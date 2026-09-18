@@ -1127,8 +1127,7 @@ ul {
 
 
 .overview-panel,
-.game-panel,
-.recruit-card {
+.game-panel {
   border: 1px solid var(--line);
   border-radius: 4px;
   background:
@@ -1731,7 +1730,6 @@ ul {
 }
 
 .breakthrough-button.is-disabled,
-.recruit-button.is-disabled,
 .upgrade-button.is-disabled {
   border-color: rgba(167, 184, 173, 0.11);
   color: #63756c;
@@ -1786,142 +1784,6 @@ ul {
   gap: 14px;
 }
 
-.recruit-card {
-  position: relative;
-  min-height: 212px;
-  padding: 21px 21px 18px;
-  overflow: hidden;
-  border-color: rgba(202, 169, 106, 0.23);
-  background:
-    linear-gradient(125deg, rgba(202, 169, 106, 0.09), transparent 45%),
-    linear-gradient(155deg, #17332b, #0d211c);
-}
-
-.recruit-card::after {
-  position: absolute;
-  top: -55px;
-  right: -45px;
-  width: 180px;
-  height: 180px;
-  border: 1px solid rgba(202, 169, 106, 0.09);
-  border-radius: 50%;
-  content: '';
-  box-shadow: inset 0 0 0 22px rgba(202, 169, 106, 0.018), inset 0 0 0 44px rgba(202, 169, 106, 0.018);
-  pointer-events: none;
-}
-
-.recruit-card h2 {
-  position: relative;
-  z-index: 1;
-  margin: 4px 0 5px;
-  font-family: 'STKaiti', 'KaiTi', serif;
-  font-size: 22px;
-  font-weight: 500;
-  letter-spacing: 0.08em;
-}
-
-.recruit-card > p:not(.eyebrow) {
-  position: relative;
-  z-index: 1;
-  color: #768c80;
-  font-size: 12px;
-}
-
-.recruit-mist {
-  position: absolute;
-  right: -50px;
-  bottom: 45px;
-  width: 240px;
-  height: 60px;
-  border-radius: 50%;
-  opacity: 0.08;
-  background: #d8e7dc;
-  filter: blur(18px);
-}
-
-.recruit-quota {
-  position: relative;
-  z-index: 1;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin: 19px 0 13px;
-  padding-top: 13px;
-  border-top: 1px solid rgba(202, 169, 106, 0.12);
-}
-
-.recruit-quota span,
-.recruit-quota strong {
-  display: block;
-}
-
-.recruit-quota span {
-  color: #6f8379;
-  font-size: 11px;
-}
-
-.recruit-quota strong {
-  color: var(--gold-bright);
-  font-family: Georgia, 'Times New Roman', serif;
-  font-size: 23px;
-  font-weight: 500;
-}
-
-.recruit-quota strong small {
-  margin-left: 2px;
-  color: #776846;
-  font-size: 11px;
-}
-
-.quota-marks {
-  display: flex;
-  gap: 6px;
-}
-
-.quota-marks i {
-  width: 17px;
-  height: 17px;
-  border: 1px solid rgba(202, 169, 106, 0.35);
-  background: rgba(202, 169, 106, 0.08);
-  transform: rotate(45deg);
-}
-
-.quota-marks i.spent {
-  border-color: rgba(121, 139, 128, 0.16);
-  background: rgba(121, 139, 128, 0.04);
-}
-
-.recruit-button {
-  position: relative;
-  z-index: 1;
-  display: flex;
-  width: 100%;
-  min-height: 45px;
-  align-items: center;
-  justify-content: space-between;
-  padding: 8px 14px;
-  border-color: rgba(202, 169, 106, 0.44);
-  color: var(--gold-bright);
-  background: rgba(202, 169, 106, 0.07);
-  box-shadow: inset 0 0 20px rgba(202, 169, 106, 0.025);
-  text-align: left;
-}
-
-.recruit-button:not(:disabled):not(.is-disabled):hover {
-  border-color: rgba(234, 209, 154, 0.72);
-  background: rgba(202, 169, 106, 0.12);
-}
-
-.recruit-button > span {
-  font-family: 'STKaiti', 'KaiTi', serif;
-  font-size: 15px;
-  letter-spacing: 0.11em;
-}
-
-.recruit-button small {
-  color: #827352;
-  font-size: 11px;
-}
 
 .building-panel {
   padding-bottom: 10px;
@@ -3433,12 +3295,7 @@ ul {
     grid-template-columns: minmax(280px, 0.7fr) minmax(0, 1.3fr);
   }
 
-  .building-panel {
-    min-height: 100%;
-  }
-
-  /* 右栏在中屏变两列：招贤台 / 山门建筑 并排，宗门晋升整行放在它们下面。 */
-  .recruit-card,
+  /* 右栏在中屏变两列：山门建筑占一格，宗门晋升整行放在下面。 */
   .building-panel {
     order: 1;
   }

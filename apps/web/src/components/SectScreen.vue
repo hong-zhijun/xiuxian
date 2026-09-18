@@ -476,44 +476,11 @@ function requestBreakthrough(disciple: DiscipleView): void {
         <div v-else class="empty-state">
           <span aria-hidden="true">寂</span>
           <strong>门下尚无弟子</strong>
-          <p>可从右侧招贤台迎接有缘之人。</p>
+          <p>可从上方操作栏的「招贤台」张榜迎接有缘之人。</p>
         </div>
       </section>
 
       <aside class="management-rail">
-        <section class="recruit-card" aria-labelledby="recruit-title">
-          <div class="recruit-mist" aria-hidden="true" />
-          <p class="eyebrow">招贤台</p>
-          <h2 id="recruit-title">山门广纳有缘人</h2>
-          <p>散修闻名而来，资质与姓名皆由天机择定。</p>
-
-          <div class="recruit-quota">
-            <div>
-              <span>今日余次</span>
-              <strong>{{ state.recruit.remaining }}<small>/{{ state.recruit.dailyLimit }}</small></strong>
-            </div>
-            <div class="quota-marks" aria-hidden="true">
-              <i
-                v-for="index in state.recruit.dailyLimit"
-                :key="index"
-                :class="{ spent: index <= state.recruit.usedToday }"
-              />
-            </div>
-          </div>
-
-          <button
-            class="action-button recruit-button"
-            :class="{ 'is-disabled': !state.recruit.canRecruit }"
-            type="button"
-            :disabled="busy"
-            :aria-disabled="!state.recruit.canRecruit"
-            @click="requestRecruit"
-          >
-            <span>张榜招贤</span>
-            <small>消耗 {{ costText(state.recruit.cost) }}</small>
-          </button>
-        </section>
-
         <section v-if="state.sectUpgrade" class="game-panel sect-upgrade-panel" aria-labelledby="sect-upgrade-title">
           <header class="section-heading panel-heading compact-heading">
             <div>
