@@ -16,7 +16,7 @@ import {
  * 密码哈希（P0-04 测试项：workerd 兼容性与耗时验证）。
  *
  * 这里同时是「选型可行性验证」：参数取 OWASP 对 Argon2id 的最低建议，
- * 实测耗时记录在 docs/verification/P0-04 与 password.ts 顶部注释里。
+ * 实测耗时记录在 password.ts 顶部注释里。
  */
 describe('密码哈希（Argon2id，workerd）', () => {
   it('哈希可校验，且同一密码两次哈希不同（随机盐）', () => {

@@ -1,6 +1,6 @@
 -- Migration number: 0009 	 Name: v5_challenge_system
 --
--- V5 挑战系统（开发规划/分期任务/V5-挑战系统.md 第一节）：
+-- 挑战系统：
 --   sects         <- 新增 defense_lineup 列（守擂阵容：3 名弟子 id 的 JSON 数组，null = 未设置）
 --   challenge_log <- 挑战记录（3v3 逐对决斗；每日 1 次限次的窗口统计来源 + 演武录展示）
 --

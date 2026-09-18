@@ -1,6 +1,6 @@
 -- Migration number: 0007 	 Name: v3_multiplayer
 --
--- V3 多人互动（开发规划/分期任务/V3-多人互动.md 第一节）：
+-- 多人互动：
 --   sects        <- 新增 reputation 列（声望，排行榜排序与展示用；初始 0）
 --   sparring_log <- 切磋记录（每日总限 5 次 + 同目标 1 次的窗口统计来源）
 --

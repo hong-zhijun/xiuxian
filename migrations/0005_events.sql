@@ -1,6 +1,6 @@
 -- Migration number: 0005 	 Name: p3_event_log
 --
--- P3 随机事件系统（开发规划/分期任务/P3-随机事件.md 第一节）：
+-- 随机事件系统：
 --   event_log <- 已触发事件的日志（sync 的 recentEvents 与 GET /game/events 的数据源）
 --
 -- 说明：

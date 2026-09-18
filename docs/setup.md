@@ -115,7 +115,7 @@ npm run dev -- --var REGISTRATION_ENABLED:true --var INVITE_CODES:invite-alpha
 | `npm run db:check:local-binding` | 断言 D1 绑定仍指向本地哨兵库 | 通过（违规配置退出码 1） |
 | `npm run db:migrate:local` | 在本地 D1 应用 `migrations/` | 通过（空库 3 个迁移；已有库只补 0003） |
 | `npm run db:seed:local` | 执行 `scripts/seed/seed.sql`（幂等） | 通过（重复执行不新增） |
-| `npm run accounts -- <命令> <账号>` | 受控账号管理：`create-user`（密码从 stdin/交互式读取）、`revoke-sessions`、`list-users`；默认只动本地 D1 | 通过（本地库创建/撤销/列表实测，见 P0-04 验证记录） |
+| `npm run accounts -- <命令> <账号>` | 受控账号管理：`create-user`（密码从 stdin/交互式读取）、`revoke-sessions`、`list-users`；默认只动本地 D1 | 通过（本地库创建/撤销/列表实测） |
 | `npm run deploy:server:dry-run` | 等同 `build:server`（`wrangler deploy --dry-run`） | 通过 |
 | `npm run deploy:web:dry-run` | 等同 `build:web`（Pages 无有意义的 dry-run，先做构建验证） | 通过 |
 
@@ -166,8 +166,7 @@ packages/game-core/      无 IO 纯函数：配置校验与公开投影（P0-03�
 packages/game-config/    带版本的静态配置 + 内容哈希（P0-03）
 tests/smoke/             根级 node 环境测试（包导入、绑定守卫）
 tests/scripts/           根级 node 环境测试（受控账号脚本的参数解析与 SQL 转义）
-docs/                    本文件与 docs/verification/<任务ID>/
-开发规划/                 需求与规划文档
+docs/                    本文件
 ```
 
 各 `packages/*` 通过 `exports` 直接暴露 TypeScript 源码（`./src/index.ts`），由 Vite/Wrangler 的打包器编译，无需单独的构建步骤。

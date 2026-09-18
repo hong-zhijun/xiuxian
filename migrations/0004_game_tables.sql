@@ -1,6 +1,6 @@
 -- Migration number: 0004 	 Name: p0_game_tables
 --
--- 一次性可玩版本（开发规划/分期任务/FINAL-一次性完成.md）：
+-- 当前可玩版本的核心游戏表：
 --   sects             <- 宗门（每个用户一个）
 --   disciples         <- 弟子（境界/阶段/修为/岗位）
 --   buildings         <- 宗门建筑（每类型一座，等级升级）

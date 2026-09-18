@@ -1,6 +1,6 @@
 -- Migration number: 0008 	 Name: v4_disciple_attributes
 --
--- V4 弟子属性与天赋（开发规划/分期任务/V4-弟子属性与天赋.md 第一节）：
+-- 弟子属性与天赋：
 --   disciples <- 新增 attack / defense / speed（1~100 战斗属性）与 talent（天赋 id）
 --
 -- 说明：

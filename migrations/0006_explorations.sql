@@ -1,6 +1,6 @@
 -- Migration number: 0006 	 Name: v2_2_explorations
 --
--- V2-2 秘境探索（开发规划/分期任务/V2-2-秘境探索.md 第一节）：
+-- 秘境探索：
 --   explorations <- 探索记录（成功/失败与本次实际发放的奖励，供每日限次统计）
 --
 -- 说明：
