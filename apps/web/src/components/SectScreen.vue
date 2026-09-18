@@ -168,7 +168,7 @@ function levelGlyphsFor(building: BuildingView): readonly string[] {
 }
 
 function buildingDescription(defId: string): string {
-  if (defId === 'spiritualArray') return '汇聚天地灵气，助益弟子问道';
+  if (defId === 'spiritualArray') return '汇聚天地灵气，每级提升灵气产出';
   if (defId === 'herbGarden') return '培育灵植，为宗门积蓄药材';
   if (defId === 'missionHall') return '开采地脉灵矿，提升灵石产出';
   if (defId === 'scriptureLibrary') return '典藏万卷，加速弟子修炼';

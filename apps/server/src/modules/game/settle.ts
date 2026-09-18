@@ -5,6 +5,8 @@ import {
   MISSION_HALL_SPIRIT_STONE_BONUS_BP_PER_LEVEL,
   SCRIPTURE_LIBRARY_BUILDING_ID,
   SCRIPTURE_LIBRARY_CULTIVATION_BONUS_BP_PER_LEVEL,
+  SPIRITUAL_ARRAY_BUILDING_ID,
+  SPIRITUAL_ARRAY_ENERGY_BONUS_BP_PER_LEVEL,
   TALENT_CULTIVATION_BONUS_BP,
   TALENT_POSITION_BONUS_BP,
   effectiveCapacity,
@@ -168,6 +170,13 @@ export function resourceRates(
     const currentRate = rates.get('spiritStone') ?? 0;
     const bonusBp = missionHallLevel * MISSION_HALL_SPIRIT_STONE_BONUS_BP_PER_LEVEL;
     rates.set('spiritStone', Math.floor((currentRate * (10_000 + bonusBp)) / 10_000));
+  }
+
+  const spiritualArrayLevel = buildingLevels?.[SPIRITUAL_ARRAY_BUILDING_ID] ?? 0;
+  if (spiritualArrayLevel > 0) {
+    const currentRate = rates.get('spiritualEnergy') ?? 0;
+    const bonusBp = spiritualArrayLevel * SPIRITUAL_ARRAY_ENERGY_BONUS_BP_PER_LEVEL;
+    rates.set('spiritualEnergy', Math.floor((currentRate * (10_000 + bonusBp)) / 10_000));
   }
 
   const positions = new Map<string, { outputPerHourPerDisciple: Record<string, string> }>(

@@ -85,6 +85,9 @@ export const BREAKTHROUGH_ARRAY_BONUS_BP_PER_LEVEL = 500;
 /** 聚灵阵的建筑定义 id（加成来源）。 */
 export const SPIRITUAL_ARRAY_BUILDING_ID = 'spiritualArray';
 
+/** 聚灵阵每级给灵气基础产出的加成（基点，2000 = +20%）。 */
+export const SPIRITUAL_ARRAY_ENERGY_BONUS_BP_PER_LEVEL = 2000;
+
 /** 空闲岗位 id（不在配置里，属于弟子状态的枚举值）。 */
 export const IDLE_ASSIGNMENT = 'idle';
 
