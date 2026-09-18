@@ -1,0 +1,9 @@
+# Cloudflare Pages 项目配置（前端构建产物托管，见 02 第 1 节）。
+# 创建 Pages 项目与部署须经授权；本地开发不使用此文件。
+name = "xiuxian-game-web"
+compatibility_date = "2026-08-22"
+pages_build_output_dir = "dist"
+
+# 生产环境通过同域 Route 把 /api/* 交给 apps/server 的 Worker，其余请求由 Pages 处理：
+# game.example.com       -> Pages（本前端）
+# game.example.com/api/* -> Worker（后端），因此无需 CORS，Cookie 自然共享。

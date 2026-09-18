@@ -1,0 +1,13 @@
+services:
+  game:
+    image: ghcr.io/hong-zhijun/xiuxian:latest
+    ports:
+      - "80:80"
+    volumes:
+      - gamedata:/app/apps/server/.wrangler/state
+    env_file:
+      - .env
+    restart: unless-stopped
+
+volumes:
+  gamedata:

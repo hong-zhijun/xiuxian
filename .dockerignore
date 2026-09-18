@@ -1,0 +1,12 @@
+node_modules
+.wrangler
+dist
+.git
+.github
+*.log
+coverage
+test-results
+.DS_Store
+Thumbs.db
+.idea
+.vscode
