@@ -12,14 +12,13 @@
     "packages/*"
   ],
   "scripts": {
-    "dev": "concurrently -k -n server,web -c blue,green \"npm:dev:server\" \"npm:dev:web\"",
+    "dev": "echo \"请分两个终端运行 npm run dev:server 和 npm run dev:web\"",
     "dev:server": "npm run dev -w apps/server",
     "dev:web": "npm run dev -w apps/web",
     "build": "npm run build:web && npm run build:server",
     "build:web": "npm run build -w apps/web",
     "build:server": "npm run build -w apps/server",
     "typecheck": "npm run typecheck --workspaces --if-present && tsc --noEmit -p tsconfig.json && tsc --noEmit -p scripts/tsconfig.json",
-    "lint": "eslint .",
     "test:unit": "vitest run && npm run test:unit -w apps/server",
     "cf:types": "npm run cf:types -w apps/server",
     "db:check:local-binding": "npm run db:check:local-binding -w apps/server",
@@ -30,18 +29,12 @@
     "deploy:web:dry-run": "npm run build:web"
   },
   "devDependencies": {
-    "@eslint/js": "10.0.1",
     "@types/node": "22.20.3",
     "@xiuxian/contracts": "*",
     "@xiuxian/game-config": "*",
     "@xiuxian/game-core": "*",
-    "concurrently": "10.0.5",
-    "eslint": "10.10.0",
-    "eslint-plugin-vue": "10.11.0",
     "tsx": "4.23.13",
     "typescript": "5.9.3",
-    "typescript-eslint": "8.70.0",
-    "vitest": "4.1.11",
-    "vue-eslint-parser": "10.4.1"
+    "vitest": "4.1.11"
   }
 }
