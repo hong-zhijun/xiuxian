@@ -426,14 +426,31 @@ export interface RecruitCandidate {
   talentName: string;
 }
 
-/** 招募预览（GET /game/recruit-preview）：同一批候选人刷新不变。 */
+/** 招募预览（GET /game/recruit-preview）：同一批候选人刷新不变，「换一批」后换人。 */
 export interface RecruitPreview {
   candidates: RecruitCandidate[];
   canRecruit: boolean;
   blockedReason: string | null;
   cost: Record<string, string>;
+  /** 本境界已用刷新次数。 */
+  refreshUsed: number;
+  /** 本境界刷新额度（宗门晋升后重置）。 */
+  refreshLimit: number;
+  /** 还剩几次刷新。 */
+  refreshRemaining: number;
 }
 
 export async function fetchRecruitPreview(): Promise<RecruitPreview> {
   return apiRequest<RecruitPreview>('/api/v1/game/recruit-preview');
+}
+
+/** 换一批有缘人（POST /game/recruit-refresh）：消耗 1 次本境界刷新额度，返回新一批候选人与最新状态。 */
+export async function refreshRecruitPreview(): Promise<{
+  state: SectStateView;
+  preview: RecruitPreview;
+}> {
+  return apiRequest<{ state: SectStateView; preview: RecruitPreview }>(
+    '/api/v1/game/recruit-refresh',
+    { method: 'POST' },
+  );
 }

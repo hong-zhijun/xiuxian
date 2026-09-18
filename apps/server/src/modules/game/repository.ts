@@ -19,6 +19,10 @@ export interface SectRow {
   last_settled_at: number;
   recruit_date_key: string;
   recruit_count: number;
+  /** V5.2 招贤刷新：上次授予额度的宗门等级（与 level 不一致即视为重置）。 */
+  recruit_refresh_level: number;
+  /** V5.2 招贤刷新：该等级已用的刷新次数（升级重置，不累积）。 */
+  recruit_refresh_used: number;
   /** V5 守擂阵容：3 个弟子 id 的 JSON 数组字符串；null = 未设置（不可被挑战）。 */
   defense_lineup: string | null;
   created_at: number;
@@ -118,7 +122,7 @@ export interface ChallengeLogRow {
 export class SectRepository extends ParamRepository {
   async findByUserId(userId: string): Promise<SectRow | null> {
     return this.one<SectRow>({
-      sql: `SELECT id, user_id, name, level, vein_level, reputation, last_settled_at, recruit_date_key, recruit_count, created_at, defense_lineup
+      sql: `SELECT id, user_id, name, level, vein_level, reputation, last_settled_at, recruit_date_key, recruit_count, recruit_refresh_level, recruit_refresh_used, created_at, defense_lineup
             FROM sects WHERE user_id = ?`,
       params: [userId],
     });
@@ -128,7 +132,7 @@ export class SectRepository extends ParamRepository {
   async findAll(): Promise<SectRow[]> {
     return this.all<SectRow>({
       sql: `SELECT id, user_id, name, level, vein_level, reputation, last_settled_at,
-                   recruit_date_key, recruit_count, created_at, defense_lineup
+                   recruit_date_key, recruit_count, recruit_refresh_level, recruit_refresh_used, created_at, defense_lineup
             FROM sects ORDER BY level DESC, reputation DESC, created_at ASC`,
       params: [],
     });
@@ -138,7 +142,7 @@ export class SectRepository extends ParamRepository {
   async findById(sectId: string): Promise<SectRow | null> {
     return this.one<SectRow>({
       sql: `SELECT id, user_id, name, level, vein_level, reputation, last_settled_at,
-                   recruit_date_key, recruit_count, created_at, defense_lineup
+                   recruit_date_key, recruit_count, recruit_refresh_level, recruit_refresh_used, created_at, defense_lineup
             FROM sects WHERE id = ?`,
       params: [sectId],
     });
@@ -580,6 +584,21 @@ export function updateSectRecruitCounterStatement(
   return {
     sql: 'UPDATE sects SET recruit_date_key = ?, recruit_count = ? WHERE id = ?',
     params: [dateKey, count, sectId],
+  };
+}
+ 
+/**
+ * 招贤刷新写回（V5.2）：记录「本次授予额度的宗门等级 + 该等级已用刷新次数」。
+ * 升级后 level 变化即视为重置（归一化在 service 层），这里只写新的等级与已用次数。
+ */
+export function updateSectRecruitRefreshStatement(
+  sectId: string,
+  level: number,
+  used: number,
+): ParameterizedQuery {
+  return {
+    sql: 'UPDATE sects SET recruit_refresh_level = ?, recruit_refresh_used = ? WHERE id = ?',
+    params: [level, used, sectId],
   };
 }
 

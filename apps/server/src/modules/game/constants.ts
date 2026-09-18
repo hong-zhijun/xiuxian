@@ -367,3 +367,10 @@ export const TALENT_COMBAT_BONUS_BP = 1500; // 战斗力 +15%
 /* ---------- V5 挑战系统 ---------- */
 /** 守擂阵容 / 出战阵容固定 3 人；顺序即对阵顺序（view 与 service 共用同一判定）。 */
 export const DEFENSE_LINEUP_SIZE = 3;
+ 
+/* ---------- V5.2 招贤台刷新 ---------- */
+/**
+ * 每个宗门等级（境界）的招贤刷新额度：升级即重置，未用次数不累积。
+ * 刷新免费（不消耗资源，也不消耗每日招募次数），只换一批候选人。
+ */
+export const RECRUIT_REFRESH_PER_LEVEL = 3;

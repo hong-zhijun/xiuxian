@@ -2996,6 +2996,54 @@ ul {
   color: var(--jade-bright);
 }
 
+
+/* 招贤台「换一批」：本境界剩余刷新次数 + 刷新按钮 */
+.recruit-refresh {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 14px;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.014);
+}
+
+.recruit-refresh-count {
+  color: #93a99e;
+  font-size: 12px;
+}
+
+.recruit-refresh-count strong {
+  color: var(--gold-bright);
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size: 15px;
+}
+
+.recruit-refresh-count small {
+  color: #6f8379;
+  font-size: 11px;
+}
+
+.recruit-refresh-button {
+  flex: 0 0 auto;
+  border: 1px solid rgba(202, 169, 106, 0.28);
+  border-radius: 3px;
+  color: var(--gold);
+  font-size: 12px;
+}
+
+.recruit-refresh-button:not(:disabled):hover {
+  border-color: rgba(234, 209, 154, 0.55);
+  background: rgba(202, 169, 106, 0.08);
+}
+
+.recruit-refresh-button:disabled {
+  border-color: rgba(167, 184, 173, 0.11);
+  color: #63756c;
+  cursor: not-allowed;
+}
 /* 招募三选一 */
 .recruit-cost {
   color: #93a99e;

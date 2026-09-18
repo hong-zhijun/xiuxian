@@ -28,6 +28,7 @@ import {
   listSecretRealms,
   previewRecruit,
   recruitDisciple,
+  refreshRecruit,
   setDefenseLineup,
   upgradeBuilding,
   upgradeSect,
@@ -87,6 +88,13 @@ export function createGameRoutes(): Hono<AppEnv> {
     const body = await parseStrictJson(recruitRequestSchema, c);
     const result = await recruitDisciple(getDb(c.env), userId, body.choice, Date.now());
     return respondOk(c, { state: result.state, outcome: result.outcome });
+  });
+ 
+  // 招贤台刷新（免费换一批候选人；每个宗门境界 3 次，升级重置）。请求体为空，不解析 JSON。
+  routes.post('/game/recruit-refresh', async (c) => {
+    const userId = requireUserId(c);
+    const result = await refreshRecruit(getDb(c.env), userId, Date.now());
+    return respondOk(c, { state: result.state, preview: result.preview });
   });
 
   routes.post('/game/assign', async (c) => {

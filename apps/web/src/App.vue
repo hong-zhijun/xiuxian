@@ -237,6 +237,15 @@ function onRecruit(choice: number): void {
   );
 }
 
+/**
+ * 招贤台「换一批」：SectScreen 已经拿到服务端返回的 state，这里只负责接管。
+ * （刷新弹窗内容属于弹窗内部事务，但 `state` 始终只在 App 赋值。）
+ */
+function onRecruitRefreshed(next: SectStateView): void {
+  state.value = next;
+  announceEvents(next);
+}
+
 function onAssign(discipleId: string, assignment: string): void {
   void runAction(
     () => assign(discipleId, assignment),
@@ -459,6 +468,7 @@ onUnmounted(() => {
       @upgrade="onUpgrade"
       @upgrade-sect="onUpgradeSect"
       @explore="onExplore"
+      @recruit-refreshed="onRecruitRefreshed"
       @challenge="onChallenge"
       @set-defense-lineup="onSetDefenseLineup"
       @dismiss-challenge-result="onDismissChallengeResult"

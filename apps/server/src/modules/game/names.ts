@@ -134,17 +134,21 @@ export interface RecruitCandidate {
 }
 
 /**
- * 根据宗门当前状态生成 3 个确定性候选人（V4 5.3）。
+ * 根据宗门当前状态生成 3 个确定性候选人（V4 5.3；V5.2 加入刷新序号）。
  *
- * seed = `${sectId}:${dateKey}:${recruitCount}`：同一次机会（同一宗门、同一 UTC+8 自然日、
- * 同一「今日已招募次数」）永远生成同一批人，预览与招募取到的是同一批。
+ * seed = `${sectId}:${dateKey}:${recruitCount}:${refreshSeq}`：
+ *   - recruitCount：今日已招募次数（跨天重置）；
+ *   - refreshSeq：本境界已用的招贤刷新次数（升级重置）。
+ * 同一次机会（同一宗门、同一 UTC+8 自然日、同一已招募次数、同一刷新次数）永远生成同一批人，
+ * 因此「预览第 N 张 = 招募时 candidates[N]」，而刷新一次（refreshSeq +1）就会真的换一批。
  */
 export function generateCandidates(
   sectId: string,
   dateKey: string,
   recruitCount: number,
+  refreshSeq = 0,
 ): RecruitCandidate[] {
-  const seed = `${sectId}:${dateKey}:${recruitCount}`;
+  const seed = `${sectId}:${dateKey}:${recruitCount}:${refreshSeq}`;
   const random = seededRandom(seed);
   const candidates: RecruitCandidate[] = [];
   for (let i = 0; i < 3; i++) {

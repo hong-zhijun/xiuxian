@@ -6,6 +6,7 @@ import { prepareStatements, type ParameterizedQuery } from '../../infra/db/repos
 import {
   DEFENSE_LINEUP_SIZE,
   IDLE_ASSIGNMENT,
+  RECRUIT_REFRESH_PER_LEVEL,
   SPIRITUAL_ARRAY_BUILDING_ID,
   STONE_MINING_ASSIGNMENT,
   STONE_MINING_LIMIT_HIGH,
@@ -66,6 +67,7 @@ import {
   updateSectDefenseLineupStatement,
   updateSectLevelStatement,
   updateSectRecruitCounterStatement,
+  updateSectRecruitRefreshStatement,
   updateSectReputationStatement,
   updateSectSettledStatement,
   type BuildingRow,
@@ -487,6 +489,8 @@ export async function createSect(
         last_settled_at: now,
         recruit_date_key: dateKeyUtc8(now),
         recruit_count: 0,
+        recruit_refresh_level: config.sect.initialLevel,
+        recruit_refresh_used: 0,
         defense_lineup: null,
         created_at: now,
       },
@@ -506,6 +510,12 @@ export interface RecruitPreview {
   canRecruit: boolean;
   blockedReason: string | null;
   cost: Record<string, string>;
+  /** V5.2：本境界已用的招贤刷新次数（升级重置，按归一化后的值）。 */
+  refreshUsed: number;
+  /** V5.2：本境界的招贤刷新额度（RECRUIT_REFRESH_PER_LEVEL）。 */
+  refreshLimit: number;
+  /** V5.2：还剩几次刷新（= limit - used，不小于 0）。 */
+  refreshRemaining: number;
 }
 
 /** 招募判定文案（预览与招募共用）：null = 可以招募。 */
@@ -535,12 +545,33 @@ function recruitBlockedReason(input: {
 }
 
 /**
+ * 招贤刷新额度的唯一归一化入口（读取 / 预览 / 刷新 / 招募共用）：
+ * 宗门等级与「上次授予等级」不一致时视为已用 0 次（升级即重置，未用次数不累积）。
+ * 返回写入用的 level（当前等级）与 used，以及展示用的 limit / remaining。
+ * 归一化只发生在内存里，读取路径不会因此落库。
+ */
+function recruitRefreshQuota(
+  sect: Pick<SectRow, 'level' | 'recruit_refresh_level' | 'recruit_refresh_used'>,
+): { level: number; used: number; limit: number; remaining: number } {
+  const level = Number(sect.level);
+  const used = level === Number(sect.recruit_refresh_level) ? Number(sect.recruit_refresh_used) : 0;
+  return {
+    level,
+    used,
+    limit: RECRUIT_REFRESH_PER_LEVEL,
+    remaining: Math.max(0, RECRUIT_REFRESH_PER_LEVEL - used),
+  };
+}
+
+/**
  * 招募预览（V4 5.4）：**只读快照，不做结算**——与排行榜同理，预览不该有副作用
  * （否则长离线后打开一次弹窗就触发了结算与随机事件）。
  *
- * 候选人与 recruitDisciple 用完全相同的 seed 生成（宗门 id + UTC+8 自然日 +
- * 「今日已招募次数」），因此「预览 → 招募」拿到的是同一批人；招募成功后该计数 +1，
- * 下一次打开预览就是新的一批。
+ * 候选人与 recruitDisciple 用完全相同的 seed 参数生成（宗门 id + UTC+8 自然日 +
+ * 「今日已招募次数」+ 归一化后的「本境界已用刷新次数」），因此「预览 → 招募」拿到的是同一批人；
+ * 招募成功后「今日已招募次数」+1、刷新后刷新序号 +1，下一次打开预览就是新的一批。
+ *
+ * 刷新额度只按归一化后的值计算返回，**不写库**（读取路径不能有副作用）。
  */
 export async function previewRecruit(
   db: D1Database,
@@ -561,6 +592,7 @@ export async function previewRecruit(
   // 与 SectDraft 的 recruitUsedToday 同一归一逻辑：日期 key 不匹配时视为 0（跨天重置）。
   const recruitUsedToday = sect.recruit_date_key === dateKey ? Number(sect.recruit_count) : 0;
   const discipleCapacity = findSectLevel(Number(sect.level)).discipleCapacity;
+  const quota = recruitRefreshQuota(sect);
 
   const blockedReason = recruitBlockedReason({
     config,
@@ -572,10 +604,13 @@ export async function previewRecruit(
   });
 
   return {
-    candidates: generateCandidates(sect.id, dateKey, recruitUsedToday),
+    candidates: generateCandidates(sect.id, dateKey, recruitUsedToday, quota.used),
     canRecruit: blockedReason === null,
     blockedReason,
     cost: { ...config.recruitment.cost },
+    refreshUsed: quota.used,
+    refreshLimit: quota.limit,
+    refreshRemaining: quota.remaining,
   };
 }
 
@@ -617,8 +652,15 @@ export async function recruitDisciple(
   }
 
   // 与 previewRecruit 同 seed、同顺序生成：预览里第 N 张卡就是这里的 candidates[N]。
+  // 刷新序号取归一化后的「本境界已用刷新次数」，与预览（含刷新接口返回的那一批）保持同一组参数。
   // schema 已把 choice 限制在 0~2，这里再兜一层，越界直接报错而不是写入脏数据。
-  const candidates = generateCandidates(draft.sect.id, dateKeyUtc8(now), draft.recruitUsedToday);
+  const refreshSeq = recruitRefreshQuota(draft.sect).used;
+  const candidates = generateCandidates(
+    draft.sect.id,
+    dateKeyUtc8(now),
+    draft.recruitUsedToday,
+    refreshSeq,
+  );
   const candidate = candidates[choice];
   if (candidate === undefined) {
     throw new AppError('VALIDATION_ERROR', '候选人不存在', { choice });
@@ -660,6 +702,65 @@ export async function recruitDisciple(
       speed: Number(disciple.speed),
       talent: disciple.talent,
       talentName: candidate.talentName,
+    },
+  };
+}
+ 
+/**
+ * 招贤台刷新（V5.2）：结算 → 校验本境界刷新额度 → used+1（并把授予等级写成当前等级）
+ * → 用「刷新后的 used」作刷新序号生成新一批候选人。
+ *
+ * 刷新免费：不扣资源、不动每日招募次数（recruit_count 与刷新计数相互独立）；
+ * 额度按「升级即重置」归一化（见 recruitRefreshQuota）。只做一次 `draft.commit()`。
+ * 返回的 preview 与随后 recruitDisciple 使用同一组 seed 参数（refreshSeq = 刷新后的 used），
+ * 保证「预览第 N 张 = 招募时 candidates[N]」。次数用尽抛 DAILY_LIMIT。
+ */
+export async function refreshRecruit(
+  db: D1Database,
+  userId: string,
+  now: number,
+): Promise<{ state: SectStateView; preview: RecruitPreview }> {
+  const draft = await draftFor(db, userId, now);
+  const quota = recruitRefreshQuota(draft.sect);
+
+  if (quota.used >= RECRUIT_REFRESH_PER_LEVEL) {
+    throw new AppError('DAILY_LIMIT', '本境界的招贤刷新次数已用完（宗门晋升后重置）', {
+      refreshLimit: RECRUIT_REFRESH_PER_LEVEL,
+      refreshUsed: quota.used,
+    });
+  }
+
+  const nextUsed = quota.used + 1;
+  draft.addStatement(updateSectRecruitRefreshStatement(draft.sect.id, quota.level, nextUsed));
+  draft.sect.recruit_refresh_level = quota.level;
+  draft.sect.recruit_refresh_used = nextUsed;
+
+  await draft.commit();
+
+  // 与 recruitDisciple 共用同一判定：刷新只换人，不改变能否招募的规则。
+  const blockedReason = recruitBlockedReason({
+    config: draft.config,
+    discipleCount: draft.disciples.length,
+    discipleCapacity: draft.discipleCapacity,
+    recruitUsedToday: draft.recruitUsedToday,
+    balanceOf: (resourceId) => draft.balanceOf(resourceId),
+  });
+
+  return {
+    state: draft.view(),
+    preview: {
+      candidates: generateCandidates(
+        draft.sect.id,
+        dateKeyUtc8(now),
+        draft.recruitUsedToday,
+        nextUsed,
+      ),
+      canRecruit: blockedReason === null,
+      blockedReason,
+      cost: { ...draft.config.recruitment.cost },
+      refreshUsed: nextUsed,
+      refreshLimit: RECRUIT_REFRESH_PER_LEVEL,
+      refreshRemaining: Math.max(0, RECRUIT_REFRESH_PER_LEVEL - nextUsed),
     },
   };
 }

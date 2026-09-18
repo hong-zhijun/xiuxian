@@ -12,7 +12,7 @@ import type {
 } from '../api/game';
 import type { ToastTone } from '../types/ui';
 import { formatAmount, formatBp, formatRate, formatTime } from '../utils/format';
-import { fetchRecruitPreview } from '../api/game';
+import { fetchRecruitPreview, refreshRecruitPreview } from '../api/game';
 import { resourceGlyph } from '../utils/glyph';
 import AssignmentSelect from './AssignmentSelect.vue';
 import ChallengeDialog from './ChallengeDialog.vue';
@@ -39,6 +39,7 @@ const emit = defineEmits<{
   refresh: [];
   logout: [];
   recruit: [choice: number];
+  'recruit-refreshed': [state: SectStateView];
   assign: [discipleId: string, assignment: string];
   upgrade: [defId: string];
   'upgrade-sect': [];
@@ -65,10 +66,12 @@ const recruitBadge = computed(() => {
   return Math.max(0, recruit.remaining);
 });
 
-/** 招贤弹窗：候选人 + 开关（点「张榜招贤」时才拉预览）。 */
+/** 招贤弹窗：候选人 + 开关（点「张榜招贤」时才拉预览；「换一批」直接换本地这份）。 */
 const recruitPreview = ref<RecruitPreview | null>(null);
 const showRecruitDialog = ref(false);
 const recruitLoading = ref(false);
+/** 「换一批」在途（与 recruitLoading 分开：打开弹窗与刷新是两条路径）。 */
+const recruitRefreshing = ref(false);
 
 /** 二级弹窗：当前正在点将出征的秘境（null = 未打开）。 */
 const exploreRealm = ref<SecretRealmView | null>(null);
@@ -183,7 +186,7 @@ function buildingDescription(defId: string): string {
   return '宗门基业，随等级提升效用';
 }
 
-/** 张榜招贤：先取本次候选人（服务端按宗门+当日+次数做种子，刷新不变），再弹窗三选一。 */
+/** 张榜招贤：先取本次候选人（服务端按宗门+当日+次数+刷新次数做种子，同一批不变），再弹窗三选一。 */
 async function requestRecruit(): Promise<void> {
   if (props.busy || recruitLoading.value) return;
   recruitLoading.value = true;
@@ -194,6 +197,30 @@ async function requestRecruit(): Promise<void> {
     emit('notify', 'error', '招贤台未应', caught instanceof Error ? caught.message : '候选人生成失败');
   } finally {
     recruitLoading.value = false;
+  }
+}
+
+/**
+ * 「换一批」：消耗 1 次本境界刷新额度，服务端返回新一批候选人和写库后的 state。
+ * 这里就地换掉弹窗里的候选人，并把 state 交给 App.vue（state 只在 App 赋值，这里只是转发服务端结果）。
+ */
+async function requestRecruitRefresh(): Promise<void> {
+  if (props.busy || recruitRefreshing.value) return;
+  recruitRefreshing.value = true;
+  try {
+    const { state: next, preview } = await refreshRecruitPreview();
+    recruitPreview.value = preview;
+    emit('recruit-refreshed', next);
+    emit(
+      'notify',
+      'success',
+      '天机已转',
+      `换了一批有缘人，本境界还剩 ${preview.refreshRemaining} 次刷新。`,
+    );
+  } catch (caught) {
+    emit('notify', 'error', '推演未成', caught instanceof Error ? caught.message : '刷新失败');
+  } finally {
+    recruitRefreshing.value = false;
   }
 }
 
@@ -634,8 +661,10 @@ function requestBreakthrough(disciple: DiscipleView): void {
       <RecruitDialog
         :preview="recruitPreview"
         :cost-text="costText(state.recruit.cost)"
-        :busy="busy"
+        :busy="busy || recruitRefreshing"
+        :refreshing="recruitRefreshing"
         @choose="onRecruitChoose"
+        @refresh="requestRecruitRefresh"
       />
     </ModalShell>
   </main>
