@@ -2,7 +2,13 @@ import { createApp } from './app';
 
 const app = createApp();
 
-// Worker 入口：只导出 fetch。scheduled（Cron 持久任务）由 P0-05 在此接入。
+// Worker 入口：/api/* 走 Hono，其余请求走 Assets 静态资源（SPA 回退到 index.html）。
 export default {
-  fetch: app.fetch,
+  async fetch(request: Request, env: Env, ctx: ExecutionContext) {
+    const url = new URL(request.url);
+    if (url.pathname.startsWith('/api/')) {
+      return app.fetch(request, env, ctx);
+    }
+    return (env as unknown as { ASSETS: Fetcher }).ASSETS.fetch(request);
+  },
 } satisfies ExportedHandler<Env>;

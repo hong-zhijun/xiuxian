@@ -14,9 +14,9 @@
   // wrangler secret put 或环境配置覆盖；secret 同名时会覆盖 vars（见 docs/setup.md）。
   "vars": {
     // local：本地 http 开发，Cookie 不带 Secure；production：Cookie 必须 Secure
-    "ENVIRONMENT": "local",
-    // 邀请内测：默认关闭注册；开放注册需显式设置并配置邀请码
-    "REGISTRATION_ENABLED": "false",
+    "ENVIRONMENT": "production",
+    // 本地开发通过 .dev.vars 覆盖为 "local"
+    "REGISTRATION_ENABLED": "true",
     "INVITE_CODES": "",
     "SESSION_TTL_SECONDS": "604800",
     // 登录限频：窗口内最多尝试次数（按账号与来源 IP 两个维度计数，D1 原子计数）
@@ -32,11 +32,14 @@
     {
       "binding": "DB",
       "database_name": "xiuxian-game-db",
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_id": "ecd948e1-401e-4285-bf6f-13653fec2647",
       // 迁移文件放在仓库根 migrations/（见 02 第 2 节），按编号前进
       "migrations_dir": "../../migrations"
     }
   ],
-  // 生产部署时启用同域路由（须经授权）：把 /api/* 交给本 Worker，其余请求由 Pages 处理
-  // "routes": [{ "pattern": "game.example.com/api/*", "zone_name": "example.com" }]
+  // 前端静态资源：Worker 同时服务 API 和前端，同域无 CORS 问题
+  "assets": {
+    "directory": "../web/dist",
+    "not_found_handling": "single-page-application"
+  }
 }
