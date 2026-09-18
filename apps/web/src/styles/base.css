@@ -2508,6 +2508,20 @@ ul {
   transform: translateY(-1px);
 }
 
+/* 禁用态的按钮条（例如招贤台在请求候选人期间）：保持禁用外观，不响应 hover 抬起。 */
+.action-chip:disabled,
+.action-chip:disabled:hover {
+  border-color: rgba(167, 184, 173, 0.11);
+  color: #63756c;
+  background: rgba(255, 255, 255, 0.016);
+  cursor: not-allowed;
+  transform: none;
+}
+
+.action-chip:disabled svg {
+  color: #63756c;
+}
+
 .action-chip svg {
   width: 17px;
   height: 17px;

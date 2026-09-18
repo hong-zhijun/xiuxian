@@ -55,8 +55,15 @@ const openPanel = ref<
   'events' | 'explore' | 'leaderboard' | 'defense-lineup' | 'challenge-history' | null
 >(null);
 
-/** 操作条角标：最近事件条数。 */
-const recentEventCount = computed(() => props.state.recentEvents?.length ?? 0);
+/**
+ * 操作条角标：本次还能招几个人（今日剩余招募次数）。
+ * 招不了（次数用尽 / 门人已满 / 灵石不够）时返回 0，按钮上就不显示角标。
+ */
+const recruitBadge = computed(() => {
+  const recruit = props.state.recruit;
+  if (!recruit.canRecruit) return 0;
+  return Math.max(0, recruit.remaining);
+});
 
 /** 招贤弹窗：候选人 + 开关（点「张榜招贤」时才拉预览）。 */
 const recruitPreview = ref<RecruitPreview | null>(null);
@@ -345,12 +352,23 @@ function requestBreakthrough(disciple: DiscipleView): void {
     </section>
 
     <div class="action-bar" role="toolbar" aria-label="宗门操作">
+      <button
+        class="action-chip"
+        type="button"
+        :disabled="busy || recruitLoading"
+        @click="requestRecruit"
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm-6.5 9.5a6.5 6.5 0 0 1 13 0M18 14.5v6m3-3h-6" />
+        </svg>
+        <span>招贤台</span>
+        <span v-if="recruitBadge > 0" class="chip-badge">{{ recruitBadge }}</span>
+      </button>
       <button class="action-chip" type="button" @click="openPanel = 'events'">
         <svg viewBox="0 0 24 24" aria-hidden="true">
           <path d="M7 4h9a2 2 0 0 1 2 2v12a2 2 0 0 0 2 2H7a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Zm2 4h5m-5 4h5" />
         </svg>
         <span>天机录</span>
-        <span v-if="recentEventCount > 0" class="chip-badge">{{ recentEventCount }}</span>
       </button>
       <button class="action-chip" type="button" @click="openPanel = 'explore'">
         <svg viewBox="0 0 24 24" aria-hidden="true">
