@@ -22,6 +22,7 @@ import {
   getSectState,
   listLeaderboard,
   listRecentEvents,
+  listSparHistory,
   listSecretRealms,
   previewRecruit,
   recruitDisciple,
@@ -146,6 +147,13 @@ export function createGameRoutes(): Hono<AppEnv> {
     requireUserId(c);
     const sect = await getPublicSect(getDb(c.env), c.req.param('sectId'));
     return respondOk(c, { sect });
+  });
+
+  // 切磋历史（只读：最近 20 条 + 胜负统计）。
+  routes.get('/game/spar-history', async (c) => {
+    const userId = requireUserId(c);
+    const history = await listSparHistory(getDb(c.env), userId);
+    return respondOk(c, history);
   });
 
   // V3：切磋（结算 → 校验 → 战力判定 → 奖励 + 切磋记录，一次 batch 写回）。

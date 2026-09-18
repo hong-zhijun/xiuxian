@@ -63,7 +63,7 @@ function submit(): void {
       <span class="count-badge">切磋</span>
     </header>
 
-    <p class="spar-note">双方各派一名弟子，战力高者胜。胜者 +10 声望与 5000 灵石，败者与平局无损失。</p>
+    <p class="spar-note">双方各派一名弟子，战力高者胜。胜者 +10 声望与 100 灵石，败者与平局无损失。</p>
 
     <div class="party-select">
       <div class="party-select-head">

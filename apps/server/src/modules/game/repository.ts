@@ -233,6 +233,34 @@ export class SparringRepository extends ParamRepository {
     });
     return Number(row?.total ?? 0);
   }
+
+  /** 该宗门参与的切磋记录（攻/守都算），新的在前。 */
+  async findBySectId(sectId: string, limit: number): Promise<SparringLogRow[]> {
+    return this.all<SparringLogRow>({
+      sql: `SELECT id, attacker_sect_id, defender_sect_id, attacker_disciple_id, defender_disciple_id,
+                   attacker_power, defender_power, result, reputation_gained, created_at
+            FROM sparring_log
+            WHERE attacker_sect_id = ? OR defender_sect_id = ?
+            ORDER BY created_at DESC LIMIT ?`,
+      params: [sectId, sectId, limit],
+    });
+  }
+
+  /** 该宗门的胜负统计（作为攻方的战绩）。 */
+  async statsBySectId(sectId: string): Promise<{ wins: number; losses: number; draws: number }> {
+    const rows = await this.all<{ result: string; cnt: number }>({
+      sql: `SELECT result, COUNT(*) AS cnt FROM sparring_log
+            WHERE attacker_sect_id = ? GROUP BY result`,
+      params: [sectId],
+    });
+    let wins = 0, losses = 0, draws = 0;
+    for (const row of rows) {
+      if (row.result === 'win') wins = Number(row.cnt);
+      else if (row.result === 'lose') losses = Number(row.cnt);
+      else draws = Number(row.cnt);
+    }
+    return { wins, losses, draws };
+  }
 }
 
 export interface NewDisciple {

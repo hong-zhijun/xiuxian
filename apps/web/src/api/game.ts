@@ -360,6 +360,37 @@ export async function spar(
   });
 }
 
+/** 切磋历史条目。 */
+export interface SparHistoryEntryView {
+  id: string;
+  attackerSectId: string;
+  attackerSectName: string;
+  defenderSectId: string;
+  defenderSectName: string;
+  attackerPower: number;
+  defenderPower: number;
+  result: string;
+  reputationGained: number;
+  role: 'attacker' | 'defender';
+  createdAt: string;
+}
+
+export interface SparStatsView {
+  wins: number;
+  losses: number;
+  draws: number;
+  total: number;
+}
+
+export interface SparHistoryView {
+  entries: SparHistoryEntryView[];
+  stats: SparStatsView;
+}
+
+export async function fetchSparHistory(): Promise<SparHistoryView> {
+  return apiRequest<SparHistoryView>('/api/v1/game/spar-history');
+}
+
 /** 招募候选人（与后端 names.ts 的 RecruitCandidate 一一对应）。 */
 export interface RecruitCandidate {
   name: string;

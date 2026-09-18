@@ -21,6 +21,7 @@ import LeaderboardPanel from './LeaderboardPanel.vue';
 import RecruitDialog from './RecruitDialog.vue';
 import ModalShell from './ModalShell.vue';
 import SparDialog from './SparDialog.vue';
+import SparHistoryPanel from './SparHistoryPanel.vue';
 
 /**
  * 游戏主界面：服务端负责结算和规则，本组件只展示、本地平滑数值并派发操作。
@@ -44,7 +45,7 @@ const emit = defineEmits<{
 }>();
 
 /** 操作条里的弹窗开关：天机录 / 历练探索（宗门晋升与建筑仍在右栏常驻）。 */
-const openPanel = ref<'events' | 'explore' | 'leaderboard' | null>(null);
+const openPanel = ref<'events' | 'explore' | 'leaderboard' | 'spar-history' | null>(null);
 
 /** 操作条角标：最近事件条数。 */
 const recentEventCount = computed(() => props.state.recentEvents?.length ?? 0);
@@ -339,6 +340,12 @@ function requestBreakthrough(disciple: DiscipleView): void {
         </svg>
         <span>江湖榜</span>
       </button>
+      <button class="action-chip" type="button" @click="openPanel = 'spar-history'">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M4 4h6v6H4zm10 0h6v6h-6zM4 14h6v6H4zm10 2a4 4 0 1 0 0-0" />
+        </svg>
+        <span>演武录</span>
+      </button>
     </div>
 
     <div class="management-grid">
@@ -576,6 +583,10 @@ function requestBreakthrough(disciple: DiscipleView): void {
 
     <ModalShell v-if="openPanel === 'leaderboard'" label="江湖榜" @close="openPanel = null">
       <LeaderboardPanel :state="state" :busy="busy" @spar="onSparRequest" />
+    </ModalShell>
+
+    <ModalShell v-if="openPanel === 'spar-history'" label="演武录" @close="openPanel = null">
+      <SparHistoryPanel :state="state" />
     </ModalShell>
 
     <!-- 切磋：叠在江湖榜 / 公开档案之上，Esc 只关这一层。 -->

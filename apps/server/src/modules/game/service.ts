@@ -78,6 +78,8 @@ import {
   type PublicSectView,
   type SecretRealmListView,
   type SectStateView,
+  type SparHistoryView,
+  type SparHistoryEntryView,
   type SparResultView,
 } from './view';
 
@@ -900,6 +902,53 @@ export async function listRecentEvents(db: D1Database, userId: string): Promise<
   return rows.map(eventLogViewFromRow);
 }
 
+const SPAR_HISTORY_LIMIT = 20;
+
+/** 切磋历史（GET /game/spar-history）：最近 20 条 + 攻方胜负统计。 */
+export async function listSparHistory(db: D1Database, userId: string): Promise<SparHistoryView> {
+  const sect = await new SectRepository(db).findByUserId(userId);
+  if (sect === null) {
+    return { entries: [], stats: { wins: 0, losses: 0, draws: 0, total: 0 } };
+  }
+
+  const sparRepo = new SparringRepository(db);
+  const [rows, stats] = await Promise.all([
+    sparRepo.findBySectId(sect.id, SPAR_HISTORY_LIMIT),
+    sparRepo.statsBySectId(sect.id),
+  ]);
+
+  const sectIds = new Set<string>();
+  for (const row of rows) {
+    sectIds.add(row.attacker_sect_id);
+    sectIds.add(row.defender_sect_id);
+  }
+  const sectRepo = new SectRepository(db);
+  const sectNames = new Map<string, string>();
+  for (const id of sectIds) {
+    const s = await sectRepo.findById(id);
+    sectNames.set(id, s?.name ?? '未知宗门');
+  }
+
+  const entries: SparHistoryEntryView[] = rows.map((row) => ({
+    id: row.id,
+    attackerSectId: row.attacker_sect_id,
+    attackerSectName: sectNames.get(row.attacker_sect_id) ?? '未知宗门',
+    defenderSectId: row.defender_sect_id,
+    defenderSectName: sectNames.get(row.defender_sect_id) ?? '未知宗门',
+    attackerPower: Number(row.attacker_power),
+    defenderPower: Number(row.defender_power),
+    result: row.result,
+    reputationGained: Number(row.reputation_gained),
+    role: row.attacker_sect_id === sect.id ? 'attacker' : 'defender',
+    createdAt: new Date(Number(row.created_at)).toISOString(),
+  }));
+
+  return {
+    entries,
+    stats: { ...stats, total: stats.wins + stats.losses + stats.draws },
+  };
+}
+
 /**
  * 探索秘境（V2-2 第五、八节）：结算 → 逐项校验 → 扣入场费 → 一次随机判定 → 发奖 / 弟子受伤。
  *
@@ -1116,7 +1165,7 @@ const SPARRING_DAILY_LIMIT = 5;
 
 /** 切磋奖励（最小单位）：只有胜利发放。 */
 const SPARRING_WIN_REPUTATION = 10;
-const SPARRING_WIN_SPIRIT_STONE = 5_000;
+const SPARRING_WIN_SPIRIT_STONE = 100_000;
 
 /** 实际战力 = 基础战力 × (0.85 ~ 1.15)（V3 第 4.2 节）。 */
 function fluctuatedPower(basePower: number): number {
@@ -1365,7 +1414,7 @@ function sparMessage(
 ): string {
   if (result === 'win') {
     return `${myName} 击败了 ${targetName}，宗门声望 +${SPARRING_WIN_REPUTATION}，获得灵石 ${String(
-      spiritStoneGained,
+      spiritStoneGained / 1000,
     )}`;
   }
   if (result === 'lose') {

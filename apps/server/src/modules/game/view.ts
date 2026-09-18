@@ -238,6 +238,37 @@ export interface PublicBuildingView {
   level: number;
 }
 
+/** 切磋历史条目（GET /game/spar-history）。 */
+export interface SparHistoryEntryView {
+  id: string;
+  attackerSectId: string;
+  attackerSectName: string;
+  defenderSectId: string;
+  defenderSectName: string;
+  attackerPower: number;
+  defenderPower: number;
+  /** 从攻方视角：'win' | 'lose' | 'draw'。 */
+  result: string;
+  reputationGained: number;
+  /** 当前用户是攻方还是守方。 */
+  role: 'attacker' | 'defender';
+  createdAt: string;
+}
+
+/** 切磋战绩统计。 */
+export interface SparStatsView {
+  wins: number;
+  losses: number;
+  draws: number;
+  total: number;
+}
+
+/** 切磋历史（GET /game/spar-history 的 data）。 */
+export interface SparHistoryView {
+  entries: SparHistoryEntryView[];
+  stats: SparStatsView;
+}
+
 /** 单次切磋结果（POST /game/spar 的 result）。 */
 export interface SparResultView {
   myDiscipleName: string;
