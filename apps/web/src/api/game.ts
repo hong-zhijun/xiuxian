@@ -90,6 +90,16 @@ export interface EventLogView {
   createdAt: string;
 }
 
+/** 可选岗位（与后端 view.ts 的 AssignmentOptionView 一一对应）。 */
+export interface AssignmentOptionView {
+  id: string;
+  name: string;
+  /** 该岗位当前占用人数（null = 该岗位无人数限制）。 */
+  currentCount: number | null;
+  /** 该岗位人数上限（null = 无限制）。 */
+  maxCount: number | null;
+}
+
 export interface SectStateView {
   sect: {
     id: string;
@@ -101,13 +111,16 @@ export interface SectStateView {
     buildingCapacity: number;
     lastSettledAt: string;
     reputation: number;
+    /** 守擂阵容（3 名弟子 id，顺序即出战顺序）；null = 尚未布阵。 */
+    defenseLineup: string[] | null;
   };
   serverNow: string;
   resources: ResourceView[];
   disciples: DiscipleView[];
   buildings: BuildingView[];
   recruit: RecruitView;
-  assignments: { id: string; name: string }[];
+  /** 可选岗位（含闲置）；有上限的岗位（如采灵）会给出 currentCount / maxCount。 */
+  assignments: AssignmentOptionView[];
   /** 最近事件（新→旧，服务端最多返回 10 条）。 */
   recentEvents: EventLogView[];
   settle: {
@@ -323,20 +336,48 @@ export interface PublicSectView {
   reputation: number;
   disciples: PublicDiscipleView[];
   buildings: PublicBuildingView[];
+  /** 是否已设守擂阵容（不暴露具体弟子）。 */
+  hasDefenseLineup: boolean;
   createdAt: string;
 }
 
-/** 一次切磋的结果（与后端 view.ts 的 SparResultView 一一对应）。 */
-export interface SparResultView {
-  myDiscipleName: string;
-  targetDiscipleName: string;
+/** 挑战中的一轮（战报用，带双方弟子名字）。 */
+export interface ChallengeRoundView {
+  round: number;
+  attackerName: string;
+  defenderName: string;
+  attackerPower: number;
+  defenderPower: number;
+  winner: 'attacker' | 'defender';
+}
+
+/** 一次挑战的结果（与后端 view.ts 的 ChallengeResultView 一一对应）。 */
+export interface ChallengeResultView {
   targetSectName: string;
-  myPower: number;
-  targetPower: number;
-  result: 'win' | 'lose' | 'draw';
+  rounds: ChallengeRoundView[];
+  result: 'win' | 'lose';
   reputationGained: number;
   spiritStoneGained: number;
   message: string;
+}
+
+/** 挑战历史条目（从自己视角看）。 */
+export interface ChallengeHistoryEntryView {
+  id: string;
+  attackerSectName: string;
+  defenderSectName: string;
+  rounds: ChallengeRoundView[];
+  /** 从攻方视角的胜负。 */
+  result: string;
+  role: 'attacker' | 'defender';
+  reputationGained: number;
+  spiritStoneGained: number;
+  createdAt: string;
+}
+
+export interface ChallengeHistoryView {
+  entries: ChallengeHistoryEntryView[];
+  stats: { wins: number; losses: number; total: number };
 }
 
 export async function fetchLeaderboard(): Promise<LeaderboardEntryView[]> {
@@ -349,46 +390,28 @@ export async function fetchPublicSect(sectId: string): Promise<PublicSectView> {
   return data.sect;
 }
 
-export async function spar(
-  targetSectId: string,
-  myDiscipleId: string,
-  targetDiscipleId: string,
-): Promise<{ state: SectStateView; result: SparResultView }> {
-  return apiRequest<{ state: SectStateView; result: SparResultView }>('/api/v1/game/spar', {
+/** 设置守擂阵容（固定 3 人，顺序即出战顺序）。 */
+export async function setDefenseLineup(discipleIds: string[]): Promise<SectStateView> {
+  const data = await apiRequest<{ state: SectStateView }>('/api/v1/game/set-defense-lineup', {
     method: 'POST',
-    body: { targetSectId, myDiscipleId, targetDiscipleId },
+    body: { discipleIds },
+  });
+  return data.state;
+}
+
+/** 发起 3v3 挑战（攻方 3 人，顺序即对阵顺序）。 */
+export async function challenge(
+  targetSectId: string,
+  discipleIds: string[],
+): Promise<{ state: SectStateView; result: ChallengeResultView }> {
+  return apiRequest<{ state: SectStateView; result: ChallengeResultView }>('/api/v1/game/challenge', {
+    method: 'POST',
+    body: { targetSectId, discipleIds },
   });
 }
 
-/** 切磋历史条目。 */
-export interface SparHistoryEntryView {
-  id: string;
-  attackerSectId: string;
-  attackerSectName: string;
-  defenderSectId: string;
-  defenderSectName: string;
-  attackerPower: number;
-  defenderPower: number;
-  result: string;
-  reputationGained: number;
-  role: 'attacker' | 'defender';
-  createdAt: string;
-}
-
-export interface SparStatsView {
-  wins: number;
-  losses: number;
-  draws: number;
-  total: number;
-}
-
-export interface SparHistoryView {
-  entries: SparHistoryEntryView[];
-  stats: SparStatsView;
-}
-
-export async function fetchSparHistory(): Promise<SparHistoryView> {
-  return apiRequest<SparHistoryView>('/api/v1/game/spar-history');
+export async function fetchChallengeHistory(): Promise<ChallengeHistoryView> {
+  return apiRequest<ChallengeHistoryView>('/api/v1/game/challenge-history');
 }
 
 /** 招募候选人（与后端 names.ts 的 RecruitCandidate 一一对应）。 */

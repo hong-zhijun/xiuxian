@@ -1665,6 +1665,26 @@ ul {
   font-size: 10px;
 }
 
+/* 满员岗位（如采灵）：不可选，但仍要能看清占用/上限。 */
+.assignment-option:disabled,
+.assignment-option:disabled:hover,
+.assignment-option:disabled:focus {
+  color: #6b7a72;
+  background: transparent;
+  cursor: not-allowed;
+}
+
+.assignment-option.is-full .option-seal {
+  border-color: rgba(167, 184, 173, 0.16);
+  color: #6b7a72;
+}
+
+.assignment-full-note {
+  color: #8c7650;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
 .breakthrough-button {
   display: flex;
   height: 42px;
@@ -2589,7 +2609,7 @@ ul {
   }
 }
 
-/* ---------- Multiplayer (leaderboard / public sect / spar) ---------- */
+/* ---------- Multiplayer (leaderboard / public sect / challenge) ---------- */
 .rank-list {
   display: flex;
   flex-direction: column;
@@ -2692,8 +2712,7 @@ ul {
   text-align: right;
 }
 
-.leaderboard-note,
-.spar-note {
+.leaderboard-note {
   margin-top: 12px;
   color: #7d9186;
   font-size: 12px;
@@ -2789,6 +2808,273 @@ ul {
   text-align: center;
 }
 
+
+/* ---------- Challenge system (defense lineup / challenge / history) ---------- */
+.defense-lineup,
+.challenge-dialog,
+.challenge-history {
+  display: flex;
+  flex-direction: column;
+}
+
+.lineup-note {
+  margin-top: 10px;
+  color: #7d9186;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.lineup-current {
+  margin-top: 14px;
+}
+
+.lineup-slots {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+  list-style: none;
+}
+
+.lineup-slot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.014);
+  font-size: 12px;
+}
+
+.slot-index {
+  display: inline-flex;
+  width: 20px;
+  height: 20px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(202, 169, 106, 0.35);
+  border-radius: 50%;
+  color: var(--gold);
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size: 12px;
+}
+
+.slot-name {
+  color: #dce6e0;
+  font-size: 13px;
+  letter-spacing: 0.04em;
+}
+
+.slot-gone {
+  color: var(--faint);
+}
+
+.lineup-empty {
+  margin-top: 8px;
+  padding: 12px;
+  border: 1px dashed rgba(202, 169, 106, 0.24);
+  border-radius: 3px;
+  color: #6b7a72;
+  font-size: 12px;
+  text-align: center;
+}
+
+/* 演武录：胜负统计 + 逐轮战报 */
+.challenge-stats {
+  display: flex;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.stat-item {
+  flex: 1 1 0;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.014);
+  color: var(--muted);
+  font-size: 13px;
+  text-align: center;
+}
+
+.stat-item.is-win {
+  border-color: rgba(119, 184, 154, 0.3);
+  color: var(--jade-bright);
+}
+
+.stat-item.is-lose {
+  border-color: rgba(200, 90, 84, 0.3);
+  color: var(--red-bright);
+}
+
+.challenge-list {
+  display: flex;
+  flex-direction: column;
+  margin-top: 12px;
+  list-style: none;
+}
+
+.challenge-card {
+  border-bottom: 1px solid var(--line);
+}
+
+.challenge-card:last-child {
+  border-bottom: 0;
+}
+
+.challenge-summary {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  grid-template-columns: 34px minmax(0, 1fr) 16px;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 2px;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  text-align: left;
+}
+
+.challenge-summary:hover {
+  background: rgba(119, 184, 154, 0.05);
+}
+
+.result-badge {
+  display: inline-flex;
+  width: 30px;
+  height: 30px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  font-family: 'STKaiti', 'KaiTi', serif;
+  font-size: 14px;
+}
+
+.result-badge.is-win {
+  border-color: rgba(119, 184, 154, 0.42);
+  color: var(--jade-bright);
+  background: rgba(119, 184, 154, 0.09);
+}
+
+.result-badge.is-lose {
+  border-color: rgba(200, 90, 84, 0.4);
+  color: var(--red-bright);
+  background: rgba(200, 90, 84, 0.08);
+}
+
+.challenge-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.challenge-title {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.challenge-title strong {
+  overflow: hidden;
+  color: #dce6e0;
+  font-family: 'STKaiti', 'KaiTi', serif;
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: 0.05em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.challenge-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 12px;
+  color: #93a99e;
+  font-size: 12px;
+}
+
+.challenge-meta .is-gain {
+  color: var(--gold);
+}
+
+.challenge-chevron {
+  color: var(--faint);
+  font-size: 12px;
+  text-align: right;
+}
+
+.round-list {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 0 2px 12px 44px;
+  list-style: none;
+}
+
+/* 弹窗里的战报不需要给「展开箭头」留左边距。 */
+.round-list.is-flush {
+  padding-left: 0;
+}
+
+/* 战报底部的总结果（胜负徽记 + 比分 + 服务端文案）。 */
+.challenge-outcome {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.challenge-outcome-text {
+  color: #dce6e0;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.challenge-outcome-text strong {
+  color: var(--gold);
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size: 15px;
+}
+
+.round-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 8px;
+  font-size: 12px;
+}
+
+.round-no {
+  flex: 0 0 auto;
+  color: var(--faint);
+  font-size: 11px;
+}
+
+.round-side {
+  color: var(--muted);
+}
+
+.round-side.is-win {
+  color: var(--jade-bright);
+}
+
+.round-side.is-lose {
+  color: #9a7a76;
+}
+
+.round-vs {
+  color: var(--faint);
+  font-size: 11px;
+}
 
 /* ---------- Disciple attributes & talents ---------- */
 .disciple-stats {

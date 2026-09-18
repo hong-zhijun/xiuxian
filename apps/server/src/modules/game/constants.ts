@@ -309,6 +309,24 @@ export const SCRIPTURE_LIBRARY_BUILDING_ID = 'scriptureLibrary';
 /** 藏经阁每级给修炼速度的加成（基点，1000 = 10%）。 */
 export const SCRIPTURE_LIBRARY_CULTIVATION_BONUS_BP_PER_LEVEL = 1000;
 
+/** 灵矿（原任务堂）建筑 id：灵石基础产出的加成来源（V5.1 改动二）。 */
+export const MISSION_HALL_BUILDING_ID = 'missionHall';
+
+/** 灵矿每级给灵石基础产出的加成（基点，2000 = +20%）。 */
+export const MISSION_HALL_SPIRIT_STONE_BONUS_BP_PER_LEVEL = 2000;
+
+/** 采灵（灵石采集）岗位 id：对应配置里的 positions.id（V5.1 改动三）。 */
+export const STONE_MINING_ASSIGNMENT = 'stoneMining';
+
+/** 采灵岗位人数上限：宗门 6 级前每人限 1 人。 */
+export const STONE_MINING_LIMIT_LOW = 1;
+
+/** 采灵岗位人数上限：宗门 6 级起限 2 人。 */
+export const STONE_MINING_LIMIT_HIGH = 2;
+
+/** 采灵岗位人数上限提到 high 的宗门等级门槛。 */
+export const STONE_MINING_UNLOCK_SECT_LEVEL = 6;
+
 /**
  * 天赋定义（V4 第二节）。天赋是代码常量，不进 game-config：
  * 每个弟子的 talent 列存 id，这里的映射负责展示名与加成对象。
@@ -342,3 +360,7 @@ export function findTalent(talentId: string): TalentDef | undefined {
 export const TALENT_POSITION_BONUS_BP = 2000; // 岗位产出 +20%
 export const TALENT_CULTIVATION_BONUS_BP = 2000; // 修炼速度 +20%
 export const TALENT_COMBAT_BONUS_BP = 1500; // 战斗力 +15%
+
+/* ---------- V5 挑战系统 ---------- */
+/** 守擂阵容 / 出战阵容固定 3 人；顺序即对阵顺序（view 与 service 共用同一判定）。 */
+export const DEFENSE_LINEUP_SIZE = 3;

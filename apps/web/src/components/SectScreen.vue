@@ -3,6 +3,7 @@ import { computed, onUnmounted, ref, watch } from 'vue';
 
 import type {
   BuildingView,
+  ChallengeResultView,
   DiscipleView,
   PublicSectView,
   RecruitPreview,
@@ -14,14 +15,15 @@ import { formatAmount, formatBp, formatRate, formatTime } from '../utils/format'
 import { fetchRecruitPreview } from '../api/game';
 import { resourceGlyph } from '../utils/glyph';
 import AssignmentSelect from './AssignmentSelect.vue';
+import ChallengeDialog from './ChallengeDialog.vue';
+import ChallengeHistoryPanel from './ChallengeHistoryPanel.vue';
+import DefenseLineupPanel from './DefenseLineupPanel.vue';
 import EventLogPanel from './EventLogPanel.vue';
 import ExplorePanel from './ExplorePanel.vue';
 import ExplorePartyDialog from './ExplorePartyDialog.vue';
 import LeaderboardPanel from './LeaderboardPanel.vue';
 import RecruitDialog from './RecruitDialog.vue';
 import ModalShell from './ModalShell.vue';
-import SparDialog from './SparDialog.vue';
-import SparHistoryPanel from './SparHistoryPanel.vue';
 
 /**
  * 游戏主界面：服务端负责结算和规则，本组件只展示、本地平滑数值并派发操作。
@@ -29,6 +31,8 @@ import SparHistoryPanel from './SparHistoryPanel.vue';
 const props = defineProps<{
   state: SectStateView;
   busy: boolean;
+  /** 最近一次挑战的战报；App.vue 负责拿结果，这里只负责展示（null = 还没打过）。 */
+  challengeResult: ChallengeResultView | null;
 }>();
 
 const emit = defineEmits<{
@@ -39,13 +43,17 @@ const emit = defineEmits<{
   upgrade: [defId: string];
   'upgrade-sect': [];
   explore: [realmId: string, discipleIds: string[]];
-  spar: [targetSectId: string, myDiscipleId: string, targetDiscipleId: string];
+  challenge: [targetSectId: string, discipleIds: string[]];
+  setDefenseLineup: [discipleIds: string[]];
+  dismissChallengeResult: [];
   breakthrough: [discipleId: string];
   notify: [tone: ToastTone, title: string, message: string];
 }>();
 
-/** 操作条里的弹窗开关：天机录 / 历练探索（宗门晋升与建筑仍在右栏常驻）。 */
-const openPanel = ref<'events' | 'explore' | 'leaderboard' | 'spar-history' | null>(null);
+/** 操作条里的弹窗开关：天机录 / 历练探索 / 江湖榜 / 守擂阵容 / 演武录（宗门晋升与建筑仍在右栏常驻）。 */
+const openPanel = ref<
+  'events' | 'explore' | 'leaderboard' | 'defense-lineup' | 'challenge-history' | null
+>(null);
 
 /** 操作条角标：最近事件条数。 */
 const recentEventCount = computed(() => props.state.recentEvents?.length ?? 0);
@@ -58,8 +66,8 @@ const recruitLoading = ref(false);
 /** 二级弹窗：当前正在点将出征的秘境（null = 未打开）。 */
 const exploreRealm = ref<SecretRealmView | null>(null);
 
-/** 切磋弹窗的目标宗门（null = 未打开）。 */
-const sparTarget = ref<PublicSectView | null>(null);
+/** 挑战弹窗的目标宗门（null = 未打开）。 */
+const challengeTarget = ref<PublicSectView | null>(null);
 
 /** 本地平滑显示：每秒按服务端给的产量推进，上限为容量（刷新后以服务端为准）。 */
 const liveResources = ref<Record<string, number>>({});
@@ -142,7 +150,7 @@ function resourceClass(resourceId: string): string {
 function buildingGlyph(defId: string): string {
   if (defId === 'spiritualArray') return '阵';
   if (defId === 'herbGarden') return '圃';
-  if (defId === 'missionHall') return '令';
+  if (defId === 'missionHall') return '矿';
   if (defId === 'scriptureLibrary') return '经';
   if (defId === 'arenaHall') return '武';
   return '殿';
@@ -162,7 +170,7 @@ function levelGlyphsFor(building: BuildingView): readonly string[] {
 function buildingDescription(defId: string): string {
   if (defId === 'spiritualArray') return '汇聚天地灵气，助益弟子问道';
   if (defId === 'herbGarden') return '培育灵植，为宗门积蓄药材';
-  if (defId === 'missionHall') return '统筹宗门事务与弟子差遣';
+  if (defId === 'missionHall') return '开采地脉灵矿，提升灵石产出';
   if (defId === 'scriptureLibrary') return '典藏万卷，加速弟子修炼';
   if (defId === 'arenaHall') return '锻炼武技，开启秘境探索';
   return '宗门基业，随等级提升效用';
@@ -220,17 +228,33 @@ function onPartyExplore(realmId: string, discipleIds: string[]): void {
   emit('explore', realmId, discipleIds);
 }
 
-/** 公开档案里点「切磋」：打开切磋弹窗。 */
-function onSparRequest(sect: PublicSectView): void {
+/** 公开档案里点「挑战」：先丢弃上一场战报，再打开挑战弹窗。 */
+function onChallengeRequest(sect: PublicSectView): void {
   if (props.busy) return;
-  sparTarget.value = sect;
+  emit('dismissChallengeResult');
+  challengeTarget.value = sect;
 }
 
-/** 出手：关掉切磋弹窗，把三方 id 交给上层调接口（结果由 App.vue 提示）。 */
-function onSparSubmit(targetSectId: string, myDiscipleId: string, targetDiscipleId: string): void {
+/**
+ * 出手：把目标与出战阵容交给上层调接口。
+ * 弹窗先留着——App.vue 拿到战报后会通过 `challengeResult` 把它切成战报态。
+ */
+function onChallengeSubmit(targetSectId: string, discipleIds: string[]): void {
   if (props.busy) return;
-  sparTarget.value = null;
-  emit('spar', targetSectId, myDiscipleId, targetDiscipleId);
+  emit('challenge', targetSectId, discipleIds);
+}
+
+/** 关掉挑战弹窗（含战报态）：清掉目标，并请上层丢弃战报。 */
+function onCloseChallengeDialog(): void {
+  challengeTarget.value = null;
+  emit('dismissChallengeResult');
+}
+
+/** 守擂阵容弹窗里点「确认阵容」：关掉弹窗，把阵容交给上层调接口。 */
+function onSetLineupChoice(discipleIds: string[]): void {
+  if (props.busy) return;
+  openPanel.value = null;
+  emit('setDefenseLineup', discipleIds);
 }
 
 function requestBreakthrough(disciple: DiscipleView): void {
@@ -340,7 +364,13 @@ function requestBreakthrough(disciple: DiscipleView): void {
         </svg>
         <span>江湖榜</span>
       </button>
-      <button class="action-chip" type="button" @click="openPanel = 'spar-history'">
+      <button class="action-chip" type="button" @click="openPanel = 'defense-lineup'">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 3.2 5 6.3v5.2c0 4.1 2.9 7.8 7 9.3 4.1-1.5 7-5.2 7-9.3V6.3L12 3.2Zm-3 8.6h6" />
+        </svg>
+        <span>守擂阵容</span>
+      </button>
+      <button class="action-chip" type="button" @click="openPanel = 'challenge-history'">
         <svg viewBox="0 0 24 24" aria-hidden="true">
           <path d="M4 4h6v6H4zm10 0h6v6h-6zM4 14h6v6H4zm10 2a4 4 0 1 0 0-0" />
         </svg>
@@ -582,21 +612,32 @@ function requestBreakthrough(disciple: DiscipleView): void {
     </ModalShell>
 
     <ModalShell v-if="openPanel === 'leaderboard'" label="江湖榜" @close="openPanel = null">
-      <LeaderboardPanel :state="state" :busy="busy" @spar="onSparRequest" />
+      <LeaderboardPanel :state="state" :busy="busy" @challenge="onChallengeRequest" />
     </ModalShell>
 
-    <ModalShell v-if="openPanel === 'spar-history'" label="演武录" @close="openPanel = null">
-      <SparHistoryPanel :state="state" />
+    <ModalShell v-if="openPanel === 'defense-lineup'" label="守擂阵容" @close="openPanel = null">
+      <DefenseLineupPanel :state="state" :busy="busy" @set-lineup="onSetLineupChoice" />
     </ModalShell>
 
-    <!-- 切磋：叠在江湖榜 / 公开档案之上，Esc 只关这一层。 -->
+    <ModalShell v-if="openPanel === 'challenge-history'" label="演武录" @close="openPanel = null">
+      <ChallengeHistoryPanel :state="state" />
+    </ModalShell>
+
+    <!-- 登门挑战：叠在江湖榜 / 公开档案之上，Esc 只关这一层；打完原地切成战报态。 -->
     <ModalShell
-      v-if="sparTarget"
+      v-if="challengeTarget"
       narrow
-      :label="`切磋 · ${sparTarget.name}`"
-      @close="sparTarget = null"
+      :label="`挑战 · ${challengeTarget.name}`"
+      @close="onCloseChallengeDialog"
     >
-      <SparDialog :target="sparTarget" :state="state" :busy="busy" @spar="onSparSubmit" />
+      <ChallengeDialog
+        :target="challengeTarget"
+        :state="state"
+        :busy="busy"
+        :result="challengeResult"
+        @challenge="onChallengeSubmit"
+        @close="onCloseChallengeDialog"
+      />
     </ModalShell>
 
     <!-- 招贤台：点「张榜招贤」拉到候选人后才打开。 -->

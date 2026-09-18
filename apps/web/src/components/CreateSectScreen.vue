@@ -107,7 +107,7 @@ async function submit(): Promise<void> {
         <p class="eyebrow">开宗赐予</p>
         <ul>
           <li><span aria-hidden="true">人</span><div><strong>三名弟子</strong><small>各循其职，静候掌门调度</small></div></li>
-          <li><span aria-hidden="true">殿</span><div><strong>三座建筑</strong><small>聚灵、灵药与任务堂俱全</small></div></li>
+          <li><span aria-hidden="true">殿</span><div><strong>三座建筑</strong><small>聚灵、灵药与灵矿俱全</small></div></li>
           <li><span aria-hidden="true">藏</span><div><strong>初始资源</strong><small>足以开启宗门第一轮经营</small></div></li>
         </ul>
         <p class="gift-note">具体弟子、建筑与资源均由天地法则（服务端配置）生成。</p>

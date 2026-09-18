@@ -4,7 +4,8 @@ import { MissingSchemaError } from './errors';
  * 必需表白名单（代码内，不来自请求参数）。
  * P0 迁移 0001~0003 建账号/会话/命令/配置表，0004 建游戏表（一次性可玩版本），
  * 0005 建事件日志表（P3 随机事件），0006 建探索记录表（V2-2 秘境探索），
- * 0007 建切磋记录表（V3 多人互动）。
+ * 0007 建切磋记录表（V3 多人互动），0008 加弟子战斗属性（V4），
+ * 0009 加守擂阵容列与挑战记录表（V5 挑战系统）。
  */
 export const REQUIRED_TABLES = [
   'users',
@@ -21,6 +22,7 @@ export const REQUIRED_TABLES = [
   'event_log',
   'explorations',
   'sparring_log',
+  'challenge_log',
 ] as const;
 
 export interface DbReadiness {

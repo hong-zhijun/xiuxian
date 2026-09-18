@@ -17,7 +17,7 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-  spar: [sect: PublicSectView];
+  challenge: [sect: PublicSectView];
 }>();
 
 const entries = ref<LeaderboardEntryView[]>([]);
@@ -39,7 +39,7 @@ async function loadLeaderboard(): Promise<void> {
   }
 }
 
-// state 变化（自己升级 / 切磋后刷新）就重拉一次，自己的名次与声望保持最新。
+// state 变化（自己升级 / 挑战后刷新）就重拉一次，自己的名次与声望保持最新。
 watch(() => props.state, () => { void loadLeaderboard(); }, { immediate: true });
 
 function openSect(entry: LeaderboardEntryView): void {
@@ -54,7 +54,7 @@ function openSect(entry: LeaderboardEntryView): void {
     :sect-id="selectedSectId"
     :busy="busy"
     @back="selectedSectId = null"
-    @spar="emit('spar', $event)"
+    @challenge="emit('challenge', $event)"
   />
 
   <section v-else class="leaderboard-panel" aria-labelledby="leaderboard-title">
@@ -100,6 +100,6 @@ function openSect(entry: LeaderboardEntryView): void {
       <strong>江湖上还没有别的宗门</strong>
     </div>
 
-    <p class="leaderboard-note">点其他宗门可查看公开档案并切磋；每日 5 次、同一宗门 1 次。</p>
+    <p class="leaderboard-note">点其他宗门可查看公开档案并发起挑战；每日 1 次机会。</p>
   </section>
 </template>

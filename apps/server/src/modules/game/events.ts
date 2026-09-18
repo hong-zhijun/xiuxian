@@ -40,9 +40,9 @@ export interface TriggeredEvent {
 }
 
 /** 每小时触发一个事件的期望次数。 */
-export const EVENT_TRIGGER_RATE_PER_HOUR = 0.3;
-/** 单次结算最多触发的事件数（离线 12 小时最多 3 个，避免刷屏）。 */
-export const MAX_EVENTS_PER_SETTLE = 3;
+export const EVENT_TRIGGER_RATE_PER_HOUR = 2.0;
+/** 单次结算最多触发的事件数（离线 12 小时最多 5 个，避免刷屏）。 */
+export const MAX_EVENTS_PER_SETTLE = 5;
 /** sync 返回的最近事件条数（新的在前）。 */
 export const RECENT_EVENTS_IN_SYNC = 10;
 /** GET /game/events 返回的最近事件条数（新的在前）。 */
@@ -161,7 +161,7 @@ export function pickEvent(
  * 按经过的时长判定本次触发的事件（P3 第三节）。
  *
  * elapsedHours = durationMs / 1h（durationMs 已是按 12 小时上限截断后的实际计时）；
- * 期望次数 = elapsedHours × 0.3，整数部分必触发，小数部分按概率补 1，单次最多 3 个。
+ * 期望次数 = elapsedHours × 2.0，整数部分必触发，小数部分按概率补 1，单次最多 5 个。
  * 随机源可注入（默认 Math.random），是与 settleEconomy 共用的随机来源。
  */
 export function triggerEvents(

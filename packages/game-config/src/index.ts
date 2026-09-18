@@ -7,7 +7,8 @@ import type { GameConfigContent } from '@xiuxian/game-core';
  * - 四种资源的起始值/产量/容量：03 第 2 节（展示单位 ×1000 = 最小单位）；
  * - 建筑上限 5（P0 原为 3，V2-1 提高）与升级成本（灵石 50×当前等级、矿石 10×当前等级）：03 第 2 节；
  * - 藏经阁/演武场两座建筑：V2-1 第 3.2 节（V2-1 新增，非 03 基线）；
- * - 岗位产量（药园 20 药材/小时、采矿 15 矿石/小时）：03 第 2 节；
+ * - 任务堂改名「灵矿」（id 仍是 missionHall，避免与库里已有 def_id 不匹配）：V5.1 第 2 节
+ * - 岗位产量（药园 20 药材/小时、采矿 15 矿石/小时）：03 第 2 节；采灵 15 灵石/小时：V5.1 第 3 节；
  * - 弟子初始 3 人、初始等级上限 6/建筑上限 3、赠三座 Lv1 建筑：03 第 2 节（运行期上限由 SECT_LEVELS 等级决定）；
  * - 招募每日 3 次、每次 50 灵石：03 第 4 节；
  * - 修炼基础 60/小时、资质系数 8000 + 资质×40 基点：03 第 4 节；
@@ -19,14 +20,14 @@ import type { GameConfigContent } from '@xiuxian/game-core';
  */
 
 /** 版本号：内容变化时必须同步更新版本与 payloadHash（见 03 第 12 节）。 */
-export const GAME_CONFIG_VERSION = 'v2.1.0';
+export const GAME_CONFIG_VERSION = 'v5.1.0';
 
 /**
  * 内容哈希（sha256:，覆盖规范化后的 JSON）。
  * 修改 content 后必须重新计算，否则 Worker 启动与 config:hash 校验都会失败。
  */
 export const GAME_CONFIG_PAYLOAD_HASH =
-  'sha256:4cc6206898464139a8a2e978766ab18ab946f5a8c0ba5b56e651759e56fb9141';
+  'sha256:7cba811dc2e4ad282590c8c98299a82cb22a1ddb46c5f6dc55068b00dee16514';
 
 export const GAME_CONFIG_CONTENT: GameConfigContent = {
   server: {
@@ -85,7 +86,7 @@ export const GAME_CONFIG_CONTENT: GameConfigContent = {
     },
     {
       id: 'missionHall',
-      name: '任务堂',
+      name: '灵矿',
       maxLevel: 5,
       upgradeCostPerLevel: { spiritStone: '50000', ore: '10000' },
       visibility: 'public',
@@ -123,6 +124,13 @@ export const GAME_CONFIG_CONTENT: GameConfigContent = {
       id: 'oreGathering',
       name: '采矿',
       outputPerHourPerDisciple: { ore: '15000' },
+      visibility: 'public',
+    },
+    {
+      // V5.1 第 3 节：采灵岗位（每小时 15000 最小单位 = 15 展示单位灵石/人）
+      id: 'stoneMining',
+      name: '采灵',
+      outputPerHourPerDisciple: { spiritStone: '15000' },
       visibility: 'public',
     },
   ],

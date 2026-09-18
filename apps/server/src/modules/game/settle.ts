@@ -1,6 +1,8 @@
 import type { GameConfigContent } from '@xiuxian/game-core';
 
 import {
+  MISSION_HALL_BUILDING_ID,
+  MISSION_HALL_SPIRIT_STONE_BONUS_BP_PER_LEVEL,
   SCRIPTURE_LIBRARY_BUILDING_ID,
   SCRIPTURE_LIBRARY_CULTIVATION_BONUS_BP_PER_LEVEL,
   TALENT_CULTIVATION_BONUS_BP,
@@ -91,7 +93,7 @@ export function settleEconomy(input: SettleInput, random: () => number = Math.ra
   const elapsed = Math.max(0, now - lastSettledAt);
   const durationMs = Math.min(elapsed, config.offlineCapSeconds * 1000);
 
-  const rateByResource = resourceRates(config, disciples);
+  const rateByResource = resourceRates(config, disciples, input.buildingLevels);
   const settledResources = resources.map((resource) =>
     settleResource(
       resource,
@@ -153,10 +155,19 @@ function applyEventEffects(
 export function resourceRates(
   config: GameConfigContent,
   disciples: readonly DiscipleState[],
+  buildingLevels?: Record<string, number>,
 ): Map<string, number> {
   const rates = new Map<string, number>();
   for (const resource of config.resources) {
     rates.set(resource.id, Number(resource.baseRatePerHour));
+  }
+
+  // V5.1：灵矿每级 +20% 灵石**基础**产出；只抬高基础值，与弟子岗位产出是相加关系。
+  const missionHallLevel = buildingLevels?.[MISSION_HALL_BUILDING_ID] ?? 0;
+  if (missionHallLevel > 0) {
+    const currentRate = rates.get('spiritStone') ?? 0;
+    const bonusBp = missionHallLevel * MISSION_HALL_SPIRIT_STONE_BONUS_BP_PER_LEVEL;
+    rates.set('spiritStone', Math.floor((currentRate * (10_000 + bonusBp)) / 10_000));
   }
 
   const positions = new Map<string, { outputPerHourPerDisciple: Record<string, string> }>(

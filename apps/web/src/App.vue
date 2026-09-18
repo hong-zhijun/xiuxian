@@ -5,16 +5,17 @@ import { ApiError, setCsrfToken } from './api/client';
 import {
   assign,
   breakthrough,
+  challenge,
   explore,
   fetchMe,
   logout as apiLogout,
   recruit,
+  setDefenseLineup,
   syncSect,
-  spar,
   upgradeBuilding,
   upgradeSect,
 } from './api/game';
-import type { EventLogView, ResourceView, SectStateView } from './api/game';
+import type { ChallengeResultView, EventLogView, ResourceView, SectStateView } from './api/game';
 import CreateSectScreen from './components/CreateSectScreen.vue';
 import LoginScreen from './components/LoginScreen.vue';
 import SectScreen from './components/SectScreen.vue';
@@ -38,6 +39,9 @@ const phase = ref<Phase>('loading');
 const state = ref<SectStateView | null>(null);
 const busy = ref(false);
 const toasts = ref<ToastItem[]>([]);
+
+/** 最近一次挑战的战报（交给 SectScreen 的挑战弹窗展示；关掉弹窗即清空）。 */
+const challengeResult = ref<ChallengeResultView | null>(null);
 
 let syncTimer: number | undefined;
 let nextToastId = 1;
@@ -278,38 +282,58 @@ async function onExplore(realmId: string, discipleIds: string[]): Promise<void> 
   }
 }
 
-/** 切磋：服务端算战力与胜负，这里只回填 state、按结果提示（含战力对比与奖励）。 */
-async function onSpar(
-  targetSectId: string,
-  myDiscipleId: string,
-  targetDiscipleId: string,
-): Promise<void> {
+/** 3v3 比分（攻方胜轮数 : 守方胜轮数），toast 标题里用。 */
+function challengeScore(result: ChallengeResultView): string {
+  const attackerWins = result.rounds.filter((round) => round.winner === 'attacker').length;
+  return `${attackerWins}:${result.rounds.length - attackerWins}`;
+}
+
+/**
+ * 登门挑战：服务端逐轮裁决，这里回填 state、把逐轮战报交给弹窗展示，并按胜负 toast（失败无损失）。
+ * toast 正文直接用服务端给的 message（已含比分与奖励），标题补一个比分，避免同一句话出现两遍。
+ */
+async function onChallenge(targetSectId: string, discipleIds: string[]): Promise<void> {
   if (busy.value) return;
   busy.value = true;
+  challengeResult.value = null;
   try {
-    const { state: next, result } = await spar(targetSectId, myDiscipleId, targetDiscipleId);
+    const { state: next, result } = await challenge(targetSectId, discipleIds);
     state.value = next;
     announceEvents(next);
+    challengeResult.value = result;
 
-    const tone: ToastTone =
-      result.result === 'win' ? 'success' : result.result === 'draw' ? 'info' : 'warning';
-    const title =
-      result.result === 'win'
-        ? `切磋得胜 · ${result.targetSectName}`
-        : result.result === 'draw'
-          ? `切磋平手 · ${result.targetSectName}`
-          : `切磋落败 · ${result.targetSectName}`;
-    const power = `${result.myDiscipleName} ${result.myPower} · ${result.targetDiscipleName} ${result.targetPower}`;
-    const reward =
-      result.spiritStoneGained > 0 || result.reputationGained > 0
-        ? ` · 声望 +${result.reputationGained} · 灵石 +${formatAmount(result.spiritStoneGained)}`
-        : '';
-    notify(tone, title, `${result.message}（战力 ${power}${reward}）`);
+    const won = result.result === 'win';
+    notify(
+      won ? 'success' : 'warning',
+      `${won ? '挑战得胜' : '挑战失利'} · ${result.targetSectName}（${challengeScore(result)}）`,
+      result.message,
+    );
   } catch (caught) {
     handleError(caught);
   } finally {
     busy.value = false;
   }
+}
+
+/** 守擂阵容：固定 3 人、顺序即迎战顺序，服务端只存弟子 id。 */
+async function onSetDefenseLineup(discipleIds: string[]): Promise<void> {
+  if (busy.value) return;
+  busy.value = true;
+  try {
+    const next = await setDefenseLineup(discipleIds);
+    state.value = next;
+    announceEvents(next);
+    notify('success', '阵容已定', '守擂阵容已更新。');
+  } catch (caught) {
+    handleError(caught);
+  } finally {
+    busy.value = false;
+  }
+}
+
+/** 挑战弹窗关闭：清掉战报，下次打开是干净的选人界面。 */
+function onDismissChallengeResult(): void {
+  challengeResult.value = null;
 }
 
 function onBreakthrough(discipleId: string): void {
@@ -427,6 +451,7 @@ onUnmounted(() => {
       v-else-if="state"
       :state="state"
       :busy="busy"
+      :challenge-result="challengeResult"
       @refresh="refresh(true)"
       @logout="onLogout"
       @recruit="onRecruit"
@@ -434,7 +459,9 @@ onUnmounted(() => {
       @upgrade="onUpgrade"
       @upgrade-sect="onUpgradeSect"
       @explore="onExplore"
-      @spar="onSpar"
+      @challenge="onChallenge"
+      @set-defense-lineup="onSetDefenseLineup"
+      @dismiss-challenge-result="onDismissChallengeResult"
       @breakthrough="onBreakthrough"
       @notify="notify"
     />

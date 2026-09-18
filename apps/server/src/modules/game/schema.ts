@@ -43,3 +43,14 @@ export const sparRequestSchema = z.strictObject({
   myDiscipleId: z.uuid(),
   targetDiscipleId: z.uuid(),
 });
+
+/** V5 守擂阵容：固定 3 人，顺序即出战顺序（去重/归属在 service 里判定）。 */
+export const setDefenseLineupSchema = z.strictObject({
+  discipleIds: z.array(z.string().min(1)).length(3),
+});
+
+/** V5 挑战：目标宗门 + 攻方 3 人出战阵容（顺序即对阵顺序）。 */
+export const challengeRequestSchema = z.strictObject({
+  targetSectId: z.string().min(1),
+  discipleIds: z.array(z.string().min(1)).length(3),
+});

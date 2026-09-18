@@ -7,26 +7,28 @@ import { getDb } from '../../infra/db/client';
 import {
   assignRequestSchema,
   breakthroughRequestSchema,
+  challengeRequestSchema,
   createSectRequestSchema,
   exploreRequestSchema,
   recruitRequestSchema,
-  sparRequestSchema,
+  setDefenseLineupSchema,
   upgradeBuildingRequestSchema,
 } from './schema';
 import {
   assignDisciple,
   breakthrough,
+  challengeSect,
   createSect,
   exploreSectRealm,
   getPublicSect,
   getSectState,
+  listChallengeHistory,
   listLeaderboard,
   listRecentEvents,
-  listSparHistory,
   listSecretRealms,
   previewRecruit,
   recruitDisciple,
-  sparWithSect,
+  setDefenseLineup,
   upgradeBuilding,
   upgradeSect,
 } from './service';
@@ -149,23 +151,30 @@ export function createGameRoutes(): Hono<AppEnv> {
     return respondOk(c, { sect });
   });
 
-  // 切磋历史（只读：最近 20 条 + 胜负统计）。
-  routes.get('/game/spar-history', async (c) => {
+  // 挑战历史（只读：最近 20 条 + 自身视角胜负统计）。
+  routes.get('/game/challenge-history', async (c) => {
     const userId = requireUserId(c);
-    const history = await listSparHistory(getDb(c.env), userId);
+    const history = await listChallengeHistory(getDb(c.env), userId);
     return respondOk(c, history);
   });
 
-  // V3：切磋（结算 → 校验 → 战力判定 → 奖励 + 切磋记录，一次 batch 写回）。
-  routes.post('/game/spar', async (c) => {
+  // V5：设置守擂阵容（结算 → 校验归属 → 写回，一次 batch）。
+  routes.post('/game/set-defense-lineup', async (c) => {
     const userId = requireUserId(c);
-    const body = await parseStrictJson(sparRequestSchema, c);
-    const result = await sparWithSect(
+    const body = await parseStrictJson(setDefenseLineupSchema, c);
+    const state = await setDefenseLineup(getDb(c.env), userId, body.discipleIds, Date.now());
+    return respondOk(c, { state });
+  });
+
+  // V5：挑战（结算 → 校验 → 3v3 逐对决斗 → 奖励 + 挑战记录，一次 batch 写回）。
+  routes.post('/game/challenge', async (c) => {
+    const userId = requireUserId(c);
+    const body = await parseStrictJson(challengeRequestSchema, c);
+    const result = await challengeSect(
       getDb(c.env),
       userId,
       body.targetSectId,
-      body.myDiscipleId,
-      body.targetDiscipleId,
+      body.discipleIds,
       Date.now(),
     );
     return respondOk(c, { state: result.state, result: result.result });

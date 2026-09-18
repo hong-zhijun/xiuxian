@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue';
+import { computed, ref, watch } from 'vue';
 
 import type { PublicSectView } from '../api/game';
 import { fetchPublicSect } from '../api/game';
@@ -17,7 +17,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   back: [];
-  spar: [sect: PublicSectView];
+  challenge: [sect: PublicSectView];
 }>();
 
 const sect = ref<PublicSectView | null>(null);
@@ -37,11 +37,16 @@ watch(
   { immediate: true },
 );
 
-function requestSpar(): void {
-  if (props.busy || sect.value === null || sect.value.disciples.length === 0) {
+/** 对方布了阵、且门下有人可应战，才能登门挑战。 */
+const canChallenge = computed(
+  () => sect.value !== null && sect.value.hasDefenseLineup && sect.value.disciples.length > 0,
+);
+
+function requestChallenge(): void {
+  if (props.busy || sect.value === null || !canChallenge.value) {
     return;
   }
-  emit('spar', sect.value);
+  emit('challenge', sect.value);
 }
 </script>
 
@@ -96,15 +101,16 @@ function requestSpar(): void {
 
       <button
         class="action-button primary-action realm-button"
-        :class="{ 'is-disabled': busy || sect.disciples.length === 0 }"
+        :class="{ 'is-disabled': busy || !canChallenge }"
         type="button"
-        :disabled="busy"
-        :aria-disabled="busy || sect.disciples.length === 0"
-        @click="requestSpar"
+        :disabled="busy || !canChallenge"
+        :aria-disabled="busy || !canChallenge"
+        @click="requestChallenge"
       >
-        <span>切磋</span>
+        <span>挑战</span>
       </button>
-      <p class="public-note">每日 5 次切磋机会，同一宗门每日 1 次；胜者 +10 声望与 5000 灵石。</p>
+      <p v-if="sect && !sect.hasDefenseLineup" class="blocked-hint">对方尚未设置守擂阵容</p>
+      <p class="public-note">每日 1 次挑战机会；胜者 +10 声望与 100 灵石。</p>
     </template>
 
     <p v-else-if="loadError" class="explore-hint">{{ loadError }}</p>

@@ -1,10 +1,15 @@
 import type { GameConfigContent } from '@xiuxian/game-core';
 
 import {
+  DEFENSE_LINEUP_SIZE,
   BREAKTHROUGH_ARRAY_BONUS_BP_PER_LEVEL,
   IDLE_ASSIGNMENT,
   SPIRITUAL_ARRAY_BUILDING_ID,
   SCRIPTURE_LIBRARY_BUILDING_ID,
+  STONE_MINING_ASSIGNMENT,
+  STONE_MINING_LIMIT_HIGH,
+  STONE_MINING_LIMIT_LOW,
+  STONE_MINING_UNLOCK_SECT_LEVEL,
   breakthroughEnergyCost,
   effectiveCapacity,
   findRealm,
@@ -104,6 +109,10 @@ export interface RecruitView {
 export interface AssignmentOptionView {
   id: string;
   name: string;
+  /** 该岗位当前占用人数；null = 无人数限制（V5.1 改动三）。 */
+  currentCount: number | null;
+  /** 该岗位人数上限；null = 无人数限制。 */
+  maxCount: number | null;
 }
 
 /** 宗门升级信息：条件逐条给前端（前端不做规则判断，只渲染 ✓/✗）。 */
@@ -125,6 +134,8 @@ export interface SectStateView {
     levelName: string;
     /** 声望（V3 多人互动）：切磋胜利 +10，失败/平局不变。 */
     reputation: number;
+    /** 守擂阵容（弟子 id 数组，顺序即出战顺序）；null = 未设置（V5 2.4）。 */
+    defenseLineup: string[] | null;
     veinLevel: number;
     discipleCapacity: number;
     buildingCapacity: number;
@@ -214,6 +225,8 @@ export interface PublicSectView {
   reputation: number;
   disciples: PublicDiscipleView[];
   buildings: PublicBuildingView[];
+  /** 是否已设守擂阵容（不暴露具体弟子，只告诉攻方「可挑战」，V5 2.5）。 */
+  hasDefenseLineup: boolean;
   createdAt: string;
 }
 
@@ -282,6 +295,49 @@ export interface SparResultView {
   message: string;
 }
 
+/** 挑战单轮战报（V5 3.4）：带双方弟子名字，供前端逐轮展示。 */
+export interface ChallengeRoundView {
+  round: number;
+  attackerName: string;
+  defenderName: string;
+  attackerPower: number;
+  defenderPower: number;
+  /** 单轮平局（浮动后战力恰好相等）算守方胜。 */
+  winner: 'attacker' | 'defender';
+}
+
+/** 单次挑战结果（POST /game/challenge 的 result，V5 3.4）。 */
+export interface ChallengeResultView {
+  targetSectName: string;
+  rounds: ChallengeRoundView[];
+  /** 从攻方（发起挑战方）视角。 */
+  result: 'win' | 'lose';
+  reputationGained: number;
+  spiritStoneGained: number;
+  message: string;
+}
+
+/** 挑战历史条目（GET /game/challenge-history，V5 4.1）。 */
+export interface ChallengeHistoryEntryView {
+  id: string;
+  attackerSectName: string;
+  defenderSectName: string;
+  rounds: ChallengeRoundView[];
+  /** 从攻方视角：'win' | 'lose'。 */
+  result: string;
+  /** 当前用户是攻方还是守方。 */
+  role: 'attacker' | 'defender';
+  reputationGained: number;
+  spiritStoneGained: number;
+  createdAt: string;
+}
+
+/** 挑战历史（GET /game/challenge-history 的 data）。 */
+export interface ChallengeHistoryView {
+  entries: ChallengeHistoryEntryView[];
+  stats: { wins: number; losses: number; total: number };
+}
+
 export interface SectStateInput {
   config: GameConfigContent;
   sect: SectRow;
@@ -313,9 +369,12 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
   } = input;
   // 速率按「当前状态」现算，而不是沿用本次结算用的旧状态：派工 / 升级藏经阁返回的那一帧里，
   // 前端看到的「每时产出」与静修速率就已经是新值（结算本身仍只用旧状态计已经过去的那段时间）。
-  const libraryLevel =
-    buildings.find((building) => building.def_id === SCRIPTURE_LIBRARY_BUILDING_ID)?.level ?? 0;
-  const resourceRatesNow = resourceRates(config, disciples.map(toDiscipleState));
+  // 建筑等级表只建一次：资源速率（含灵矿加成）与藏经阁加成共用同一份数据。
+  const buildingLevels: Record<string, number> = Object.fromEntries(
+    buildings.map((building) => [building.def_id, building.level]),
+  );
+  const libraryLevel = buildingLevels[SCRIPTURE_LIBRARY_BUILDING_ID] ?? 0;
+  const resourceRatesNow = resourceRates(config, disciples.map(toDiscipleState), buildingLevels);
   const ratesByDisciple = new Map(
     disciples.map((disciple) => [
       disciple.id,
@@ -473,6 +532,7 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
       level: sect.level,
       levelName: levelDef.name,
       reputation: Number(sect.reputation) || 0,
+      defenseLineup: parseDefenseLineup(sect.defense_lineup),
       veinLevel: sect.vein_level,
       discipleCapacity,
       buildingCapacity,
@@ -493,8 +553,21 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
       blockedReason: recruitBlockedReason,
     },
     assignments: [
-      { id: IDLE_ASSIGNMENT, name: '闲置' },
-      ...config.positions.map((position) => ({ id: position.id, name: position.name })),
+      { id: IDLE_ASSIGNMENT, name: '闲置', currentCount: null, maxCount: null },
+      ...config.positions.map((position) => {
+        if (position.id === STONE_MINING_ASSIGNMENT) {
+          // 采灵岗位有人数上限：宗门 6 级前 1 人、6 级起 2 人（与 service 的派工判定同一套常量）。
+          const limit =
+            Number(sect.level) >= STONE_MINING_UNLOCK_SECT_LEVEL
+              ? STONE_MINING_LIMIT_HIGH
+              : STONE_MINING_LIMIT_LOW;
+          const count = disciples.filter(
+            (disciple) => disciple.assignment === STONE_MINING_ASSIGNMENT,
+          ).length;
+          return { id: position.id, name: position.name, currentCount: count, maxCount: limit };
+        }
+        return { id: position.id, name: position.name, currentCount: null, maxCount: null };
+      }),
     ],
     recentEvents: mergeRecentEvents(settleResult.events, recentEventRows, now, RECENT_EVENTS_IN_SYNC),
     settle: {
@@ -665,6 +738,29 @@ function parseEffects(text: string): Record<string, string> {
     return effects;
   } catch {
     return {};
+  }
+}
+
+/**
+ * 守擂阵容列（JSON 数组字符串）→ 弟子 id 数组；null / 非法输入退化为 null，
+ * 与 parseEffects 同理：脏数据不该让整个 state 读取失败。
+ *
+ * 长度不是 3 时同样返回 null：与 service 的 parseDefenseLineupIds 保持同一判定，
+ * 避免「自己能看见阵容、别人却挑战不了」这种不一致。
+ */
+function parseDefenseLineup(text: string | null): string[] | null {
+  if (text === null) {
+    return null;
+  }
+  try {
+    const parsed: unknown = JSON.parse(text);
+    if (!Array.isArray(parsed)) {
+      return null;
+    }
+    const ids = parsed.filter((item): item is string => typeof item === 'string');
+    return ids.length === DEFENSE_LINEUP_SIZE ? ids : null;
+  } catch {
+    return null;
   }
 }
 

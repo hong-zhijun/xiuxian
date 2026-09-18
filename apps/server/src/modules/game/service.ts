@@ -4,8 +4,13 @@ import { validatedGameConfig } from '../../config/loadGameConfig';
 import { AppError } from '../../http/appError';
 import { prepareStatements, type ParameterizedQuery } from '../../infra/db/repository';
 import {
+  DEFENSE_LINEUP_SIZE,
   IDLE_ASSIGNMENT,
   SPIRITUAL_ARRAY_BUILDING_ID,
+  STONE_MINING_ASSIGNMENT,
+  STONE_MINING_LIMIT_HIGH,
+  STONE_MINING_LIMIT_LOW,
+  STONE_MINING_UNLOCK_SECT_LEVEL,
   breakthroughEnergyCost,
   dateKeyUtc8,
   dayStartMs,
@@ -36,6 +41,7 @@ import {
 } from './realms';
 import {
   BuildingRepository,
+  ChallengeRepository,
   DiscipleRepository,
   EventLogRepository,
   ExplorationRepository,
@@ -43,6 +49,7 @@ import {
   SectRepository,
   SparringRepository,
   insertBuildingStatement,
+  insertChallengeLogStatement,
   insertDiscipleStatement,
   insertEventLogStatement,
   insertExplorationStatement,
@@ -56,6 +63,7 @@ import {
   updateDiscipleInjuryStatement,
   updateDiscipleProgressStatement,
   updateResourceSettledStatement,
+  updateSectDefenseLineupStatement,
   updateSectLevelStatement,
   updateSectRecruitCounterStatement,
   updateSectReputationStatement,
@@ -73,6 +81,10 @@ import {
   eventLogViewFromRow,
   upgradeCost,
   type EventLogView,
+  type ChallengeHistoryEntryView,
+  type ChallengeHistoryView,
+  type ChallengeResultView,
+  type ChallengeRoundView,
   type ExplorationResultView,
   type LeaderboardEntryView,
   type PublicSectView,
@@ -475,6 +487,7 @@ export async function createSect(
         last_settled_at: now,
         recruit_date_key: dateKeyUtc8(now),
         recruit_count: 0,
+        defense_lineup: null,
         created_at: now,
       },
       disciples,
@@ -669,6 +682,22 @@ export async function assignDisciple(
   }
 
   const disciple = draft.discipleById(discipleId);
+
+  // V5.1 改动三：采灵岗位有人数上限（宗门 6 级前 1 人、6 级起 2 人）。
+  // item.id !== discipleId：弟子本来就在采灵岗位时，重复派工不该算占位。
+  if (assignment === STONE_MINING_ASSIGNMENT) {
+    const limit =
+      Number(draft.sect.level) >= STONE_MINING_UNLOCK_SECT_LEVEL
+        ? STONE_MINING_LIMIT_HIGH
+        : STONE_MINING_LIMIT_LOW;
+    const currentCount = draft.disciples.filter(
+      (item) => item.assignment === STONE_MINING_ASSIGNMENT && item.id !== discipleId,
+    ).length;
+    if (currentCount >= limit) {
+      throw new AppError('CAPACITY_FULL', `采灵岗位已满（上限 ${limit} 人）`);
+    }
+  }
+
   const nextAssignment = assignment;
   draft.addStatement(updateDiscipleAssignmentStatement(disciple.id, nextAssignment));
   disciple.assignment = nextAssignment;
@@ -1256,6 +1285,8 @@ export async function getPublicSect(db: D1Database, sectId: string): Promise<Pub
     level: Number(sect.level),
     levelName: findSectLevel(Number(sect.level)).name,
     reputation: Number(sect.reputation) || 0,
+    // 与 challengeSect 的校验口径完全一致：长度不是 3 / 非法 JSON 都算「未布阵」。
+    hasDefenseLineup: parseDefenseLineupIds(sect.defense_lineup) !== null,
     disciples: disciples.map((disciple) => ({
       id: disciple.id,
       name: disciple.name,
@@ -1421,4 +1452,398 @@ function sparMessage(
     return `${myName} 不敌 ${targetName}，切磋落败（无损失）`;
   }
   return `${myName} 与 ${targetName} 战成平手`;
+}
+
+/** 每天只能发起 1 次挑战（V5 3.1）。 */
+const CHALLENGE_DAILY_LIMIT = 1;
+
+/** 挑战奖励（只有胜利发放）：声望 +10、灵石 +100 展示单位（= 100000 最小单位）。 */
+const CHALLENGE_WIN_REPUTATION = 10;
+const CHALLENGE_WIN_SPIRIT_STONE = 100_000;
+
+/** 挑战历史展示条数上限（与旧的切磋历史一致）。 */
+const CHALLENGE_HISTORY_LIMIT = 20;
+
+/** 挑战单轮结果（V5 3.2）；单轮平局（浮动后战力恰好相等）算守方胜。 */
+interface RoundResult {
+  round: number;
+  attackerPower: number;
+  defenderPower: number;
+  winner: 'attacker' | 'defender';
+}
+
+/** 挑战阵容成员快照：id + 名字 + 基础战力（浮动前的 discipleCombatPower）。 */
+interface ChallengeMember {
+  discipleId: string;
+  name: string;
+  power: number;
+}
+
+/**
+ * 3v3 逐对决斗（V5 3.2）：每轮取双方同序号弟子，战力 ±15% 浮动后高者胜该轮；
+ * 先赢满 2 轮者胜整场（第 3 轮只在 1:1 时打）。单轮平局算守方胜。
+ */
+function resolveChallenge(
+  attackerMembers: readonly ChallengeMember[],
+  defenderMembers: readonly ChallengeMember[],
+): { rounds: RoundResult[]; result: 'win' | 'lose' } {
+  const rounds: RoundResult[] = [];
+  let attackerWins = 0;
+  let defenderWins = 0;
+
+  for (let i = 0; i < DEFENSE_LINEUP_SIZE; i++) {
+    if (attackerWins >= 2 || defenderWins >= 2) {
+      break;
+    }
+    const aPower = fluctuatedPower(attackerMembers[i].power);
+    const dPower = fluctuatedPower(defenderMembers[i].power);
+    const winner: RoundResult['winner'] = aPower > dPower ? 'attacker' : 'defender';
+    rounds.push({ round: i + 1, attackerPower: aPower, defenderPower: dPower, winner });
+    if (winner === 'attacker') {
+      attackerWins++;
+    } else {
+      defenderWins++;
+    }
+  }
+
+  return { rounds, result: attackerWins >= 2 ? 'win' : 'lose' };
+}
+
+/** 守擂阵容列（JSON 数组字符串）→ 3 个弟子 id；null / 非法输入 / 长度不对都返回 null。 */
+function parseDefenseLineupIds(text: string | null): string[] | null {
+  if (text === null) {
+    return null;
+  }
+  try {
+    const parsed: unknown = JSON.parse(text);
+    if (!Array.isArray(parsed)) {
+      return null;
+    }
+    const ids = parsed.filter((item): item is string => typeof item === 'string');
+    return ids.length === DEFENSE_LINEUP_SIZE ? ids : null;
+  } catch {
+    // 脏数据（非法 JSON）不抛 500：退化为「未设置守擂阵容」。
+    return null;
+  }
+}
+
+/** 挑战记录里的阵容 JSON 快照 → 成员数组；非法输入退化为空数组。 */
+function parseLineupMembers(text: string): ChallengeMember[] {
+  try {
+    const parsed: unknown = JSON.parse(text);
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    const members: ChallengeMember[] = [];
+    for (const item of parsed) {
+      if (item === null || typeof item !== 'object') {
+        continue;
+      }
+      const row = item as Record<string, unknown>;
+      members.push({
+        discipleId: typeof row.discipleId === 'string' ? row.discipleId : '',
+        name: typeof row.name === 'string' ? row.name : '未知',
+        power: Number(row.power) || 0,
+      });
+    }
+    return members;
+  } catch {
+    return [];
+  }
+}
+
+/** 挑战记录里的每轮结果 JSON → RoundResult[]；非法输入退化为空数组。 */
+function parseRoundResults(text: string): RoundResult[] {
+  try {
+    const parsed: unknown = JSON.parse(text);
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    const rounds: RoundResult[] = [];
+    for (const item of parsed) {
+      if (item === null || typeof item !== 'object') {
+        continue;
+      }
+      const row = item as Record<string, unknown>;
+      rounds.push({
+        round: Number(row.round),
+        attackerPower: Number(row.attackerPower),
+        defenderPower: Number(row.defenderPower),
+        winner: row.winner === 'attacker' ? 'attacker' : 'defender',
+      });
+    }
+    return rounds;
+  } catch {
+    return [];
+  }
+}
+
+/** 把逐轮结果与双方阵容（按序号）拼成带名字的战报视图。 */
+function toChallengeRoundViews(
+  results: readonly RoundResult[],
+  attackerMembers: readonly ChallengeMember[],
+  defenderMembers: readonly ChallengeMember[],
+): ChallengeRoundView[] {
+  return results.map((result) => ({
+    round: result.round,
+    attackerName: attackerMembers[result.round - 1]?.name ?? '未知',
+    defenderName: defenderMembers[result.round - 1]?.name ?? '未知',
+    attackerPower: result.attackerPower,
+    defenderPower: result.defenderPower,
+    winner: result.winner,
+  }));
+}
+
+/**
+ * 设置守擂阵容（V5 2.2）：结算 → 去重 → 逐个校验归属（不存在抛 NOT_FOUND）→ 写回。
+ *
+ * 注意：受伤的弟子**可以**放进守擂阵容（守擂是预设的，不检查伤势）。
+ * 只有一次 `draft.commit()`：结算写回 + 阵容更新同一个 batch。
+ */
+export async function setDefenseLineup(
+  db: D1Database,
+  userId: string,
+  discipleIds: string[],
+  now: number,
+): Promise<SectStateView> {
+  const draft = await draftFor(db, userId, now);
+
+  if (discipleIds.length !== DEFENSE_LINEUP_SIZE) {
+    throw new AppError('VALIDATION_ERROR', `守擂阵容需要 ${DEFENSE_LINEUP_SIZE} 名弟子`);
+  }
+  if (new Set(discipleIds).size !== discipleIds.length) {
+    throw new AppError('VALIDATION_ERROR', '不能重复选择同一名弟子');
+  }
+  for (const id of discipleIds) {
+    // 归属校验：只看自己的弟子，不存在（含不属于本宗）抛 NOT_FOUND。
+    draft.discipleById(id);
+  }
+
+  const lineupJson = JSON.stringify(discipleIds);
+  draft.addStatement(updateSectDefenseLineupStatement(draft.sect.id, lineupJson));
+  draft.sect.defense_lineup = lineupJson;
+
+  await draft.commit();
+  return draft.view();
+}
+
+/**
+ * 挑战（3v3 逐对决斗，V5 3.3）：结算 → 逐项校验 → 逐对决斗 → 胜利发奖 + 写挑战记录。
+ *
+ * 校验顺序（全部失败都在任何写库之前抛出）：
+ *   1. 自己的宗门快照（draftFor，顺带结算）
+ *   2. 目标宗门存在、不是自己（NOT_FOUND / VALIDATION_ERROR）
+ *   3. 今日挑战次数 < 1（DAILY_LIMIT，UTC+8 自然日窗口）
+ *   4. 目标宗门已设守擂阵容（INVALID_STATUS）
+ *   5. 攻方 3 人：不重复、都属于自己、都未受伤（VALIDATION_ERROR / NOT_FOUND / INVALID_STATUS）
+ *   6. 解析守方阵容 → 3 个弟子（已不存在则该位战力 0、名字「已离宗」）
+ *   7. resolveChallenge 逐对决斗
+ *   8. 胜利：声望 +10、灵石 +100000（最小单位）
+ *   9. 写 challenge_log
+ *  10. 只做**一次** `draft.commit()`，返回 state + 挑战结果
+ */
+export async function challengeSect(
+  db: D1Database,
+  userId: string,
+  targetSectId: string,
+  discipleIds: string[],
+  now: number,
+): Promise<{ state: SectStateView; result: ChallengeResultView }> {
+  const draft = await draftFor(db, userId, now);
+
+  const targetSect = await new SectRepository(db).findById(targetSectId);
+  if (targetSect === null) {
+    throw new AppError('NOT_FOUND', '对方宗门不存在');
+  }
+  if (targetSect.id === draft.sect.id) {
+    throw new AppError('VALIDATION_ERROR', '不能挑战自己的宗门');
+  }
+
+  const usedToday = await new ChallengeRepository(db).countTodayByAttacker(
+    draft.sect.id,
+    dayStartMs(now),
+  );
+  if (usedToday >= CHALLENGE_DAILY_LIMIT) {
+    throw new AppError('DAILY_LIMIT', `今日挑战次数已用完（${CHALLENGE_DAILY_LIMIT} 次/天）`);
+  }
+
+  const defenderIds = parseDefenseLineupIds(targetSect.defense_lineup);
+  if (defenderIds === null) {
+    throw new AppError('INVALID_STATUS', '对方尚未设置守擂阵容');
+  }
+
+  if (discipleIds.length !== DEFENSE_LINEUP_SIZE) {
+    throw new AppError('VALIDATION_ERROR', `攻方阵容需要 ${DEFENSE_LINEUP_SIZE} 名弟子`);
+  }
+  if (new Set(discipleIds).size !== discipleIds.length) {
+    throw new AppError('VALIDATION_ERROR', '不能派遣重复弟子');
+  }
+  const attackerMembers: ChallengeMember[] = [];
+  for (const id of discipleIds) {
+    const disciple = draft.discipleById(id);
+    if (disciple.injured_until !== null && Number(disciple.injured_until) > now) {
+      throw new AppError('INVALID_STATUS', `${disciple.name}正在疗伤，无法出战`);
+    }
+    attackerMembers.push({
+      discipleId: disciple.id,
+      name: disciple.name,
+      power: discipleCombatPower(
+        disciple.realm_id,
+        Number(disciple.stage),
+        Number(disciple.attack),
+        Number(disciple.defense),
+        Number(disciple.speed),
+        disciple.talent,
+      ),
+    });
+  }
+
+  // 守方弟子可能已被移除（本版本暂无遣散功能，但要兜底）：该位视为战力 0、名字「已离宗」。
+  const discipleRepository = new DiscipleRepository(db);
+  const defenderMembers: ChallengeMember[] = [];
+  for (const id of defenderIds) {
+    const disciple = await discipleRepository.findById(id);
+    if (disciple === null || disciple.sect_id !== targetSect.id) {
+      defenderMembers.push({ discipleId: id, name: '已离宗', power: 0 });
+      continue;
+    }
+    defenderMembers.push({
+      discipleId: disciple.id,
+      name: disciple.name,
+      power: discipleCombatPower(
+        disciple.realm_id,
+        Number(disciple.stage),
+        Number(disciple.attack),
+        Number(disciple.defense),
+        Number(disciple.speed),
+        disciple.talent,
+      ),
+    });
+  }
+
+  const resolved = resolveChallenge(attackerMembers, defenderMembers);
+  const roundViews = toChallengeRoundViews(resolved.rounds, attackerMembers, defenderMembers);
+  const attackerWins = resolved.rounds.filter((round) => round.winner === 'attacker').length;
+  const defenderWins = resolved.rounds.filter((round) => round.winner === 'defender').length;
+
+  const reputationGained = resolved.result === 'win' ? CHALLENGE_WIN_REPUTATION : 0;
+  const spiritStoneGained = resolved.result === 'win' ? CHALLENGE_WIN_SPIRIT_STONE : 0;
+  if (resolved.result === 'win') {
+    draft.addStatement(updateSectReputationStatement(draft.sect.id, reputationGained));
+    draft.addStatement(resourceDeltaStatement(draft.sect.id, 'spiritStone', spiritStoneGained, now));
+    // 内存状态同步更新：本次返回的 state 里就是新声望 / 新灵石余额。
+    draft.sect.reputation = (Number(draft.sect.reputation) || 0) + reputationGained;
+    draft.balances = draft.balances.map((row) =>
+      row.resource_id === 'spiritStone'
+        ? { ...row, balance: Number(row.balance) + spiritStoneGained, updated_at: now }
+        : row,
+    );
+  }
+
+  draft.addStatement(
+    insertChallengeLogStatement({
+      id: crypto.randomUUID(),
+      attackerSectId: draft.sect.id,
+      defenderSectId: targetSect.id,
+      attackerLineup: JSON.stringify(attackerMembers),
+      defenderLineup: JSON.stringify(defenderMembers),
+      rounds: JSON.stringify(resolved.rounds),
+      result: resolved.result,
+      reputationGained,
+      spiritStoneGained,
+      now,
+    }),
+  );
+
+  // 唯一的一次 commit：结算写回 + 奖励 + 挑战记录同一个 batch。
+  await draft.commit();
+  return {
+    state: draft.view(),
+    result: {
+      targetSectName: targetSect.name,
+      rounds: roundViews,
+      result: resolved.result,
+      reputationGained,
+      spiritStoneGained,
+      message: challengeMessage(
+        resolved.result,
+        targetSect.name,
+        attackerWins,
+        defenderWins,
+        spiritStoneGained,
+      ),
+    },
+  };
+}
+
+/** 挑战结果文案（V5 第七节第 3 条）；灵石用展示单位。 */
+function challengeMessage(
+  result: 'win' | 'lose',
+  targetSectName: string,
+  attackerWins: number,
+  defenderWins: number,
+  spiritStoneGained: number,
+): string {
+  const score = `${String(attackerWins)}:${String(defenderWins)}`;
+  if (result === 'win') {
+    return `你的阵容 ${score} 击败了 ${targetSectName}！声望 +${String(
+      CHALLENGE_WIN_REPUTATION,
+    )}，灵石 +${String(spiritStoneGained / 1000)}`;
+  }
+  return `你的阵容 ${score} 不敌 ${targetSectName}，挑战失败（无损失）`;
+}
+
+/**
+ * 挑战历史（GET /game/challenge-history，V5 4.1）：最近 20 条 + 自身视角胜负统计。
+ *
+ * `role` 标识当前用户是攻方还是守方；记录的 `result` 存的是攻方视角，
+ * 前端可结合 `role` 展示「自己的胜负」；`stats` 已经在服务端翻转为自身视角。
+ */
+export async function listChallengeHistory(
+  db: D1Database,
+  userId: string,
+): Promise<ChallengeHistoryView> {
+  const sect = await new SectRepository(db).findByUserId(userId);
+  if (sect === null) {
+    return { entries: [], stats: { wins: 0, losses: 0, total: 0 } };
+  }
+
+  const challengeRepository = new ChallengeRepository(db);
+  const [rows, stats] = await Promise.all([
+    challengeRepository.findBySectId(sect.id, CHALLENGE_HISTORY_LIMIT),
+    challengeRepository.statsBySectId(sect.id),
+  ]);
+
+  const sectIds = new Set<string>();
+  for (const row of rows) {
+    sectIds.add(row.attacker_sect_id);
+    sectIds.add(row.defender_sect_id);
+  }
+  const sectRepository = new SectRepository(db);
+  const sectNames = new Map<string, string>();
+  for (const id of sectIds) {
+    const target = await sectRepository.findById(id);
+    sectNames.set(id, target?.name ?? '未知宗门');
+  }
+
+  const entries: ChallengeHistoryEntryView[] = rows.map((row) => {
+    const attackerMembers = parseLineupMembers(row.attacker_lineup);
+    const defenderMembers = parseLineupMembers(row.defender_lineup);
+    return {
+      id: row.id,
+      attackerSectName: sectNames.get(row.attacker_sect_id) ?? '未知宗门',
+      defenderSectName: sectNames.get(row.defender_sect_id) ?? '未知宗门',
+      rounds: toChallengeRoundViews(parseRoundResults(row.rounds), attackerMembers, defenderMembers),
+      result: row.result,
+      role: row.attacker_sect_id === sect.id ? 'attacker' : 'defender',
+      reputationGained: Number(row.reputation_gained),
+      spiritStoneGained: Number(row.spirit_stone_gained),
+      createdAt: new Date(Number(row.created_at)).toISOString(),
+    };
+  });
+
+  return {
+    entries,
+    stats: { wins: stats.wins, losses: stats.losses, total: stats.wins + stats.losses },
+  };
 }

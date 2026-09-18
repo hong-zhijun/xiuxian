@@ -19,6 +19,8 @@ export interface SectRow {
   last_settled_at: number;
   recruit_date_key: string;
   recruit_count: number;
+  /** V5 守擂阵容：3 个弟子 id 的 JSON 数组字符串；null = 未设置（不可被挑战）。 */
+  defense_lineup: string | null;
   created_at: number;
 }
 
@@ -96,10 +98,27 @@ export interface SparringLogRow {
   created_at: number;
 }
 
+/**
+ * 挑战记录行（V5 第三节）；result 从攻方视角：'win' | 'lose'。
+ * attacker_lineup / defender_lineup / rounds 是 JSON 字符串快照（见 0009 迁移）。
+ */
+export interface ChallengeLogRow {
+  id: string;
+  attacker_sect_id: string;
+  defender_sect_id: string;
+  attacker_lineup: string;
+  defender_lineup: string;
+  rounds: string;
+  result: string;
+  reputation_gained: number;
+  spirit_stone_gained: number;
+  created_at: number;
+}
+
 export class SectRepository extends ParamRepository {
   async findByUserId(userId: string): Promise<SectRow | null> {
     return this.one<SectRow>({
-      sql: `SELECT id, user_id, name, level, vein_level, reputation, last_settled_at, recruit_date_key, recruit_count, created_at
+      sql: `SELECT id, user_id, name, level, vein_level, reputation, last_settled_at, recruit_date_key, recruit_count, created_at, defense_lineup
             FROM sects WHERE user_id = ?`,
       params: [userId],
     });
@@ -109,7 +128,7 @@ export class SectRepository extends ParamRepository {
   async findAll(): Promise<SectRow[]> {
     return this.all<SectRow>({
       sql: `SELECT id, user_id, name, level, vein_level, reputation, last_settled_at,
-                   recruit_date_key, recruit_count, created_at
+                   recruit_date_key, recruit_count, created_at, defense_lineup
             FROM sects ORDER BY level DESC, reputation DESC, created_at ASC`,
       params: [],
     });
@@ -119,7 +138,7 @@ export class SectRepository extends ParamRepository {
   async findById(sectId: string): Promise<SectRow | null> {
     return this.one<SectRow>({
       sql: `SELECT id, user_id, name, level, vein_level, reputation, last_settled_at,
-                   recruit_date_key, recruit_count, created_at
+                   recruit_date_key, recruit_count, created_at, defense_lineup
             FROM sects WHERE id = ?`,
       params: [sectId],
     });
@@ -260,6 +279,57 @@ export class SparringRepository extends ParamRepository {
       else draws = Number(row.cnt);
     }
     return { wins, losses, draws };
+  }
+}
+
+/**
+ * 挑战记录（V5 第三节）：每日限次的窗口统计、演武录展示与胜负统计。
+ *
+ * 与旧 SparringRepository 的区别：每日限次只按攻方（挑战发起方）统计；
+ * 胜负统计要把「被挑战」的记录从守方视角翻转。
+ */
+export class ChallengeRepository extends ParamRepository {
+  /** 今日（UTC+8 自然日窗口，created_at >= dayStartMs）该宗门作为攻方的挑战次数。 */
+  async countTodayByAttacker(sectId: string, dayStartMs: number): Promise<number> {
+    const row = await this.one<{ total: number }>({
+      sql: 'SELECT COUNT(*) AS total FROM challenge_log WHERE attacker_sect_id = ? AND created_at >= ?',
+      params: [sectId, dayStartMs],
+    });
+    return Number(row?.total ?? 0);
+  }
+
+  /** 该宗门参与的挑战记录（攻/守都算），新的在前。 */
+  async findBySectId(sectId: string, limit: number): Promise<ChallengeLogRow[]> {
+    return this.all<ChallengeLogRow>({
+      sql: `SELECT * FROM challenge_log
+            WHERE attacker_sect_id = ? OR defender_sect_id = ?
+            ORDER BY created_at DESC LIMIT ?`,
+      params: [sectId, sectId, limit],
+    });
+  }
+
+  /** 该宗门的胜负统计（从自身视角；被挑战的记录要翻转结果）。 */
+  async statsBySectId(sectId: string): Promise<{ wins: number; losses: number }> {
+    const atkRows = await this.all<{ result: string; cnt: number }>({
+      sql: 'SELECT result, COUNT(*) AS cnt FROM challenge_log WHERE attacker_sect_id = ? GROUP BY result',
+      params: [sectId],
+    });
+    const defRows = await this.all<{ result: string; cnt: number }>({
+      sql: 'SELECT result, COUNT(*) AS cnt FROM challenge_log WHERE defender_sect_id = ? GROUP BY result',
+      params: [sectId],
+    });
+    let wins = 0;
+    let losses = 0;
+    for (const row of atkRows) {
+      if (row.result === 'win') wins += Number(row.cnt);
+      else losses += Number(row.cnt);
+    }
+    for (const row of defRows) {
+      // 守方：攻方 win = 我方 lose，攻方 lose = 我方 win。
+      if (row.result === 'win') losses += Number(row.cnt);
+      else wins += Number(row.cnt);
+    }
+    return { wins, losses };
   }
 }
 
@@ -550,5 +620,48 @@ export function updateSectReputationStatement(sectId: string, delta: number): Pa
   return {
     sql: 'UPDATE sects SET reputation = reputation + ? WHERE id = ?',
     params: [delta, sectId],
+  };
+}
+
+/** 守擂阵容写回（V5 2.2）：defense_lineup 是弟子 id 数组的 JSON 字符串。 */
+export function updateSectDefenseLineupStatement(
+  sectId: string,
+  lineupJson: string,
+): ParameterizedQuery {
+  return {
+    sql: 'UPDATE sects SET defense_lineup = ? WHERE id = ?',
+    params: [lineupJson, sectId],
+  };
+}
+
+/** 挑战记录写入（V5 第三节）：阵容与每轮结果都是 JSON 字符串快照。 */
+export function insertChallengeLogStatement(row: {
+  id: string;
+  attackerSectId: string;
+  defenderSectId: string;
+  attackerLineup: string;
+  defenderLineup: string;
+  rounds: string;
+  result: string;
+  reputationGained: number;
+  spiritStoneGained: number;
+  now: number;
+}): ParameterizedQuery {
+  return {
+    sql: `INSERT INTO challenge_log (id, attacker_sect_id, defender_sect_id, attacker_lineup,
+            defender_lineup, rounds, result, reputation_gained, spirit_stone_gained, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    params: [
+      row.id,
+      row.attackerSectId,
+      row.defenderSectId,
+      row.attackerLineup,
+      row.defenderLineup,
+      row.rounds,
+      row.result,
+      row.reputationGained,
+      row.spiritStoneGained,
+      row.now,
+    ],
   };
 }
