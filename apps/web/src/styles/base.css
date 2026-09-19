@@ -2880,6 +2880,57 @@ ul {
   color: var(--gold);
 }
 
+/* 零奖励胜利标记（守方低 3 级以上，赢了也没有收益） */
+.challenge-meta .is-zero {
+  color: var(--red-bright);
+}
+
+/* 挑战情报块（公开档案）：剩余次数 / 等级差 / 守擂方式 / 若胜利奖励 */
+.challenge-preview {
+  border: 1px dashed rgba(202, 169, 106, 0.28);
+  border-radius: 6px;
+  padding: 10px 12px;
+}
+
+.challenge-preview-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin-top: 6px;
+  color: #93a99e;
+  font-size: 12px;
+}
+
+.challenge-preview-reward {
+  margin-top: 6px;
+  color: var(--gold);
+  font-size: 12px;
+}
+
+/* 警示文案：零奖励警告等高可见提示 */
+.blocked-hint.is-warning {
+  color: var(--red-bright);
+}
+
+/* 挑战弹窗选人阶段的情报行 */
+.challenge-info {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin-bottom: 10px;
+  padding: 8px 10px;
+  border: 1px dashed rgba(202, 169, 106, 0.28);
+  border-radius: 6px;
+  color: #93a99e;
+  font-size: 12px;
+}
+
+.challenge-reward-line {
+  margin-top: 10px;
+  color: #93a99e;
+  font-size: 12px;
+}
+
 .challenge-chevron {
   color: var(--faint);
   font-size: 12px;

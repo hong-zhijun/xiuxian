@@ -52,6 +52,7 @@ function openSect(entry: LeaderboardEntryView): void {
   <PublicSectPanel
     v-if="selectedSectId"
     :sect-id="selectedSectId"
+    :state="state"
     :busy="busy"
     @back="selectedSectId = null"
     @challenge="emit('challenge', $event)"
@@ -100,6 +101,6 @@ function openSect(entry: LeaderboardEntryView): void {
       <strong>江湖上还没有别的宗门</strong>
     </div>
 
-    <p class="leaderboard-note">点其他宗门可查看公开档案并发起挑战；每日 1 次机会。</p>
+    <p class="leaderboard-note">点其他宗门可查看公开档案并发起挑战；每日 3 次机会，同一宗门每天限挑战 1 次。</p>
   </section>
 </template>

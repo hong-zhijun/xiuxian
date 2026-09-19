@@ -209,3 +209,143 @@ describe('D1 迁移与约束（P0-02）', () => {
     expect(await repository.findByCode('s1')).not.toBeNull();
   });
 });
+
+describe('0012 挑战优化迁移（每日次数 + 日志快照 + 唯一部分索引）', () => {
+  /** 建一个用户 + 宗门（独立主键，不依赖回滚）。 */
+  async function insertSectFixture(sectId: string): Promise<string> {
+    const userId = `u-${sectId}`;
+    await env.DB.prepare(
+      `INSERT INTO users (id, normalized_account, password_hash, status, created_at, updated_at)
+       VALUES (?, ?, 'pretend-hash', 'active', ?, ?)`,
+    )
+      .bind(userId, `challenge-${sectId}`, NOW, NOW)
+      .run();
+    await env.DB.prepare(
+      `INSERT INTO sects (id, user_id, name, level, vein_level, last_settled_at, recruit_date_key, recruit_count, created_at)
+       VALUES (?, ?, ?, 1, 1, ?, '', 0, ?)`,
+    )
+      .bind(sectId, userId, `宗门${sectId}`, NOW, NOW)
+      .run();
+    return userId;
+  }
+
+  async function insertChallengeLog(values: {
+    id: string;
+    attackerSectId: string;
+    defenderSectId: string;
+    /** null = 模拟 0012 迁移前的旧记录（不带日期键）。 */
+    dateKey?: string | null;
+  }): Promise<unknown> {
+    return env.DB.prepare(
+      `INSERT INTO challenge_log (id, attacker_sect_id, defender_sect_id, attacker_lineup,
+          defender_lineup, rounds, result, reputation_gained, spirit_stone_gained,
+          attacker_level, defender_level, reward_tier, defense_mode, challenge_date_key, created_at)
+       VALUES (?, ?, ?, '[]', '[]', '[]', 'win', 0, 0, 1, 1, 'equal', 'automatic', ?, ?)`,
+    )
+      .bind(
+        values.id,
+        values.attackerSectId,
+        values.defenderSectId,
+        values.dateKey ?? null,
+        NOW,
+      )
+      .run();
+  }
+
+  it('旧宗门获得合法默认计数字段（date_key 空、计数 0），challenge_count 有 CHECK', async () => {
+    await insertSectFixture('m12-default');
+    const row = await env.DB.prepare(
+      'SELECT challenge_date_key, challenge_count FROM sects WHERE id = ?',
+    )
+      .bind('m12-default')
+      .first<{ challenge_date_key: string; challenge_count: number }>();
+    expect(row?.challenge_date_key).toBe('');
+    expect(Number(row?.challenge_count)).toBe(0);
+
+    const negative = await env.DB.prepare(
+      'UPDATE sects SET challenge_count = -1 WHERE id = ?',
+    )
+      .bind('m12-default')
+      .run()
+      .then(
+        () => null,
+        (error: unknown) => error,
+      );
+    expect(negative).not.toBeNull();
+  });
+
+  it('旧日志新快照列为 NULL 仍可读；新记录写入快照字段', async () => {
+    await insertSectFixture('m12-log-a');
+    await insertSectFixture('m12-log-b');
+    await env.DB.prepare(
+      `INSERT INTO challenge_log (id, attacker_sect_id, defender_sect_id, attacker_lineup,
+          defender_lineup, rounds, result, reputation_gained, spirit_stone_gained, created_at)
+       VALUES ('m12-old-log', 'm12-log-a', 'm12-log-b', '[]', '[]', '[]', 'win', 10, 100000, ?)`,
+    )
+      .bind(NOW)
+      .run();
+
+    const oldRow = await env.DB.prepare('SELECT * FROM challenge_log WHERE id = ?')
+      .bind('m12-old-log')
+      .first<Record<string, unknown>>();
+    expect(oldRow?.attacker_level ?? null).toBeNull();
+    expect(oldRow?.defender_level ?? null).toBeNull();
+    expect(oldRow?.reward_tier ?? null).toBeNull();
+    expect(oldRow?.defense_mode ?? null).toBeNull();
+    expect(oldRow?.challenge_date_key ?? null).toBeNull();
+    // 旧记录的业务字段仍然完好
+    expect(oldRow?.result).toBe('win');
+
+    await insertChallengeLog({
+      id: 'm12-new-log',
+      attackerSectId: 'm12-log-a',
+      defenderSectId: 'm12-log-b',
+      dateKey: '2026-09-19',
+    });
+    const newRow = await env.DB.prepare('SELECT * FROM challenge_log WHERE id = ?')
+      .bind('m12-new-log')
+      .first<Record<string, unknown>>();
+    expect(newRow?.attacker_level).toBe(1);
+    expect(newRow?.reward_tier).toBe('equal');
+    expect(newRow?.defense_mode).toBe('automatic');
+    expect(newRow?.challenge_date_key).toBe('2026-09-19');
+  });
+
+  it('同一日期键下同一攻守组合唯一；旧式记录（无日期键）不受约束', async () => {
+    await insertSectFixture('m12-uniq-a');
+    await insertSectFixture('m12-uniq-b');
+
+    await insertChallengeLog({
+      id: 'm12-uniq-first',
+      attackerSectId: 'm12-uniq-a',
+      defenderSectId: 'm12-uniq-b',
+      dateKey: '2026-09-19',
+    });
+    const sameDayDuplicate = await insertChallengeLog({
+      id: 'm12-uniq-dup',
+      attackerSectId: 'm12-uniq-a',
+      defenderSectId: 'm12-uniq-b',
+      dateKey: '2026-09-19',
+    }).then(
+      () => null,
+      (error: unknown) => error,
+    );
+    expect(sameDayDuplicate).not.toBeNull();
+
+    // 不同日期键的同组合允许（跨日重置）
+    await insertChallengeLog({
+      id: 'm12-uniq-next-day',
+      attackerSectId: 'm12-uniq-a',
+      defenderSectId: 'm12-uniq-b',
+      dateKey: '2026-09-20',
+    });
+
+    // 旧式记录（date_key NULL）：同一攻守组合可以有多条（迁移前行为不受影响）
+    await insertChallengeLog({ id: 'm12-legacy-1', attackerSectId: 'm12-uniq-a', defenderSectId: 'm12-uniq-b' });
+    await insertChallengeLog({ id: 'm12-legacy-2', attackerSectId: 'm12-uniq-a', defenderSectId: 'm12-uniq-b' });
+    const count = await env.DB.prepare(
+      "SELECT COUNT(*) AS total FROM challenge_log WHERE attacker_sect_id = 'm12-uniq-a' AND challenge_date_key IS NULL",
+    ).first<{ total: number }>();
+    expect(Number(count?.total)).toBe(2);
+  });
+});

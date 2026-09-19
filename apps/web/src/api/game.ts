@@ -138,6 +138,12 @@ export interface SectStateView {
   sectUpgrade: SectUpgradeView | null;
   /** 炼丹面板（配方/库存/解锁状态，canCraft 与短板预览都由服务端算好）。 */
   alchemy: AlchemyView;
+  /** 主动挑战的当日次数（每日 3 次；失败/零奖励同样消耗）。 */
+  challenge: {
+    dailyLimit: number;
+    usedToday: number;
+    remaining: number;
+  };
 }
 
 /** 单个丹方（与后端 view.ts 的 AlchemyRecipeView 一一对应）。 */
@@ -393,9 +399,53 @@ export interface PublicSectView {
   reputation: number;
   disciples: PublicDiscipleView[];
   buildings: PublicBuildingView[];
-  /** 是否已设守擂阵容（不暴露具体弟子）。 */
+  /** 是否已设置**有效**的手动守擂阵容（不代表能否挑战；自动守擂也可挑战）。 */
   hasDefenseLineup: boolean;
+  /** 挑战预览（相对当前用户）；观看者没有宗门时为 null。 */
+  challenge: PublicSectChallengeView | null;
   createdAt: string;
+}
+
+/** 不可挑战的稳定原因码（与后端 view.ts 的 ChallengeBlockedReason 一致）。 */
+export type ChallengeBlockedReason =
+  | 'self'
+  | 'daily_limit'
+  | 'already_challenged_today'
+  | 'defender_insufficient';
+
+/** 守擂方式：有效手动阵容 / 临时自动守擂。 */
+export type DefenseMode = 'configured' | 'automatic';
+
+/** 奖励档位稳定标识（与后端 challenge.ts 的 RewardTier 一致）。 */
+export type RewardTier =
+  | 'lower_3_plus_no_reward'
+  | 'lower_2'
+  | 'lower_1'
+  | 'equal'
+  | 'higher_1'
+  | 'higher_2'
+  | 'higher_3_plus';
+
+/** 「若胜利」的确切奖励预览（数值来自服务端档位表，前端不复制分支）。 */
+export interface ChallengeRewardPreviewView {
+  tier: RewardTier;
+  reputation: number;
+  spiritStone: number;
+}
+
+/** 公开档案里的挑战预览（与后端 view.ts 的 PublicSectChallengeView 一一对应）。 */
+export interface PublicSectChallengeView {
+  canChallenge: boolean;
+  blockedReason: ChallengeBlockedReason | null;
+  /** 守方弟子不足时为 null。 */
+  defenseMode: DefenseMode | null;
+  dailyLimit: number;
+  usedToday: number;
+  remaining: number;
+  alreadyChallengedToday: boolean;
+  /** 守方等级 - 攻方等级。 */
+  levelDifference: number;
+  rewardPreview: ChallengeRewardPreviewView;
 }
 
 /** 挑战中的一轮（战报用，带双方弟子名字）。 */
@@ -416,6 +466,12 @@ export interface ChallengeResultView {
   reputationGained: number;
   spiritStoneGained: number;
   message: string;
+  /** 开战快照：双方宗门等级与等级差（守方 - 攻方）。 */
+  attackerLevel: number;
+  defenderLevel: number;
+  levelDifference: number;
+  rewardTier: RewardTier;
+  defenseMode: DefenseMode;
 }
 
 /** 挑战历史条目（从自己视角看）。 */
@@ -429,6 +485,12 @@ export interface ChallengeHistoryEntryView {
   role: 'attacker' | 'defender';
   reputationGained: number;
   spiritStoneGained: number;
+  /** 0012 开战快照；旧记录为 null（前端不伪造值）。 */
+  attackerLevel: number | null;
+  defenderLevel: number | null;
+  levelDifference: number | null;
+  rewardTier: RewardTier | null;
+  defenseMode: DefenseMode | null;
   createdAt: string;
 }
 

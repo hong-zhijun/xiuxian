@@ -27,6 +27,10 @@ export interface SectRow {
   recruit_refresh_used: number;
   /** V5 守擂阵容：3 个弟子 id 的 JSON 数组字符串；null = 未设置（不可被挑战）。 */
   defense_lineup: string | null;
+  /** 0012 挑战优化：当日已受理场次的 UTC+8 日期键；'' = 尚无新口径计数（迁移前宗门）。 */
+  challenge_date_key: string;
+  /** 0012 挑战优化：challenge_date_key 对应日期内已受理的挑战场次。 */
+  challenge_count: number;
   created_at: number;
 }
 
@@ -109,6 +113,7 @@ export interface SparringLogRow {
 /**
  * 挑战记录行（V5 第三节）；result 从攻方视角：'win' | 'lose'。
  * attacker_lineup / defender_lineup / rounds 是 JSON 字符串快照（见 0009 迁移）。
+ * 0012 起新增可空快照列（双方等级 / 奖励档位 / 守擂方式 / 日期键）；旧行这些列为 NULL。
  */
 export interface ChallengeLogRow {
   id: string;
@@ -120,13 +125,23 @@ export interface ChallengeLogRow {
   result: string;
   reputation_gained: number;
   spirit_stone_gained: number;
+  /** 开战时攻方宗门等级；旧记录为 null。 */
+  attacker_level: number | null;
+  /** 开战时守方宗门等级；旧记录为 null。 */
+  defender_level: number | null;
+  /** 开战时的奖励档位标识（challenge.ts 的 RewardTier）；旧记录为 null。 */
+  reward_tier: string | null;
+  /** 'configured' | 'automatic'；旧记录为 null。 */
+  defense_mode: string | null;
+  /** 本场对应的 UTC+8 日期键；旧记录为 null。 */
+  challenge_date_key: string | null;
   created_at: number;
 }
 
 export class SectRepository extends ParamRepository {
   async findByUserId(userId: string): Promise<SectRow | null> {
     return this.one<SectRow>({
-      sql: `SELECT id, user_id, name, level, vein_level, reputation, last_settled_at, recruit_date_key, recruit_count, recruit_refresh_level, recruit_refresh_used, created_at, defense_lineup
+      sql: `SELECT id, user_id, name, level, vein_level, reputation, last_settled_at, recruit_date_key, recruit_count, recruit_refresh_level, recruit_refresh_used, created_at, defense_lineup, challenge_date_key, challenge_count
             FROM sects WHERE user_id = ?`,
       params: [userId],
     });
@@ -136,7 +151,7 @@ export class SectRepository extends ParamRepository {
   async findAll(): Promise<SectRow[]> {
     return this.all<SectRow>({
       sql: `SELECT id, user_id, name, level, vein_level, reputation, last_settled_at,
-                   recruit_date_key, recruit_count, recruit_refresh_level, recruit_refresh_used, created_at, defense_lineup
+                   recruit_date_key, recruit_count, recruit_refresh_level, recruit_refresh_used, created_at, defense_lineup, challenge_date_key, challenge_count
             FROM sects ORDER BY level DESC, reputation DESC, created_at ASC`,
       params: [],
     });
@@ -146,7 +161,7 @@ export class SectRepository extends ParamRepository {
   async findById(sectId: string): Promise<SectRow | null> {
     return this.one<SectRow>({
       sql: `SELECT id, user_id, name, level, vein_level, reputation, last_settled_at,
-                   recruit_date_key, recruit_count, recruit_refresh_level, recruit_refresh_used, created_at, defense_lineup
+                   recruit_date_key, recruit_count, recruit_refresh_level, recruit_refresh_used, created_at, defense_lineup, challenge_date_key, challenge_count
             FROM sects WHERE id = ?`,
       params: [sectId],
     });
@@ -319,13 +334,35 @@ export class SparringRepository extends ParamRepository {
  * 胜负统计要把「被挑战」的记录从守方视角翻转。
  */
 export class ChallengeRepository extends ParamRepository {
-  /** 今日（UTC+8 自然日窗口，created_at >= dayStartMs）该宗门作为攻方的挑战次数。 */
-  async countTodayByAttacker(sectId: string, dayStartMs: number): Promise<number> {
+  /**
+   * 该宗门今日（UTC+8）已受理的挑战场次，兼容 0012 迁移前的旧记录：
+   * 新记录带 challenge_date_key，旧记录只有 created_at —— 两种口径都算「今天」。
+   * 只在宗门行的日期键不是今天时作为兼容核对使用（正常路径读 sects.challenge_count）。
+   */
+  async countTodayByAttacker(sectId: string, dateKey: string, dayStartMs: number): Promise<number> {
     const row = await this.one<{ total: number }>({
-      sql: 'SELECT COUNT(*) AS total FROM challenge_log WHERE attacker_sect_id = ? AND created_at >= ?',
-      params: [sectId, dayStartMs],
+      sql: `SELECT COUNT(*) AS total FROM challenge_log
+            WHERE attacker_sect_id = ?
+              AND (challenge_date_key = ? OR (challenge_date_key IS NULL AND created_at >= ?))`,
+      params: [sectId, dateKey, dayStartMs],
     });
     return Number(row?.total ?? 0);
+  }
+
+  /** 今日是否已挑战过指定目标（同一攻方对同一守方每天最多 1 场；兼容旧记录日窗口）。 */
+  async hasChallengedTargetToday(
+    attackerSectId: string,
+    defenderSectId: string,
+    dateKey: string,
+    dayStartMs: number,
+  ): Promise<boolean> {
+    const row = await this.one<{ total: number }>({
+      sql: `SELECT COUNT(*) AS total FROM challenge_log
+            WHERE attacker_sect_id = ? AND defender_sect_id = ?
+              AND (challenge_date_key = ? OR (challenge_date_key IS NULL AND created_at >= ?))`,
+      params: [attackerSectId, defenderSectId, dateKey, dayStartMs],
+    });
+    return Number(row?.total ?? 0) > 0;
   }
 
   /** 该宗门参与的挑战记录（攻/守都算），新的在前。 */
@@ -686,7 +723,10 @@ export function updateSectDefenseLineupStatement(
   };
 }
 
-/** 挑战记录写入（V5 第三节）：阵容与每轮结果都是 JSON 字符串快照。 */
+/**
+ * 挑战记录写入（V5 第三节）：阵容与每轮结果都是 JSON 字符串快照。
+ * 0012 起同时写入开战快照（双方等级 / 奖励档位 / 守擂方式 / 日期键）。
+ */
 export function insertChallengeLogStatement(row: {
   id: string;
   attackerSectId: string;
@@ -697,12 +737,23 @@ export function insertChallengeLogStatement(row: {
   result: string;
   reputationGained: number;
   spiritStoneGained: number;
+  /** 开战快照：攻方宗门等级。 */
+  attackerLevel: number;
+  /** 开战快照：守方宗门等级。 */
+  defenderLevel: number;
+  /** 开战快照：奖励档位标识（challenge.ts 的 RewardTier）。 */
+  rewardTier: string;
+  /** 开战快照：守擂方式（'configured' | 'automatic'）。 */
+  defenseMode: string;
+  /** 本场 UTC+8 日期键（唯一部分索引据此防同日重复目标）。 */
+  challengeDateKey: string;
   now: number;
 }): ParameterizedQuery {
   return {
     sql: `INSERT INTO challenge_log (id, attacker_sect_id, defender_sect_id, attacker_lineup,
-            defender_lineup, rounds, result, reputation_gained, spirit_stone_gained, created_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            defender_lineup, rounds, result, reputation_gained, spirit_stone_gained,
+            attacker_level, defender_level, reward_tier, defense_mode, challenge_date_key, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     params: [
       row.id,
       row.attackerSectId,
@@ -713,8 +764,80 @@ export function insertChallengeLogStatement(row: {
       row.result,
       row.reputationGained,
       row.spiritStoneGained,
+      row.attackerLevel,
+      row.defenderLevel,
+      row.rewardTier,
+      row.defenseMode,
+      row.challengeDateKey,
       row.now,
     ],
+  };
+}
+
+/**
+ * 挑战计数写回（0012）：受理一场战斗时把攻方的日期键归一到今天、计数 +1。
+ * 条件判断在 mutation_guards 快照语句里完成（batch 首条），这里只负责写入。
+ */
+export function updateSectChallengeCounterStatement(
+  sectId: string,
+  dateKey: string,
+  count: number,
+): ParameterizedQuery {
+  return {
+    sql: 'UPDATE sects SET challenge_date_key = ?, challenge_count = ? WHERE id = ?',
+    params: [dateKey, count, sectId],
+  };
+}
+
+/**
+ * 挑战 batch 的首条语句（与炼丹的 alchemySnapshotGuardStatement 同一模式）：
+ * 快照过期时插入 valid=0 触发 mutation_guards 的 CHECK，让同批的结算、计数、奖励、
+ * 日志一起回滚。校验攻方宗门行（等级/声望/结算时间/挑战日期键/计数）、全部资源余额，
+ * 以及守方宗门的等级与守擂阵容（奖励档位与阵容都以开战快照为准）。
+ */
+export function challengeSnapshotGuardStatement(
+  commandId: string,
+  snapshot: {
+    sect: SectRow;
+    balances: readonly ResourceBalanceRow[];
+    target: {
+      id: string;
+      level: number;
+      defenseLineup: string | null;
+    };
+  },
+): ParameterizedQuery {
+  const { sect, balances, target } = snapshot;
+  const checks = [
+    `EXISTS (SELECT 1 FROM sects WHERE id = ? AND level = ? AND reputation = ?
+      AND last_settled_at = ? AND challenge_date_key = ? AND challenge_count = ?)`,
+    `EXISTS (SELECT 1 FROM sects WHERE id = ? AND level = ? AND defense_lineup IS ?)`,
+  ];
+  const params: (string | number | null)[] = [
+    commandId,
+    sect.id, sect.level, sect.reputation,
+    sect.last_settled_at, sect.challenge_date_key, sect.challenge_count,
+    target.id, target.level, target.defenseLineup,
+  ];
+
+  for (const row of balances) {
+    checks.push(
+      'EXISTS (SELECT 1 FROM resource_balances WHERE id = ? AND sect_id = ? AND balance = ? AND remainder = ?)',
+    );
+    params.push(row.id, sect.id, row.balance, row.remainder);
+  }
+
+  return {
+    sql: `INSERT INTO mutation_guards (command_id, valid)
+          SELECT ?, CASE WHEN ${checks.join(' AND ')} THEN 1 ELSE 0 END`,
+    params,
+  };
+}
+
+export function deleteChallengeSnapshotGuardStatement(commandId: string): ParameterizedQuery {
+  return {
+    sql: 'DELETE FROM mutation_guards WHERE command_id = ?',
+    params: [commandId],
   };
 }
 

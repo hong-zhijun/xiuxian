@@ -14,6 +14,17 @@ import {
   type PillRecipe,
 } from './alchemy';
 import {
+  CHALLENGE_DAILY_LIMIT,
+  asDefenseMode,
+  asRewardTier,
+  challengeDayStateOf,
+  planDefenseLineup,
+  rewardTierForLevelDifference,
+  shufflePick,
+  type ChallengeDayState,
+  type DefenseMode,
+} from './challenge';
+import {
   DEFENSE_LINEUP_SIZE,
   IDLE_ASSIGNMENT,
   RECRUIT_REFRESH_PER_LEVEL,
@@ -61,7 +72,9 @@ import {
   SectRepository,
   SparringRepository,
   alchemySnapshotGuardStatement,
+  challengeSnapshotGuardStatement,
   deleteAlchemySnapshotGuardStatement,
+  deleteChallengeSnapshotGuardStatement,
   insertBuildingStatement,
   insertChallengeLogStatement,
   insertDiscipleStatement,
@@ -79,6 +92,7 @@ import {
   updateDiscipleProgressStatement,
   updatePillInventoryQuantityStatement,
   updateResourceSettledStatement,
+  updateSectChallengeCounterStatement,
   updateSectDefenseLineupStatement,
   updateSectLevelStatement,
   updateSectRecruitCounterStatement,
@@ -99,6 +113,8 @@ import {
   buildSectStateView,
   eventLogViewFromRow,
   upgradeCost,
+  type ChallengeBlockedReason,
+  type ChallengeRewardPreviewView,
   type EventLogView,
   type ChallengeHistoryEntryView,
   type ChallengeHistoryView,
@@ -106,6 +122,7 @@ import {
   type ChallengeRoundView,
   type ExplorationResultView,
   type LeaderboardEntryView,
+  type PublicSectChallengeView,
   type PublicSectView,
   type SecretRealmListView,
   type SectStateView,
@@ -129,6 +146,8 @@ export interface SectSnapshot {
   balances: ResourceBalanceRow[];
   /** 丹药库存（可能为空数组；没有行的 pill 视为 0）。 */
   pillInventories: PillInventoryRow[];
+  /** 主动挑战的当日次数（0012；日期键过期时已做日志兼容核对）。 */
+  challengeDay: ChallengeDayState;
   /** 读快照时库里的最近事件行；本次结算刚触发的在本层另行合并（见 view.ts）。 */
   recentEvents: EventLogRow[];
 }
@@ -138,19 +157,43 @@ export function gameConfig(): GameConfigContent {
   return validatedGameConfig.content;
 }
 
-async function loadSnapshot(db: D1Database, userId: string): Promise<SectSnapshot | null> {
+/**
+ * 主动挑战的当日次数口径（计划 4.2）：宗门行的日期键是今天就读 challenge_count，
+ * 否则视为 0，但用 challenge_log 的日窗口查询做发布当天兼容核对（旧记录没有日期键）。
+ * 展示值 clamp 到 0..3，数据异常不让前端出现负数。
+ */
+async function loadChallengeDayState(
+  db: D1Database,
+  sect: SectRow,
+  now: number,
+): Promise<ChallengeDayState> {
+  const dateKey = dateKeyUtc8(now);
+  const keyMatches = sect.challenge_date_key === dateKey;
+  const legacyUsedToday = keyMatches
+    ? 0
+    : await new ChallengeRepository(db).countTodayByAttacker(sect.id, dateKey, dayStartMs(now));
+  return challengeDayStateOf(sect, now, legacyUsedToday);
+}
+
+async function loadSnapshot(
+  db: D1Database,
+  userId: string,
+  now: number,
+): Promise<SectSnapshot | null> {
   const sect = await new SectRepository(db).findByUserId(userId);
   if (sect === null) {
     return null;
   }
-  const [disciples, buildings, balances, pillInventories, recentEvents] = await Promise.all([
-    new DiscipleRepository(db).findBySectId(sect.id),
-    new BuildingRepository(db).findBySectId(sect.id),
-    new ResourceBalanceRepository(db).findBySectId(sect.id),
-    new PillInventoryRepository(db).findBySectId(sect.id),
-    new EventLogRepository(db).findRecentBySectId(sect.id, RECENT_EVENTS_IN_SYNC),
-  ]);
-  return { sect, disciples, buildings, balances, pillInventories, recentEvents };
+  const [disciples, buildings, balances, pillInventories, recentEvents, challengeDay] =
+    await Promise.all([
+      new DiscipleRepository(db).findBySectId(sect.id),
+      new BuildingRepository(db).findBySectId(sect.id),
+      new ResourceBalanceRepository(db).findBySectId(sect.id),
+      new PillInventoryRepository(db).findBySectId(sect.id),
+      new EventLogRepository(db).findRecentBySectId(sect.id, RECENT_EVENTS_IN_SYNC),
+      loadChallengeDayState(db, sect, now),
+    ]);
+  return { sect, disciples, buildings, balances, pillInventories, challengeDay, recentEvents };
 }
 
 /**
@@ -175,6 +218,8 @@ class SectDraft {
   balances: ResourceBalanceRow[];
   /** 丹药库存（可变：炼制加、服用减；与写库语句一起在 commit 一次性提交）。 */
   pillInventories: PillInventoryRow[];
+  /** 主动挑战的当日次数（可变：挑战受理后在本层更新，随 view() 返回新口径）。 */
+  challengeDay: ChallengeDayState;
   readonly recruitUsedToday: number;
 
   private readonly statements: ParameterizedQuery[] = [];
@@ -233,6 +278,7 @@ class SectDraft {
     });
     this.buildings = base.buildings.map((row) => ({ ...row }));
     this.pillInventories = base.pillInventories.map((row) => ({ ...row }));
+    this.challengeDay = base.challengeDay;
 
     const dateKey = dateKeyUtc8(now);
     this.recruitUsedToday = base.sect.recruit_date_key === dateKey ? Number(base.sect.recruit_count) : 0;
@@ -401,6 +447,7 @@ class SectDraft {
       buildings: this.buildings,
       balances: this.balances,
       pillInventories: this.pillInventories,
+      challengeDay: this.challengeDay,
       settleResult: this.settleResult,
       now: this.now,
       recruitUsedToday: this.recruitUsedToday,
@@ -443,10 +490,45 @@ class SectDraft {
       throw error;
     }
   }
+
+  /**
+   * 挑战 batch（0012）：守卫 + 结算 + 计数/奖励/日志 + 清理守卫一次提交。
+   *
+   * 并发保护（计划 5.7）：
+   * - 首条 mutation_guards 快照语句在 batch 执行时重新校验攻方宗门行（等级/声望/
+   *   结算时间/挑战日期键/计数）、资源余额与守方等级/阵容；任何一个并发改动都会让
+   *   CHECK 失败并回滚整批，所以「成功场次 <= 3」和「奖励与日志同生共死」由数据库保证。
+   * - challenge_log 的唯一部分索引（attacker, defender, challenge_date_key）兜底同日
+   *   同目标的并发挑战，冲突映射成 DAILY_LIMIT 业务错误，不向前端暴露 SQL。
+   */
+  async commitChallenge(target: { id: string; level: number; defenseLineup: string | null }): Promise<void> {
+    const commandId = crypto.randomUUID();
+    const guard = challengeSnapshotGuardStatement(commandId, {
+      sect: this.base.sect,
+      balances: this.base.balances,
+      target,
+    });
+    try {
+      await this.db.batch(prepareStatements(this.db, [
+        guard,
+        ...this.statements,
+        deleteChallengeSnapshotGuardStatement(commandId),
+      ]));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (/CHECK constraint failed: (?:valid = 1|mutation_guards)/i.test(message)) {
+        throw new AppError('INVALID_STATUS', '宗门状态已变化，请刷新后重试');
+      }
+      if (/UNIQUE constraint failed: challenge_log/i.test(message)) {
+        throw new AppError('DAILY_LIMIT', '今日已挑战过该宗门（同一目标每日 1 次）');
+      }
+      throw error;
+    }
+  }
 }
 
 async function draftFor(db: D1Database, userId: string, now: number): Promise<SectDraft> {
-  const snapshot = await loadSnapshot(db, userId);
+  const snapshot = await loadSnapshot(db, userId, now);
   if (snapshot === null) {
     throw new AppError('NOT_FOUND', '尚未创建宗门');
   }
@@ -459,7 +541,7 @@ export async function getSectState(
   userId: string,
   now: number,
 ): Promise<SectStateView | null> {
-  const snapshot = await loadSnapshot(db, userId);
+  const snapshot = await loadSnapshot(db, userId, now);
   if (snapshot === null) {
     return null;
   }
@@ -589,12 +671,18 @@ export async function createSect(
         recruit_refresh_level: config.sect.initialLevel,
         recruit_refresh_used: 0,
         defense_lineup: null,
+        challenge_date_key: '',
+        challenge_count: 0,
         created_at: now,
       },
       disciples,
       buildings,
       balances,
       pillInventories: [],
+      challengeDay: challengeDayStateOf(
+        { challenge_date_key: '', challenge_count: 0 },
+        now,
+      ),
       recentEvents: [],
     },
     now,
@@ -1350,7 +1438,7 @@ export async function listSecretRealms(
   userId: string,
   now: number,
 ): Promise<SecretRealmListView[]> {
-  const snapshot = await loadSnapshot(db, userId);
+  const snapshot = await loadSnapshot(db, userId, now);
   if (snapshot === null) {
     return [];
   }
@@ -1466,18 +1554,74 @@ export async function listLeaderboard(
  *
  * 只返回安全字段——**不含**资源余额、弟子修为/岗位/伤势、建筑升级消耗与招募计数；
  * 宗门不存在抛 NOT_FOUND。
+ *
+ * 0012 挑战预览：相对当前用户计算可挑战状态、阻止原因、守擂方式、当日次数、
+ * 是否已挑战过、等级差与「若胜利」的确切奖励。只报告守擂方式，不暴露临时自动
+ * 阵容的人选与顺序（自动阵容只在挑战真正受理时生成）。观看者自己没有宗门时
+ * `challenge` 为 null（前端渲染为不可挑战）。
  */
-export async function getPublicSect(db: D1Database, sectId: string): Promise<PublicSectView> {
+export async function getPublicSect(
+  db: D1Database,
+  sectId: string,
+  viewerUserId: string,
+  now: number,
+): Promise<PublicSectView> {
   const sect = await new SectRepository(db).findById(sectId);
   if (sect === null) {
     throw new AppError('NOT_FOUND', '宗门不存在');
   }
 
-  const [disciples, buildings] = await Promise.all([
+  const [disciples, buildings, viewerSect] = await Promise.all([
     new DiscipleRepository(db).findBySectId(sectId),
     new BuildingRepository(db).findBySectId(sectId),
+    new SectRepository(db).findByUserId(viewerUserId),
   ]);
   const config = gameConfig();
+
+  const plan = planDefenseLineup(sect.defense_lineup, disciples);
+  let challenge: PublicSectChallengeView | null = null;
+  if (viewerSect !== null) {
+    const isSelf = viewerSect.id === sect.id;
+    const challengeDay = await loadChallengeDayState(db, viewerSect, now);
+    const alreadyChallengedToday = !isSelf
+      ? await new ChallengeRepository(db).hasChallengedTargetToday(
+          viewerSect.id,
+          sect.id,
+          challengeDay.dateKey,
+          dayStartMs(now),
+        )
+      : false;
+
+    let blockedReason: ChallengeBlockedReason | null = null;
+    if (isSelf) {
+      blockedReason = 'self';
+    } else if (challengeDay.remaining <= 0) {
+      blockedReason = 'daily_limit';
+    } else if (alreadyChallengedToday) {
+      blockedReason = 'already_challenged_today';
+    } else if (!plan.canDefend) {
+      blockedReason = 'defender_insufficient';
+    }
+
+    const levelDifference = Number(sect.level) - Number(viewerSect.level);
+    const reward = rewardTierForLevelDifference(levelDifference);
+    const preview: ChallengeRewardPreviewView = {
+      tier: reward.tier,
+      reputation: reward.reputation,
+      spiritStone: reward.spiritStone,
+    };
+    challenge = {
+      canChallenge: blockedReason === null,
+      blockedReason,
+      defenseMode: plan.canDefend ? plan.mode : null,
+      dailyLimit: CHALLENGE_DAILY_LIMIT,
+      usedToday: challengeDay.usedToday,
+      remaining: challengeDay.remaining,
+      alreadyChallengedToday,
+      levelDifference,
+      rewardPreview: preview,
+    };
+  }
 
   return {
     sectId: sect.id,
@@ -1485,8 +1629,9 @@ export async function getPublicSect(db: D1Database, sectId: string): Promise<Pub
     level: Number(sect.level),
     levelName: findSectLevel(Number(sect.level)).name,
     reputation: Number(sect.reputation) || 0,
-    // 与 challengeSect 的校验口径完全一致：长度不是 3 / 非法 JSON 都算「未布阵」。
-    hasDefenseLineup: parseDefenseLineupIds(sect.defense_lineup) !== null,
+    // 「有效手动守擂阵容」：3 个不重复、仍属于本宗的弟子；无效阵容不算已布阵。
+    hasDefenseLineup: plan.canDefend && plan.mode === 'configured',
+    challenge,
     disciples: disciples.map((disciple) => ({
       id: disciple.id,
       name: disciple.name,
@@ -1654,13 +1799,6 @@ function sparMessage(
   return `${myName} 与 ${targetName} 战成平手`;
 }
 
-/** 每天只能发起 1 次挑战（V5 3.1）。 */
-const CHALLENGE_DAILY_LIMIT = 1;
-
-/** 挑战奖励（只有胜利发放）：声望 +10、灵石 +100 展示单位（= 100000 最小单位）。 */
-const CHALLENGE_WIN_REPUTATION = 10;
-const CHALLENGE_WIN_SPIRIT_STONE = 100_000;
-
 /** 挑战历史展示条数上限（与旧的切磋历史一致）。 */
 const CHALLENGE_HISTORY_LIMIT = 20;
 
@@ -1707,24 +1845,6 @@ function resolveChallenge(
   }
 
   return { rounds, result: attackerWins >= 2 ? 'win' : 'lose' };
-}
-
-/** 守擂阵容列（JSON 数组字符串）→ 3 个弟子 id；null / 非法输入 / 长度不对都返回 null。 */
-function parseDefenseLineupIds(text: string | null): string[] | null {
-  if (text === null) {
-    return null;
-  }
-  try {
-    const parsed: unknown = JSON.parse(text);
-    if (!Array.isArray(parsed)) {
-      return null;
-    }
-    const ids = parsed.filter((item): item is string => typeof item === 'string');
-    return ids.length === DEFENSE_LINEUP_SIZE ? ids : null;
-  } catch {
-    // 脏数据（非法 JSON）不抛 500：退化为「未设置守擂阵容」。
-    return null;
-  }
 }
 
 /** 挑战记录里的阵容 JSON 快照 → 成员数组；非法输入退化为空数组。 */
@@ -1828,19 +1948,22 @@ export async function setDefenseLineup(
 }
 
 /**
- * 挑战（3v3 逐对决斗，V5 3.3）：结算 → 逐项校验 → 逐对决斗 → 胜利发奖 + 写挑战记录。
+ * 挑战（3v3 逐对决斗，0012 优化版）：结算 → 固定顺序校验 → 守方阵容快照 → 逐对决斗
+ * → 奖励按等级差档位 → 计数/奖励/日志/结算一次受保护 batch 提交。
  *
- * 校验顺序（全部失败都在任何写库之前抛出）：
+ * 校验顺序（全部失败都在任何写库之前抛出，不消耗次数）：
  *   1. 自己的宗门快照（draftFor，顺带结算）
  *   2. 目标宗门存在、不是自己（NOT_FOUND / VALIDATION_ERROR）
- *   3. 今日挑战次数 < 1（DAILY_LIMIT，UTC+8 自然日窗口）
- *   4. 目标宗门已设守擂阵容（INVALID_STATUS）
- *   5. 攻方 3 人：不重复、都属于自己、都未受伤（VALIDATION_ERROR / NOT_FOUND / INVALID_STATUS）
- *   6. 解析守方阵容 → 3 个弟子（已不存在则该位战力 0、名字「已离宗」）
- *   7. resolveChallenge 逐对决斗
- *   8. 胜利：声望 +10、灵石 +100000（最小单位）
- *   9. 写 challenge_log
- *  10. 只做**一次** `draft.commit()`，返回 state + 挑战结果
+ *   3. 攻方当日计数（UTC+8 归一 + 发布当天日志兼容核对）< 3（DAILY_LIMIT）
+ *   4. 今日未挑战过该目标（DAILY_LIMIT；并发兜底靠唯一部分索引）
+ *   5. 攻方恰好 3 名不重复、属于自己且未受伤的弟子（VALIDATION_ERROR / NOT_FOUND / INVALID_STATUS）
+ *   6. 一次性加载守方当前全部弟子
+ *   7. 守方阵容：有效手动阵容按原顺序；无效/未设置但弟子 >= 3 → 临时自动守擂
+ *      （等概率不重复抽 3 名、随机排序、可含受伤弟子）；弟子 < 3 拒绝（INVALID_STATUS）
+ *   8. 快照双方等级 → 等级差 → 奖励档位（奖励以开战快照为准）
+ *   9. resolveChallenge 逐对决斗；胜利按档位发奖（失败/`<=-3` 胜利都是 0）
+ *  10. commitChallenge：守卫 + 结算写回 + 计数 + 奖励 + 挑战日志（含快照）同一 batch；
+ *      「受理一场战斗」的边界就是整个 batch 成功。
  */
 export async function challengeSect(
   db: D1Database,
@@ -1851,6 +1974,7 @@ export async function challengeSect(
 ): Promise<{ state: SectStateView; result: ChallengeResultView }> {
   const draft = await draftFor(db, userId, now);
 
+  // 2. 目标存在且不是自己
   const targetSect = await new SectRepository(db).findById(targetSectId);
   if (targetSect === null) {
     throw new AppError('NOT_FOUND', '对方宗门不存在');
@@ -1859,19 +1983,26 @@ export async function challengeSect(
     throw new AppError('VALIDATION_ERROR', '不能挑战自己的宗门');
   }
 
-  const usedToday = await new ChallengeRepository(db).countTodayByAttacker(
-    draft.sect.id,
-    dayStartMs(now),
-  );
-  if (usedToday >= CHALLENGE_DAILY_LIMIT) {
+  // 3. 当日次数（UTC+8 归一；日期键过期时做日志兼容核对）
+  const challengeDay = draft.challengeDay;
+  if (challengeDay.remaining <= 0) {
     throw new AppError('DAILY_LIMIT', `今日挑战次数已用完（${CHALLENGE_DAILY_LIMIT} 次/天）`);
   }
 
-  const defenderIds = parseDefenseLineupIds(targetSect.defense_lineup);
-  if (defenderIds === null) {
-    throw new AppError('INVALID_STATUS', '对方尚未设置守擂阵容');
+  // 4. 同一目标每日 1 次（先查给友好报错；并发兜底在唯一部分索引）
+  const challengeRepository = new ChallengeRepository(db);
+  if (
+    await challengeRepository.hasChallengedTargetToday(
+      draft.sect.id,
+      targetSect.id,
+      challengeDay.dateKey,
+      dayStartMs(now),
+    )
+  ) {
+    throw new AppError('DAILY_LIMIT', `今日已挑战过${targetSect.name}（同一目标每日 1 次）`);
   }
 
+  // 5. 攻方阵容：不重复、属于自己、未受伤
   if (discipleIds.length !== DEFENSE_LINEUP_SIZE) {
     throw new AppError('VALIDATION_ERROR', `攻方阵容需要 ${DEFENSE_LINEUP_SIZE} 名弟子`);
   }
@@ -1898,16 +2029,35 @@ export async function challengeSect(
     });
   }
 
-  // 守方弟子可能已被移除（本版本暂无遣散功能，但要兜底）：该位视为战力 0、名字「已离宗」。
-  const discipleRepository = new DiscipleRepository(db);
-  const defenderMembers: ChallengeMember[] = [];
-  for (const id of defenderIds) {
-    const disciple = await discipleRepository.findById(id);
-    if (disciple === null || disciple.sect_id !== targetSect.id) {
-      defenderMembers.push({ discipleId: id, name: '已离宗', power: 0 });
-      continue;
-    }
-    defenderMembers.push({
+  // 6-7. 守方阵容：有效手动阵容按原顺序；否则临时自动守擂（弟子 < 3 拒绝，不消耗次数）
+  const defenderDisciples = await new DiscipleRepository(db).findBySectId(targetSect.id);
+  const plan = planDefenseLineup(targetSect.defense_lineup, defenderDisciples);
+  if (!plan.canDefend) {
+    throw new AppError('INVALID_STATUS', '对方门下弟子不足 3 人，暂时无法应战');
+  }
+  const defenseMode: DefenseMode = plan.mode;
+  let defenderMembers: ChallengeMember[];
+  if (plan.mode === 'configured') {
+    // 手动阵容按玩家设置的顺序使用；成员此刻必然都在守方（planDefenseLineup 已校验）。
+    defenderMembers = plan.manualIds.map((id) => {
+      const disciple = defenderDisciples.find((row) => row.id === id)!;
+      return {
+        discipleId: disciple.id,
+        name: disciple.name,
+        power: discipleCombatPower(
+          disciple.realm_id,
+          Number(disciple.stage),
+          Number(disciple.attack),
+          Number(disciple.defense),
+          Number(disciple.speed),
+          disciple.talent,
+        ),
+      };
+    });
+  } else {
+    // 自动守擂：等概率不重复抽 3 名并随机排序，可含受伤弟子；
+    // 战斗、返回结果和历史记录使用同一份快照。
+    const candidates = defenderDisciples.map((disciple) => ({
       discipleId: disciple.id,
       name: disciple.name,
       power: discipleCombatPower(
@@ -1918,17 +2068,25 @@ export async function challengeSect(
         Number(disciple.speed),
         disciple.talent,
       ),
-    });
+    }));
+    defenderMembers = shufflePick(candidates, DEFENSE_LINEUP_SIZE);
   }
 
+  // 8. 开战快照：等级差与奖励档位（不从之后状态反推）
+  const attackerLevel = Number(draft.sect.level);
+  const defenderLevel = Number(targetSect.level);
+  const levelDifference = defenderLevel - attackerLevel;
+  const rewardTier = rewardTierForLevelDifference(levelDifference);
+
+  // 9. 解算战斗 + 按档位发奖（失败与 `<=-3` 的胜利都是 0）
   const resolved = resolveChallenge(attackerMembers, defenderMembers);
   const roundViews = toChallengeRoundViews(resolved.rounds, attackerMembers, defenderMembers);
   const attackerWins = resolved.rounds.filter((round) => round.winner === 'attacker').length;
   const defenderWins = resolved.rounds.filter((round) => round.winner === 'defender').length;
 
-  const reputationGained = resolved.result === 'win' ? CHALLENGE_WIN_REPUTATION : 0;
-  const spiritStoneGained = resolved.result === 'win' ? CHALLENGE_WIN_SPIRIT_STONE : 0;
-  if (resolved.result === 'win') {
+  const reputationGained = resolved.result === 'win' ? rewardTier.reputation : 0;
+  const spiritStoneGained = resolved.result === 'win' ? rewardTier.spiritStone : 0;
+  if (resolved.result === 'win' && (reputationGained > 0 || spiritStoneGained > 0)) {
     draft.addStatement(updateSectReputationStatement(draft.sect.id, reputationGained));
     draft.addStatement(resourceDeltaStatement(draft.sect.id, 'spiritStone', spiritStoneGained, now));
     // 内存状态同步更新：本次返回的 state 里就是新声望 / 新灵石余额。
@@ -1940,6 +2098,15 @@ export async function challengeSect(
     );
   }
 
+  // 10-1. 计数写回：日期键归一到今天、计数 = 已用 + 1（内存同步，返回的 state 就是新值）。
+  const usedAfter = challengeDay.usedToday + 1;
+  draft.addStatement(
+    updateSectChallengeCounterStatement(draft.sect.id, challengeDay.dateKey, usedAfter),
+  );
+  draft.sect.challenge_date_key = challengeDay.dateKey;
+  draft.sect.challenge_count = usedAfter;
+
+  // 10-2. 挑战日志（含开战快照；阵容与 rounds 是当场实际出战快照）。
   draft.addStatement(
     insertChallengeLogStatement({
       id: crypto.randomUUID(),
@@ -1951,12 +2118,29 @@ export async function challengeSect(
       result: resolved.result,
       reputationGained,
       spiritStoneGained,
+      attackerLevel,
+      defenderLevel,
+      rewardTier: rewardTier.tier,
+      defenseMode,
+      challengeDateKey: challengeDay.dateKey,
       now,
     }),
   );
 
-  // 唯一的一次 commit：结算写回 + 奖励 + 挑战记录同一个 batch。
-  await draft.commit();
+  // 10-3. 唯一的一次受保护提交：守卫 + 结算 + 计数 + 奖励 + 日志同一个 batch。
+  await draft.commitChallenge({
+    id: targetSect.id,
+    level: defenderLevel,
+    defenseLineup: targetSect.defense_lineup,
+  });
+
+  // 13. 提交成功后返回含最新剩余次数的 state 与完整战斗结果。
+  draft.challengeDay = {
+    ...challengeDay,
+    usedToday: usedAfter,
+    remaining: Math.max(0, CHALLENGE_DAILY_LIMIT - usedAfter),
+  };
+
   return {
     state: draft.view(),
     result: {
@@ -1965,32 +2149,42 @@ export async function challengeSect(
       result: resolved.result,
       reputationGained,
       spiritStoneGained,
+      attackerLevel,
+      defenderLevel,
+      levelDifference,
+      rewardTier: rewardTier.tier,
+      defenseMode,
       message: challengeMessage(
         resolved.result,
         targetSect.name,
         attackerWins,
         defenderWins,
+        reputationGained,
         spiritStoneGained,
       ),
     },
   };
 }
 
-/** 挑战结果文案（V5 第七节第 3 条）；灵石用展示单位。 */
+/** 挑战结果文案（胜/负/零奖励胜）；灵石用展示单位。 */
 function challengeMessage(
   result: 'win' | 'lose',
   targetSectName: string,
   attackerWins: number,
   defenderWins: number,
+  reputationGained: number,
   spiritStoneGained: number,
 ): string {
   const score = `${String(attackerWins)}:${String(defenderWins)}`;
   if (result === 'win') {
-    return `你的阵容 ${score} 击败了 ${targetSectName}！声望 +${String(
-      CHALLENGE_WIN_REPUTATION,
-    )}，灵石 +${String(spiritStoneGained / 1000)}`;
+    if (reputationGained === 0 && spiritStoneGained === 0) {
+      return `你的阵容 ${score} 击败了 ${targetSectName}！对方等级过低，此胜没有奖励（已消耗 1 次挑战）。`;
+    }
+    return `你的阵容 ${score} 击败了 ${targetSectName}！声望 +${String(reputationGained)}，灵石 +${String(
+      spiritStoneGained / 1000,
+    )}`;
   }
-  return `你的阵容 ${score} 不敌 ${targetSectName}，挑战失败（无损失）`;
+  return `你的阵容 ${score} 不敌 ${targetSectName}，挑战失败（无奖励，已消耗 1 次挑战）`;
 }
 
 /**
@@ -2029,6 +2223,9 @@ export async function listChallengeHistory(
   const entries: ChallengeHistoryEntryView[] = rows.map((row) => {
     const attackerMembers = parseLineupMembers(row.attacker_lineup);
     const defenderMembers = parseLineupMembers(row.defender_lineup);
+    // 0012 快照：旧记录这些列为 NULL，原样透传（前端不伪造等级差/档位/守擂方式）。
+    const attackerLevel = row.attacker_level === null ? null : Number(row.attacker_level);
+    const defenderLevel = row.defender_level === null ? null : Number(row.defender_level);
     return {
       id: row.id,
       attackerSectName: sectNames.get(row.attacker_sect_id) ?? '未知宗门',
@@ -2038,6 +2235,13 @@ export async function listChallengeHistory(
       role: row.attacker_sect_id === sect.id ? 'attacker' : 'defender',
       reputationGained: Number(row.reputation_gained),
       spiritStoneGained: Number(row.spirit_stone_gained),
+      attackerLevel,
+      defenderLevel,
+      // 等级差口径：守方等级 - 攻方等级（与开战预览/结果一致）
+      levelDifference:
+        attackerLevel === null || defenderLevel === null ? null : defenderLevel - attackerLevel,
+      rewardTier: asRewardTier(row.reward_tier),
+      defenseMode: asDefenseMode(row.defense_mode),
       createdAt: new Date(Number(row.created_at)).toISOString(),
     };
   });

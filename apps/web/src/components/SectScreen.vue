@@ -447,6 +447,7 @@ function onUsePill(pillId: string, discipleId: string): void {
           <path d="M4 4h6v6H4zm10 0h6v6h-6zM4 14h6v6H4zm10 2a4 4 0 1 0 0-0" />
         </svg>
         <span>演武录</span>
+        <span v-if="state.challenge.remaining > 0" class="chip-badge">{{ state.challenge.remaining }}</span>
       </button>
     </div>
 

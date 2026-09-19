@@ -1,17 +1,19 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
 
-import type { PublicSectView } from '../api/game';
+import type { PublicSectView, SectStateView } from '../api/game';
 import { fetchPublicSect } from '../api/game';
-import { formatTime } from '../utils/format';
+import { formatAmount, formatTime } from '../utils/format';
 
 /**
  * 别人宗门的公开档案（嵌在江湖榜弹窗里）。
  *
  * 只显示服务端给的公开字段：没有资源余额、修为进度、岗位、伤势、招募次数。
+ * 挑战预览（剩余次数/等级差/奖励/守擂方式/阻止原因）都由服务端相对当前玩家算好。
  */
 const props = defineProps<{
   sectId: string;
+  state: SectStateView;
   busy: boolean;
 }>();
 
@@ -22,25 +24,59 @@ const emit = defineEmits<{
 
 const sect = ref<PublicSectView | null>(null);
 const loadError = ref<string | null>(null);
+let loadSeq = 0;
 
 watch(
-  () => props.sectId,
-  async (sectId) => {
+  () => [props.sectId, props.state] as const,
+  async ([sectId]) => {
+    const seq = ++loadSeq;
     sect.value = null;
     loadError.value = null;
     try {
-      sect.value = await fetchPublicSect(sectId);
+      const next = await fetchPublicSect(sectId);
+      if (seq !== loadSeq) return;
+      sect.value = next;
     } catch (caught) {
+      if (seq !== loadSeq) return;
       loadError.value = caught instanceof Error ? caught.message : '档案读取失败';
     }
   },
   { immediate: true },
 );
 
-/** 对方布了阵、且门下有人可应战，才能登门挑战。 */
-const canChallenge = computed(
-  () => sect.value !== null && sect.value.hasDefenseLineup && sect.value.disciples.length > 0,
-);
+/** 能否挑战以服务端算好的 challenge.canChallenge 为准（自动守擂也可挑战）。 */
+const canChallenge = computed(() => sect.value?.challenge?.canChallenge === true);
+
+/** 不可挑战的原因文案（稳定原因码 → 中文）。 */
+const BLOCKED_LABELS: Record<string, string> = {
+  self: '不能挑战自己的宗门',
+  daily_limit: '今日挑战次数已用完',
+  already_challenged_today: '今日已挑战过该宗门（同一目标每日 1 次）',
+  defender_insufficient: '对方门下弟子不足 3 人，暂时无法应战',
+};
+
+const blockedText = computed(() => {
+  const reason = sect.value?.challenge?.blockedReason;
+  return reason === null || reason === undefined ? null : (BLOCKED_LABELS[reason] ?? '暂时无法挑战');
+});
+
+/** 等级差标签：正 = 对方更高（以下克上），负 = 对方更低。 */
+const levelDiffText = computed(() => {
+  const preview = sect.value?.challenge;
+  if (preview === null || preview === undefined) {
+    return '';
+  }
+  const diff = preview.levelDifference;
+  if (diff === 0) return '同级';
+  return diff > 0 ? `对方高 ${diff} 级` : `对方低 ${-diff} 级`;
+});
+
+function defenseModeText(sectValue: PublicSectView): string {
+  const mode = sectValue.challenge?.defenseMode;
+  if (mode === 'configured') return '已设置守擂阵容';
+  if (mode === 'automatic') return '将使用临时自动守擂';
+  return '守擂存疑';
+}
 
 function requestChallenge(): void {
   if (props.busy || sect.value === null || !canChallenge.value) {
@@ -67,6 +103,23 @@ function requestChallenge(): void {
         <span>品阶 {{ sect.level }} · {{ sect.levelName }}</span>
         <span>声望 {{ sect.reputation }}</span>
         <span>立于 {{ formatTime(sect.createdAt) }}</span>
+      </div>
+
+      <div v-if="sect.challenge" class="public-block challenge-preview">
+        <p class="eyebrow">挑战情报</p>
+        <div class="challenge-preview-meta">
+          <span>今日剩余 {{ sect.challenge.remaining }}/{{ sect.challenge.dailyLimit }} 次</span>
+          <span>{{ levelDiffText }}（{{ sect.challenge.levelDifference >= 0 ? '+' : '' }}{{ sect.challenge.levelDifference }}）</span>
+          <span>{{ defenseModeText(sect) }}</span>
+        </div>
+        <p class="challenge-preview-reward">
+          若胜利：声望 +{{ sect.challenge.rewardPreview.reputation }}，灵石 +
+          {{ formatAmount(sect.challenge.rewardPreview.spiritStone) }}
+        </p>
+        <p v-if="sect.challenge.rewardPreview.spiritStone === 0" class="blocked-hint is-warning">
+          对方等级低出 3 级以上：胜利也没有奖励，但仍会消耗 1 次挑战机会。
+        </p>
+        <p v-if="blockedText" class="blocked-hint">{{ blockedText }}</p>
       </div>
 
       <div class="public-block">
@@ -109,8 +162,7 @@ function requestChallenge(): void {
       >
         <span>挑战</span>
       </button>
-      <p v-if="sect && !sect.hasDefenseLineup" class="blocked-hint">对方尚未设置守擂阵容</p>
-      <p class="public-note">每日 1 次挑战机会；胜者 +10 声望与 100 灵石。</p>
+      <p class="public-note">每日 3 次挑战机会；同一宗门每天只能挑战 1 次；没有守擂阵容的宗门会临时自动守擂。</p>
     </template>
 
     <p v-else-if="loadError" class="explore-hint">{{ loadError }}</p>

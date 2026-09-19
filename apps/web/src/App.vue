@@ -307,7 +307,7 @@ function challengeScore(result: ChallengeResultView): string {
 }
 
 /**
- * 登门挑战：服务端逐轮裁决，这里回填 state、把逐轮战报交给弹窗展示，并按胜负 toast（失败无损失）。
+ * 登门挑战：服务端逐轮裁决，这里回填 state、把逐轮战报交给弹窗展示，并按胜负 toast。
  * toast 正文直接用服务端给的 message（已含比分与奖励），标题补一个比分，避免同一句话出现两遍。
  */
 async function onChallenge(targetSectId: string, discipleIds: string[]): Promise<void> {

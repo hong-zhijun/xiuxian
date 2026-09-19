@@ -2,12 +2,14 @@
 import { computed, onUnmounted, ref } from 'vue';
 
 import type { ChallengeResultView, DiscipleView, PublicSectView, SectStateView } from '../api/game';
+import { formatAmount } from '../utils/format';
 
 /**
  * 发起挑战（弹窗内容）：选攻方 3 人，点击顺序就是对阵顺序。
  *
- * 对方守擂阵容不可见（策略核心）；受伤弟子不能出战。
- * 打完以后（`result` 非 null）弹窗切换成战报态：逐轮显示双方弟子名字、战力、胜负，最后是总结果。
+ * 挑战情报（剩余次数/等级差/胜利奖励/守擂方式）全部来自服务端预览；
+ * 对方守擂阵容不可见（自动守擂连人选都不可见）；受伤弟子不能出战。
+ * 打完以后（`result` 非 null）弹窗切换成战报态：逐轮显示双方弟子名字、战力、胜负，最后是总结果与实际奖励。
  */
 const props = defineProps<{
   target: PublicSectView;
@@ -106,6 +108,19 @@ const scoreText = computed(() => {
   const wins = result.rounds.filter((round) => round.winner === 'attacker').length;
   return `${wins}:${result.rounds.length - wins}`;
 });
+
+/** 挑战情报（来自服务端预览；null = 观看者没有宗门，面板不会放行到这里）。 */
+const preview = computed(() => props.target.challenge);
+
+const levelDiffText = computed(() => {
+  const challenge = preview.value;
+  if (challenge === null || challenge === undefined) {
+    return '';
+  }
+  const diff = challenge.levelDifference;
+  if (diff === 0) return '同级';
+  return diff > 0 ? `对方高 ${diff} 级` : `对方低 ${-diff} 级`;
+});
 </script>
 
 <template>
@@ -150,12 +165,35 @@ const scoreText = computed(() => {
         </span>
       </div>
 
+      <p class="challenge-reward-line">
+        实际奖励：声望 +{{ result.reputationGained }}，灵石 +{{ formatAmount(result.spiritStoneGained) }}
+        <template v-if="result.result === 'win' && result.reputationGained === 0 && result.spiritStoneGained === 0">
+          （零奖励胜利）
+        </template>
+        <template v-else-if="result.result === 'lose'">（失败无奖励）</template>
+        · 守擂方式：{{ result.defenseMode === 'configured' ? '手动阵容' : '临时自动' }}
+      </p>
+
       <button class="action-button primary-action realm-button" type="button" @click="emit('close')">
         <span>知道了</span>
       </button>
     </template>
 
     <template v-else>
+      <div v-if="preview" class="challenge-info">
+        <span>今日剩余 {{ preview.remaining }}/{{ preview.dailyLimit }} 次</span>
+        <span>
+          我方 {{ props.state.sect.level }} 级 · 对方 {{ props.target.level }} 级（{{ levelDiffText }}）
+        </span>
+        <span>
+          若胜利：声望 +{{ preview.rewardPreview.reputation }}，灵石 +
+          {{ formatAmount(preview.rewardPreview.spiritStone) }}
+        </span>
+        <span>
+          {{ preview.defenseMode === 'configured' ? '对方已设置守擂阵容' : '对方将使用临时自动守擂' }}
+        </span>
+      </div>
+
       <p class="lineup-note">
         双方各出 3 人逐对交手，先赢 2 轮者胜；对方守擂阵容不可见。点击顺序就是对阵顺序。
       </p>
@@ -221,6 +259,12 @@ const scoreText = computed(() => {
       </button>
       <p v-if="selected.length !== LINEUP_SIZE" class="blocked-hint">
         请选择 {{ LINEUP_SIZE }} 名弟子（当前 {{ selected.length }} 名）
+      </p>
+      <p
+        v-if="preview && preview.rewardPreview.spiritStone === 0"
+        class="blocked-hint is-warning"
+      >
+        胜利无奖励，仍消耗 1 次：对方等级低出 3 级以上，此战只有胜负没有收益。
       </p>
     </template>
   </section>

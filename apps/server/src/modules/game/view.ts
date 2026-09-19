@@ -8,6 +8,12 @@ import {
   PILL_RECIPES,
 } from './alchemy';
 import {
+  CHALLENGE_DAILY_LIMIT,
+  type ChallengeDayState,
+  type DefenseMode,
+  type RewardTier,
+} from './challenge';
+import {
   DEFENSE_LINEUP_SIZE,
   BREAKTHROUGH_ARRAY_BONUS_BP_PER_LEVEL,
   IDLE_ASSIGNMENT,
@@ -202,6 +208,12 @@ export interface SectStateView {
   sectUpgrade: SectUpgradeView | null;
   /** 炼丹面板（配方、库存、解锁状态；解锁判断只在服务端）。 */
   alchemy: AlchemyView;
+  /** 主动挑战的当日次数（0012：每日 3 次；失败/零奖励同样消耗）。 */
+  challenge: {
+    dailyLimit: number;
+    usedToday: number;
+    remaining: number;
+  };
 }
 
 /** 秘境列表视图（GET /game/realms）：规则（锁定/次数）由服务端算好，前端只渲染。 */
@@ -257,6 +269,41 @@ export interface LeaderboardEntryView {
   isMe: boolean;
 }
 
+/** 不可挑战的稳定原因码（前端据此渲染文案，不做规则判断）。 */
+export type ChallengeBlockedReason =
+  | 'self'
+  | 'daily_limit'
+  | 'already_challenged_today'
+  | 'defender_insufficient';
+
+/** 「若胜利」的确切奖励预览（数值来自 challenge.ts 档位表，前端不复制分支）。 */
+export interface ChallengeRewardPreviewView {
+  tier: RewardTier;
+  reputation: number;
+  spiritStone: number;
+}
+
+/** 公开档案里的挑战预览（相对当前用户计算；null = 观看者自己没有宗门）。 */
+export interface PublicSectChallengeView {
+  canChallenge: boolean;
+  /** 稳定原因码；null = 可以挑战。 */
+  blockedReason: ChallengeBlockedReason | null;
+  /** 守擂方式：有效手动阵容 / 临时自动守擂；守方弟子不足时为 null。 */
+  defenseMode: DefenseMode | null;
+  /** 当日上限（固定 3）。 */
+  dailyLimit: number;
+  /** 当日已受理场次。 */
+  usedToday: number;
+  /** 当日剩余场次。 */
+  remaining: number;
+  /** 今日是否已挑战过该目标。 */
+  alreadyChallengedToday: boolean;
+  /** 守方等级 - 攻方等级。 */
+  levelDifference: number;
+  /** 若胜利可得的确切奖励。 */
+  rewardPreview: ChallengeRewardPreviewView;
+}
+
 /**
  * 公开档案（V3 第三节）：只暴露安全字段，**不含**资源余额、修为进度、岗位、
  * 伤势、招募计数与建筑升级消耗。
@@ -269,8 +316,10 @@ export interface PublicSectView {
   reputation: number;
   disciples: PublicDiscipleView[];
   buildings: PublicBuildingView[];
-  /** 是否已设守擂阵容（不暴露具体弟子，只告诉攻方「可挑战」，V5 2.5）。 */
+  /** 是否已设置**有效**的手动守擂阵容（0012 起不再代表「能否挑战」；自动守擂也可挑战）。 */
   hasDefenseLineup: boolean;
+  /** 挑战预览（相对当前用户）；观看者没有宗门时为 null。 */
+  challenge: PublicSectChallengeView | null;
   createdAt: string;
 }
 
@@ -359,6 +408,14 @@ export interface ChallengeResultView {
   reputationGained: number;
   spiritStoneGained: number;
   message: string;
+  /** 开战快照：双方宗门等级与等级差（守方 - 攻方）。 */
+  attackerLevel: number;
+  defenderLevel: number;
+  levelDifference: number;
+  /** 开战时匹配的奖励档位（失败也记录档位，实际发奖为 0）。 */
+  rewardTier: RewardTier;
+  /** 守擂方式快照：有效手动阵容 / 临时自动守擂。 */
+  defenseMode: DefenseMode;
 }
 
 /** 挑战历史条目（GET /game/challenge-history，V5 4.1）。 */
@@ -373,6 +430,15 @@ export interface ChallengeHistoryEntryView {
   role: 'attacker' | 'defender';
   reputationGained: number;
   spiritStoneGained: number;
+  /**
+   * 0012 开战快照；0012 迁移前的旧记录这些字段为 null，
+   * 前端对 null 不显示占位（不伪造等级差/档位/守擂方式）。
+   */
+  attackerLevel: number | null;
+  defenderLevel: number | null;
+  levelDifference: number | null;
+  rewardTier: RewardTier | null;
+  defenseMode: DefenseMode | null;
   createdAt: string;
 }
 
@@ -390,6 +456,8 @@ export interface SectStateInput {
   balances: readonly ResourceBalanceRow[];
   /** 丹药库存行（可能为空数组；没有行的 pill 视为库存 0）。 */
   pillInventories: readonly PillInventoryRow[];
+  /** 主动挑战的当日次数状态（0012；日期键过期由调用方做兼容核对）。 */
+  challengeDay: ChallengeDayState;
   settleResult: SettleResult;
   /** 库里的最近事件行；本次结算刚触发的事件在 buildSectStateView 里合并进来。 */
   recentEventRows: readonly EventLogRow[];
@@ -408,6 +476,7 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
     buildings,
     balances,
     pillInventories,
+    challengeDay,
     settleResult,
     now,
     recruitUsedToday,
@@ -670,6 +739,11 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
     },
     sectUpgrade,
     alchemy: alchemyView,
+    challenge: {
+      dailyLimit: CHALLENGE_DAILY_LIMIT,
+      usedToday: challengeDay.usedToday,
+      remaining: challengeDay.remaining,
+    },
   };
 }
 

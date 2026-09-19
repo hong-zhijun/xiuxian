@@ -82,6 +82,39 @@ function score(entry: ChallengeHistoryEntryView): string {
   const won = entry.rounds.filter((round) => isMyRoundWin(entry, round)).length;
   return `${won}:${entry.rounds.length - won}`;
 }
+
+/** 从自己视角描述双方等级差；旧记录（null）不显示。 */
+function levelDiffText(entry: ChallengeHistoryEntryView): string {
+  if (entry.levelDifference === null) {
+    return '';
+  }
+  const diff = entry.role === 'attacker' ? entry.levelDifference : -entry.levelDifference;
+  if (diff === 0) {
+    return '同级交锋';
+  }
+  return diff > 0 ? `对方高 ${diff} 级` : `对方低 ${-diff} 级`;
+}
+
+/** 守擂方式文案；旧记录（null）不显示。 */
+function defenseModeText(entry: ChallengeHistoryEntryView): string | null {
+  if (entry.defenseMode === null) {
+    return null;
+  }
+  return entry.defenseMode === 'configured' ? '手动守擂' : '临时自动守擂';
+}
+
+/**
+ * 零奖励胜利（守方低 3 级以上）：与普通失败区分开，避免「显示胜利却没有奖励」被当成 bug。
+ * 只对攻方角色有意义（守方本来就没有奖励）。
+ */
+function isZeroRewardWin(entry: ChallengeHistoryEntryView): boolean {
+  return (
+    entry.role === 'attacker' &&
+    entry.result === 'win' &&
+    entry.reputationGained === 0 &&
+    entry.spiritStoneGained === 0
+  );
+}
 </script>
 
 <template>
@@ -119,11 +152,16 @@ function score(entry: ChallengeHistoryEntryView): string {
             </span>
             <span class="challenge-meta">
               <span>比分 {{ score(entry) }}</span>
+              <span v-if="levelDiffText(entry) !== ''">{{ levelDiffText(entry) }}</span>
+              <span v-if="defenseModeText(entry) !== null">{{ defenseModeText(entry) }}</span>
               <span v-if="entry.role === 'attacker' && entry.reputationGained > 0" class="is-gain">
                 声望 +{{ entry.reputationGained }}
               </span>
               <span v-if="entry.role === 'attacker' && entry.spiritStoneGained > 0" class="is-gain">
                 灵石 +{{ formatAmount(entry.spiritStoneGained) }}
+              </span>
+              <span v-if="isZeroRewardWin(entry)" class="is-zero">
+                零奖励胜利
               </span>
             </span>
           </span>

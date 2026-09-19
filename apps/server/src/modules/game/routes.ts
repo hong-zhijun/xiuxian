@@ -157,9 +157,10 @@ export function createGameRoutes(): Hono<AppEnv> {
   });
 
   // V3：公开档案（只读：不结算、不写库；只返回安全字段，宗门不存在 404）。
+  // 0012：传入当前用户与时间，挑战预览相对观看者计算。
   routes.get('/game/sect/:sectId', async (c) => {
-    requireUserId(c);
-    const sect = await getPublicSect(getDb(c.env), c.req.param('sectId'));
+    const userId = requireUserId(c);
+    const sect = await getPublicSect(getDb(c.env), c.req.param('sectId'), userId, Date.now());
     return respondOk(c, { sect });
   });
 
