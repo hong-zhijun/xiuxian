@@ -3704,6 +3704,203 @@ ul {
   }
 }
 
+/* ---------- Alchemy (pill crafting & usage) ---------- */
+
+.alchemy-locked {
+  margin-top: 8px;
+}
+
+.alchemy-locked .blocked-hint {
+  margin-top: 6px;
+}
+
+.alchemy-recipe-list {
+  display: flex;
+  flex-direction: column;
+}
+
+/* 配方行：丹标记 + 名称/成本/库存 + 数量步进与炼制按钮。 */
+.alchemy-recipe {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 39px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 11px;
+  padding: 12px 2px;
+  border-bottom: 1px solid var(--line);
+}
+
+.alchemy-recipe:last-child {
+  border-bottom: 0;
+}
+
+.alchemy-pill-glyph {
+  display: flex;
+  width: 37px;
+  height: 37px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(202, 169, 106, 0.24);
+  border-radius: 50%;
+  color: var(--gold-bright);
+  background: rgba(202, 169, 106, 0.05);
+  font-family: 'STKaiti', 'KaiTi', serif;
+  font-size: 14px;
+}
+
+.alchemy-recipe-copy {
+  min-width: 0;
+}
+
+.alchemy-recipe-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.alchemy-recipe-title strong {
+  overflow: hidden;
+  color: #dce6e0;
+  font-family: 'STKaiti', 'KaiTi', serif;
+  font-size: 15px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.alchemy-owned {
+  padding: 1px 7px;
+  border: 1px solid rgba(202, 169, 106, 0.24);
+  border-radius: 2px;
+  color: var(--gold-bright);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.alchemy-recipe-desc {
+  margin-top: 3px;
+  color: #657970;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.alchemy-recipe-cost {
+  margin-top: 5px;
+  color: #93a99e;
+  font-size: 12px;
+}
+
+.alchemy-recipe-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+}
+
+/* 数量步进（1~5）：− n + */
+.alchemy-stepper {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 2px 4px;
+}
+
+.alchemy-stepper span {
+  min-width: 26px;
+  text-align: center;
+  color: #dce6e0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.alchemy-stepper button {
+  display: flex;
+  width: 24px;
+  height: 24px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(202, 169, 106, 0.28);
+  border-radius: 50%;
+  color: var(--gold-bright);
+  background: transparent;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.alchemy-stepper button:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
+}
+
+.alchemy-craft-button {
+  padding: 8px 14px;
+}
+
+.alchemy-use-section {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--line);
+}
+
+.alchemy-use-title {
+  margin: 0 0 6px;
+  color: #93a99e;
+  font-family: 'STKaiti', 'KaiTi', serif;
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+}
+
+.alchemy-use-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.alchemy-use-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 2px;
+  border-bottom: 1px solid var(--line);
+}
+
+.alchemy-use-row:last-child {
+  border-bottom: 0;
+}
+
+.alchemy-use-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.alchemy-use-copy strong {
+  color: #dce6e0;
+  font-family: 'STKaiti', 'KaiTi', serif;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.alchemy-use-copy span {
+  color: #657970;
+  font-size: 12px;
+}
+
+.alchemy-use-empty {
+  margin: 6px 0 0;
+  color: #657970;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

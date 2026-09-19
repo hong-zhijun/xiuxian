@@ -6,6 +6,7 @@ import {
   assign,
   breakthrough,
   challenge,
+  craftPill,
   explore,
   fetchMe,
   logout as apiLogout,
@@ -14,8 +15,16 @@ import {
   syncSect,
   upgradeBuilding,
   upgradeSect,
+  usePill,
 } from './api/game';
-import type { ChallengeResultView, EventLogView, ResourceView, SectStateView } from './api/game';
+import type {
+  ChallengeResultView,
+  CraftPillOutcome,
+  EventLogView,
+  ResourceView,
+  SectStateView,
+  UsePillOutcome,
+} from './api/game';
 import CreateSectScreen from './components/CreateSectScreen.vue';
 import LoginScreen from './components/LoginScreen.vue';
 import SectScreen from './components/SectScreen.vue';
@@ -360,6 +369,45 @@ function onBreakthrough(discipleId: string): void {
   );
 }
 
+const PILL_ATTRIBUTE_NAMES: Record<string, string> = { attack: '攻击', defense: '防御', speed: '身法' };
+
+/** 炼丹：数量由炼丹面板选好（1~5），服务端整单校验并扣资源，返回完整 state。 */
+function onCraftPill(pillId: string, quantity: number): void {
+  void runAction(
+    () => craftPill(pillId, quantity),
+    (data) => {
+      const outcome = data.outcome as CraftPillOutcome | undefined;
+      return {
+        title: '炼丹告成',
+        message:
+          outcome === undefined
+            ? '丹药已收入丹库。'
+            : `炼得 ${outcome.pillName} ×${String(outcome.quantity)}，已收入丹库。`,
+      };
+    },
+  );
+}
+
+/** 服用丹药：目标与状态由服务端校验，成功后按效果提示（回春/修为/淬体）。 */
+function onUsePill(pillId: string, discipleId: string): void {
+  void runAction(
+    () => usePill(pillId, discipleId),
+    (data) => {
+      const outcome = data.outcome as UsePillOutcome | undefined;
+      const effect = outcome?.effect;
+      let message = '丹药入腹，药力生效。';
+      if (effect?.kind === 'heal') {
+        message = `${outcome?.discipleName ?? '弟子'} 伤势尽复，可以再度出战。`;
+      } else if (effect?.kind === 'cultivation') {
+        message = `${outcome?.discipleName ?? '弟子'} 修为 +${String(effect.gain ?? 0)}。`;
+      } else if (effect?.kind === 'bodyTempering') {
+        message = `${outcome?.discipleName ?? '弟子'} ${PILL_ATTRIBUTE_NAMES[effect.attribute ?? ''] ?? '属性'} +${String(effect.gain ?? 0)}。`;
+      }
+      return { title: `服用${outcome?.pillName ?? '丹药'}`, message };
+    },
+  );
+}
+
 async function onLogout(): Promise<void> {
   if (busy.value) return;
   busy.value = true;
@@ -473,6 +521,8 @@ onUnmounted(() => {
       @set-defense-lineup="onSetDefenseLineup"
       @dismiss-challenge-result="onDismissChallengeResult"
       @breakthrough="onBreakthrough"
+      @craft-pill="onCraftPill"
+      @use-pill="onUsePill"
       @notify="notify"
     />
 

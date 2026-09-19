@@ -14,6 +14,7 @@ import type { ToastTone } from '../types/ui';
 import { formatAmount, formatBp, formatRate, formatTime } from '../utils/format';
 import { fetchRecruitPreview, refreshRecruitPreview } from '../api/game';
 import { resourceGlyph } from '../utils/glyph';
+import AlchemyPanel from './AlchemyPanel.vue';
 import AssignmentSelect from './AssignmentSelect.vue';
 import ChallengeDialog from './ChallengeDialog.vue';
 import ChallengeHistoryPanel from './ChallengeHistoryPanel.vue';
@@ -48,12 +49,20 @@ const emit = defineEmits<{
   setDefenseLineup: [discipleIds: string[]];
   dismissChallengeResult: [];
   breakthrough: [discipleId: string];
+  'craft-pill': [pillId: string, quantity: number];
+  'use-pill': [pillId: string, discipleId: string];
   notify: [tone: ToastTone, title: string, message: string];
 }>();
 
-/** 操作条里的弹窗开关：天机录 / 历练探索 / 江湖榜 / 守擂阵容 / 演武录（宗门晋升与建筑仍在右栏常驻）。 */
+/** 操作条里的弹窗开关：天机录 / 历练探索 / 江湖榜 / 守擂阵容 / 演武录 / 炼丹（宗门晋升与建筑仍在右栏常驻）。 */
 const openPanel = ref<
-  'events' | 'explore' | 'leaderboard' | 'defense-lineup' | 'challenge-history' | null
+  | 'events'
+  | 'explore'
+  | 'leaderboard'
+  | 'defense-lineup'
+  | 'challenge-history'
+  | 'alchemy'
+  | null
 >(null);
 
 /**
@@ -299,6 +308,18 @@ function requestBreakthrough(disciple: DiscipleView): void {
   }
   emit('breakthrough', disciple.id);
 }
+
+/** 炼丹面板里点「炼制」：数量已在面板内选好（1~5），转发给上层调接口。 */
+function onCraftPill(pillId: string, quantity: number): void {
+  if (props.busy) return;
+  emit('craft-pill', pillId, quantity);
+}
+
+/** 炼丹面板里点「服用」：目标弟子由服务端校验归属与状态，转发给上层调接口。 */
+function onUsePill(pillId: string, discipleId: string): void {
+  if (props.busy) return;
+  emit('use-pill', pillId, discipleId);
+}
 </script>
 
 <template>
@@ -402,6 +423,12 @@ function requestBreakthrough(disciple: DiscipleView): void {
           <path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Zm3.4 5.6-2.1 5-5 2.1 2.1-5 5-2.1Z" />
         </svg>
         <span>历练探索</span>
+      </button>
+      <button class="action-chip" type="button" @click="openPanel = 'alchemy'">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M9 3h6M10 3v4.2a6.5 6.5 0 1 0 4 0V3m-4.8 11h9.6" />
+        </svg>
+        <span>炼丹</span>
       </button>
       <button class="action-chip" type="button" @click="openPanel = 'leaderboard'">
         <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -606,6 +633,16 @@ function requestBreakthrough(disciple: DiscipleView): void {
 
     <ModalShell v-if="openPanel === 'explore'" label="秘境探索" @close="openPanel = null">
       <ExplorePanel :state="state" :busy="busy" @select="onSelectRealm" />
+    </ModalShell>
+
+    <!-- 炼丹：解锁/库存/canCraft 都由服务端算好；炼制与服药后 state 整体刷新，面板就地更新。 -->
+    <ModalShell v-if="openPanel === 'alchemy'" label="炼丹" @close="openPanel = null">
+      <AlchemyPanel
+        :state="state"
+        :busy="busy"
+        @craft="onCraftPill"
+        @use="onUsePill"
+      />
     </ModalShell>
 
     <!-- 选人出征：叠在秘境列表之上，Esc / 点遮罩只关这一层。 -->

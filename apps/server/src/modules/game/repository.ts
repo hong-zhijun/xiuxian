@@ -1,5 +1,7 @@
 import { ParamRepository, type ParameterizedQuery } from '../../infra/db/repository';
 
+import type { PillAttribute } from './alchemy';
+
 /**
  * 游戏仓储（一次性可玩版本）。
  *
@@ -45,6 +47,8 @@ export interface DiscipleRow {
   cultivation_remainder: number;
   assignment: string;
   injured_until: number | null;
+  /** 已服用淬体丹次数（上限 BODY_TEMPERING_MAX_USES，见 alchemy.ts）。 */
+  body_tempering_count: number;
   created_at: number;
 }
 
@@ -154,7 +158,7 @@ export class DiscipleRepository extends ParamRepository {
     return this.all<DiscipleRow>({
       sql: `SELECT id, sect_id, name, gender, aptitude, attack, defense, speed, talent,
                    realm_id, stage, cultivation, cultivation_remainder,
-                   assignment, injured_until, created_at
+                   assignment, injured_until, body_tempering_count, created_at
             FROM disciples WHERE sect_id = ? ORDER BY created_at ASC, id ASC`,
       params: [sectId],
     });
@@ -164,7 +168,7 @@ export class DiscipleRepository extends ParamRepository {
     return this.one<DiscipleRow>({
       sql: `SELECT id, sect_id, name, gender, aptitude, attack, defense, speed, talent,
                    realm_id, stage, cultivation, cultivation_remainder,
-                   assignment, injured_until, created_at
+                   assignment, injured_until, body_tempering_count, created_at
             FROM disciples WHERE id = ?`,
       params: [discipleId],
     });
@@ -193,6 +197,28 @@ export class ResourceBalanceRepository extends ParamRepository {
     return this.all<ResourceBalanceRow>({
       sql: `SELECT id, sect_id, resource_id, balance, remainder, updated_at
             FROM resource_balances WHERE sect_id = ? ORDER BY resource_id ASC`,
+      params: [sectId],
+    });
+  }
+}
+
+/**
+ * 丹药库存行（0011 迁移）：同一宗门同一 pill_id 只有一行（UNIQUE 约束）。
+ * quantity 是非负整数，没有行视为 0；pill_id 是代码常量（alchemy.ts），不建外键。
+ */
+export interface PillInventoryRow {
+  id: string;
+  sect_id: string;
+  pill_id: string;
+  quantity: number;
+  updated_at: number;
+}
+
+export class PillInventoryRepository extends ParamRepository {
+  async findBySectId(sectId: string): Promise<PillInventoryRow[]> {
+    return this.all<PillInventoryRow>({
+      sql: `SELECT id, sect_id, pill_id, quantity, updated_at
+            FROM pill_inventories WHERE sect_id = ? ORDER BY pill_id ASC`,
       params: [sectId],
     });
   }
@@ -350,6 +376,8 @@ export interface NewDisciple {
   realmId: string;
   stage: number;
   assignment: string;
+  /** 淬体丹服用次数；新建弟子一律传 0。 */
+  bodyTemperingCount: number;
   now: number;
 }
 
@@ -399,8 +427,9 @@ export function insertDiscipleStatement(row: NewDisciple): ParameterizedQuery {
   return {
     sql: `INSERT INTO disciples
             (id, sect_id, name, gender, aptitude, attack, defense, speed, talent,
-             realm_id, stage, cultivation, cultivation_remainder, assignment, injured_until, created_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, NULL, ?)`,
+             realm_id, stage, cultivation, cultivation_remainder, assignment, injured_until,
+             body_tempering_count, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, NULL, ?, ?)`,
     params: [
       row.id,
       row.sectId,
@@ -414,6 +443,7 @@ export function insertDiscipleStatement(row: NewDisciple): ParameterizedQuery {
       row.realmId,
       row.stage,
       row.assignment,
+      row.bodyTemperingCount,
       row.now,
     ],
   };
@@ -564,10 +594,13 @@ export function updateDiscipleProgressStatement(
   };
 }
 
-/** 探索失败写回：只改伤势冷却，**不**碰境界/阶段/修为（与突破写回区分开）。 */
+/**
+ * 探索失败写回：只改伤势冷却，**不**碰境界/阶段/修为（与突破写回区分开）。
+ * 传 null 表示清除伤势（回春丹），与设置冷却共用同一条 UPDATE。
+ */
 export function updateDiscipleInjuryStatement(
   discipleId: string,
-  injuredUntil: number,
+  injuredUntil: number | null,
 ): ParameterizedQuery {
   return {
     sql: 'UPDATE disciples SET injured_until = ? WHERE id = ?',
@@ -682,5 +715,117 @@ export function insertChallengeLogStatement(row: {
       row.spiritStoneGained,
       row.now,
     ],
+  };
+}
+
+/* ---------- 丹药系统（0011 迁移 + alchemy.ts） ---------- */
+
+/**
+ * 库存 upsert：首次炼制创建行；同一 (sect_id, pill_id) 重复炼制复用同一行
+ * （UNIQUE 冲突时改写 quantity / updated_at），保证每宗门每丹药只有一条库存记录。
+ */
+export function upsertPillInventoryStatement(
+  sectId: string,
+  pillId: string,
+  quantity: number,
+  now: number,
+): ParameterizedQuery {
+  return {
+    sql: `INSERT INTO pill_inventories (id, sect_id, pill_id, quantity, updated_at)
+          VALUES (?, ?, ?, ?, ?)
+          ON CONFLICT (sect_id, pill_id)
+          DO UPDATE SET quantity = excluded.quantity, updated_at = excluded.updated_at`,
+    params: [crypto.randomUUID(), sectId, pillId, quantity, now],
+  };
+}
+
+/** 库存数量写回（服用后减 1）；只用于库存行已存在且数量已检查过的场景。 */
+export function updatePillInventoryQuantityStatement(
+  row: PillInventoryRow,
+  quantity: number,
+  now: number,
+): ParameterizedQuery {
+  return {
+    sql: 'UPDATE pill_inventories SET quantity = ?, updated_at = ? WHERE id = ?',
+    params: [quantity, now, row.id],
+  };
+}
+
+/**
+ * 淬体丹写回：只更新补短板的那一个属性列 + 服用次数。
+ * 列名来自 PillAttribute 的固定映射（不拼用户输入），一次只改一列。
+ */
+export function updateDiscipleBodyTemperingStatement(
+  discipleId: string,
+  attribute: PillAttribute,
+  attributeValue: number,
+  bodyTemperingCount: number,
+): ParameterizedQuery {
+  const column =
+    attribute === 'attack' ? 'attack' : attribute === 'defense' ? 'defense' : 'speed';
+  return {
+    sql: `UPDATE disciples SET ${column} = ?, body_tempering_count = ? WHERE id = ?`,
+    params: [attributeValue, bodyTemperingCount, discipleId],
+  };
+}
+
+/**
+ * 炼丹 batch 的首条语句：快照过期时插入 valid=0，触发 mutation_guards 的 CHECK，
+ * 让同批的结算、资源扣减、库存和弟子更新一起回滚。
+ */
+export function alchemySnapshotGuardStatement(
+  commandId: string,
+  snapshot: {
+    sect: SectRow;
+    balances: readonly ResourceBalanceRow[];
+    buildings: readonly BuildingRow[];
+    pillId: string;
+    pillQuantity: number;
+    disciple?: DiscipleRow;
+  },
+): ParameterizedQuery {
+  const { sect, balances, buildings, pillId, pillQuantity, disciple } = snapshot;
+  const checks = [
+    'EXISTS (SELECT 1 FROM sects WHERE id = ? AND level = ? AND last_settled_at = ?)',
+    'COALESCE((SELECT quantity FROM pill_inventories WHERE sect_id = ? AND pill_id = ?), 0) = ?',
+  ];
+  const params: (string | number | null)[] = [
+    commandId,
+    sect.id, sect.level, sect.last_settled_at,
+    sect.id, pillId, pillQuantity,
+  ];
+
+  for (const row of balances) {
+    checks.push('EXISTS (SELECT 1 FROM resource_balances WHERE id = ? AND sect_id = ? AND balance = ? AND remainder = ?)');
+    params.push(row.id, sect.id, row.balance, row.remainder);
+  }
+  for (const row of buildings) {
+    checks.push('EXISTS (SELECT 1 FROM buildings WHERE id = ? AND sect_id = ? AND level = ?)');
+    params.push(row.id, sect.id, row.level);
+  }
+  if (disciple !== undefined) {
+    checks.push(`EXISTS (SELECT 1 FROM disciples WHERE id = ? AND sect_id = ?
+      AND realm_id = ? AND stage = ? AND cultivation = ? AND cultivation_remainder = ?
+      AND attack = ? AND defense = ? AND speed = ? AND body_tempering_count = ?
+      AND injured_until IS ? AND assignment = ?)`);
+    params.push(
+      disciple.id, sect.id, disciple.realm_id, disciple.stage,
+      disciple.cultivation, disciple.cultivation_remainder,
+      disciple.attack, disciple.defense, disciple.speed, disciple.body_tempering_count,
+      disciple.injured_until, disciple.assignment,
+    );
+  }
+
+  return {
+    sql: `INSERT INTO mutation_guards (command_id, valid)
+          SELECT ?, CASE WHEN ${checks.join(' AND ')} THEN 1 ELSE 0 END`,
+    params,
+  };
+}
+
+export function deleteAlchemySnapshotGuardStatement(commandId: string): ParameterizedQuery {
+  return {
+    sql: 'DELETE FROM mutation_guards WHERE command_id = ?',
+    params: [commandId],
   };
 }

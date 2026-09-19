@@ -1,6 +1,13 @@
 import type { GameConfigContent } from '@xiuxian/game-core';
 
 import {
+  alchemyUnlockBlockedReason,
+  bodyTemperingTarget,
+  firstInsufficientResource,
+  BODY_TEMPERING_MAX_USES,
+  PILL_RECIPES,
+} from './alchemy';
+import {
   DEFENSE_LINEUP_SIZE,
   BREAKTHROUGH_ARRAY_BONUS_BP_PER_LEVEL,
   IDLE_ASSIGNMENT,
@@ -21,7 +28,14 @@ import {
 } from './constants';
 import { RECENT_EVENTS_IN_SYNC, eventNameOf, type TriggeredEvent } from './events';
 import { discipleCombatPower } from './realms';
-import type { BuildingRow, DiscipleRow, EventLogRow, ResourceBalanceRow, SectRow } from './repository';
+import type {
+  BuildingRow,
+  DiscipleRow,
+  EventLogRow,
+  PillInventoryRow,
+  ResourceBalanceRow,
+  SectRow,
+} from './repository';
 import { cultivationRatePerHour, resourceRates, type DiscipleState, type SettleResult } from './settle';
 /**
  * 接口返回的视图类型（前端只读这些字段，不需要再读配置）。
@@ -82,6 +96,13 @@ export interface DiscipleView {
   blockedReason: string | null;
   breakthroughCost: string;
   breakthroughChanceBp: number;
+  /** 已服用淬体丹次数与剩余次数（上限 BODY_TEMPERING_MAX_USES）。 */
+  bodyTemperingUses: number;
+  bodyTemperingRemaining: number;
+  /** 服务端算好的淬体短板预览；null = 无短板或次数已用完。 */
+  bodyTemperingTarget: 'attack' | 'defense' | 'speed' | null;
+  /** 本次服用淬体丹的提升量；无短板时为 0。 */
+  bodyTemperingGain: number;
 }
 
 export interface BuildingView {
@@ -125,6 +146,27 @@ export interface SectUpgradeView {
   blockedReason: string | null;
 }
 
+/** 单个丹方视图：owned / canCraft / blockedReason 都由服务端算好（丹方定义在 alchemy.ts）。 */
+export interface AlchemyRecipeView {
+  id: string;
+  name: string;
+  description: string;
+  /** 单颗炼制成本（最小单位）。 */
+  cost: Record<string, string>;
+  /** 当前库存（非负整数；没有库存行视为 0）。 */
+  owned: number;
+  /** 是否可炼制（解锁 + 资源足够一颗；数量 × 成本的精确检查由 craft 服务执行）。 */
+  canCraft: boolean;
+  blockedReason: string | null;
+}
+
+/** 炼丹面板视图（解锁判断只在服务端实现，前端只渲染）。 */
+export interface AlchemyView {
+  unlocked: boolean;
+  blockedReason: string | null;
+  recipes: AlchemyRecipeView[];
+}
+
 export interface SectStateView {
   sect: {
     id: string;
@@ -158,6 +200,8 @@ export interface SectStateView {
   };
   /** 宗门升级信息。null = 已满级。 */
   sectUpgrade: SectUpgradeView | null;
+  /** 炼丹面板（配方、库存、解锁状态；解锁判断只在服务端）。 */
+  alchemy: AlchemyView;
 }
 
 /** 秘境列表视图（GET /game/realms）：规则（锁定/次数）由服务端算好，前端只渲染。 */
@@ -344,6 +388,8 @@ export interface SectStateInput {
   disciples: readonly DiscipleRow[];
   buildings: readonly BuildingRow[];
   balances: readonly ResourceBalanceRow[];
+  /** 丹药库存行（可能为空数组；没有行的 pill 视为库存 0）。 */
+  pillInventories: readonly PillInventoryRow[];
   settleResult: SettleResult;
   /** 库里的最近事件行；本次结算刚触发的事件在 buildSectStateView 里合并进来。 */
   recentEventRows: readonly EventLogRow[];
@@ -361,6 +407,7 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
     disciples,
     buildings,
     balances,
+    pillInventories,
     settleResult,
     now,
     recruitUsedToday,
@@ -428,6 +475,17 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
       blockedReason = `${energyName}不足（需要 ${String(cost)}）`;
     }
 
+    // 淬体丹预览：服务端算好短板与提升量，前端不复制算法；次数用完视为无短板。
+    const temperingUses = Number(disciple.body_tempering_count);
+    const temperingTarget =
+      temperingUses < BODY_TEMPERING_MAX_USES
+        ? bodyTemperingTarget(
+            Number(disciple.attack),
+            Number(disciple.defense),
+            Number(disciple.speed),
+          )
+        : null;
+
     return {
       id: disciple.id,
       name: disciple.name,
@@ -460,6 +518,10 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
       blockedReason,
       breakthroughCost: String(cost),
       breakthroughChanceBp: chanceBp,
+      bodyTemperingUses: temperingUses,
+      bodyTemperingRemaining: Math.max(0, BODY_TEMPERING_MAX_USES - temperingUses),
+      bodyTemperingTarget: temperingTarget?.attribute ?? null,
+      bodyTemperingGain: temperingTarget?.gain ?? 0,
     };
   });
 
@@ -525,6 +587,36 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
     balancesByResource,
   });
 
+  // 炼丹面板：解锁判断只在服务端（宗门等级 + 灵药园等级），canCraft 只预检单颗成本。
+  const buildingLevelsForAlchemy: Record<string, number> = Object.fromEntries(
+    buildings.map((building) => [building.def_id, building.level]),
+  );
+  const alchemyLockedReason = alchemyUnlockBlockedReason(Number(sect.level), buildingLevelsForAlchemy);
+  const alchemyView: AlchemyView = {
+    unlocked: alchemyLockedReason === null,
+    blockedReason: alchemyLockedReason,
+    recipes: PILL_RECIPES.map((recipe) => {
+      const ownedRow = pillInventories.find((row) => row.pill_id === recipe.id);
+      const lacking = alchemyLockedReason === null
+        ? firstInsufficientResource(recipe.cost, (resourceId) => balancesByResource.get(resourceId) ?? 0)
+        : null;
+      const lackingName =
+        lacking === undefined || lacking === null
+          ? ''
+          : (config.resources.find((resource) => resource.id === lacking)?.name ?? lacking);
+      return {
+        id: recipe.id,
+        name: recipe.name,
+        description: recipe.description,
+        cost: { ...recipe.cost },
+        owned: ownedRow === undefined ? 0 : Number(ownedRow.quantity),
+        canCraft: alchemyLockedReason === null && lacking === null,
+        blockedReason:
+          alchemyLockedReason ?? (lacking === null ? null : `${lackingName}不足`),
+      };
+    }),
+  };
+
   return {
     sect: {
       id: sect.id,
@@ -577,6 +669,7 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
       totalDiscarded: String(settleResult.totalDiscarded),
     },
     sectUpgrade,
+    alchemy: alchemyView,
   };
 }
 

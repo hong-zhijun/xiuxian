@@ -4,6 +4,16 @@ import { validatedGameConfig } from '../../config/loadGameConfig';
 import { AppError } from '../../http/appError';
 import { prepareStatements, type ParameterizedQuery } from '../../infra/db/repository';
 import {
+  alchemyUnlockBlockedReason,
+  bodyTemperingTarget,
+  findPillRecipe,
+  BODY_TEMPERING_MAX_USES,
+  CULTIVATION_PILL_GAIN,
+  type PillAttribute,
+  type PillId,
+  type PillRecipe,
+} from './alchemy';
+import {
   DEFENSE_LINEUP_SIZE,
   IDLE_ASSIGNMENT,
   RECRUIT_REFRESH_PER_LEVEL,
@@ -46,9 +56,12 @@ import {
   DiscipleRepository,
   EventLogRepository,
   ExplorationRepository,
+  PillInventoryRepository,
   ResourceBalanceRepository,
   SectRepository,
   SparringRepository,
+  alchemySnapshotGuardStatement,
+  deleteAlchemySnapshotGuardStatement,
   insertBuildingStatement,
   insertChallengeLogStatement,
   insertDiscipleStatement,
@@ -60,9 +73,11 @@ import {
   resourceDeltaStatement,
   updateBuildingLevelStatement,
   updateDiscipleAssignmentStatement,
+  updateDiscipleBodyTemperingStatement,
   updateDiscipleCultivationStatement,
   updateDiscipleInjuryStatement,
   updateDiscipleProgressStatement,
+  updatePillInventoryQuantityStatement,
   updateResourceSettledStatement,
   updateSectDefenseLineupStatement,
   updateSectLevelStatement,
@@ -70,9 +85,11 @@ import {
   updateSectRecruitRefreshStatement,
   updateSectReputationStatement,
   updateSectSettledStatement,
+  upsertPillInventoryStatement,
   type BuildingRow,
   type DiscipleRow,
   type EventLogRow,
+  type PillInventoryRow,
   type ResourceBalanceRow,
   type SectRow,
 } from './repository';
@@ -110,6 +127,8 @@ export interface SectSnapshot {
   disciples: DiscipleRow[];
   buildings: BuildingRow[];
   balances: ResourceBalanceRow[];
+  /** 丹药库存（可能为空数组；没有行的 pill 视为 0）。 */
+  pillInventories: PillInventoryRow[];
   /** 读快照时库里的最近事件行；本次结算刚触发的在本层另行合并（见 view.ts）。 */
   recentEvents: EventLogRow[];
 }
@@ -124,13 +143,14 @@ async function loadSnapshot(db: D1Database, userId: string): Promise<SectSnapsho
   if (sect === null) {
     return null;
   }
-  const [disciples, buildings, balances, recentEvents] = await Promise.all([
+  const [disciples, buildings, balances, pillInventories, recentEvents] = await Promise.all([
     new DiscipleRepository(db).findBySectId(sect.id),
     new BuildingRepository(db).findBySectId(sect.id),
     new ResourceBalanceRepository(db).findBySectId(sect.id),
+    new PillInventoryRepository(db).findBySectId(sect.id),
     new EventLogRepository(db).findRecentBySectId(sect.id, RECENT_EVENTS_IN_SYNC),
   ]);
-  return { sect, disciples, buildings, balances, recentEvents };
+  return { sect, disciples, buildings, balances, pillInventories, recentEvents };
 }
 
 /**
@@ -153,6 +173,8 @@ class SectDraft {
   disciples: DiscipleRow[];
   readonly buildings: BuildingRow[];
   balances: ResourceBalanceRow[];
+  /** 丹药库存（可变：炼制加、服用减；与写库语句一起在 commit 一次性提交）。 */
+  pillInventories: PillInventoryRow[];
   readonly recruitUsedToday: number;
 
   private readonly statements: ParameterizedQuery[] = [];
@@ -210,6 +232,7 @@ class SectDraft {
       return { ...row, cultivation: settled.cultivation, cultivation_remainder: settled.cultivationRemainder };
     });
     this.buildings = base.buildings.map((row) => ({ ...row }));
+    this.pillInventories = base.pillInventories.map((row) => ({ ...row }));
 
     const dateKey = dateKeyUtc8(now);
     this.recruitUsedToday = base.sect.recruit_date_key === dateKey ? Number(base.sect.recruit_count) : 0;
@@ -304,6 +327,7 @@ class SectDraft {
       realmId: row.realm_id,
       stage: Number(row.stage),
       assignment: row.assignment,
+      bodyTemperingCount: Number(row.body_tempering_count),
       now: this.now,
     }));
   }
@@ -324,6 +348,48 @@ class SectDraft {
     return building;
   }
 
+  /** 当前宗门某丹药的库存（非负整数；没有库存行视为 0）。 */
+  pillQuantity(pillId: string): number {
+    const row = this.pillInventories.find((item) => item.pill_id === pillId);
+    return row === undefined ? 0 : Number(row.quantity);
+  }
+
+  /** 服用前置检查 + 扣库存 1（内存与写库语句一起追加；库存不足抛 INVALID_STATUS）。 */
+  requirePill(pillId: string): void {
+    const row = this.pillInventories.find((item) => item.pill_id === pillId);
+    const quantity = row === undefined ? 0 : Number(row.quantity);
+    if (quantity < 1) {
+      throw new AppError('INVALID_STATUS', '丹药库存不足');
+    }
+    const updated: PillInventoryRow = { ...row!, quantity: quantity - 1, updated_at: this.now };
+    this.pillInventories = this.pillInventories.map((item) =>
+      item.id === updated.id ? updated : item,
+    );
+    this.addStatement(updatePillInventoryQuantityStatement(updated, updated.quantity, this.now));
+  }
+
+  /** 炼制入库 +quantity（首次用 upsert 创建库存行；同一 (sect, pill) 永远只有一行）。 */
+  addPill(pillId: string, quantity: number): void {
+    const existing = this.pillInventories.find((item) => item.pill_id === pillId);
+    let row: PillInventoryRow;
+    if (existing === undefined) {
+      row = {
+        id: crypto.randomUUID(),
+        sect_id: this.sect.id,
+        pill_id: pillId,
+        quantity,
+        updated_at: this.now,
+      };
+      this.pillInventories = [...this.pillInventories, row];
+    } else {
+      row = { ...existing, quantity: Number(existing.quantity) + quantity, updated_at: this.now };
+      this.pillInventories = this.pillInventories.map((item) =>
+        item.id === row.id ? row : item,
+      );
+    }
+    this.addStatement(upsertPillInventoryStatement(this.sect.id, pillId, row.quantity, this.now));
+  }
+
   view(): SectStateView {
     // 容量/上限按「当前（可能刚升级的）等级」现算：upgradeSect 之后的同一请求里返回的
     // state 就已经是新倍率/新上限，不需要等下一次 sync。
@@ -334,6 +400,7 @@ class SectDraft {
       disciples: this.disciples,
       buildings: this.buildings,
       balances: this.balances,
+      pillInventories: this.pillInventories,
       settleResult: this.settleResult,
       now: this.now,
       recruitUsedToday: this.recruitUsedToday,
@@ -347,6 +414,34 @@ class SectDraft {
       return;
     }
     await this.db.batch(prepareStatements(this.db, this.statements));
+  }
+
+  async commitAlchemy(pillId: string, discipleId?: string): Promise<void> {
+    const commandId = crypto.randomUUID();
+    const disciple = discipleId === undefined
+      ? undefined
+      : this.base.disciples.find((row) => row.id === discipleId);
+    const guard = alchemySnapshotGuardStatement(commandId, {
+      sect: this.base.sect,
+      balances: this.base.balances,
+      buildings: this.base.buildings,
+      pillId,
+      pillQuantity: this.base.pillInventories.find((row) => row.pill_id === pillId)?.quantity ?? 0,
+      ...(disciple === undefined ? {} : { disciple }),
+    });
+    try {
+      await this.db.batch(prepareStatements(this.db, [
+        guard,
+        ...this.statements,
+        deleteAlchemySnapshotGuardStatement(commandId),
+      ]));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (/CHECK constraint failed: (?:valid = 1|mutation_guards)/i.test(message)) {
+        throw new AppError('INVALID_STATUS', '宗门状态已变化，请刷新后重试');
+      }
+      throw error;
+    }
   }
 }
 
@@ -416,6 +511,7 @@ export async function createSect(
       cultivation_remainder: 0,
       assignment: template.assignment,
       injured_until: null,
+      body_tempering_count: 0,
       created_at: now,
     };
     statements.push(
@@ -432,6 +528,7 @@ export async function createSect(
         realmId: row.realm_id,
         stage: row.stage,
         assignment: row.assignment,
+        bodyTemperingCount: 0,
         now,
       }),
     );
@@ -497,6 +594,7 @@ export async function createSect(
       disciples,
       buildings,
       balances,
+      pillInventories: [],
       recentEvents: [],
     },
     now,
@@ -682,6 +780,7 @@ export async function recruitDisciple(
     cultivation_remainder: 0,
     assignment: IDLE_ASSIGNMENT,
     injured_until: null,
+    body_tempering_count: 0,
     created_at: now,
   };
   draft.addDisciple(disciple);
@@ -1946,5 +2045,202 @@ export async function listChallengeHistory(
   return {
     entries,
     stats: { wins: stats.wins, losses: stats.losses, total: stats.wins + stats.losses },
+  };
+}
+
+/* ---------- 丹药系统（0011 迁移 + alchemy.ts） ---------- */
+
+/** 炼制结果（POST /game/craft-pill 的 outcome）。 */
+export interface CraftPillOutcome {
+  pillId: PillId;
+  pillName: string;
+  quantity: number;
+  /** 本次炼制的实际总成本（单颗 × quantity，最小单位）。 */
+  cost: Record<string, string>;
+}
+
+/** 服用结果（POST /game/use-pill 的 outcome）。 */
+export interface UsePillOutcome {
+  pillId: PillId;
+  pillName: string;
+  discipleId: string;
+  discipleName: string;
+  effect: {
+    kind: 'heal' | 'cultivation' | 'bodyTempering';
+    /** cultivation / bodyTempering 的提升量。 */
+    gain?: number;
+    /** bodyTempering 服务端自动选中的短板属性。 */
+    attribute?: PillAttribute;
+  };
+}
+
+/** 建筑等级表（defId -> level），炼丹解锁判断用。 */
+function buildingLevelsOf(buildings: readonly BuildingRow[]): Record<string, number> {
+  return Object.fromEntries(buildings.map((row) => [row.def_id, row.level]));
+}
+
+/** 炼丹解锁检查（只在服务端实现；未解锁时 craft/use 一律 INVALID_STATUS）。 */
+function requireAlchemyUnlocked(draft: SectDraft): void {
+  const reason = alchemyUnlockBlockedReason(
+    Number(draft.sect.level),
+    buildingLevelsOf(draft.buildings),
+  );
+  if (reason !== null) {
+    throw new AppError('INVALID_STATUS', reason);
+  }
+}
+
+/** 配方查找：未知 pill id 抛 NOT_FOUND（不写库）。 */
+function requirePillRecipe(pillId: string): PillRecipe {
+  const recipe = findPillRecipe(pillId);
+  if (recipe === undefined) {
+    throw new AppError('NOT_FOUND', '未知丹方');
+  }
+  return recipe;
+}
+
+/**
+ * 炼制丹药（即时命令，无队列）：结算 → 解锁/配方/资源校验 → 扣资源 + 库存 +quantity，
+ * 只做**一次** `draft.commitAlchemy()`（单次 D1 batch，首条校验快照）。
+ * 资源不足或快照冲突整次失败，不产生半写。
+ */
+export async function craftPill(
+  db: D1Database,
+  userId: string,
+  pillId: string,
+  quantity: number,
+  now: number,
+): Promise<{ state: SectStateView; outcome: CraftPillOutcome }> {
+  const draft = await draftFor(db, userId, now);
+  requireAlchemyUnlocked(draft);
+  const recipe = requirePillRecipe(pillId);
+
+  // 单次成本 = 单颗成本 × quantity；requireResource 逐项检查并扣减（不足抛 INSUFFICIENT_RESOURCE）。
+  const cost: Record<string, string> = {};
+  for (const [resourceId, amount] of Object.entries(recipe.cost)) {
+    const total = Number(amount) * quantity;
+    draft.requireResource(resourceId, total);
+    cost[resourceId] = String(total);
+  }
+
+  draft.addPill(recipe.id, quantity);
+
+  await draft.commitAlchemy(recipe.id);
+  return {
+    state: draft.view(),
+    outcome: { pillId: recipe.id, pillName: recipe.name, quantity, cost },
+  };
+}
+
+/**
+ * 服用丹药（三条路径共用一套校验顺序）：
+ *   结算 → 解锁检查 → 配方检查 → 弟子归属（discipleById 只在当前宗门里找）
+ *   → 状态检查（不满足抛 INVALID_STATUS，且都在任何写库之前）
+ *   → 扣库存 1 + 效果写回，只做**一次** `draft.commitAlchemy()`。
+ *
+ * - 回春丹：只清除有效伤势（injured_until > now），不碰修为/境界/属性。
+ * - 聚气丹：修为 +min(120, 门槛 - 当前)，不越过突破门槛；cultivation_remainder 保持不变；
+ *   已达本版本最高阶段或修为已满门槛的弟子不能用。
+ * - 淬体丹：服务端自动选短板（attack -> defense -> speed），每名弟子最多 10 次；
+ *   没有短板时拒绝。不使用随机数。
+ */
+export async function usePill(
+  db: D1Database,
+  userId: string,
+  pillId: string,
+  discipleId: string,
+  now: number,
+): Promise<{ state: SectStateView; outcome: UsePillOutcome }> {
+  const draft = await draftFor(db, userId, now);
+  requireAlchemyUnlocked(draft);
+  const recipe = requirePillRecipe(pillId);
+  const disciple = draft.discipleById(discipleId);
+
+  if (recipe.id === 'healingPill') {
+    if (disciple.injured_until === null || Number(disciple.injured_until) <= now) {
+      throw new AppError('INVALID_STATUS', `${disciple.name}没有需要治疗的伤势`);
+    }
+    draft.requirePill(recipe.id);
+    draft.addStatement(updateDiscipleInjuryStatement(disciple.id, null));
+    disciple.injured_until = null;
+    await draft.commitAlchemy(recipe.id, disciple.id);
+    return {
+      state: draft.view(),
+      outcome: {
+        pillId: recipe.id,
+        pillName: recipe.name,
+        discipleId: disciple.id,
+        discipleName: disciple.name,
+        effect: { kind: 'heal' },
+      },
+    };
+  }
+
+  if (recipe.id === 'cultivationPill') {
+    const stage = findStage(disciple.realm_id, Number(disciple.stage));
+    if (stage.requiredCultivation === null) {
+      throw new AppError('INVALID_STATUS', `${disciple.name}已达本版本最高阶段，无法再服用聚气丹`);
+    }
+    if (Number(disciple.cultivation) >= stage.requiredCultivation) {
+      throw new AppError('INVALID_STATUS', `${disciple.name}修为已达突破门槛，请先突破再服用聚气丹`);
+    }
+    const gain = Math.min(
+      CULTIVATION_PILL_GAIN,
+      stage.requiredCultivation - Number(disciple.cultivation),
+    );
+    draft.requirePill(recipe.id);
+    const cultivation = Number(disciple.cultivation) + gain;
+    // 修为余数保持不变：不因服药丢弃离线结算的小数余量。
+    draft.addStatement(
+      updateDiscipleCultivationStatement(disciple.id, cultivation, Number(disciple.cultivation_remainder)),
+    );
+    disciple.cultivation = cultivation;
+    await draft.commitAlchemy(recipe.id, disciple.id);
+    return {
+      state: draft.view(),
+      outcome: {
+        pillId: recipe.id,
+        pillName: recipe.name,
+        discipleId: disciple.id,
+        discipleName: disciple.name,
+        effect: { kind: 'cultivation', gain },
+      },
+    };
+  }
+
+  // bodyTemperingPill
+  const uses = Number(disciple.body_tempering_count);
+  if (uses >= BODY_TEMPERING_MAX_USES) {
+    throw new AppError(
+      'INVALID_STATUS',
+      `${disciple.name}已服用淬体丹 ${BODY_TEMPERING_MAX_USES} 次，药力已满`,
+    );
+  }
+  const target = bodyTemperingTarget(
+    Number(disciple.attack),
+    Number(disciple.defense),
+    Number(disciple.speed),
+  );
+  if (target === null) {
+    throw new AppError('INVALID_STATUS', `${disciple.name}没有需要补齐的属性短板`);
+  }
+  draft.requirePill(recipe.id);
+  const nextValue = Number(disciple[target.attribute]) + target.gain;
+  const nextUses = uses + 1;
+  disciple[target.attribute] = nextValue;
+  disciple.body_tempering_count = nextUses;
+  draft.addStatement(
+    updateDiscipleBodyTemperingStatement(disciple.id, target.attribute, nextValue, nextUses),
+  );
+  await draft.commitAlchemy(recipe.id, disciple.id);
+  return {
+    state: draft.view(),
+    outcome: {
+      pillId: recipe.id,
+      pillName: recipe.name,
+      discipleId: disciple.id,
+      discipleName: disciple.name,
+      effect: { kind: 'bodyTempering', gain: target.gain, attribute: target.attribute },
+    },
   };
 }

@@ -8,16 +8,19 @@ import {
   assignRequestSchema,
   breakthroughRequestSchema,
   challengeRequestSchema,
+  craftPillRequestSchema,
   createSectRequestSchema,
   exploreRequestSchema,
   recruitRequestSchema,
   setDefenseLineupSchema,
   upgradeBuildingRequestSchema,
+  usePillRequestSchema,
 } from './schema';
 import {
   assignDisciple,
   breakthrough,
   challengeSect,
+  craftPill,
   createSect,
   exploreSectRealm,
   getPublicSect,
@@ -32,6 +35,7 @@ import {
   setDefenseLineup,
   upgradeBuilding,
   upgradeSect,
+  usePill,
 } from './service';
 import type { SectStateView } from './view';
 
@@ -186,6 +190,22 @@ export function createGameRoutes(): Hono<AppEnv> {
       Date.now(),
     );
     return respondOk(c, { state: result.state, result: result.result });
+  });
+
+  // 丹药：炼制（结算 → 解锁/配方/资源校验 → 扣资源 + 库存 +quantity，一次 batch）。
+  routes.post('/game/craft-pill', async (c) => {
+    const userId = requireUserId(c);
+    const body = await parseStrictJson(craftPillRequestSchema, c);
+    const result = await craftPill(getDb(c.env), userId, body.pillId, body.quantity, Date.now());
+    return respondOk(c, { state: result.state, outcome: result.outcome });
+  });
+
+  // 丹药：服用（结算 → 解锁/配方/归属/状态校验 → 扣库存 1 + 效果写回，一次 batch）。
+  routes.post('/game/use-pill', async (c) => {
+    const userId = requireUserId(c);
+    const body = await parseStrictJson(usePillRequestSchema, c);
+    const result = await usePill(getDb(c.env), userId, body.pillId, body.discipleId, Date.now());
+    return respondOk(c, { state: result.state, outcome: result.outcome });
   });
 
   return routes;

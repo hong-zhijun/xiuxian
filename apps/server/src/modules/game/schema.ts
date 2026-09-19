@@ -54,3 +54,15 @@ export const challengeRequestSchema = z.strictObject({
   targetSectId: z.string().min(1),
   discipleIds: z.array(z.string().min(1)).length(3),
 });
+
+/** 丹药炼制：quantity 是 1~5 的整数；pill id 的合法性由服务端按 PILL_RECIPES 校验。 */
+export const craftPillRequestSchema = z.strictObject({
+  pillId: z.string().min(1).max(64),
+  quantity: z.number().int().min(1).max(5),
+});
+
+/** 丹药服用：目标弟子必须属于当前宗门（服务端用 draft.discipleById 判定归属）。 */
+export const usePillRequestSchema = z.strictObject({
+  pillId: z.string().min(1).max(64),
+  discipleId: z.string().min(1).max(64),
+});

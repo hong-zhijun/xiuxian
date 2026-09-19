@@ -57,6 +57,11 @@ export interface DiscipleView {
   talentName: string;
   /** 当前战力（服务端按 realms.ts 公式算好）。 */
   combatPower: number;
+  /** 淬体丹：已服用次数 / 剩余次数与服务端算好的短板预览（null = 无短板或已用完）。 */
+  bodyTemperingUses: number;
+  bodyTemperingRemaining: number;
+  bodyTemperingTarget: 'attack' | 'defense' | 'speed' | null;
+  bodyTemperingGain: number;
 }
 
 export interface BuildingView {
@@ -131,6 +136,29 @@ export interface SectStateView {
   };
   /** 宗门升级信息；null = 已满级。 */
   sectUpgrade: SectUpgradeView | null;
+  /** 炼丹面板（配方/库存/解锁状态，canCraft 与短板预览都由服务端算好）。 */
+  alchemy: AlchemyView;
+}
+
+/** 单个丹方（与后端 view.ts 的 AlchemyRecipeView 一一对应）。 */
+export interface AlchemyRecipeView {
+  id: string;
+  name: string;
+  description: string;
+  /** 单颗炼制成本（最小单位）。 */
+  cost: Record<string, string>;
+  /** 当前库存（非负整数）。 */
+  owned: number;
+  /** 是否可炼制（解锁 + 资源足够一颗；数量 × 成本的精确检查由服务端执行）。 */
+  canCraft: boolean;
+  blockedReason: string | null;
+}
+
+/** 炼丹面板状态（与后端 view.ts 的 AlchemyView 一一对应）。 */
+export interface AlchemyView {
+  unlocked: boolean;
+  blockedReason: string | null;
+  recipes: AlchemyRecipeView[];
 }
 
 export interface BreakthroughOutcome {
@@ -142,9 +170,38 @@ export interface BreakthroughOutcome {
   message: string;
 }
 
+/** 炼制结果（与后端 service.ts 的 CraftPillOutcome 一一对应）。 */
+export interface CraftPillOutcome {
+  pillId: string;
+  pillName: string;
+  quantity: number;
+  /** 本次炼制的实际总成本（单颗 × quantity）。 */
+  cost: Record<string, string>;
+}
+
+/** 服用效果（与后端 service.ts 的 UsePillOutcome['effect'] 一一对应）。 */
+export interface PillUseEffect {
+  kind: 'heal' | 'cultivation' | 'bodyTempering';
+  gain?: number;
+  attribute?: 'attack' | 'defense' | 'speed';
+}
+
+/** 服用结果（与后端 service.ts 的 UsePillOutcome 一一对应）。 */
+export interface UsePillOutcome {
+  pillId: string;
+  pillName: string;
+  discipleId: string;
+  discipleName: string;
+  effect: PillUseEffect;
+}
+
 export interface GameActionData {
   state: SectStateView;
-  outcome?: BreakthroughOutcome | { discipleName: string; aptitude: number };
+  outcome?:
+    | BreakthroughOutcome
+    | { discipleName: string; aptitude: number }
+    | CraftPillOutcome
+    | UsePillOutcome;
 }
 
 /** 宗门升级面板信息（与后端 view.ts 的 SectUpgradeView 一一对应）。 */
@@ -453,4 +510,26 @@ export async function refreshRecruitPreview(): Promise<{
     '/api/v1/game/recruit-refresh',
     { method: 'POST' },
   );
+}
+
+/** 炼制丹药（POST /game/craft-pill）：quantity 1~5，返回写库后的完整状态与炼制结果。 */
+export async function craftPill(pillId: string, quantity: number): Promise<{
+  state: SectStateView;
+  outcome: CraftPillOutcome;
+}> {
+  return apiRequest<{ state: SectStateView; outcome: CraftPillOutcome }>('/api/v1/game/craft-pill', {
+    method: 'POST',
+    body: { pillId, quantity },
+  });
+}
+
+/** 服用丹药（POST /game/use-pill）：目标弟子必须属于当前宗门，返回写库后的完整状态与服用效果。 */
+export async function usePill(pillId: string, discipleId: string): Promise<{
+  state: SectStateView;
+  outcome: UsePillOutcome;
+}> {
+  return apiRequest<{ state: SectStateView; outcome: UsePillOutcome }>('/api/v1/game/use-pill', {
+    method: 'POST',
+    body: { pillId, discipleId },
+  });
 }
