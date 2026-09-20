@@ -12,6 +12,7 @@ import {
   deleteDiscipleSnapshotGuardStatement,
   deleteDiscipleStatement,
   discipleSnapshotGuardStatement,
+  settlementSnapshotGuardStatements,
 } from '../src/modules/game/repository';
 import { getSectState } from '../src/modules/game/service';
 import {
@@ -351,6 +352,38 @@ async function startOk(
   expect(typeof journeyId).toBe('string');
   return journeyId as string;
 }
+
+describe('满编宗门同步', () => {
+  it('35 名弟子的宗门仍可同步结算', async () => {
+    const fixture = await makeSect('full-roster-sync', 32);
+    await setLastSettledAt(fixture.sectId, Date.now() - HOUR);
+    const response = await fixture.api.get('/api/v1/game/sync');
+    expect(response.status).toBe(200);
+    expect((dataOf(response) as Record<string, any>).state.disciples).toHaveLength(35);
+    expect(await mutationGuardCount()).toBe(0);
+
+    const sect = (await new SectRepository(env.DB).findById(fixture.sectId))!;
+    const balances = await new ResourceBalanceRepository(env.DB).findBySectId(fixture.sectId);
+    const disciples = await new DiscipleRepository(env.DB).findBySectId(fixture.sectId);
+    const guard = settlementSnapshotGuardStatements(crypto.randomUUID(), { sect, balances, disciples });
+    expect(guard.guards.length).toBeGreaterThan(1);
+    await env.DB.prepare('UPDATE disciples SET cultivation = cultivation + 1 WHERE id = ?')
+      .bind(disciples.at(-1)!.id)
+      .run();
+
+    const before = await dbBalance(fixture.sectId, 'spiritStone');
+    await expect(env.DB.batch(prepareStatements(env.DB, [
+      ...guard.guards,
+      {
+        sql: 'UPDATE resource_balances SET balance = balance + 1 WHERE sect_id = ? AND resource_id = ?',
+        params: [fixture.sectId, 'spiritStone'],
+      },
+      ...guard.cleanup,
+    ]))).rejects.toThrow(/CHECK constraint failed/);
+    expect(await dbBalance(fixture.sectId, 'spiritStone')).toBe(before);
+    expect(await mutationGuardCount()).toBe(0);
+  });
+});
 
 describe('0014 迁移：表、索引与旧数据不变', () => {
   it('disciple_journeys 建表成功，同一弟子只有一条未领取记录', async () => {

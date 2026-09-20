@@ -78,7 +78,6 @@ import {
   deleteAlchemySnapshotGuardStatement,
   deleteChallengeSnapshotGuardStatement,
   deleteDiscipleSnapshotGuardStatement,
-  deleteSettlementSnapshotGuardStatement,
   deleteDiscipleStatement,
   discipleSnapshotGuardStatement,
   insertBuildingStatement,
@@ -90,7 +89,7 @@ import {
   insertSectStatement,
   insertSparringLogStatement,
   resourceDeltaStatement,
-  settlementSnapshotGuardStatement,
+  settlementSnapshotGuardStatements,
   updateBuildingLevelStatement,
   updateDiscipleAssignmentStatement,
   updateDiscipleBodyTemperingStatement,
@@ -568,16 +567,16 @@ class SectDraft {
       return;
     }
     const commandId = crypto.randomUUID();
-    const guard = settlementSnapshotGuardStatement(commandId, {
+    const guard = settlementSnapshotGuardStatements(commandId, {
       sect: this.base.sect,
       balances: this.base.balances,
       disciples: this.base.disciples,
     });
     try {
       await this.db.batch(prepareStatements(this.db, [
-        guard,
+        ...guard.guards,
         ...this.statements,
-        deleteSettlementSnapshotGuardStatement(commandId),
+        ...guard.cleanup,
       ]));
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

@@ -580,39 +580,65 @@ export function updateDiscipleCultivationStatement(
   };
 }
 
-/** 普通结算也必须先核对快照，避免迟到的 sync 覆盖已领取的资源或新的弟子进度。 */
-export function settlementSnapshotGuardStatement(
+/**
+ * 普通结算也必须先核对快照，避免迟到的 sync 覆盖已领取的资源或新的弟子进度。
+ * D1 单条语句最多绑定 100 个参数；满编宗门有 35 名弟子，每人 8 项校验，
+ * 因此把校验拆成同一次 batch 内的多条守卫，任一失败都回滚整批。
+ */
+export function settlementSnapshotGuardStatements(
   commandId: string,
   snapshot: {
     sect: SectRow;
     balances: readonly ResourceBalanceRow[];
     disciples: readonly DiscipleRow[];
   },
-): ParameterizedQuery {
+): { guards: ParameterizedQuery[]; cleanup: ParameterizedQuery[] } {
   const { sect, balances, disciples } = snapshot;
   const checks = [
     'EXISTS (SELECT 1 FROM sects WHERE id = ? AND level = ? AND last_settled_at = ?)',
+    '(SELECT COUNT(*) FROM disciples WHERE sect_id = ?) = ?',
   ];
-  const params: (string | number | null)[] = [commandId, sect.id, sect.level, sect.last_settled_at];
+  const params: (string | number | null)[] = [
+    commandId, sect.id, sect.level, sect.last_settled_at, sect.id, disciples.length,
+  ];
   for (const row of balances) {
     checks.push('EXISTS (SELECT 1 FROM resource_balances WHERE id = ? AND sect_id = ? AND balance = ? AND remainder = ?)');
     params.push(row.id, sect.id, row.balance, row.remainder);
   }
-  for (const row of disciples) {
-    checks.push(`EXISTS (SELECT 1 FROM disciples WHERE id = ? AND sect_id = ? AND realm_id = ? AND stage = ?
-      AND cultivation = ? AND cultivation_remainder = ? AND assignment = ? AND injured_until IS ?)`);
-    params.push(row.id, sect.id, row.realm_id, row.stage, row.cultivation, row.cultivation_remainder,
-      row.assignment, row.injured_until);
+
+  const guardIds = [commandId];
+  const guards: ParameterizedQuery[] = [
+    {
+      sql: `INSERT INTO mutation_guards (command_id, valid)
+            SELECT ?, CASE WHEN ${checks.join(' AND ')} THEN 1 ELSE 0 END`,
+      params,
+    },
+  ];
+  const DISCIPLES_PER_GUARD = 10;
+  for (let start = 0; start < disciples.length; start += DISCIPLES_PER_GUARD) {
+    const guardId = `${commandId}:disciples:${String(start)}`;
+    const memberChecks: string[] = [];
+    const memberParams: (string | number | null)[] = [guardId];
+    for (const row of disciples.slice(start, start + DISCIPLES_PER_GUARD)) {
+      memberChecks.push(`EXISTS (SELECT 1 FROM disciples WHERE id = ? AND sect_id = ? AND realm_id = ? AND stage = ?
+        AND cultivation = ? AND cultivation_remainder = ? AND assignment = ? AND injured_until IS ?)`);
+      memberParams.push(row.id, sect.id, row.realm_id, row.stage, row.cultivation,
+        row.cultivation_remainder, row.assignment, row.injured_until);
+    }
+    guardIds.push(guardId);
+    guards.push({
+      sql: `INSERT INTO mutation_guards (command_id, valid)
+            SELECT ?, CASE WHEN ${memberChecks.join(' AND ')} THEN 1 ELSE 0 END`,
+      params: memberParams,
+    });
   }
   return {
-    sql: `INSERT INTO mutation_guards (command_id, valid)
-          SELECT ?, CASE WHEN ${checks.join(' AND ')} THEN 1 ELSE 0 END`,
-    params,
+    guards,
+    cleanup: guardIds.map((id) => ({
+      sql: 'DELETE FROM mutation_guards WHERE command_id = ?',
+      params: [id],
+    })),
   };
-}
-
-export function deleteSettlementSnapshotGuardStatement(commandId: string): ParameterizedQuery {
-  return { sql: 'DELETE FROM mutation_guards WHERE command_id = ?', params: [commandId] };
 }
 
 /** 资源增减（消耗用负数），只用于已经检查过余额的场景。 */
