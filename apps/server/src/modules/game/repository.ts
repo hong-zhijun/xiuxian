@@ -1470,3 +1470,234 @@ export function deleteJourneyClaimSnapshotGuardStatement(commandId: string): Par
     params: [commandId],
   };
 }
+
+// ---------- 交互式秘境探索（0015 迁移：进行中的探索 / 阶段推进 / 快照守卫） ----------
+
+/**
+ * 交互式探索记录行（0015 迁移）。
+ *
+ * 与「速通」的 explorations（0006）不同：这里保存的是**跨请求存活的进行中状态** ——
+ * 每关给出一个遭遇等玩家选择，每次选择都是一次新的命令，所以关卡进度、当前遭遇、
+ * 用过的场景与已得奖励都要落库（前端刷新 / 断线后靠 GET /game/realm-explore/active 续上）。
+ *
+ * 0 关已完成的语义：`current_stage` 是**已完成**的关卡数（0 = 还没走完第一关），
+ * 因此第 N 关的展示编号是 current_stage + 1。
+ *
+ * 四个 JSON 列都是受控小结构（与 event_log.effects 同一做法；读取侧解析失败退化为空值）：
+ * - `party`：string[]（本次派遣的弟子 id）；
+ * - `current_encounter`：`{ id, name, description, choices }`；NULL = 已结束（completed / failed）；
+ * - `used_encounters`：string[]（本次已抽到过的场景 id，防同一局重复）；
+ * - `rewards_collected`：Record<string, string>（累计已得奖励，最小单位整数字符串）。
+ *
+ * `status`：'in_progress' | 'completed' | 'failed'（终态不可逆，判定在 service 层）。
+ */
+export interface RealmExplorationRow {
+  id: string;
+  sect_id: string;
+  realm_id: string;
+  /** JSON: string[] */
+  party: string;
+  total_stages: number;
+  current_stage: number;
+  /** 'in_progress' | 'completed' | 'failed' */
+  status: string;
+  /** JSON: { id, name, description, choices }；null = 已结束 */
+  current_encounter: string | null;
+  /** JSON: string[] */
+  used_encounters: string;
+  /** JSON: Record<string, string> */
+  rewards_collected: string;
+  created_at: number;
+  updated_at: number;
+}
+
+/** 交互式探索表的完整列清单（避免 SELECT * 与将来加列时的静默漂移）。 */
+const REALM_EXPLORATION_COLUMNS = `id, sect_id, realm_id, party, total_stages, current_stage,
+       status, current_encounter, used_encounters, rewards_collected, created_at, updated_at`;
+
+export class RealmExplorationRepository extends ParamRepository {
+  /** 该宗门当前进行中的探索（每宗门同时最多一个）；没有返回 null。 */
+  async findActiveBySectId(sectId: string): Promise<RealmExplorationRow | null> {
+    return this.one<RealmExplorationRow>({
+      sql: `SELECT ${REALM_EXPLORATION_COLUMNS} FROM realm_explorations
+            WHERE sect_id = ? AND status = 'in_progress'
+            ORDER BY created_at DESC, id DESC LIMIT 1`,
+      params: [sectId],
+    });
+  }
+
+  /**
+   * 单条记录：按 id **且** 属于该宗门查（跨宗 id 返回 null，绝不只按 id 查）。
+   * 与 journey 的 findByIdForSect 同一约定：越权访问在这里就变成 NOT_FOUND。
+   */
+  async findByIdForSect(id: string, sectId: string): Promise<RealmExplorationRow | null> {
+    return this.one<RealmExplorationRow>({
+      sql: `SELECT ${REALM_EXPLORATION_COLUMNS} FROM realm_explorations
+            WHERE id = ? AND sect_id = ?`,
+      params: [id, sectId],
+    });
+  }
+}
+
+/**
+ * 开局写入（0015）：记录建立时第 1 关的遭遇已经抽好（current_stage = 0，等待玩家第一次选择）。
+ * 「每宗门同时最多一条 in_progress」由 service 在读取快照时把关（守卫再复核一次记录归属）。
+ */
+export function insertRealmExplorationStatement(args: {
+  id: string;
+  sectId: string;
+  realmId: string;
+  /** JSON 数组字符串。 */
+  party: string;
+  totalStages: number;
+  /** JSON 对象字符串：第一关的遭遇。 */
+  currentEncounter: string;
+  /** JSON 数组字符串。 */
+  usedEncounters: string;
+  now: number;
+}): ParameterizedQuery {
+  return {
+    sql: `INSERT INTO realm_explorations
+            (id, sect_id, realm_id, party, total_stages, current_stage, status,
+             current_encounter, used_encounters, rewards_collected, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, 0, 'in_progress', ?, ?, '{}', ?, ?)`,
+    params: [
+      args.id,
+      args.sectId,
+      args.realmId,
+      args.party,
+      args.totalStages,
+      args.currentEncounter,
+      args.usedEncounters,
+      args.now,
+      args.now,
+    ],
+  };
+}
+
+/**
+ * 推进一关（0015）：把「本关结果 + 下一关遭遇」（或终态）一次写回。
+ * 参数固定 7 个（远低于 D1 单语句 100 个绑定参数的上限）。
+ */
+export function updateRealmExplorationStageStatement(args: {
+  id: string;
+  currentStage: number;
+  status: string;
+  /** JSON 对象字符串；null = 本局结束（与 status 的终态一起写）。 */
+  currentEncounter: string | null;
+  /** JSON 数组字符串。 */
+  usedEncounters: string;
+  /** JSON 对象字符串。 */
+  rewardsCollected: string;
+  now: number;
+}): ParameterizedQuery {
+  return {
+    sql: `UPDATE realm_explorations
+          SET current_stage = ?, status = ?, current_encounter = ?, used_encounters = ?,
+              rewards_collected = ?, updated_at = ?
+          WHERE id = ?`,
+    params: [
+      args.currentStage,
+      args.status,
+      args.currentEncounter,
+      args.usedEncounters,
+      args.rewardsCollected,
+      args.now,
+      args.id,
+    ],
+  };
+}
+
+/**
+ * 交互探索 batch 的首条语句（与 journey 的守卫同一模式）：快照过期时插入 valid=0，
+ * 触发 mutation_guards 的 CHECK，让同批的阶段推进 / 奖励入账 / 记录写回一起回滚。
+ *
+ * 复核内容：
+ * - 宗门行（等级 / 结算时间）：防与并发命令双重结算；
+ * - 全部资源余额：与既有守卫一致（入场费与奖励都动资产）；
+ * - 传了 exploration 时再复核这条记录本身：status / current_stage / current_encounter /
+ *   rewards_collected 仍与读取时完全一致 —— 并发 choose 或 abandon 的晚提交方整批回滚，
+ *   不会把同一关的奖励发两次，也不会在已被放弃的局上继续推进。
+ *   `current_encounter IS ?` 用 IS 而不是 =（可空列，`= NULL` 永不成立）。
+ *
+ * 参数个数：1（command_id）+ 3（宗门）+ 6（记录，可选）+ 4 × 资源余额行数。
+ * 生产配置只有 4 种资源（spiritStone / spiritualEnergy / herb / ore），即最多 26 个，
+ * 远低于 D1 单语句 100 个绑定参数的上限。
+ */
+export function realmExploreSnapshotGuardStatement(
+  commandId: string,
+  snapshot: {
+    sect: SectRow;
+    balances: readonly ResourceBalanceRow[];
+    /** 传了就在 batch 执行时复核这条记录没被并发推进 / 结束。 */
+    exploration?: RealmExplorationRow;
+    /**
+     * 传了就在 batch 执行时复核这些弟子仍属于本宗（开始探索时传队伍成员：
+     * 与「驱逐 / 派去历练」并发时不允许带着一个刚离开的弟子开局）。
+     */
+    members?: readonly { id: string }[];
+  },
+): ParameterizedQuery {
+  const { sect, balances, exploration, members } = snapshot;
+  const checks = [
+    'EXISTS (SELECT 1 FROM sects WHERE id = ? AND level = ? AND last_settled_at = ?)',
+  ];
+  const params: (string | number | null)[] = [
+    commandId,
+    sect.id, sect.level, sect.last_settled_at,
+  ];
+
+  if (exploration !== undefined) {
+    checks.push(`EXISTS (SELECT 1 FROM realm_explorations
+       WHERE id = ? AND sect_id = ? AND status = ? AND current_stage = ?
+         AND current_encounter IS ? AND rewards_collected = ?)`);
+    params.push(
+      exploration.id, sect.id, exploration.status, exploration.current_stage,
+      exploration.current_encounter, exploration.rewards_collected,
+    );
+  }
+
+  for (const member of members ?? []) {
+    checks.push('EXISTS (SELECT 1 FROM disciples WHERE id = ? AND sect_id = ?)');
+    params.push(member.id, sect.id);
+  }
+
+  for (const row of balances) {
+    checks.push(
+      'EXISTS (SELECT 1 FROM resource_balances WHERE id = ? AND sect_id = ? AND balance = ? AND remainder = ?)',
+    );
+    params.push(row.id, sect.id, row.balance, row.remainder);
+  }
+
+  return {
+    sql: `INSERT INTO mutation_guards (command_id, valid)
+          SELECT ?, CASE WHEN ${checks.join(' AND ')} THEN 1 ELSE 0 END`,
+    params,
+  };
+}
+
+export function deleteRealmExploreSnapshotGuardStatement(commandId: string): ParameterizedQuery {
+  return {
+    sql: 'DELETE FROM mutation_guards WHERE command_id = ?',
+    params: [commandId],
+  };
+}
+
+/**
+ * 旧的 explorations 表（0006）写回：交互探索开始时先占坑（success = 0，rewards = '{}'），
+ * 结束时按真实结果回填 —— 这样「今日已探索次数」的统计（按 explorations 行数算）
+ * 与速通共用同一口径，中途放弃 / 失败也照实消耗次数。
+ * 条件 `id = ? AND sect_id = ?` 保证只能改到自己宗门的那一行。
+ */
+export function updateExplorationResultStatement(args: {
+  explorationId: string;
+  sectId: string;
+  success: boolean;
+  /** JSON 对象字符串：本局实际入账的奖励（最小单位数量字符串）。 */
+  rewards: string;
+}): ParameterizedQuery {
+  return {
+    sql: 'UPDATE explorations SET success = ?, rewards = ? WHERE id = ? AND sect_id = ?',
+    params: [args.success ? 1 : 0, args.rewards, args.explorationId, args.sectId],
+  };
+}

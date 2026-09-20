@@ -104,3 +104,23 @@ export const startJourneyRequestSchema = z.strictObject({
 export const claimJourneyRequestSchema = z.strictObject({
   journeyId: z.string().min(1).max(64),
 });
+
+/**
+ * V6 交互式秘境探索（0015）：id/choiceId 只做「类型 + 宽松长度」的第一道防线，
+ * 秘境与选项的合法性、探索记录的归属、是否仍有进行中的探索都在 service 层判定。
+ */
+export const startRealmExploreSchema = z.strictObject({
+  realmId: z.string().min(1).max(64),
+  discipleIds: z.array(z.string().min(1).max(64)).min(1).max(3),
+});
+
+/** V6 推进一关：探索记录 id + 当前遭遇里的选项 id（跨宗 id 一律 NOT_FOUND）。 */
+export const chooseRealmExploreSchema = z.strictObject({
+  explorationId: z.string().min(1).max(64),
+  choiceId: z.string().min(1).max(64),
+});
+
+/** V6 放弃探索：结算已得奖励并结束这一局。 */
+export const abandonExplorationSchema = z.strictObject({
+  explorationId: z.string().min(1).max(64),
+});

@@ -18,5 +18,12 @@
 #   LOGIN_RATE_LIMIT_WINDOW_SECONDS=60     # 固定窗口长度（秒）
 #   ALLOWED_ORIGINS=                       # 仅本地前端直连 Worker 时使用的白名单；生产必须留空
 #
+# V6 交互式秘境探索：wrangler.jsonc 的 REALM_EXPLORE_ENABLED 默认 "false"（只显示「速通」）。
+# 本地要试交互探索就覆盖成 true：
+#   REALM_EXPLORE_ENABLED=true
+# 判定用的模型 key 是可选项：没有 key（或调用失败 / 超时）时服务端会自动降级成本地随机，
+# 探索流程照常可玩；要真的走模型再填：
+#   OPENROUTER_API_KEY=sk-or-...        # 远程请用 wrangler secret put OPENROUTER_API_KEY
+#
 # 注意：注册与登录都要跑 Argon2id（本机约 140～156 ms/次），超过 Workers Free 的 10 ms/请求 CPU 上限，
 # 因此这两条路径需要 Workers Paid 套餐（见 docs/setup.md 的已知问题说明）。

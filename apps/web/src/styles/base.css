@@ -3301,6 +3301,412 @@ ul {
   transform: none;
 }
 
+/* ---------- V6 交互式秘境探索（面板双按钮 + RealmExploreDialog） ---------- */
+
+/* 秘境卡片的按钮区：速通 + 探索（exploreEnabled === false 时只有速通）。 */
+.realm-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.realm-actions .realm-go {
+  min-width: 61px;
+}
+
+/* 交互探索按钮：用金色与「速通」的玉色区分开，避免两个按钮看起来一样。 */
+.realm-go.is-explore {
+  border-color: rgba(202, 169, 106, 0.34);
+  color: var(--gold-bright);
+  background: rgba(202, 169, 106, 0.05);
+}
+
+.realm-go.is-explore:not(:disabled):not(.is-disabled):hover {
+  border-color: rgba(202, 169, 106, 0.66);
+  color: #f0e0b4;
+  background: rgba(202, 169, 106, 0.13);
+}
+
+/* 行内状态标记：与锁定标记同形，用玉色表示「进行中」而不是「不可用」。 */
+.realm-flag.is-active {
+  border-color: rgba(119, 184, 154, 0.3);
+  color: var(--jade-bright);
+}
+
+/* 面板顶部的断点恢复入口（整行可点，键盘可达）。 */
+.realm-resume {
+  display: grid;
+  width: 100%;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+  padding: 10px;
+  border: 1px solid rgba(119, 184, 154, 0.3);
+  border-radius: 4px;
+  color: var(--ink-text);
+  background: rgba(119, 184, 154, 0.08);
+  text-align: left;
+  transition: border-color 150ms cubic-bezier(0.33, 1, 0.68, 1),
+    background-color 150ms cubic-bezier(0.33, 1, 0.68, 1);
+}
+
+.realm-resume:not(:disabled):hover {
+  border-color: rgba(119, 184, 154, 0.62);
+  background-color: rgba(119, 184, 154, 0.16);
+}
+
+.realm-resume:not(:disabled):active {
+  transform: translateY(1px);
+}
+
+.realm-resume-glyph {
+  display: flex;
+  width: 34px;
+  height: 34px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(119, 184, 154, 0.34);
+  border-radius: 50%;
+  color: var(--jade-bright);
+  font-family: 'STKaiti', 'KaiTi', serif;
+  font-size: 14px;
+}
+
+.realm-resume-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.realm-resume-copy strong {
+  overflow: hidden;
+  font-family: 'STKaiti', 'KaiTi', serif;
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: 0.05em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.realm-resume-copy small {
+  overflow: hidden;
+  color: #93a99e;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.realm-resume-arrow {
+  color: var(--gold);
+  font-size: 18px;
+  line-height: 1;
+}
+
+.realm-explore {
+  min-width: 0;
+}
+
+/* 进度点：已完成（金）/ 当前（玉）/ 未抵达（灰）。 */
+.explore-progress {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 2px 0 12px;
+  padding: 0;
+  list-style: none;
+}
+
+.explore-dot {
+  display: flex;
+  align-items: center;
+}
+
+.explore-dot-ink {
+  width: 12px;
+  height: 12px;
+  border: 1px solid var(--faint);
+  border-radius: 50%;
+  background: transparent;
+  transition: border-color 200ms cubic-bezier(0.33, 1, 0.68, 1),
+    background-color 200ms cubic-bezier(0.33, 1, 0.68, 1),
+    transform 220ms cubic-bezier(0.34, 1.4, 0.64, 1);
+}
+
+/* 进度点的无障碍文本：视觉上裁掉，读屏仍逐点播报。 */
+.explore-dot-text {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.explore-dot.is-done .explore-dot-ink {
+  border-color: rgba(202, 169, 106, 0.62);
+  background: var(--gold);
+}
+
+.explore-dot.is-current .explore-dot-ink {
+  border-color: var(--jade-bright);
+  background: var(--jade);
+  transform: scale(1.28);
+}
+
+.explore-dot.is-pending .explore-dot-ink {
+  border-color: rgba(100, 122, 112, 0.55);
+}
+
+/* 遭遇：场景 + 选项（整行可点的大按钮）。 */
+.explore-scene {
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.014);
+}
+
+.explore-scene-name {
+  margin: 0 0 6px;
+  color: var(--gold-bright);
+  font-family: 'STKaiti', 'KaiTi', serif;
+  font-size: 18px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+}
+
+.explore-scene-desc {
+  margin: 0;
+  color: #b9c8bf;
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.explore-choices {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* 读屏状态句（遭遇 / 判定结论）：与进度点文本一样视觉裁掉。 */
+.explore-status-text {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* 逐条入场（stagger）：每关换一批遭遇时按顺序浮起，--choice-index 由组件内联给出。 */
+.explore-choice-item {
+  min-width: 0;
+  animation: explore-item-in 260ms cubic-bezier(0.22, 1, 0.36, 1) backwards;
+  animation-delay: calc(var(--choice-index, 0) * 70ms);
+}
+
+.explore-choice {
+  display: flex;
+  width: 100%;
+  min-height: 46px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--ink-text);
+  background: rgba(255, 255, 255, 0.014);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 140ms cubic-bezier(0.33, 1, 0.68, 1),
+    background-color 140ms cubic-bezier(0.33, 1, 0.68, 1),
+    transform 120ms cubic-bezier(0.33, 1, 0.68, 1);
+}
+
+.explore-choice:not(:disabled):hover {
+  border-color: rgba(119, 184, 154, 0.55);
+  background-color: rgba(119, 184, 154, 0.09);
+  transform: translateY(-1px);
+}
+
+.explore-choice:not(:disabled):active {
+  transform: translateY(0) scale(0.996);
+}
+
+.explore-choice:disabled {
+  cursor: progress;
+}
+
+/* 判定中：选项整体呼吸，文案由组件换成「判定中…」。 */
+.explore-choice.is-busy {
+  animation: explore-busy-pulse 1.4s ease-in-out infinite;
+}
+
+.explore-choice-label {
+  font-family: 'STKaiti', 'KaiTi', serif;
+  font-size: 15px;
+  letter-spacing: 0.06em;
+}
+
+.explore-choice-risk {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.explore-choice.is-busy .explore-choice-risk {
+  color: var(--gold);
+}
+
+/* 结果态：按判定档位给左侧色条（大成功金 / 成功玉 / 失败红）。 */
+.explore-outcome {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-left-width: 2px;
+  border-radius: 4px;
+  animation: explore-item-in 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.explore-outcome.is-great {
+  border-left-color: var(--gold);
+  background: rgba(202, 169, 106, 0.07);
+}
+
+.explore-outcome.is-success {
+  border-left-color: var(--jade);
+  background: rgba(119, 184, 154, 0.06);
+}
+
+.explore-outcome.is-failure {
+  border-left-color: var(--red);
+  background: rgba(184, 81, 66, 0.07);
+}
+
+.explore-outcome-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.explore-outcome-title {
+  font-family: 'STKaiti', 'KaiTi', serif;
+  font-size: 16px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+}
+
+.explore-outcome.is-great .explore-outcome-title {
+  color: var(--gold-bright);
+}
+
+.explore-outcome.is-success .explore-outcome-title {
+  color: var(--jade-bright);
+}
+
+.explore-outcome.is-failure .explore-outcome-title {
+  color: var(--red-bright);
+}
+
+.explore-outcome-message {
+  margin: 0;
+  color: #b9c8bf;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+/* 奖励区（本关 / 已获账本 / 总入账）共用一行标签 + 奖励标签的排布。 */
+.explore-rewards,
+.explore-ledger,
+.explore-final {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  margin-top: 10px;
+  font-size: 12px;
+}
+
+.explore-final {
+  padding-top: 10px;
+  border-top: 1px dashed var(--line);
+}
+
+.explore-rewards-empty,
+.explore-ledger-empty {
+  color: var(--faint);
+}
+
+.explore-injury {
+  margin-top: 8px;
+  color: var(--red-bright);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.explore-continue {
+  margin-top: 14px;
+}
+
+.explore-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.explore-abandon {
+  padding: 7px 12px;
+  border: 1px solid rgba(184, 81, 66, 0.34);
+  border-radius: 3px;
+  color: var(--red-bright);
+  background: rgba(184, 81, 66, 0.06);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  transition: border-color 140ms cubic-bezier(0.33, 1, 0.68, 1),
+    background-color 140ms cubic-bezier(0.33, 1, 0.68, 1);
+}
+
+.explore-abandon:not(:disabled):hover {
+  border-color: rgba(184, 81, 66, 0.7);
+  background-color: rgba(184, 81, 66, 0.14);
+}
+
+.explore-footer-note {
+  min-width: 0;
+  flex: 1 1 190px;
+  color: var(--faint);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+@keyframes explore-item-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes explore-busy-pulse {
+  0%, 100% { opacity: 0.68; }
+  50% { opacity: 1; }
+}
+
 /* ---------- Random events ---------- */
 
 .event-list {
@@ -5017,6 +5423,70 @@ ul {
   font-size: 12px;
   line-height: 1.55;
 }
+/* ---------- V6 交互探索：窄屏布局 ---------- */
+
+/* 中窄屏：秘境行从三列变两列，两个出发按钮整行平分，不再挤压秘境文案。 */
+@media (max-width: 680px) {
+  .realm-row {
+    grid-template-columns: 33px minmax(0, 1fr);
+  }
+
+  .realm-actions {
+    grid-column: 1 / -1;
+    flex-direction: row;
+  }
+
+  .realm-actions .realm-go {
+    height: 38px;
+    flex: 1 1 0;
+    min-width: 0;
+  }
+
+  .realm-resume {
+    grid-template-columns: 30px minmax(0, 1fr) auto;
+  }
+
+  .realm-resume-glyph {
+    width: 30px;
+    height: 30px;
+  }
+
+  /* 选项按钮在窄屏上整行可点、点击目标更高。 */
+  .explore-choice {
+    min-height: 54px;
+    padding: 10px 12px;
+  }
+
+  .explore-progress {
+    margin-bottom: 10px;
+  }
+}
+
+/* 最窄屏：进度点与放弃按钮各自收窄 / 占满整行。 */
+@media (max-width: 420px) {
+  .explore-progress {
+    gap: 5px;
+  }
+
+  .explore-dot-ink {
+    width: 10px;
+    height: 10px;
+  }
+
+  .realm-resume-arrow {
+    display: none;
+  }
+
+  .explore-footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .explore-abandon {
+    min-height: 40px;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

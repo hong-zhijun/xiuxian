@@ -5,9 +5,11 @@ import { respondOk } from '../../http/envelope';
 import { parseStrictJson } from '../../http/validation';
 import { getDb } from '../../infra/db/client';
 import {
+  abandonExplorationSchema,
   assignRequestSchema,
   breakthroughRequestSchema,
   challengeRequestSchema,
+  chooseRealmExploreSchema,
   claimJourneyRequestSchema,
   craftPillRequestSchema,
   createSectRequestSchema,
@@ -18,18 +20,22 @@ import {
   setDefenseLineupSchema,
   setDiscipleNoteRequestSchema,
   startJourneyRequestSchema,
+  startRealmExploreSchema,
   upgradeBuildingRequestSchema,
   usePillRequestSchema,
 } from './schema';
 import {
+  abandonRealmExplore,
   assignDisciple,
   breakthrough,
   challengeSect,
+  chooseRealmExplore,
   claimJourney,
   craftPill,
   createSect,
   expelDisciple,
   exploreSectRealm,
+  getActiveExploration,
   getPublicSect,
   getSectState,
   listChallengeHistory,
@@ -43,6 +49,7 @@ import {
   setDefenseLineup,
   setDiscipleNote,
   startJourney,
+  startRealmExplore,
   upgradeBuilding,
   upgradeSect,
   usePill,
@@ -78,7 +85,7 @@ export function createGameRoutes(): Hono<AppEnv> {
   // V2-2：秘境列表（只读：不结算、不写库）。
   routes.get('/game/realms', async (c) => {
     const userId = requireUserId(c);
-    const realms = await listSecretRealms(getDb(c.env), userId, Date.now());
+    const realms = await listSecretRealms(getDb(c.env), c.env, userId, Date.now());
     return respondOk(c, { realms });
   });
 
@@ -269,6 +276,51 @@ export function createGameRoutes(): Hono<AppEnv> {
     return respondOk(c, { state: result.state, outcome: result.outcome });
   });
 
+  // V6：交互式秘境探索（迁移 0015）。四个接口都在 /game/realm-explore/ 前缀下。
+  // 查询当前进行中的探索（只读：不结算、不写库；没有就返回 null，用于刷新后恢复）。
+  routes.get('/game/realm-explore/active', async (c) => {
+    const userId = requireUserId(c);
+    const exploration = await getActiveExploration(getDb(c.env), userId, Date.now());
+    return respondOk(c, { exploration });
+  });
+
+  // 开始交互探索（结算 → 校验 → 扣入场费 → 建记录 + 占坑，一次受保护 batch）。
+  routes.post('/game/realm-explore/start', async (c) => {
+    const userId = requireUserId(c);
+    const body = await parseStrictJson(startRealmExploreSchema, c);
+    const result = await startRealmExplore(
+      getDb(c.env),
+      c.env,
+      userId,
+      body.realmId,
+      body.discipleIds,
+      Date.now(),
+    );
+    return respondOk(c, { state: result.state, exploration: result.exploration });
+  });
+
+  // 提交一次选择（Decisions 判定，失败自动降级为本地随机；奖励在整场结束时入账）。
+  routes.post('/game/realm-explore/choose', async (c) => {
+    const userId = requireUserId(c);
+    const body = await parseStrictJson(chooseRealmExploreSchema, c);
+    const result = await chooseRealmExplore(
+      getDb(c.env),
+      c.env,
+      userId,
+      body.explorationId,
+      body.choiceId,
+      Date.now(),
+    );
+    return respondOk(c, { state: result.state, result: result.result });
+  });
+
+  // 放弃探索（已获奖励照常入账，不退入场费）。
+  routes.post('/game/realm-explore/abandon', async (c) => {
+    const userId = requireUserId(c);
+    const body = await parseStrictJson(abandonExplorationSchema, c);
+    const result = await abandonRealmExplore(getDb(c.env), userId, body.explorationId, Date.now());
+    return respondOk(c, { state: result.state });
+  });
   return routes;
 }
 

@@ -152,6 +152,8 @@ export interface SectStateView {
   };
   /** 0014 宗门历练名额与最近 10 条历练摘要（仅本宗可见，结果由服务端决定）。 */
   journey: JourneyView;
+  /** V6 进行中的交互式秘境探索；null = 当前没有（刷新后据此恢复断点）。 */
+  activeExploration: ActiveExplorationView | null;
 }
 
 /** 单个丹方（与后端 view.ts 的 AlchemyRecipeView 一一对应）。 */
@@ -333,6 +335,8 @@ export interface SecretRealmView {
   requiredSectLevel: number;
   locked: boolean;
   hasArena: boolean;
+  /** V6：是否开放交互式「探索」（未开放时只显示「速通」）。 */
+  exploreEnabled: boolean;
 }
 
 /** 一次探索的结果（与后端 view.ts 的 ExplorationResultView 一一对应）。 */
@@ -798,4 +802,88 @@ export async function claimJourney(
     '/api/v1/game/claim-journey',
     { method: 'POST', body: { journeyId } },
   );
+}
+
+/* ---------- V6：交互式秘境探索 ---------- */
+
+/** 一个遭遇选项（与后端 view.ts 的 EncounterChoiceView 一一对应）。 */
+export interface EncounterChoiceView {
+  id: string;
+  label: string;
+  riskHint: string;
+}
+
+/** 一次遭遇的展示内容（与后端 view.ts 的 EncounterView 一一对应）。 */
+export interface EncounterView {
+  name: string;
+  description: string;
+  choices: EncounterChoiceView[];
+}
+
+/** 进行中的交互探索（与后端 view.ts 的 ActiveExplorationView 一一对应）。 */
+export interface ActiveExplorationView {
+  id: string;
+  realmId: string;
+  realmName: string;
+  totalStages: number;
+  /** 已完成的关卡数（0 = 还没走完第一关）。 */
+  currentStage: number;
+  encounter: EncounterView;
+  /** 运行中的奖励账本；真正的资源入账发生在整场结束时。 */
+  rewardsCollected: Record<string, string>;
+}
+
+/** 判定结果（与后端 service.ts 的 ExploreOutcome 一致）。 */
+export type ExploreOutcome = 'great_success' | 'success' | 'failure';
+
+/** 一次选择的判定结果（与后端 view.ts 的 ExploreChoiceResultView 一一对应）。 */
+export interface ExploreChoiceResult {
+  outcome: ExploreOutcome;
+  stageRewards: Record<string, string>;
+  injury: { discipleName: string; until: string } | null;
+  /** null = 这场探索结束了（通关或失败）。 */
+  nextEncounter: EncounterView | null;
+  /** 通关时整场入账的总奖励；未通关为 null。 */
+  finalRewards: Record<string, string> | null;
+  message: string;
+}
+
+/** 查询当前进行中的探索（刷新后恢复断点）；没有则 null。 */
+export async function fetchActiveExploration(): Promise<ActiveExplorationView | null> {
+  const data = await apiRequest<{ exploration: ActiveExplorationView | null }>(
+    '/api/v1/game/realm-explore/active',
+  );
+  return data.exploration;
+}
+
+/** 开始交互探索（扣入场费 + 建记录 + 抽第一关遭遇）。 */
+export async function startRealmExplore(
+  realmId: string,
+  discipleIds: string[],
+): Promise<{ state: SectStateView; exploration: ActiveExplorationView }> {
+  return apiRequest<{ state: SectStateView; exploration: ActiveExplorationView }>(
+    '/api/v1/game/realm-explore/start',
+    { method: 'POST', body: { realmId, discipleIds } },
+  );
+}
+
+/** 提交一次选择（服务端判定；Decisions 不可用时自动降级，前端无感）。 */
+export async function chooseRealmExplore(
+  explorationId: string,
+  choiceId: string,
+): Promise<{ state: SectStateView; result: ExploreChoiceResult }> {
+  return apiRequest<{ state: SectStateView; result: ExploreChoiceResult }>(
+    '/api/v1/game/realm-explore/choose',
+    { method: 'POST', body: { explorationId, choiceId } },
+  );
+}
+
+/** 放弃探索（已获奖励照常入账，不退入场费）。 */
+export async function abandonRealmExplore(
+  explorationId: string,
+): Promise<{ state: SectStateView }> {
+  return apiRequest<{ state: SectStateView }>('/api/v1/game/realm-explore/abandon', {
+    method: 'POST',
+    body: { explorationId },
+  });
 }

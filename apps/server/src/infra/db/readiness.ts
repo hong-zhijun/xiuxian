@@ -6,7 +6,8 @@ import { MissingSchemaError } from './errors';
  * 0005 建事件日志表（P3 随机事件），0006 建探索记录表（V2-2 秘境探索），
  * 0007 建切磋记录表（V3 多人互动），0008 加弟子战斗属性（V4），
  * 0009 加守擂阵容列与挑战记录表（V5 挑战系统），0010 加招贤刷新列（V5.2 招贤台刷新），
- * 0011 加弟子淬体次数列与丹药库存表（丹药系统）。
+ * 0011 加弟子淬体次数列与丹药库存表（丹药系统），0015 建交互式秘境探索进行中状态表
+ * （V6 秘境探索重构：realm_explorations）。
  */
 export const REQUIRED_TABLES = [
   'users',
@@ -25,6 +26,7 @@ export const REQUIRED_TABLES = [
   'sparring_log',
   'challenge_log',
   'pill_inventories',
+  'realm_explorations',
 ] as const;
 
 export interface DbReadiness {

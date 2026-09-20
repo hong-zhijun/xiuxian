@@ -2,9 +2,11 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 
 import type {
+  ActiveExplorationView,
   BuildingView,
   ChallengeResultView,
   DiscipleView,
+  ExploreChoiceResult,
   JourneyDirection,
   JourneyPreviewView,
   PublicSectView,
@@ -14,7 +16,12 @@ import type {
 } from '../api/game';
 import type { ToastTone } from '../types/ui';
 import { formatAmount, formatRate, formatTime } from '../utils/format';
-import { fetchJourneyPreview, fetchRecruitPreview, refreshRecruitPreview } from '../api/game';
+import {
+  fetchJourneyPreview,
+  fetchRecruitPreview,
+  fetchSecretRealms,
+  refreshRecruitPreview,
+} from '../api/game';
 import { resourceGlyph } from '../utils/glyph';
 import AlchemyPanel from './AlchemyPanel.vue';
 import ChallengeDialog from './ChallengeDialog.vue';
@@ -25,6 +32,7 @@ import DiscipleRoster from './DiscipleRoster.vue';
 import EventLogPanel from './EventLogPanel.vue';
 import ExplorePanel from './ExplorePanel.vue';
 import ExplorePartyDialog from './ExplorePartyDialog.vue';
+import RealmExploreDialog from './RealmExploreDialog.vue';
 import LeaderboardPanel from './LeaderboardPanel.vue';
 import RecruitDialog from './RecruitDialog.vue';
 import ModalShell from './ModalShell.vue';
@@ -37,6 +45,8 @@ const props = defineProps<{
   busy: boolean;
   /** 最近一次挑战的战报；App.vue 负责拿结果，这里只负责展示（null = 还没打过）。 */
   challengeResult: ChallengeResultView | null;
+  /** V6 交互探索刚判定完的那一步；App.vue 负责拿结果，这里只负责展示（null = 还没判定）。 */
+  exploreResult: ExploreChoiceResult | null;
 }>();
 
 const emit = defineEmits<{
@@ -48,6 +58,16 @@ const emit = defineEmits<{
   upgrade: [defId: string];
   'upgrade-sect': [];
   explore: [realmId: string, discipleIds: string[]];
+  /**
+   * V6 交互探索：与「速通」共用选人弹窗，提交时才分道。
+   * 4 个请求事件都由 App.vue 绑定并负责调接口 / 写 state，本组件只派发与展示。
+   */
+  'explore-start': [realmId: string, discipleIds: string[]];
+  'explore-resume': [];
+  'explore-choose': [explorationId: string, choiceId: string];
+  'explore-abandon': [explorationId: string];
+  /** 结果看完了（或弹窗被关掉）：请 App.vue 清空 exploreResult。 */
+  'dismiss-explore-result': [];
   challenge: [targetSectId: string, discipleIds: string[]];
   setDefenseLineup: [discipleIds: string[]];
   dismissChallengeResult: [];
@@ -98,6 +118,27 @@ const recruitRefreshing = ref(false);
 
 /** 二级弹窗：当前正在点将出征的秘境（null = 未打开）。 */
 const exploreRealm = ref<SecretRealmView | null>(null);
+
+/**
+ * 本次「点将出征」要走哪条路：速通（旧逻辑）还是交互探索。
+ * 两种模式复用同一个 ExplorePartyDialog，提交时才分叉。
+ */
+const exploreMode = ref<'speedrun' | 'interactive' | null>(null);
+
+/** 交互探索弹窗是否打开；真正的渲染条件是它 + explorationShown 非空。 */
+const exploreDialogOpen = ref(false);
+
+/**
+ * 最后一条「进行中的探索」快照。
+ *
+ * 服务端在「本关通过且已是最后一关」或「判定失败」时会把 state.activeExploration 置为 null，
+ * 但结算面板（总入账奖励 /「完成」）还得显示这一场的顶栏与进度，所以留一份快照；
+ * 它只在「有未读结果」时参与渲染（见 explorationShown），其余时候一律以 state 为准。
+ */
+const lastExploration = ref<ActiveExplorationView | null>(null);
+
+/** 交互探索的秘境定义在途（ExplorePanel 只给 realmId，这里补一次只读列表请求）。 */
+const exploreRealmLoading = ref(false);
 
 /** 挑战弹窗的目标宗门（null = 未打开）。 */
 const challengeTarget = ref<PublicSectView | null>(null);
@@ -316,17 +357,109 @@ function requestUpgradeSect(): void {
   emit('upgrade-sect');
 }
 
-/** 秘境列表里点「探索」：打开二级弹窗选人。 */
+/** 秘境列表里点「速通」：打开二级弹窗选人（旧逻辑不变）。 */
 function onSelectRealm(realm: SecretRealmView): void {
+  exploreMode.value = 'speedrun';
   exploreRealm.value = realm;
 }
 
-/** 选好人出发：关掉选人弹窗，把秘境与队伍交给上层调接口（结果由 App.vue 提示）。 */
+/**
+ * 秘境列表里点「探索」：面板只给 realmId（列表在面板内部），
+ * 这里补一次只读的秘境列表请求拿到定义，再打开同一个选人弹窗。
+ */
+async function onExploreStartRequest(realmId: string): Promise<void> {
+  if (props.busy || exploreRealmLoading.value) return;
+  exploreRealmLoading.value = true;
+  try {
+    const realms = await fetchSecretRealms();
+    const realm = realms.find((item) => item.id === realmId);
+    if (realm === undefined) {
+      emit('notify', 'error', '秘境未寻得', '秘境列表已变化，请关掉面板重新打开。');
+      return;
+    }
+    exploreMode.value = 'interactive';
+    exploreRealm.value = realm;
+  } catch (caught) {
+    emit('notify', 'error', '秘境未寻得', caught instanceof Error ? caught.message : '秘境信息获取失败');
+  } finally {
+    exploreRealmLoading.value = false;
+  }
+}
+
+/**
+ * 选好人出发：关掉选人弹窗，按 exploreMode 分叉交给上层调接口（结果由 App.vue 提示）。
+ * 交互探索不需要额外事件把弹窗叫起来：上层写回 state.activeExploration 后它就渲染出来了。
+ */
 function onPartyExplore(realmId: string, discipleIds: string[]): void {
   if (props.busy) return;
+  const mode = exploreMode.value;
   exploreRealm.value = null;
+  exploreMode.value = null;
+  if (mode === 'interactive') {
+    // 先把上一次的结果收起来；成功返回的 state 一到位，弹窗就自己出现。
+    emit('dismiss-explore-result');
+    exploreDialogOpen.value = true;
+    emit('explore-start', realmId, discipleIds);
+    return;
+  }
   emit('explore', realmId, discipleIds);
 }
+
+/**
+ * 面板顶部「继续探索」：断点已经在 state.activeExploration 里，不需要请求，
+ * 打开弹窗即可；同时照本组件「详情 → 主界面 → App」的惯例向上转发一次事件名。
+ */
+function onExploreResume(): void {
+  exploreDialogOpen.value = true;
+  emit('explore-resume');
+}
+
+/** 遭遇选项：判定与推进全部由 App.vue / 服务端负责，这里只转发。 */
+function onExploreChoose(explorationId: string, choiceId: string): void {
+  if (props.busy) return;
+  emit('explore-choose', explorationId, choiceId);
+}
+
+/** 放弃探索：二次确认已在弹窗里完成（window.confirm），这里只转发。 */
+function onExploreAbandon(explorationId: string): void {
+  if (props.busy) return;
+  emit('explore-abandon', explorationId);
+}
+
+/** 「继续前进」：清掉结果，露出服务端已经推进好的下一个遭遇。 */
+function onDismissExploreResult(): void {
+  emit('dismiss-explore-result');
+}
+
+/** 关闭弹窗（「完成」/ Esc / 点遮罩）：探索是否结束由服务端说了算，这里只收界面。 */
+function onCloseExploreDialog(): void {
+  exploreDialogOpen.value = false;
+  lastExploration.value = null;
+  emit('dismiss-explore-result');
+}
+
+/**
+ * 弹窗渲染用的探索：优先用 state 里的进行中记录（服务端权威）；
+ * 只有「整场已经结束但玩家还没收下结算」时才回落到快照（服务端那时已把 activeExploration 置空）。
+ */
+const explorationShown = computed<ActiveExplorationView | null>(() => {
+  if (props.state.activeExploration !== null) return props.state.activeExploration;
+  return props.exploreResult === null ? null : lastExploration.value;
+});
+
+// 记录断点快照；探索真的结束（且结算已收下）时自动关掉弹窗。
+watch(
+  () => props.state.activeExploration,
+  (exploration) => {
+    if (exploration !== null) {
+      lastExploration.value = exploration;
+      return;
+    }
+    if (props.exploreResult !== null) return;
+    exploreDialogOpen.value = false;
+    lastExploration.value = null;
+  },
+);
 
 /** 公开档案里点「挑战」：先丢弃上一场战报，再打开挑战弹窗。 */
 function onChallengeRequest(sect: PublicSectView): void {
@@ -718,7 +851,13 @@ function onDetailNotify(tone: ToastTone, title: string, message: string): void {
     </ModalShell>
 
     <ModalShell v-if="openPanel === 'explore'" label="秘境探索" @close="openPanel = null">
-      <ExplorePanel :state="state" :busy="busy" @select="onSelectRealm" />
+      <ExplorePanel
+        :state="state"
+        :busy="busy"
+        @select="onSelectRealm"
+        @explore-start="onExploreStartRequest"
+        @explore-resume="onExploreResume"
+      />
     </ModalShell>
 
     <!-- 炼丹：解锁/库存/canCraft 都由服务端算好，只保留炼制；弟子服药入口已移入弟子详情。 -->
@@ -742,6 +881,28 @@ function onDetailNotify(tone: ToastTone, title: string, message: string): void {
         :state="state"
         :busy="busy"
         @explore="onPartyExplore"
+      />
+    </ModalShell>
+
+    <!--
+      V6 交互探索：叠在秘境列表之上（Esc 只关这一层）。
+      整场结束时服务端会把 state.activeExploration 置空，此时靠 lastExploration 快照
+      把「总入账奖励 + 完成」这一屏撑到玩家收下为止。
+    -->
+    <ModalShell
+      v-if="exploreDialogOpen && explorationShown"
+      :label="`秘境探索 · ${explorationShown.realmName}`"
+      @close="onCloseExploreDialog"
+    >
+      <RealmExploreDialog
+        :state="state"
+        :exploration="explorationShown"
+        :busy="busy"
+        :result="exploreResult"
+        @choose="onExploreChoose"
+        @abandon="onExploreAbandon"
+        @close="onCloseExploreDialog"
+        @dismiss-result="onDismissExploreResult"
       />
     </ModalShell>
 

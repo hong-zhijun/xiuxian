@@ -3,9 +3,11 @@ import { onMounted, onUnmounted, ref } from 'vue';
 
 import { ApiError, setCsrfToken } from './api/client';
 import {
+  abandonRealmExplore,
   assign,
   breakthrough,
   challenge,
+  chooseRealmExplore,
   claimJourney,
   craftPill,
   expelDisciple,
@@ -16,6 +18,7 @@ import {
   setDiscipleNote,
   setDefenseLineup,
   startJourney,
+  startRealmExplore,
   syncSect,
   upgradeBuilding,
   upgradeSect,
@@ -26,6 +29,8 @@ import type {
   CraftPillOutcome,
   EventLogView,
   ExpelDiscipleOutcome,
+  ExploreChoiceResult,
+  ExploreOutcome,
   JourneyClaimOutcomeView,
   JourneyDirection,
   ResourceView,
@@ -37,7 +42,7 @@ import LoginScreen from './components/LoginScreen.vue';
 import SectScreen from './components/SectScreen.vue';
 import ToastStack from './components/ToastStack.vue';
 import type { ToastItem, ToastTone } from './types/ui';
-import { formatAmount, formatBp } from './utils/format';
+import { formatAmount, formatBp, formatTime } from './utils/format';
 
 /**
  * 应用外壳：只有三种界面（未登录 / 未建宗门 / 游戏中），用 ref 管理，不用 Vue Router / Pinia。
@@ -58,6 +63,9 @@ const toasts = ref<ToastItem[]>([]);
 
 /** 最近一次挑战的战报（交给 SectScreen 的挑战弹窗展示；关掉弹窗即清空）。 */
 const challengeResult = ref<ChallengeResultView | null>(null);
+
+/** V6 交互探索刚判定完的那一步（交给 SectScreen 的探索弹窗展示；收下即清空）。 */
+const exploreResult = ref<ExploreChoiceResult | null>(null);
 
 let syncTimer: number | undefined;
 let nextToastId = 1;
@@ -305,6 +313,96 @@ async function onExplore(realmId: string, discipleIds: string[]): Promise<void> 
   } finally {
     busy.value = false;
   }
+}
+
+/* ---------- V6 交互式秘境探索 ---------- */
+
+/** 判定档位 → toast 标题 / 语气（大成功与成功都是好消息，失败降级为 warning）。 */
+const EXPLORE_OUTCOME_FEEDBACK: Record<ExploreOutcome, { tone: ToastTone; label: string }> = {
+  great_success: { tone: 'success', label: '大成功' },
+  success: { tone: 'success', label: '顺利通过' },
+  failure: { tone: 'warning', label: '探索受挫' },
+};
+
+/**
+ * 踏入秘境：服务端扣入场费、建记录、抽第一关遭遇，返回完整 state 与断点。
+ * 弹窗由 SectScreen 自己打开（它看到 state.activeExploration 就会渲染），这里只负责提示。
+ */
+async function onExploreStart(realmId: string, discipleIds: string[]): Promise<void> {
+  if (busy.value) return;
+  busy.value = true;
+  exploreResult.value = null;
+  try {
+    const { state: next, exploration } = await startRealmExplore(realmId, discipleIds);
+    state.value = next;
+    announceEvents(next);
+    notify(
+      'success',
+      `踏入秘境 · ${exploration.realmName}`,
+      `共 ${exploration.totalStages} 关，首关遭遇「${exploration.encounter.name}」，请择路而行。`,
+    );
+  } catch (caught) {
+    handleError(caught);
+  } finally {
+    busy.value = false;
+  }
+}
+
+/**
+ * 一次遭遇选择：服务端判定后把 state.activeExploration 推进（或清空），
+ * 这里回填 state 与结果面板，并按判定档位提示（失败时附上受伤信息）。
+ */
+async function onExploreChoose(explorationId: string, choiceId: string): Promise<void> {
+  if (busy.value) return;
+  busy.value = true;
+  try {
+    const { state: next, result } = await chooseRealmExplore(explorationId, choiceId);
+    state.value = next;
+    announceEvents(next);
+    exploreResult.value = result;
+
+    const feedback = EXPLORE_OUTCOME_FEEDBACK[result.outcome];
+    const parts = [result.message];
+    if (result.finalRewards !== null) {
+      const gained = effectSummary(result.finalRewards, next.resources);
+      if (gained !== '') parts.push(`总入账 ${gained}`);
+    } else if (Object.keys(result.stageRewards).length > 0) {
+      parts.push(`本关收获 ${effectSummary(result.stageRewards, next.resources)}`);
+    }
+    if (result.injury !== null) {
+      parts.push(`${result.injury.discipleName} 受伤，疗伤至 ${formatTime(result.injury.until)}`);
+    }
+    notify(feedback.tone, feedback.label, parts.join('；'));
+  } catch (caught) {
+    handleError(caught);
+  } finally {
+    busy.value = false;
+  }
+}
+
+/**
+ * 放弃探索：已获奖励照常入账、不退入场费（服务端说了算）。
+ * state.activeExploration 被置空后，SectScreen 的 watch 会自己关掉弹窗。
+ */
+async function onExploreAbandon(explorationId: string): Promise<void> {
+  if (busy.value) return;
+  busy.value = true;
+  try {
+    const { state: next } = await abandonRealmExplore(explorationId);
+    state.value = next;
+    announceEvents(next);
+    exploreResult.value = null;
+    notify('info', '已离开秘境', '本场探索终结：已获奖励照常入账，入场费不予退还。');
+  } catch (caught) {
+    handleError(caught);
+  } finally {
+    busy.value = false;
+  }
+}
+
+/** 收下结果（「继续前进」/「完成」/关弹窗）：清掉结果面板，下一次是干净的遭遇态。 */
+function onDismissExploreResult(): void {
+  exploreResult.value = null;
 }
 
 /** 3v3 比分（攻方胜轮数 : 守方胜轮数），toast 标题里用。 */
@@ -588,6 +686,7 @@ onUnmounted(() => {
       :state="state"
       :busy="busy"
       :challenge-result="challengeResult"
+      :explore-result="exploreResult"
       @refresh="refresh(true)"
       @logout="onLogout"
       @recruit="onRecruit"
@@ -595,6 +694,10 @@ onUnmounted(() => {
       @upgrade="onUpgrade"
       @upgrade-sect="onUpgradeSect"
       @explore="onExplore"
+      @explore-start="onExploreStart"
+      @explore-choose="onExploreChoose"
+      @explore-abandon="onExploreAbandon"
+      @dismiss-explore-result="onDismissExploreResult"
       @recruit-refreshed="onRecruitRefreshed"
       @challenge="onChallenge"
       @set-defense-lineup="onSetDefenseLineup"

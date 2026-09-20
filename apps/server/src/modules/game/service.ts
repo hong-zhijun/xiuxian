@@ -4,6 +4,12 @@ import { validatedGameConfig } from '../../config/loadGameConfig';
 import { AppError } from '../../http/appError';
 import { prepareStatements, type ParameterizedQuery } from '../../infra/db/repository';
 import {
+  decide,
+  type ChoiceAnswer,
+  type NoulAnswer,
+  type Question,
+} from '../../infra/openrouter/decisions';
+import {
   alchemyUnlockBlockedReason,
   bodyTemperingTarget,
   findPillRecipe,
@@ -46,6 +52,7 @@ import {
   nextStageOf,
   realmIndex,
 } from './constants';
+import { drawEncounters, type EncounterDef } from './encounters';
 import { EVENT_HISTORY_LIMIT, RECENT_EVENTS_IN_SYNC } from './events';
 import {
   generateCandidates,
@@ -126,7 +133,15 @@ import {
   journeyStartSnapshotGuardStatement,
   updateDiscipleJourneyReturnStatement,
 } from './repository';
-import type { DiscipleJourneyRow } from './repository';
+import type { DiscipleJourneyRow, RealmExplorationRow } from './repository';
+import {
+  RealmExplorationRepository,
+  deleteRealmExploreSnapshotGuardStatement,
+  insertRealmExplorationStatement,
+  realmExploreSnapshotGuardStatement,
+  updateExplorationResultStatement,
+  updateRealmExplorationStageStatement,
+} from './repository';
 import { settleEconomy, type SettleResult } from './settle';
 
 import {
@@ -180,6 +195,9 @@ import {
   type JourneyDirectionPreviewView,
   type JourneyDurationPreviewView,
   type JourneyPreviewView,
+  type ActiveExplorationView,
+  type EncounterView,
+  type ExploreChoiceResultView,
 } from './view';
 
 /**
@@ -205,6 +223,8 @@ export interface SectSnapshot {
   journeys: DiscipleJourneyRow[];
   /** 0014：最近历练记录（含已领取，最多 10 条）。 */
   recentJourneys: DiscipleJourneyRow[];
+  /** 0015：进行中的交互式秘境探索（每宗门同时最多一个）；null = 当前没有。 */
+  activeExploration: RealmExplorationRow | null;
 }
 
 /** 全局唯一配置来源：启动期已校验过的配置内容（不在游戏模块里硬编码数值）。 */
@@ -248,6 +268,7 @@ async function loadSnapshot(
     challengeDay,
     journeys,
     recentJourneys,
+    activeExploration,
   ] = await Promise.all([
     new DiscipleRepository(db).findBySectId(sect.id),
     new BuildingRepository(db).findBySectId(sect.id),
@@ -258,6 +279,8 @@ async function loadSnapshot(
     // 0014：未领取的历练（在外中 + 待领取）与最近历史（含已领取，最多 10 条）。
     new DiscipleJourneyRepository(db).findOpenBySectId(sect.id),
     new DiscipleJourneyRepository(db).findRecentBySectId(sect.id, JOURNEY_HISTORY_LIMIT),
+    // 0015：进行中的交互式秘境探索（每宗门同时最多一个）。
+    new RealmExplorationRepository(db).findActiveBySectId(sect.id),
   ]);
   return {
     sect,
@@ -269,6 +292,7 @@ async function loadSnapshot(
     recentEvents,
     journeys,
     recentJourneys,
+    activeExploration,
   };
 }
 
@@ -303,6 +327,8 @@ class SectDraft {
   journeys: DiscipleJourneyRow[];
   /** 0014：读快照时的最近历练记录（含已领取）；与 journeys 合并去重后交给 view。 */
   recentJourneys: DiscipleJourneyRow[];
+  /** 0015：进行中的交互式秘境探索（本批可能被推进 / 结束）。 */
+  activeExploration: RealmExplorationRow | null;
   /** 0014：本批归队入账产生的语句（附在结算写回之后同批提交）。 */
   private readonly journeyReturnStatements: ParameterizedQuery[] = [];
   /** 0014：本批已完成归队的弟子 id（他们的修为/伤势由归队语句一次写完）。 */
@@ -324,6 +350,7 @@ class SectDraft {
     // 0014：未领取的历练记录（在外中 + 待领取）；最近历史另查一次，供摘要用。
     this.journeys = base.journeys.map((row) => ({ ...row }));
     this.recentJourneys = base.recentJourneys.map((row) => ({ ...row }));
+    this.activeExploration = base.activeExploration === null ? null : { ...base.activeExploration };
 
     const lastSettledAt = Number(base.sect.last_settled_at);
     // 0014：未领取的历练就是「在外区间」；结算只屏蔽这些区间内的岗位产出与静修，
@@ -559,6 +586,7 @@ class SectDraft {
       capacityMultiplier: levelDef.capacityMultiplier,
       journeys: this.journeys,
       recentJourneys: this.recentRowsForView(),
+      activeExploration: this.activeExplorationView(),
     });
   }
 
@@ -971,6 +999,51 @@ class SectDraft {
       throw error;
     }
   }
+
+  /**
+   * 0015：交互探索的受保护提交（开始 / 推进 / 放弃共用）。
+   *
+   * 守卫在 batch 执行时复核宗门行（等级 + 结算时间）与全部资源余额，避免与并发命令双重结算；
+   * 推进 / 放弃时还复核这条探索记录的 status / current_stage / current_encounter /
+   * rewards_collected 都未被并发改动 —— 同一关不会被结算两次，也不会重复发奖。
+   * members 传入时还复核这些弟子仍属于本宗（开始探索时传队伍成员）。
+   */
+  async commitRealmExplore(
+    exploration?: RealmExplorationRow,
+    members?: readonly { id: string }[],
+  ): Promise<void> {
+    const commandId = crypto.randomUUID();
+    const guard = realmExploreSnapshotGuardStatement(commandId, {
+      sect: this.base.sect,
+      balances: this.base.balances,
+      ...(exploration === undefined ? {} : { exploration }),
+      ...(members === undefined ? {} : { members }),
+    });
+    try {
+      await this.db.batch(
+        prepareStatements(this.db, [
+          guard,
+          ...this.statements,
+          deleteRealmExploreSnapshotGuardStatement(commandId),
+        ]),
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (/CHECK constraint failed: (?:valid = 1|mutation_guards)/i.test(message)) {
+        throw new AppError('INVALID_STATUS', '宗门状态已变化，请刷新后重试');
+      }
+      // 迁移 0015 的部分唯一索引兜底「同一宗门同时只能有一场进行中的探索」。
+      if (/UNIQUE constraint failed/i.test(message) && /realm_explorations/i.test(message)) {
+        throw new AppError('INVALID_STATUS', '已有一场进行中的秘境探索');
+      }
+      throw error;
+    }
+  }
+
+  /** 进行中探索的视图（null = 当前没有）；view() 与 getActiveExploration 共用同一份装配。 */
+  activeExplorationView(): ActiveExplorationView | null {
+    return this.activeExploration === null ? null : activeExplorationViewOf(this.activeExploration);
+  }
 }
 
 async function draftFor(db: D1Database, userId: string, now: number): Promise<SectDraft> {
@@ -1142,6 +1215,7 @@ export async function createSect(
       // 0014：新宗门还没有任何历练记录。
       journeys: [],
       recentJourneys: [],
+      activeExploration: null,
     },
     now,
   );
@@ -1681,6 +1755,11 @@ export async function expelDisciple(
   // 0014：在外弟子不能被驱逐；已归队但未领取的也要先领取。
   requireJourneySettled(draft, disciple, '驱逐');
 
+  // 0015：正在交互探索中的弟子不能被驱逐 —— 否则这支队伍的成员会被抽走，探索记录就不成立了。
+  if (explorationPartyIds(draft.activeExploration).includes(disciple.id)) {
+    throw new AppError('INVALID_STATUS', `${disciple.name}正在秘境探索中，探索结束后才能驱逐`);
+  }
+
   // 阵容守卫必须用「读到的库值」：守卫是本批第一条语句，此时本批写入还没执行。
   const lineupSnapshot = draft.sect.defense_lineup;
   const lineupCleared = lineupContainsDisciple(lineupSnapshot, disciple.id);
@@ -2020,6 +2099,7 @@ export async function exploreSectRealm(
  */
 export async function listSecretRealms(
   db: D1Database,
+  env: Env,
   userId: string,
   now: number,
 ): Promise<SecretRealmListView[]> {
@@ -2031,6 +2111,7 @@ export async function listSecretRealms(
   const sectLevel = Number(snapshot.sect.level);
   const dayStart = dayStartMs(now);
   const arena = snapshot.buildings.find((b) => b.def_id === ARENA_BUILDING_ID);
+  const exploreEnabled = realmExploreEnabled(env);
   const views: SecretRealmListView[] = [];
 
   for (const realm of SECRET_REALMS) {
@@ -2057,6 +2138,7 @@ export async function listSecretRealms(
       requiredSectLevel: realm.requiredSectLevel,
       locked,
       hasArena: arena !== undefined,
+      exploreEnabled,
     });
   }
   return views;
@@ -3106,9 +3188,18 @@ function journeyEligibilityOf(input: {
   disciple: DiscipleRow;
   disciples: readonly DiscipleRow[];
   journeys: readonly DiscipleJourneyRow[];
+  /** 0015：进行中的交互式秘境探索；其队伍成员同样「不在家」，不能被派出去历练。 */
+  activeExploration: RealmExplorationRow | null;
   now: number;
 }): JourneyBlock | null {
   const awayIds = journeyAwayIds(input.journeys, input.now);
+  // 0015：秘境探索中的弟子不能被派出去历练 —— 否则这支探索队伍会被抽走一个成员。
+  if (explorationPartyIds(input.activeExploration).includes(input.disciple.id)) {
+    return {
+      code: 'INVALID_STATUS',
+      message: `${input.disciple.name}正在秘境探索中，探索结束后才能外出历练`,
+    };
+  }
   const pending = input.journeys.find(
     (row) => row.disciple_id === input.disciple.id && row.claimed_at === null,
   );
@@ -3174,6 +3265,7 @@ export async function previewJourney(
   }
 
   const eligibility = journeyEligibilityOf({
+    activeExploration: snapshot.activeExploration,
     sect: snapshot.sect,
     disciple,
     disciples: snapshot.disciples,
@@ -3262,6 +3354,7 @@ export async function startJourney(
   const disciple = draft.discipleById(discipleId);
 
   const eligibility = journeyEligibilityOf({
+    activeExploration: draft.activeExploration,
     sect: draft.sect,
     disciple,
     disciples: draft.disciples,
@@ -3431,4 +3524,724 @@ export async function claimJourney(
       }),
     },
   };
+}
+/* ------------------------------------------------------------------ *
+ * V6：交互式秘境探索（迁移 0015）
+ *
+ * 与「速通」（exploreSectRealm）并行的第二种玩法：点「探索」后逐个遭遇做选择，由
+ * OpenRouter Decisions API 做结构化判定；API 不可用时降级为本地随机（与速通同一套
+ * 成功率公式），绝不让玩家卡住。旧的速通路径保持原样不动。
+ *
+ * 关键取舍：
+ * - 奖励不在中途发放，只在**这场探索结束时**（通关 / 失败 / 放弃）一次性入账，
+ *   rewards_collected 是运行中的账本；这样一次探索只有一次发奖，也不会出现半截奖励。
+ * - 耗时的 Decisions 调用安排在「结算窗口之外」：先只读预检 + 判定，判定完成后再取
+ *   新鲜草稿应用结果。否则几秒的等待足以让并发命令推进结算，导致提交守卫整批回滚。
+ * ------------------------------------------------------------------ */
+
+/** 低级秘境（宗门 1~3 级可进）的关卡数。 */
+export const EXPLORE_STAGES_LOW = 3;
+/** 高级秘境（宗门 4 级以上可进）的关卡数。 */
+export const EXPLORE_STAGES_HIGH = 5;
+
+/** 大成功的本关奖励倍率（基点）：15000 = ×1.5。 */
+const GREAT_SUCCESS_REWARD_BP = 15_000;
+
+/** 弟子受伤时长：与速通一致的 10 分钟。 */
+const EXPLORE_INJURY_DURATION_MS = 10 * 60 * 1000;
+
+/** 受伤概率阈值：Decisions 给出的 injury 概率大于它才真的受伤。 */
+const EXPLORE_INJURY_THRESHOLD = 0.6;
+
+export type ExploreOutcome = 'great_success' | 'success' | 'failure';
+
+/**
+ * 读一个字符串型绑定。
+ *
+ * `wrangler types` 会把 wrangler.jsonc 的 vars 生成成**字面量类型**（例如 `"false"`），
+ * 而运行时可能被 .dev.vars / dashboard 覆盖成别的字符串；这里统一放宽成 string，
+ * 避免类型上出现「不可能相等」的假象（与 config/authConfig.ts 的 readVar 同一做法）。
+ */
+function readStringVar(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined;
+}
+
+/** 交互式秘境探索总开关（未显式开启时前端只显示「速通」）。 */
+export function realmExploreEnabled(env: Env): boolean {
+  return readStringVar(env.REALM_EXPLORE_ENABLED) === 'true';
+}
+
+/** 把入库的遭遇 JSON 还原成视图；脏数据返回 null（不让一条坏记录卡死整个 sync）。 */
+function encounterViewOf(json: string | null): EncounterView | null {
+  if (json === null) {
+    return null;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(json);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== 'object' || parsed === null) {
+    return null;
+  }
+  const record = parsed as Record<string, unknown>;
+  const rawChoices = Array.isArray(record.choices) ? record.choices : [];
+  return {
+    name: typeof record.name === 'string' ? record.name : '未知遭遇',
+    description: typeof record.description === 'string' ? record.description : '',
+    choices: rawChoices.flatMap((item) => {
+      if (typeof item !== 'object' || item === null) {
+        return [];
+      }
+      const choice = item as Record<string, unknown>;
+      if (typeof choice.id !== 'string' || typeof choice.label !== 'string') {
+        return [];
+      }
+      return [
+        {
+          id: choice.id,
+          label: choice.label,
+          riskHint: typeof choice.riskHint === 'string' ? choice.riskHint : '',
+        },
+      ];
+    }),
+  };
+}
+
+/** 遭遇定义 → 入库 JSON（只存展示与选项校验需要的字段，不存难度区间）。 */
+function encounterJsonOf(encounter: EncounterDef): string {
+  return JSON.stringify({
+    id: encounter.id,
+    name: encounter.name,
+    description: encounter.description,
+    choices: encounter.choices.map((choice) => ({
+      id: choice.id,
+      label: choice.label,
+      riskHint: choice.riskHint,
+    })),
+  });
+}
+
+/** 解析一个「resourceId -> 数量字符串」JSON；脏数据视为空账本。 */
+function rewardsJsonOf(text: string): Record<string, string> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return {};
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    return {};
+  }
+  const out: Record<string, string> = {};
+  for (const [resourceId, amount] of Object.entries(parsed as Record<string, unknown>)) {
+    if (typeof amount === 'string' || typeof amount === 'number') {
+      out[resourceId] = String(amount);
+    }
+  }
+  return out;
+}
+
+/** 解析一个字符串数组 JSON（used_encounters / party 共用）；脏数据视为空数组。 */
+function stringArrayOf(text: string): string[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(parsed)) {
+    return [];
+  }
+  return parsed.filter((item): item is string => typeof item === 'string');
+}
+
+/** 进行中探索的出战弟子 id（脏数据视为空队伍）。 */
+function explorationPartyIds(exploration: RealmExplorationRow | null): string[] {
+  return exploration === null ? [] : stringArrayOf(exploration.party);
+}
+
+/** 探索记录 → 视图（realm 名从代码定义取；未知 realmId 退化成 id，不伪造名字）。 */
+function activeExplorationViewOf(row: RealmExplorationRow): ActiveExplorationView {
+  return {
+    id: row.id,
+    realmId: row.realm_id,
+    realmName: findSecretRealm(row.realm_id)?.name ?? row.realm_id,
+    totalStages: Number(row.total_stages),
+    currentStage: Number(row.current_stage),
+    // in_progress 的记录必有当前遭遇；脏数据兜一个空壳（前端继续不下去），好过整个 sync 报错。
+    encounter: encounterViewOf(row.current_encounter) ?? {
+      name: '未知遭遇',
+      description: '',
+      choices: [],
+    },
+    rewardsCollected: rewardsJsonOf(row.rewards_collected),
+  };
+}
+
+/** 本关基础奖励 = floor(总奖励 / (总关卡数 + 1))，逐资源计算；0 不写入。 */
+function stageBaseRewards(
+  rewards: Record<string, string>,
+  totalStages: number,
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [resourceId, amount] of Object.entries(rewards)) {
+    const base = Math.floor(Number(amount) / (totalStages + 1));
+    if (base > 0) {
+      out[resourceId] = String(base);
+    }
+  }
+  return out;
+}
+
+/** 按基点倍率放大一份奖励（大成功用）。 */
+function scaleRewards(rewards: Record<string, string>, bp: number): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [resourceId, amount] of Object.entries(rewards)) {
+    const value = Math.floor((Number(amount) * bp) / 10_000);
+    if (value > 0) {
+      out[resourceId] = String(value);
+    }
+  }
+  return out;
+}
+
+/** 账本累加（返回新对象，不改入参）。 */
+function addRewards(
+  ledger: Record<string, string>,
+  delta: Record<string, string>,
+): Record<string, string> {
+  const out: Record<string, string> = { ...ledger };
+  for (const [resourceId, amount] of Object.entries(delta)) {
+    out[resourceId] = String(Number(out[resourceId] ?? 0) + Number(amount));
+  }
+  return out;
+}
+
+/** Decisions 的 outcome 取值收窄；不在白名单里返回 null（触发降级）。 */
+function normalizeExploreOutcome(value: unknown): ExploreOutcome | null {
+  return value === 'great_success' || value === 'success' || value === 'failure' ? value : null;
+}
+
+/** noul 回答收窄到 0~1；非数字返回 null（触发降级）。 */
+function normalizeProbability(value: unknown): number | null {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return null;
+  }
+  return Math.min(1, Math.max(0, value));
+}
+
+/** 交给模型的上下文：难度 + 队伍战力 + 遭遇 + 所选行动（纯文本，不含玩家标识）。 */
+function exploreStateText(input: {
+  realm: { name: string; difficulty: number };
+  encounter: EncounterView;
+  choice: { label: string; riskHint: string };
+  power: number;
+}): string {
+  return [
+    `秘境「${input.realm.name}」，难度 ${String(input.realm.difficulty)}，队伍战力 ${String(input.power)}。`,
+    `遭遇：${input.encounter.name}——${input.encounter.description}`,
+    `所选行动：${input.choice.label}（${input.choice.riskHint}）`,
+  ].join('\n');
+}
+
+interface ExploreJudgement {
+  outcome: ExploreOutcome;
+  injuryProb: number;
+  /** true = 走了本地降级路径（Decisions 不可用或返回形状不符）。 */
+  degraded: boolean;
+}
+
+/**
+ * 判定一次选择。
+ *
+ * 优先走 Decisions API；没有 key、调用失败、超时或返回形状不符时**一律降级**为本地随机
+ * （与速通同一套成功率公式），保证玩家永远能继续。降级只记一条 warn，不向玩家泄露。
+ */
+async function judgeExploreChoice(input: {
+  env: Env;
+  realm: { id: string; name: string; difficulty: number };
+  encounter: EncounterView;
+  choice: { id: string; label: string; riskHint: string };
+  power: number;
+  arenaLevel: number;
+}): Promise<ExploreJudgement> {
+  const { env, realm, encounter, choice, power, arenaLevel } = input;
+  const apiKey = readStringVar(env.OPENROUTER_API_KEY);
+  if (apiKey !== undefined && apiKey.length > 0) {
+    try {
+      const questions: Record<string, Question> = {
+        outcome: {
+          type: 'choice',
+          instructions: '根据队伍实力与所选行动的合理性，判断这次遭遇的结果。',
+          criteria: {
+            great_success: '实力远超难度，或选择巧妙，完美通过并额外收获',
+            success: '顺利通过',
+            failure: '实力不足或选择失误，探索失败',
+          },
+        },
+        injury: {
+          type: 'noul',
+          instructions: '这次遭遇中队伍是否有弟子受伤。',
+          criteria: {
+            true: '选择冒险，或实力差距导致受伤',
+            false: '安全通过，或选择了稳妥方案',
+          },
+        },
+      };
+      const answers = await decide(
+        apiKey,
+        exploreStateText({ realm, encounter, choice, power }),
+        questions,
+      );
+      const outcome = normalizeExploreOutcome(
+        (answers.outcome as ChoiceAnswer | undefined)?.choice,
+      );
+      const injuryProb = normalizeProbability((answers.injury as NoulAnswer | undefined)?.noul);
+      if (outcome !== null && injuryProb !== null) {
+        return { outcome, injuryProb, degraded: false };
+      }
+      console.warn(`explore_decisions_unexpected_shape realm=${realm.id}`);
+    } catch (error) {
+      // 只记原因类别，不打 API key、不打响应体。
+      console.warn(
+        `explore_decisions_failed realm=${realm.id} reason=${
+          error instanceof Error ? error.name : 'unknown'
+        }`,
+      );
+    }
+  }
+
+  const chanceBp = explorationSuccessChanceBp(power, realm.difficulty, arenaLevel);
+  const roll = Math.floor(Math.random() * 10_000);
+  const outcome: ExploreOutcome =
+    roll < Math.floor(chanceBp * 0.3) ? 'great_success' : roll < chanceBp ? 'success' : 'failure';
+  return { outcome, injuryProb: outcome === 'failure' ? 0.8 : 0.2, degraded: true };
+}
+
+/**
+ * 受伤判定：概率超过阈值时在本场队伍里随机挑一名**仍在本宗**的弟子受伤 10 分钟。
+ * 直接写回草稿（内存 + 语句），并返回视图的一部分；不满足条件返回 null。
+ */
+function rollExploreInjury(
+  injuryProb: number,
+  partyIds: readonly string[],
+  draft: SectDraft,
+  now: number,
+): { discipleName: string; until: string } | null {
+  if (injuryProb <= EXPLORE_INJURY_THRESHOLD) {
+    return null;
+  }
+  const candidates = draft.disciples.filter((disciple) => partyIds.includes(disciple.id));
+  if (candidates.length === 0) {
+    return null;
+  }
+  const target = candidates[Math.floor(Math.random() * candidates.length)];
+  if (target === undefined) {
+    return null;
+  }
+  const until = now + EXPLORE_INJURY_DURATION_MS;
+  draft.addStatement(updateDiscipleInjuryStatement(target.id, until));
+  target.injured_until = until;
+  return { discipleName: target.name, until: new Date(until).toISOString() };
+}
+
+/** 结果文案（成功 / 大成功 / 失败 / 中途继续），资源用展示单位由前端格式化。 */
+function exploreChoiceMessage(input: {
+  outcome: ExploreOutcome;
+  encounter: EncounterView;
+  realmName: string;
+  finished: boolean;
+  payout: Record<string, string>;
+}): string {
+  const paidOut = Object.keys(input.payout).length > 0;
+  if (input.outcome === 'failure') {
+    return paidOut
+      ? `在「${input.encounter.name}」上失手，探索就此终止；已获奖励仍然归你。`
+      : `在「${input.encounter.name}」上失手，探索就此终止。`;
+  }
+  if (input.outcome === 'great_success') {
+    return input.finished
+      ? `大成功突破「${input.encounter.name}」，${input.realmName}的通关奖励已入库。`
+      : `大成功！以巧劲化解「${input.encounter.name}」，继续深入。`;
+  }
+  return input.finished
+    ? `顺利走完「${input.encounter.name}」，${input.realmName}通关奖励已入库。`
+    : `安然通过「${input.encounter.name}」，继续深入。`;
+}
+/** 当前进行中的交互探索（GET /game/realm-explore/active）；只读、不结算、不存在返回 null。 */
+export async function getActiveExploration(
+  db: D1Database,
+  userId: string,
+  now: number,
+): Promise<ActiveExplorationView | null> {
+  const snapshot = await loadSnapshot(db, userId, now);
+  if (snapshot === null || snapshot.activeExploration === null) {
+    return null;
+  }
+  return activeExplorationViewOf(snapshot.activeExploration);
+}
+
+/**
+ * 开始交互探索：结算 → 校验（开关 / 秘境 / 等级 / 演武场 / 无进行中探索 / 人数 / 成员）
+ * → 每日限次 → 扣入场费 → 抽第 1 关遭遇 → 建记录 + 速通表占坑 → 一次受保护 batch 提交。
+ *
+ * 每日限次与速通共享同一份 `explorations` 计数（同一张表、同一口径）。
+ */
+export async function startRealmExplore(
+  db: D1Database,
+  env: Env,
+  userId: string,
+  realmId: string,
+  discipleIds: string[],
+  now: number,
+): Promise<{ state: SectStateView; exploration: ActiveExplorationView }> {
+  if (!realmExploreEnabled(env)) {
+    throw new AppError('INVALID_STATUS', '交互式秘境探索尚未开启');
+  }
+  const draft = await draftFor(db, userId, now);
+  const realm = findSecretRealm(realmId);
+  if (realm === undefined) {
+    throw new AppError('NOT_FOUND', '秘境不存在');
+  }
+  if (Number(draft.sect.level) < realm.requiredSectLevel) {
+    throw new AppError('INVALID_STATUS', `需要宗门 ${String(realm.requiredSectLevel)} 级才能进入`);
+  }
+  const arena = draft.buildings.find((building) => building.def_id === ARENA_BUILDING_ID);
+  if (arena === undefined) {
+    throw new AppError('INVALID_STATUS', '需要先建造演武场');
+  }
+  if (draft.activeExploration !== null) {
+    throw new AppError('INVALID_STATUS', '已有一场进行中的秘境探索');
+  }
+  if (discipleIds.length < realm.minParty || discipleIds.length > realm.maxParty) {
+    throw new AppError('VALIDATION_ERROR', `需要 ${String(realm.minParty)}~${String(realm.maxParty)} 名弟子`);
+  }
+  if (new Set(discipleIds).size !== discipleIds.length) {
+    throw new AppError('VALIDATION_ERROR', '不能派遣重复弟子');
+  }
+  for (const id of discipleIds) {
+    const disciple = draft.discipleById(id);
+    requireNotAway(draft, disciple, '出战');
+    if (disciple.injured_until !== null && Number(disciple.injured_until) > now) {
+      throw new AppError('INVALID_STATUS', `${disciple.name}正在疗伤，无法出战`);
+    }
+  }
+  if (realm.dailyLimit !== null) {
+    const used = await new ExplorationRepository(db).countTodayBySectAndRealm(
+      draft.sect.id,
+      realmId,
+      dayStartMs(now),
+    );
+    if (used >= realm.dailyLimit) {
+      throw new AppError(
+        'DAILY_LIMIT',
+        `今日${realm.name}探索次数已用完（${String(realm.dailyLimit)}次/天）`,
+      );
+    }
+  }
+  for (const [resourceId, amount] of Object.entries(realm.entryCost)) {
+    draft.requireResource(resourceId, Number(amount));
+  }
+
+  const totalStages = realm.requiredSectLevel <= 3 ? EXPLORE_STAGES_LOW : EXPLORE_STAGES_HIGH;
+  const first = drawEncounters(realm.difficulty, 1, [])[0];
+  if (first === undefined) {
+    throw new AppError('INVALID_STATUS', '秘境场景数据缺失，暂时无法探索');
+  }
+
+  // 同一个 id 同时作为 realm_explorations 与 explorations 两行的主键：前者存交互进度，
+  // 后者只做每日限次统计（开始时占坑 success=0，结束时回填真实结果）。
+  const explorationId = crypto.randomUUID();
+  const partyJson = JSON.stringify(discipleIds);
+  const usedJson = JSON.stringify([first.id]);
+  const encounterJson = encounterJsonOf(first);
+  draft.activeExploration = {
+    id: explorationId,
+    sect_id: draft.sect.id,
+    realm_id: realmId,
+    party: partyJson,
+    total_stages: totalStages,
+    current_stage: 0,
+    status: 'in_progress',
+    current_encounter: encounterJson,
+    used_encounters: usedJson,
+    rewards_collected: '{}',
+    created_at: now,
+    updated_at: now,
+  };
+  draft.addStatement(
+    insertRealmExplorationStatement({
+      id: explorationId,
+      sectId: draft.sect.id,
+      realmId,
+      party: partyJson,
+      totalStages,
+      currentEncounter: encounterJson,
+      usedEncounters: usedJson,
+      now,
+    }),
+  );
+  draft.addStatement(
+    insertExplorationStatement({
+      id: explorationId,
+      sectId: draft.sect.id,
+      realmId,
+      party: partyJson,
+      success: false,
+      rewards: '{}',
+      now,
+    }),
+  );
+
+  // 开始时不带记录快照（记录是本批刚建的）：并发兜底有两个 —— 0015 的部分唯一索引
+  // （一个宗门同时只能有一场 in_progress）与 members 成员归属核对（队伍成员不能被并发抽走）。
+  await draft.commitRealmExplore(undefined, discipleIds.map((id) => ({ id })));
+  return {
+    state: draft.view(),
+    exploration: activeExplorationViewOf(draft.activeExploration),
+  };
+}
+
+/**
+ * 提交一次选择（核心命令）。
+ *
+ * 顺序刻意是「只读预检 → 调用 Decisions（可能数百毫秒~数秒）→ 取新鲜草稿 → 应用 → 受保护提交」：
+ * 把慢调用放在结算窗口之外，避免等待期间其他命令推进结算导致守卫整批回滚。
+ *
+ * 奖励只在整场结束时一次性入账（通关 = 各关累计 + 一关通关奖励；失败 / 放弃 = 已累计部分）。
+ */
+export async function chooseRealmExplore(
+  db: D1Database,
+  env: Env,
+  userId: string,
+  explorationId: string,
+  choiceId: string,
+  now: number,
+): Promise<{ state: SectStateView; result: ExploreChoiceResultView }> {
+  // ---- 1. 只读预检（不结算、不写库）----
+  const preflight = await loadSnapshot(db, userId, now);
+  if (preflight === null) {
+    throw new AppError('NOT_FOUND', '尚未创建宗门');
+  }
+  // 按 id + 本宗查（而不是「当前进行中」那条）：已结束的记录能给出精确的 INVALID_STATUS。
+  const row = await new RealmExplorationRepository(db).findByIdForSect(
+    explorationId,
+    preflight.sect.id,
+  );
+  if (row === null) {
+    throw new AppError('NOT_FOUND', '探索记录不存在');
+  }
+  if (row.status !== 'in_progress') {
+    throw new AppError('INVALID_STATUS', '这场探索已经结束');
+  }
+  const encounter = encounterViewOf(row.current_encounter);
+  if (encounter === null) {
+    throw new AppError('INVALID_STATUS', '这场探索已经结束');
+  }
+  const choice = encounter.choices.find((item) => item.id === choiceId);
+  if (choice === undefined) {
+    throw new AppError('VALIDATION_ERROR', '选项无效');
+  }
+  const realm = findSecretRealm(row.realm_id);
+  if (realm === undefined) {
+    throw new AppError('NOT_FOUND', '秘境不存在');
+  }
+  const partyIds = explorationPartyIds(row);
+  const party = preflight.disciples.filter((disciple) => partyIds.includes(disciple.id));
+  const power = partyCombatPower(
+    party.map((disciple) => ({
+      realmId: disciple.realm_id,
+      stage: Number(disciple.stage),
+      attack: Number(disciple.attack),
+      defense: Number(disciple.defense),
+      speed: Number(disciple.speed),
+      talent: disciple.talent,
+    })),
+  );
+  const arenaLevel =
+    preflight.buildings.find((building) => building.def_id === ARENA_BUILDING_ID)?.level ?? 0;
+
+  // ---- 2. 判定（Decisions；失败 / 超时自动降级为本地随机）----
+  const judgement = await judgeExploreChoice({ env, realm, encounter, choice, power, arenaLevel });
+
+  // ---- 3. 判定完成后才取新鲜草稿并应用结果 ----
+  const draft = await draftFor(db, userId, now);
+  const current = draft.activeExploration;
+  if (current === null || current.id !== explorationId || current.status !== 'in_progress') {
+    // 等待期间这场探索已被并发结束 / 推进：本批什么都不做，交给前端刷新。
+    throw new AppError('INVALID_STATUS', '宗门状态已变化，请刷新后重试');
+  }
+  // 守卫是本批第一条语句，比较的是**写入前**的库状态 → 必须传读取时的原值。
+  const guardRow: RealmExplorationRow = { ...current };
+
+  const totalStages = Number(current.total_stages);
+  const stageBase = stageBaseRewards(realm.rewards, totalStages);
+  const stageRewards =
+    judgement.outcome === 'great_success'
+      ? scaleRewards(stageBase, GREAT_SUCCESS_REWARD_BP)
+      : judgement.outcome === 'success'
+        ? { ...stageBase }
+        : {};
+  const collectedBefore = rewardsJsonOf(current.rewards_collected);
+  const collectedAfter = addRewards(collectedBefore, stageRewards);
+
+  let status = 'in_progress';
+  let currentStage = Number(current.current_stage);
+  let nextEncounter: string | null = current.current_encounter;
+  let usedIds = stringArrayOf(current.used_encounters);
+  let ledger = collectedAfter;
+  /** 本批真正入账的奖励（只有整场结束时才非空）。 */
+  let payout: Record<string, string> = {};
+  let finalRewards: Record<string, string> | null = null;
+  let injury: { discipleName: string; until: string } | null = null;
+
+  if (judgement.outcome === 'failure') {
+    status = 'failed';
+    nextEncounter = null;
+    ledger = collectedBefore;
+    payout = collectedBefore;
+  } else if (currentStage + 1 >= totalStages) {
+    // 通关：各关累计 + 一关的通关奖励。
+    status = 'completed';
+    currentStage += 1;
+    nextEncounter = null;
+    ledger = addRewards(collectedAfter, stageBase);
+    payout = ledger;
+    finalRewards = ledger;
+  } else {
+    currentStage += 1;
+    const next = drawEncounters(realm.difficulty, 1, usedIds)[0];
+    if (next === undefined) {
+      // 遭遇池被抽空（理论不可达）：按通关收尾，不让玩家卡在无法继续的状态。
+      status = 'completed';
+      nextEncounter = null;
+      ledger = addRewards(collectedAfter, stageBase);
+      payout = ledger;
+      finalRewards = ledger;
+    } else {
+      usedIds = [...usedIds, next.id];
+      nextEncounter = encounterJsonOf(next);
+    }
+  }
+
+  // 受伤判定与 outcome 无关（设计文档 §6.3 第 4 步）：模型给出的 injury 概率
+  // 在成功 / 大成功时同样有效 —— 「选正面迎战且判定通过但仍挂了彩」正是把 injury
+  // 单独出题的原因；本地降级路径成功时给 0.2，低于阈值，所以只有模型能触发这种情况。
+  injury = rollExploreInjury(judgement.injuryProb, partyIds, draft, now);
+
+  const finished = status !== 'in_progress';
+  draft.activeExploration = finished
+    ? null
+    : {
+        ...current,
+        current_stage: currentStage,
+        current_encounter: nextEncounter,
+        used_encounters: JSON.stringify(usedIds),
+        rewards_collected: JSON.stringify(ledger),
+        updated_at: now,
+      };
+
+  draft.addStatement(
+    updateRealmExplorationStageStatement({
+      id: current.id,
+      currentStage,
+      status,
+      currentEncounter: nextEncounter,
+      usedEncounters: JSON.stringify(usedIds),
+      rewardsCollected: JSON.stringify(ledger),
+      now,
+    }),
+  );
+  // 速通表（每日限次口径）只在整场结束时回填真实结果：中段回填会把「本次实际发放」写成
+  // 尚未入账的账面数字，语义失真（限次统计只看行数，本来不需要中段写）。
+  if (finished) {
+    draft.addStatement(
+      updateExplorationResultStatement({
+        explorationId: current.id,
+        sectId: draft.sect.id,
+        success: status === 'completed',
+        rewards: JSON.stringify(payout),
+      }),
+    );
+  }
+  for (const [resourceId, amount] of Object.entries(payout)) {
+    draft.grantResource(resourceId, Number(amount));
+  }
+
+  await draft.commitRealmExplore(guardRow);
+
+  return {
+    state: draft.view(),
+    result: {
+      outcome: judgement.outcome,
+      stageRewards,
+      injury,
+      nextEncounter: finished ? null : encounterViewOf(nextEncounter),
+      finalRewards,
+      message: exploreChoiceMessage({
+        outcome: judgement.outcome,
+        encounter,
+        realmName: realm.name,
+        finished,
+        payout,
+      }),
+    },
+  };
+}
+
+/**
+ * 放弃探索：已累计的奖励照常入账，记录标记 failed。
+ * 与速通一致——放弃 / 失败都不返还入场费。
+ */
+export async function abandonRealmExplore(
+  db: D1Database,
+  userId: string,
+  explorationId: string,
+  now: number,
+): Promise<{ state: SectStateView }> {
+  const draft = await draftFor(db, userId, now);
+  // 按 id + 本宗查（而不是「当前进行中」那条）：已结束的记录能给出精确的 INVALID_STATUS，
+  // 而不是含糊的「记录不存在」；跨宗 id 同样落在这里。
+  const row = await new RealmExplorationRepository(db).findByIdForSect(
+    explorationId,
+    draft.sect.id,
+  );
+  if (row === null) {
+    throw new AppError('NOT_FOUND', '探索记录不存在');
+  }
+  if (row.status !== 'in_progress') {
+    throw new AppError('INVALID_STATUS', '这场探索已经结束');
+  }
+  // 守卫比较的是写入前的库状态 → 传这条读出来的原值。
+  const guardRow: RealmExplorationRow = { ...row };
+  const ledger = rewardsJsonOf(row.rewards_collected);
+
+  draft.activeExploration = null;
+  draft.addStatement(
+    updateRealmExplorationStageStatement({
+      id: row.id,
+      currentStage: Number(row.current_stage),
+      status: 'failed',
+      currentEncounter: null,
+      usedEncounters: row.used_encounters,
+      rewardsCollected: JSON.stringify(ledger),
+      now,
+    }),
+  );
+  draft.addStatement(
+    updateExplorationResultStatement({
+      explorationId: row.id,
+      sectId: draft.sect.id,
+      success: false,
+      rewards: JSON.stringify(ledger),
+    }),
+  );
+  for (const [resourceId, amount] of Object.entries(ledger)) {
+    draft.grantResource(resourceId, Number(amount));
+  }
+
+  await draft.commitRealmExplore(guardRow);
+  return { state: draft.view() };
 }

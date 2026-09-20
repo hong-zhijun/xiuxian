@@ -338,6 +338,51 @@ export interface JourneyClaimOutcomeView {
   endsAt: string;
   message: string;
 }
+
+/** V6 交互式秘境探索：单个选项（label 与风险提示都由服务端下发，前端不复制文案）。 */
+export interface EncounterChoiceView {
+  id: string;
+  label: string;
+  /** 风险提示（例如「风险较高，可能受伤」）。 */
+  riskHint: string;
+}
+
+/** 当前等待玩家选择的遭遇场景。 */
+export interface EncounterView {
+  name: string;
+  description: string;
+  choices: EncounterChoiceView[];
+}
+
+/** 进行中的交互式探索（POST /game/realm-explore/start 与 GET /game/realm-explore/active）。 */
+export interface ActiveExplorationView {
+  id: string;
+  /** 秘境 id（前端按 id 与秘境列表对应）。 */
+  realmId: string;
+  realmName: string;
+  totalStages: number;
+  /** 已完成的关卡数（0 = 还没走完第一关）。 */
+  currentStage: number;
+  encounter: EncounterView;
+  /** 累计已得奖励（最小单位；key 为 resourceId）。 */
+  rewardsCollected: Record<string, string>;
+}
+
+/** 单次选择的判定结果（POST /game/realm-explore/choose 的 result）。 */
+export interface ExploreChoiceResultView {
+  /** 决策模型判定；模型不可用时由服务端本地随机降级，取值不变。 */
+  outcome: 'great_success' | 'success' | 'failure';
+  /** 本关的账面奖励（整场结束时才真正入账；失败为空对象）。 */
+  stageRewards: Record<string, string>;
+  /** 本关受伤的弟子（未受伤为 null）。 */
+  injury: { discipleName: string; until: string } | null;
+  /** 成功时下一关的遭遇；通关或失败为 null。 */
+  nextEncounter: EncounterView | null;
+  /** 通关时的累计奖励（= rewardsCollected 入账后的总量）；未通关为 null。 */
+  finalRewards: Record<string, string> | null;
+  message: string;
+}
+
 export interface SectStateView {
   sect: {
     id: string;
@@ -381,6 +426,8 @@ export interface SectStateView {
   };
   /** 0014 历练面板：名额 + 最近 10 条摘要（仅本宗可见）。 */
   journey: JourneyView;
+  /** V6 交互式秘境探索：本宗当前进行中的一局；没有则 null（每宗门同时最多一局）。 */
+  activeExploration: ActiveExplorationView | null;
 }
 
 /** 秘境列表视图（GET /game/realms）：规则（锁定/次数）由服务端算好，前端只渲染。 */
@@ -402,6 +449,11 @@ export interface SecretRealmListView {
   locked: boolean;
   /** 宗门是否已建造演武场（没有则不能探索）。 */
   hasArena: boolean;
+  /**
+   * V6：交互式探索开关（由 env.REALM_EXPLORE_ENABLED 决定，只有 "true" 才是 true）；
+   * 未启用时前端只显示「速通」，不显示「探索」。
+   */
+  exploreEnabled: boolean;
 }
 
 /** 单次探索结果（POST /game/explore 的 result）。 */
@@ -636,6 +688,11 @@ export interface SectStateInput {
   journeys: readonly DiscipleJourneyRow[];
   /** 0014：最近历练记录（含已领取，最多 10 条），新的在前。 */
   recentJourneys: readonly DiscipleJourneyRow[];
+  /**
+   * V6：本宗当前进行中的交互式探索（可选输入，避免其他调用方被迫传值）；
+   * 视图输出统一用 `input.activeExploration ?? null`。
+   */
+  activeExploration?: ActiveExplorationView | null;
   capacityMultiplier: number;
 }
 
@@ -949,6 +1006,7 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
     sectUpgrade,
     alchemy: alchemyView,
     journey: journeySlot,
+    activeExploration: input.activeExploration ?? null,
     challenge: {
       dailyLimit: CHALLENGE_DAILY_LIMIT,
       usedToday: challengeDay.usedToday,
