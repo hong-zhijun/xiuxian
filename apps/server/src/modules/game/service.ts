@@ -3724,6 +3724,34 @@ function normalizeExploreOutcome(value: unknown): ExploreOutcome | null {
   return value === 'great_success' || value === 'success' || value === 'failure' ? value : null;
 }
 
+/**
+ * 用模型返回的概率分布做加权随机，而不是直接取最高概率项。
+ * 这样"稳妥"选项也有小概率翻车，"冒险"选项也能赌出大成功。
+ * 概率分布残缺时返回 null（触发降级）。
+ */
+function rollFromProbabilities(
+  probabilities: Record<string, number> | undefined,
+): ExploreOutcome | null {
+  if (probabilities === undefined) {
+    return null;
+  }
+  const gs = Number(probabilities.great_success) || 0;
+  const su = Number(probabilities.success) || 0;
+  const fa = Number(probabilities.failure) || 0;
+  const total = gs + su + fa;
+  if (total <= 0) {
+    return null;
+  }
+  const roll = Math.random() * total;
+  if (roll < gs) {
+    return 'great_success';
+  }
+  if (roll < gs + su) {
+    return 'success';
+  }
+  return 'failure';
+}
+
 /** noul 回答收窄到 0~1；非数字返回 null（触发降级）。 */
 function normalizeProbability(value: unknown): number | null {
   if (typeof value !== 'number' || !Number.isFinite(value)) {
@@ -3795,8 +3823,8 @@ async function judgeExploreChoice(input: {
         exploreStateText({ realm, encounter, choice, power }),
         questions,
       );
-      const outcome = normalizeExploreOutcome(
-        (answers.outcome as ChoiceAnswer | undefined)?.choice,
+      const outcome = rollFromProbabilities(
+        (answers.outcome as ChoiceAnswer | undefined)?.probabilities,
       );
       const injuryProb = normalizeProbability((answers.injury as NoulAnswer | undefined)?.noul);
       if (outcome !== null && injuryProb !== null) {
