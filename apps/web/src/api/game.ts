@@ -66,6 +66,8 @@ export interface DiscipleView {
   bodyTemperingGain: number;
   /** 0013 掌门私有备注（单行纯文本，≤60 字；空串 = 未填写）。只在自己的 sync 状态里有值。 */
   note: string;
+  /** 0014 历练状态：none / active / ready + 名额与不可出发原因（全部服务端算好，前端只渲染）。 */
+  journey: DiscipleJourneyView;
 }
 
 export interface BuildingView {
@@ -148,6 +150,8 @@ export interface SectStateView {
     usedToday: number;
     remaining: number;
   };
+  /** 0014 宗门历练名额与最近 10 条历练摘要（仅本宗可见，结果由服务端决定）。 */
+  journey: JourneyView;
 }
 
 /** 单个丹方（与后端 view.ts 的 AlchemyRecipeView 一一对应）。 */
@@ -635,5 +639,163 @@ export async function expelDisciple(discipleId: string): Promise<{
   return apiRequest<{ state: SectStateView; outcome: ExpelDiscipleOutcome }>(
     '/api/v1/game/expel-disciple',
     { method: 'POST', body: { discipleId } },
+  );
+}
+
+/* ---------- 0014 弟子历练 ---------- */
+
+/** 历练方向（与后端 journey.ts 的白名单一致）。 */
+export type JourneyDirection = 'daoSeeking' | 'gathering';
+
+/** 单条历练对弟子的归约状态（none = 没有未领取记录）。 */
+export type JourneyStatusView = 'none' | 'active' | 'ready';
+
+/** 历练结果（只在到期后公开；未领取时 claimedAt 为 null）。 */
+export interface JourneyOutcomeView {
+  /** 返程实际入账的修为（受返程门槛封顶；最高阶段为 0）。 */
+  cultivationAwarded: number;
+  /** 出发时快照的计划修为（含额外收获，未按门槛截断）。 */
+  cultivationPlanned: number;
+  /** 资源奖励（最小单位；领取时一次性入账）。 */
+  resources: Record<string, string>;
+  extraHarvest: boolean;
+  injured: boolean;
+  injuryChanceBp: number;
+  /** 伤势复原时间（从到期时间起算 30 分钟）；未受伤为 null。 */
+  injuredUntil: string | null;
+  completedAt: string | null;
+  claimedAt: string | null;
+}
+
+/** 单个弟子的历练状态（DiscipleView.journey）。 */
+export interface DiscipleJourneyView {
+  status: JourneyStatusView;
+  /** 未领取记录 id；status = 'none' 时为 null。 */
+  journeyId: string | null;
+  direction: JourneyDirection | null;
+  directionName: string | null;
+  durationSeconds: number | null;
+  startedAt: string | null;
+  endsAt: string | null;
+  /** 出发前岗位名（原岗位名额仍为该弟子保留）。 */
+  originalAssignmentName: string | null;
+  /** 已到期待领取时给出结果；未到期一律 null（服务端不泄漏结果）。 */
+  outcome: JourneyOutcomeView | null;
+  canStart: boolean;
+  blockedReason: string | null;
+}
+
+/** 最近历练摘要条目（仅本宗可见）。 */
+export interface JourneyRecordView {
+  id: string;
+  discipleId: string;
+  discipleName: string;
+  direction: JourneyDirection;
+  directionName: string;
+  durationSeconds: number;
+  status: 'active' | 'ready' | 'claimed';
+  startedAt: string;
+  endsAt: string;
+  /** 未到期为 null。 */
+  outcome: JourneyOutcomeView | null;
+}
+
+/** 宗门历练面板：名额 + 最近 10 条摘要。 */
+export interface JourneyView {
+  /** 尚未到期的在外人数（已到期待领取不占名额）。 */
+  activeCount: number;
+  maxConcurrent: number;
+  minAtHome: number;
+  recent: JourneyRecordView[];
+}
+
+/** 单档时长的预览（GET /game/journey-preview 的 data；不展示随机结果）。 */
+export interface JourneyDurationPreviewView {
+  durationSeconds: number;
+  durationLabel: string;
+  /** 保底修为（已按当前剩余突破门槛截断；最高阶段为 0）。 */
+  cultivation: number;
+  /** true = 受当前突破门槛限制，展示为「最多」。 */
+  cultivationCapped: boolean;
+  /** 保底资源（最小单位）。 */
+  resources: Record<string, string>;
+  /** 额外收获概率（基点）。 */
+  extraChanceBp: number;
+  /** 实际受伤概率（基点，已按出发时战力下调并 clamp 到方向下限）。 */
+  injuryChanceBp: number;
+  /** 预计返程时间（服务器时间基准）。 */
+  endsAt: string;
+}
+
+/** 单个方向的预览。 */
+export interface JourneyDirectionPreviewView {
+  direction: JourneyDirection;
+  name: string;
+  description: string;
+  /** 本方向当前是否可选；false 时 blockedReason 说明原因。 */
+  available: boolean;
+  blockedReason: string | null;
+  durations: JourneyDurationPreviewView[];
+}
+
+/** 历练预览（只读，不结算、不写库；最终资格以 POST /game/start-journey 为准）。 */
+export interface JourneyPreviewView {
+  discipleId: string;
+  discipleName: string;
+  canStart: boolean;
+  blockedReason: string | null;
+  activeCount: number;
+  maxConcurrent: number;
+  directions: JourneyDirectionPreviewView[];
+  serverNow: string;
+}
+
+/** 领取回执（POST /game/claim-journey 的 outcome）：本次实际入账的结果。 */
+export interface JourneyClaimOutcomeView {
+  journeyId: string;
+  discipleId: string;
+  discipleName: string;
+  direction: JourneyDirection;
+  directionName: string;
+  cultivationAwarded: number;
+  resources: Record<string, string>;
+  /** 本次入账的资源（最小单位，十进制字符串）。 */
+  extraHarvest: boolean;
+  injured: boolean;
+  injuredUntil: string | null;
+  endsAt: string;
+  message: string;
+}
+
+/**
+ * 0014 历练预览（GET /game/journey-preview）：只读，不做挂机结算。
+ * 资格、奖励、概率与阻止原因全部由服务端算好，前端不复制任何公式。
+ */
+export async function fetchJourneyPreview(discipleId: string): Promise<JourneyPreviewView> {
+  return apiRequest<JourneyPreviewView>(
+    `/api/v1/game/journey-preview?discipleId=${encodeURIComponent(discipleId)}`,
+  );
+}
+
+/** 0014 出发历练：方向与时长由预览给出，服务端重新校验并返回写库后的完整状态。 */
+export async function startJourney(
+  discipleId: string,
+  direction: JourneyDirection,
+  durationSeconds: number,
+): Promise<SectStateView> {
+  const data = await apiRequest<{ state: SectStateView }>('/api/v1/game/start-journey', {
+    method: 'POST',
+    body: { discipleId, direction, durationSeconds },
+  });
+  return data.state;
+}
+
+/** 0014 领取历练收获：资源一次性入账，返回最新状态与实际结果（重复领取不会重复发奖）。 */
+export async function claimJourney(
+  journeyId: string,
+): Promise<{ state: SectStateView; outcome: JourneyClaimOutcomeView }> {
+  return apiRequest<{ state: SectStateView; outcome: JourneyClaimOutcomeView }>(
+    '/api/v1/game/claim-journey',
+    { method: 'POST', body: { journeyId } },
   );
 }

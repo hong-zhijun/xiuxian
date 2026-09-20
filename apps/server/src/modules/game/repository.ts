@@ -580,6 +580,41 @@ export function updateDiscipleCultivationStatement(
   };
 }
 
+/** 普通结算也必须先核对快照，避免迟到的 sync 覆盖已领取的资源或新的弟子进度。 */
+export function settlementSnapshotGuardStatement(
+  commandId: string,
+  snapshot: {
+    sect: SectRow;
+    balances: readonly ResourceBalanceRow[];
+    disciples: readonly DiscipleRow[];
+  },
+): ParameterizedQuery {
+  const { sect, balances, disciples } = snapshot;
+  const checks = [
+    'EXISTS (SELECT 1 FROM sects WHERE id = ? AND level = ? AND last_settled_at = ?)',
+  ];
+  const params: (string | number | null)[] = [commandId, sect.id, sect.level, sect.last_settled_at];
+  for (const row of balances) {
+    checks.push('EXISTS (SELECT 1 FROM resource_balances WHERE id = ? AND sect_id = ? AND balance = ? AND remainder = ?)');
+    params.push(row.id, sect.id, row.balance, row.remainder);
+  }
+  for (const row of disciples) {
+    checks.push(`EXISTS (SELECT 1 FROM disciples WHERE id = ? AND sect_id = ? AND realm_id = ? AND stage = ?
+      AND cultivation = ? AND cultivation_remainder = ? AND assignment = ? AND injured_until IS ?)`);
+    params.push(row.id, sect.id, row.realm_id, row.stage, row.cultivation, row.cultivation_remainder,
+      row.assignment, row.injured_until);
+  }
+  return {
+    sql: `INSERT INTO mutation_guards (command_id, valid)
+          SELECT ?, CASE WHEN ${checks.join(' AND ')} THEN 1 ELSE 0 END`,
+    params,
+  };
+}
+
+export function deleteSettlementSnapshotGuardStatement(commandId: string): ParameterizedQuery {
+  return { sql: 'DELETE FROM mutation_guards WHERE command_id = ?', params: [commandId] };
+}
+
 /** 资源增减（消耗用负数），只用于已经检查过余额的场景。 */
 export function resourceDeltaStatement(
   sectId: string,
@@ -821,8 +856,8 @@ export function updateSectChallengeCounterStatement(
  * 挑战 batch 的首条语句（与炼丹的 alchemySnapshotGuardStatement 同一模式）：
  * 快照过期时插入 valid=0 触发 mutation_guards 的 CHECK，让同批的结算、计数、奖励、
  * 日志一起回滚。校验攻方宗门行（等级/声望/结算时间/挑战日期键/计数）、全部资源余额、
- * 攻方出战弟子仍属于本宗（0013：与驱逐交错时不出现幽灵出战），以及守方宗门的等级
- * 与守擂阵容（奖励档位与阵容都以开战快照为准）。
+ * 攻方出战弟子仍属于本宗，以及守方宗门的等级与守擂阵容；双方出战弟子
+ * 都必须仍在宗门内且未在外历练，避免读完阵容后守方出发造成幽灵出战。
  */
 export function challengeSnapshotGuardStatement(
   commandId: string,
@@ -835,6 +870,8 @@ export function challengeSnapshotGuardStatement(
       level: number;
       defenseLineup: string | null;
     };
+    defenderIds: readonly string[];
+    now: number;
   },
 ): ParameterizedQuery {
   const { sect, balances, members, target } = snapshot;
@@ -859,6 +896,19 @@ export function challengeSnapshotGuardStatement(
   for (const member of members) {
     checks.push('EXISTS (SELECT 1 FROM disciples WHERE id = ? AND sect_id = ?)');
     params.push(member.id, sect.id);
+  }
+
+  for (const member of members) {
+    checks.push(`NOT EXISTS (SELECT 1 FROM disciple_journeys
+      WHERE disciple_id = ? AND claimed_at IS NULL AND ends_at > ?)`);
+    params.push(member.id, snapshot.now);
+  }
+  for (const defenderId of snapshot.defenderIds) {
+    checks.push('EXISTS (SELECT 1 FROM disciples WHERE id = ? AND sect_id = ?)');
+    params.push(defenderId, target.id);
+    checks.push(`NOT EXISTS (SELECT 1 FROM disciple_journeys
+      WHERE disciple_id = ? AND claimed_at IS NULL AND ends_at > ?)`);
+    params.push(defenderId, snapshot.now);
   }
 
   return {
@@ -1006,10 +1056,18 @@ export function discipleSnapshotGuardStatement(
     sect: SectRow;
     balances: readonly ResourceBalanceRow[];
     members: readonly { id: string }[];
+    /** 判定「尚未到期的历练」的时刻（调用方的 now）。 */
+    now: number;
+    /**
+     * 0014：是否要求每名成员在此刻都没有「尚未到期的历练」。
+     * 出发 / 驱逐 / 派工 / 服药 / 布阵 / 探索 / 挑战都要 true；
+     * 保存私有备注按计划必须在外期间也能用，所以那条路径传 false。
+     */
+    rejectAwayMembers?: boolean;
     defenseLineup?: string | null;
   },
 ): ParameterizedQuery {
-  const { sect, balances, members, defenseLineup } = snapshot;
+  const { sect, balances, members, now, rejectAwayMembers, defenseLineup } = snapshot;
   const checks = [
     'EXISTS (SELECT 1 FROM sects WHERE id = ? AND level = ? AND last_settled_at = ?)',
   ];
@@ -1024,6 +1082,20 @@ export function discipleSnapshotGuardStatement(
   for (const member of members) {
     checks.push('EXISTS (SELECT 1 FROM disciples WHERE id = ? AND sect_id = ?)');
     params.push(member.id, sect.id);
+    if (rejectAwayMembers === true) {
+      /**
+       * 0014：目标弟子在此刻也不得仍处于「尚未到期的历练」。
+       *
+       * 读取快照时的在野校验（requireNotAway）只是友好报错；这一条是批内复核：出发与
+       * 驱逐 / 派工 / 服药 / 布阵 / 探索 / 挑战并发时，晚提交的一方整批回滚，不会出现
+       * 「弟子被驱逐了，但他的历练记录还挂着未领取」这种谁都不再处理的悬空行
+       * （那会让后续 sync 的归队与「留守人数」口径互相打架）。
+       */
+      checks.push(
+        'NOT EXISTS (SELECT 1 FROM disciple_journeys WHERE disciple_id = ? AND claimed_at IS NULL AND ends_at > ?)',
+      );
+      params.push(member.id, now);
+    }
   }
   if (defenseLineup !== undefined) {
     checks.push('EXISTS (SELECT 1 FROM sects WHERE id = ? AND defense_lineup IS ?)');
@@ -1038,6 +1110,335 @@ export function discipleSnapshotGuardStatement(
 }
 
 export function deleteDiscipleSnapshotGuardStatement(commandId: string): ParameterizedQuery {
+  return {
+    sql: 'DELETE FROM mutation_guards WHERE command_id = ?',
+    params: [commandId],
+  };
+}
+
+// ---------- 弟子历练（0014 迁移：记录 / 返程 / 领取 / 快照守卫） ----------
+
+/**
+ * 历练记录行（0014 迁移）。
+ *
+ * 三段状态用三个可空时间戳表达：
+ * - `completed_at` 为 NULL：还没处理返程（在外中或尚未被任何请求看到）；
+ * - `completed_at` 非 NULL、`claimed_at` 为 NULL：已归队待领取（修为/伤势已入账，资源未发）；
+ * - 两个都非 NULL：已领取结束，进入历史。
+ *
+ * 奖励快照列在到期前**不**向前端公开（view 层按 `ends_at <= now` 把关）。
+ */
+export interface DiscipleJourneyRow {
+  id: string;
+  sect_id: string;
+  /** 不设外键：弟子被驱逐后历史仍保留（只允许已领取后驱逐）。 */
+  disciple_id: string;
+  /** 出发时的姓名快照。 */
+  disciple_name: string;
+  direction: string;
+  duration_seconds: number;
+  /** 出发前的岗位快照；disciples.assignment 本身不变。 */
+  original_assignment: string;
+  started_at: number;
+  ends_at: number;
+  completed_at: number | null;
+  claimed_at: number | null;
+  /** 出发时快照：计划修为（保底 + 额外收获，未按返程门槛截断）。 */
+  reward_cultivation: number;
+  /** 出发时快照：各项资源（JSON：resourceId -> 最小单位整数）。 */
+  reward_resources: string;
+  extra_harvest: number;
+  injured: number;
+  injury_chance_bp: number;
+  /** 返程实际入账修为；未处理返程为 NULL。 */
+  cultivation_awarded: number | null;
+  created_at: number;
+}
+
+/** 历练表的完整列清单（避免 SELECT * 与将来加列时的静默漂移）。 */
+const JOURNEY_COLUMNS = `id, sect_id, disciple_id, disciple_name, direction, duration_seconds,
+       original_assignment, started_at, ends_at, completed_at, claimed_at,
+       reward_cultivation, reward_resources, extra_harvest, injured, injury_chance_bp,
+       cultivation_awarded, created_at`;
+
+export class DiscipleJourneyRepository extends ParamRepository {
+  /**
+   * 宗门**未领取**的历练记录（在外中 + 待领取），新的在前。
+   * 结算屏蔽、名额统计、状态视图都从这一份数据派生，避免多处各查一次。
+   */
+  async findOpenBySectId(sectId: string): Promise<DiscipleJourneyRow[]> {
+    return this.all<DiscipleJourneyRow>({
+      sql: `SELECT ${JOURNEY_COLUMNS} FROM disciple_journeys
+            WHERE sect_id = ? AND claimed_at IS NULL
+            ORDER BY started_at DESC, id DESC`,
+      params: [sectId],
+    });
+  }
+
+  /** 最近历练记录（含已领取，新的在前）：历史摘要用。 */
+  async findRecentBySectId(sectId: string, limit: number): Promise<DiscipleJourneyRow[]> {
+    return this.all<DiscipleJourneyRow>({
+      sql: `SELECT ${JOURNEY_COLUMNS} FROM disciple_journeys
+            WHERE sect_id = ? ORDER BY started_at DESC, id DESC LIMIT ?`,
+      params: [sectId, limit],
+    });
+  }
+
+  /** 单条记录（领取时按 id + 宗门取，跨宗 id 一律 NOT_FOUND）。 */
+  async findByIdForSect(journeyId: string, sectId: string): Promise<DiscipleJourneyRow | null> {
+    return this.one<DiscipleJourneyRow>({
+      sql: `SELECT ${JOURNEY_COLUMNS} FROM disciple_journeys WHERE id = ? AND sect_id = ?`,
+      params: [journeyId, sectId],
+    });
+  }
+
+  /** 某宗门当前尚未到期（在外）的人数；已到期待领取不占名额。 */
+  async countActiveBySectId(sectId: string, now: number): Promise<number> {
+    const row = await this.one<{ total: number }>({
+      sql: `SELECT COUNT(*) AS total FROM disciple_journeys
+            WHERE sect_id = ? AND claimed_at IS NULL AND ends_at > ?`,
+      params: [sectId, now],
+    });
+    return Number(row?.total ?? 0);
+  }
+}
+
+/**
+ * 出发写入（0014）：奖励快照与随机结果在出发时一次性落库，之后不再重抽。
+ * 同一弟子重复出发由唯一部分索引（disciple_id WHERE claimed_at IS NULL）兜底。
+ */
+export function insertDiscipleJourneyStatement(row: {
+  id: string;
+  sectId: string;
+  discipleId: string;
+  discipleName: string;
+  direction: string;
+  durationSeconds: number;
+  originalAssignment: string;
+  startedAt: number;
+  endsAt: number;
+  rewardCultivation: number;
+  /** JSON 字符串：resourceId -> 最小单位整数。 */
+  rewardResources: string;
+  extraHarvest: boolean;
+  injured: boolean;
+  injuryChanceBp: number;
+  now: number;
+}): ParameterizedQuery {
+  return {
+    sql: `INSERT INTO disciple_journeys
+            (id, sect_id, disciple_id, disciple_name, direction, duration_seconds,
+             original_assignment, started_at, ends_at, completed_at, claimed_at,
+             reward_cultivation, reward_resources, extra_harvest, injured, injury_chance_bp,
+             cultivation_awarded, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, NULL, ?)`,
+    params: [
+      row.id,
+      row.sectId,
+      row.discipleId,
+      row.discipleName,
+      row.direction,
+      row.durationSeconds,
+      row.originalAssignment,
+      row.startedAt,
+      row.endsAt,
+      row.rewardCultivation,
+      row.rewardResources,
+      row.extraHarvest ? 1 : 0,
+      row.injured ? 1 : 0,
+      row.injuryChanceBp,
+      row.now,
+    ],
+  };
+}
+
+/**
+ * 返程入账的弟子写回（修为 + 余数 + 伤势一次写完）。
+ * 条件 `completed_at IS NULL` 让并发下只生效一次：另一个请求已归队时本句是 no-op，
+ * 而它的绝对写回值更新（见 service 的说明），不会出现重复发奖。
+ */
+export function updateDiscipleJourneyReturnStatement(
+  journeyId: string,
+  discipleId: string,
+  sectId: string,
+  progress: { cultivation: number; remainder: number; injuredUntil: number | null },
+): ParameterizedQuery {
+  return {
+    sql: `UPDATE disciples
+          SET cultivation = ?, cultivation_remainder = ?, injured_until = ?
+          WHERE id = ? AND sect_id = ?
+            AND EXISTS (SELECT 1 FROM disciple_journeys
+                        WHERE id = ? AND disciple_id = ? AND claimed_at IS NULL AND completed_at IS NULL)`,
+    params: [
+      progress.cultivation,
+      progress.remainder,
+      progress.injuredUntil,
+      discipleId,
+      sectId,
+      journeyId,
+      discipleId,
+    ],
+  };
+}
+
+/** 完成标记（含实际入账修为）；重复同步 / 并发完成都不再改写已完成的行。 */
+export function completeDiscipleJourneyStatement(
+  journeyId: string,
+  discipleId: string,
+  completedAt: number,
+  cultivationAwarded: number,
+): ParameterizedQuery {
+  return {
+    sql: `UPDATE disciple_journeys SET completed_at = ?, cultivation_awarded = ?
+          WHERE id = ? AND disciple_id = ? AND completed_at IS NULL AND claimed_at IS NULL`,
+    params: [completedAt, cultivationAwarded, journeyId, discipleId],
+  };
+}
+
+/**
+ * 领取标记：条件更新（`claimed_at IS NULL`）保证「只领一次」，
+ * 不依赖「先 SELECT 再无条件 UPDATE」。与资源入账同批，失败整批回滚。
+ */
+export function claimDiscipleJourneyStatement(
+  journeyId: string,
+  sectId: string,
+  claimedAt: number,
+): ParameterizedQuery {
+  return {
+    sql: `UPDATE disciple_journeys SET claimed_at = ?
+          WHERE id = ? AND sect_id = ? AND completed_at IS NOT NULL AND claimed_at IS NULL`,
+    params: [claimedAt, journeyId, sectId],
+  };
+}
+
+/**
+ * 出发 batch 的首条语句（与炼丹 / 挑战 / 弟子命令守卫同一模式）：快照过期时插入 valid=0，
+ * 触发 mutation_guards 的 CHECK，让同批的结算写回与历练记录一起回滚。
+ *
+ * 复核内容（计划第 3 节「堵住不同弟子并发出发绕过两人上限」）：
+ * - 宗门行（等级 / 结算时间 / 守擂阵容原值）：防与任何并发命令双重结算或边布阵边出发；
+ * - 全部资源余额：与既有守卫一致；
+ * - 本宗尚未到期人数与不在外人数仍与读取快照一致：两人上限与「至少留 3 人」不可能被并发绕过；
+ * - 目标弟子的境界 / 阶段 / 修为 / 伤势 / 岗位仍与快照一致，且仍属本宗；
+ * - 该弟子没有未领取记录（唯一部分索引在数据库层的第二道保险）。
+ */
+export function journeyStartSnapshotGuardStatement(
+  commandId: string,
+  snapshot: {
+    sect: SectRow;
+    balances: readonly ResourceBalanceRow[];
+    disciple: DiscipleRow;
+    /** 读取快照时尚未到期的在外人数。 */
+    activeCount: number;
+    /** 读取快照时不在外的弟子数（含目标弟子本人）。 */
+    atHomeCount: number;
+    /** 判定基准：快照读取时刻。 */
+    now: number;
+  },
+): ParameterizedQuery {
+  const { sect, balances, disciple, activeCount, atHomeCount, now } = snapshot;
+  const checks = [
+    'EXISTS (SELECT 1 FROM sects WHERE id = ? AND level = ? AND last_settled_at = ?)',
+    'EXISTS (SELECT 1 FROM sects WHERE id = ? AND defense_lineup IS ?)',
+    `(SELECT COUNT(*) FROM disciple_journeys
+       WHERE sect_id = ? AND claimed_at IS NULL AND ends_at > ?) = ?`,
+    `(SELECT COUNT(*) FROM disciples d WHERE d.sect_id = ?
+       AND NOT EXISTS (SELECT 1 FROM disciple_journeys j
+                       WHERE j.disciple_id = d.id AND j.claimed_at IS NULL AND j.ends_at > ?)) = ?`,
+    `EXISTS (SELECT 1 FROM disciples WHERE id = ? AND sect_id = ? AND realm_id = ? AND stage = ?
+       AND cultivation = ? AND cultivation_remainder = ? AND injured_until IS ? AND assignment = ?)`,
+    'NOT EXISTS (SELECT 1 FROM disciple_journeys WHERE disciple_id = ? AND claimed_at IS NULL)',
+  ];
+  const params: (string | number | null)[] = [
+    commandId,
+    sect.id, sect.level, sect.last_settled_at,
+    sect.id, sect.defense_lineup,
+    sect.id, now, activeCount,
+    sect.id, now, atHomeCount,
+    disciple.id, sect.id, disciple.realm_id, disciple.stage,
+    disciple.cultivation, disciple.cultivation_remainder, disciple.injured_until, disciple.assignment,
+    disciple.id,
+  ];
+
+  for (const row of balances) {
+    checks.push(
+      'EXISTS (SELECT 1 FROM resource_balances WHERE id = ? AND sect_id = ? AND balance = ? AND remainder = ?)',
+    );
+    params.push(row.id, sect.id, row.balance, row.remainder);
+  }
+
+  return {
+    sql: `INSERT INTO mutation_guards (command_id, valid)
+          SELECT ?, CASE WHEN ${checks.join(' AND ')} THEN 1 ELSE 0 END`,
+    params,
+  };
+}
+
+export function deleteJourneyStartSnapshotGuardStatement(commandId: string): ParameterizedQuery {
+  return {
+    sql: 'DELETE FROM mutation_guards WHERE command_id = ?',
+    params: [commandId],
+  };
+}
+
+/**
+ * 领取 batch 的首条语句：领取是唯一真正发放资源的命令，必须由数据库保证只成功一次。
+ *
+ * 复核内容：
+ * - 记录仍然属于本宗、仍未领取，且完成状态 / 奖赏快照与读取时完全一致
+ *   （并发领取或并发完成都会让它回滚，而不是各发一份）；
+ * - 宗门行（等级 / 结算时间）与全部资源余额：与既有守卫一致；
+ * - 若本批同时承担「归队入账」（尚未完成的记录被直接领取），还要核对弟子行未被并发改动。
+ */
+export function journeyClaimSnapshotGuardStatement(
+  commandId: string,
+  snapshot: {
+    sect: SectRow;
+    balances: readonly ResourceBalanceRow[];
+    journey: DiscipleJourneyRow;
+    /** 本批同时归队入账时提供：弟子行读取快照。 */
+    disciple?: DiscipleRow;
+  },
+): ParameterizedQuery {
+  const { sect, balances, journey, disciple } = snapshot;
+  const checks = [
+    `EXISTS (SELECT 1 FROM disciple_journeys
+       WHERE id = ? AND sect_id = ? AND claimed_at IS NULL
+         AND completed_at IS ? AND cultivation_awarded IS ?
+         AND reward_cultivation = ? AND reward_resources = ?)`,
+    'EXISTS (SELECT 1 FROM sects WHERE id = ? AND level = ? AND last_settled_at = ?)',
+  ];
+  const params: (string | number | null)[] = [
+    commandId,
+    journey.id, sect.id, journey.completed_at, journey.cultivation_awarded,
+    journey.reward_cultivation, journey.reward_resources,
+    sect.id, sect.level, sect.last_settled_at,
+  ];
+
+  for (const row of balances) {
+    checks.push(
+      'EXISTS (SELECT 1 FROM resource_balances WHERE id = ? AND sect_id = ? AND balance = ? AND remainder = ?)',
+    );
+    params.push(row.id, sect.id, row.balance, row.remainder);
+  }
+
+  if (disciple !== undefined) {
+    checks.push(`EXISTS (SELECT 1 FROM disciples WHERE id = ? AND sect_id = ? AND realm_id = ? AND stage = ?
+      AND cultivation = ? AND cultivation_remainder = ? AND injured_until IS ? AND assignment = ?)`);
+    params.push(
+      disciple.id, sect.id, disciple.realm_id, disciple.stage,
+      disciple.cultivation, disciple.cultivation_remainder, disciple.injured_until, disciple.assignment,
+    );
+  }
+
+  return {
+    sql: `INSERT INTO mutation_guards (command_id, valid)
+          SELECT ?, CASE WHEN ${checks.join(' AND ')} THEN 1 ELSE 0 END`,
+    params,
+  };
+}
+
+export function deleteJourneyClaimSnapshotGuardStatement(commandId: string): ParameterizedQuery {
   return {
     sql: 'DELETE FROM mutation_guards WHERE command_id = ?',
     params: [commandId],

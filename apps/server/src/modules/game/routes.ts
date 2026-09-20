@@ -8,13 +8,16 @@ import {
   assignRequestSchema,
   breakthroughRequestSchema,
   challengeRequestSchema,
+  claimJourneyRequestSchema,
   craftPillRequestSchema,
   createSectRequestSchema,
   expelDiscipleRequestSchema,
   exploreRequestSchema,
+  journeyPreviewQuerySchema,
   recruitRequestSchema,
   setDefenseLineupSchema,
   setDiscipleNoteRequestSchema,
+  startJourneyRequestSchema,
   upgradeBuildingRequestSchema,
   usePillRequestSchema,
 } from './schema';
@@ -22,6 +25,7 @@ import {
   assignDisciple,
   breakthrough,
   challengeSect,
+  claimJourney,
   craftPill,
   createSect,
   expelDisciple,
@@ -32,11 +36,13 @@ import {
   listLeaderboard,
   listRecentEvents,
   listSecretRealms,
+  previewJourney,
   previewRecruit,
   recruitDisciple,
   refreshRecruit,
-  setDiscipleNote,
   setDefenseLineup,
+  setDiscipleNote,
+  startJourney,
   upgradeBuilding,
   upgradeSect,
   usePill,
@@ -226,6 +232,40 @@ export function createGameRoutes(): Hono<AppEnv> {
     const userId = requireUserId(c);
     const body = await parseStrictJson(expelDiscipleRequestSchema, c);
     const result = await expelDisciple(getDb(c.env), userId, body.discipleId, Date.now());
+    return respondOk(c, { state: result.state, outcome: result.outcome });
+  });
+
+  // 0014：历练预览（只读，不结算、不写库；最终资格以 POST /game/start-journey 为准）。
+  routes.get('/game/journey-preview', async (c) => {
+    const userId = requireUserId(c);
+    const query = journeyPreviewQuerySchema.safeParse({ discipleId: c.req.query('discipleId') });
+    if (!query.success) {
+      throw new AppError('VALIDATION_ERROR', '缺少或非法的 discipleId');
+    }
+    const preview = await previewJourney(getDb(c.env), userId, query.data.discipleId, Date.now());
+    return respondOk(c, preview);
+  });
+
+  // 0014：出发历练（结算 → 资格校验 → 出发时抽结果并落库 → 受保护 batch）。
+  routes.post('/game/start-journey', async (c) => {
+    const userId = requireUserId(c);
+    const body = await parseStrictJson(startJourneyRequestSchema, c);
+    const state = await startJourney(
+      getDb(c.env),
+      userId,
+      body.discipleId,
+      body.direction,
+      body.durationSeconds,
+      Date.now(),
+    );
+    return respondOk(c, { state });
+  });
+
+  // 0014：领取历练收获（结算 → 到期归队 → 资源一次性入账 → 标记已领取，同一原子 batch）。
+  routes.post('/game/claim-journey', async (c) => {
+    const userId = requireUserId(c);
+    const body = await parseStrictJson(claimJourneyRequestSchema, c);
+    const result = await claimJourney(getDb(c.env), userId, body.journeyId, Date.now());
     return respondOk(c, { state: result.state, outcome: result.outcome });
   });
 

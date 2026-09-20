@@ -17,6 +17,7 @@ import {
   discipleStatus,
   filterDisciples,
   isFilterActive,
+  journeyBadge,
   realmOptions,
 } from '../utils/discipleFilter';
 
@@ -46,10 +47,23 @@ const emit = defineEmits<{
 
 const filter = ref<DiscipleFilter>({ ...DEFAULT_DISCIPLE_FILTER });
 
+/**
+ * 行内状态标签：历练状态优先（在外 / 待领取），其次疗伤，最后当前岗位。
+ * key 直接进 `status-*` / `is-*` 类名，所以历练用 `journey` / `journey-ready` 两个新类。
+ */
+interface RosterStatus {
+  key: string;
+  label: string;
+}
+
 interface RosterRow {
   disciple: DiscipleView;
   status: DiscipleStatus;
-  displayStatus: DiscipleStatus;
+  displayStatus: RosterStatus;
+  /** 行上的历练类名（'' / is-journey / is-journey-ready）。 */
+  journeyClass: string;
+  /** 待领取：行与「详情」按钮上都要有可见入口。 */
+  journeyReady: boolean;
   progress: CultivationProgress;
 }
 
@@ -60,15 +74,22 @@ const matched = computed(() => filterDisciples(props.disciples, filter.value, pr
 const rows = computed<RosterRow[]>(() =>
   matched.value.map((disciple) => {
     const status = discipleStatus(disciple, props.serverNowMs);
+    const badge = journeyBadge(disciple.journey, props.serverNowMs);
+    const journeyReady = disciple.journey.status === 'ready';
+    // 卡片只显示当前状态：疗伤优先，其余统一显示当前岗位。
+    // 可破境由满环表达，不再重复占用状态标签。
+    const rosterStatus: RosterStatus =
+      status.key === 'injured' ? status : { key: 'assignment', label: disciple.assignmentName };
     return {
       disciple,
       status,
-      // 卡片只显示当前状态：疗伤优先，其余统一显示当前岗位。
-      // 可破境由满环表达，不再重复占用状态标签。
+      // 历练标记优先于岗位名：在外/待领取的弟子不该看起来像在正常当值。
       displayStatus:
-        status.key === 'injured'
-          ? status
-          : { key: 'assignment', label: disciple.assignmentName },
+        badge === null
+          ? rosterStatus
+          : { key: journeyReady ? 'journey-ready' : 'journey', label: badge },
+      journeyClass: badge === null ? '' : journeyReady ? 'is-journey-ready' : 'is-journey',
+      journeyReady,
       progress: cultivationProgress(
         props.liveCultivation[disciple.id] ?? disciple.cultivation,
         disciple.requiredCultivation,
@@ -235,7 +256,7 @@ watch(
         v-for="(row, index) in rows"
         :key="row.disciple.id"
         class="disciple-row"
-        :class="`status-${row.displayStatus.key}`"
+        :class="[`status-${row.displayStatus.key}`, row.journeyClass]"
         :style="rowIndexStyle(index)"
       >
         <div class="disciple-row-media">
@@ -263,6 +284,7 @@ watch(
           <strong class="disciple-row-name" :title="row.disciple.name">{{ row.disciple.name }}</strong>
           <div class="disciple-card-tags">
             <span class="realm-tag">{{ row.disciple.stageName }}</span>
+            <!-- 历练标记（在外 / 待领取）优先，玩家一眼能看出这名弟子不在宗门正常当值。 -->
             <span class="disciple-status" :class="`is-${row.displayStatus.key}`">
               {{ row.displayStatus.label }}
             </span>
@@ -282,14 +304,19 @@ watch(
           {{ row.disciple.note || '占位' }}
         </p>
 
+        <!-- 待领取时按钮上再挂一个「待领取」标记：玩家知道点这里去领历练收获。 -->
         <button
           :ref="(element) => setRowButton(row.disciple.id, element as Element | null)"
           class="disciple-detail-button"
+          :class="{ 'is-journey-ready': row.journeyReady }"
           type="button"
-          :aria-label="`查看 ${row.disciple.name} 的详情`"
+          :aria-label="
+            row.journeyReady ? `查看 ${row.disciple.name} 的详情并领取历练收获` : `查看 ${row.disciple.name} 的详情`
+          "
           @click="emit('openDetail', row.disciple.id)"
         >
           <span>详情</span>
+          <span v-if="row.journeyReady" class="journey-ready-marker">待领取</span>
         </button>
       </li>
     </ul>

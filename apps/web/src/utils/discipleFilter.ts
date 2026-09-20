@@ -128,6 +128,40 @@ export function discipleStatus(disciple: FilterableDisciple, serverNowMs: number
   return { key: 'assignment', label: disciple.assignmentName };
 }
 
+/** 历练状态里名册需要的最小结构（`DiscipleView.journey` 的一个子集）。 */
+export interface JourneyBadge {
+  status: 'none' | 'active' | 'ready';
+  directionName: string | null;
+  endsAt: string | null;
+}
+
+const HOUR_MS = 3_600_000;
+const MINUTE_MS = 60_000;
+
+/**
+ * 名册行上的历练标记：在外显示「方向 · 剩余时间」；已归队待领取显示「已归队 · 待领取」；其余为 null。
+ *
+ * 剩余时间只按调用方给的 `serverNowMs`（服务端时间基准）估算，不读本机时钟；
+ * 这里只做展示，不判定可否领取（可否领取只看服务端给的 `status`，前端计时器不能自行发奖）。
+ */
+export function journeyBadge(journey: JourneyBadge | undefined, serverNowMs: number): string | null {
+  if (journey === undefined) return null;
+  if (journey.status === 'ready') return '已归队 · 待领取';
+  if (journey.status !== 'active') return null;
+
+  // endsAt 缺失/非法时没有剩余时间可算，只显示方向名。
+  const direction = journey.directionName ?? '历练中';
+  if (journey.endsAt === null) return direction;
+  const endsAtMs = Date.parse(journey.endsAt);
+  if (!Number.isFinite(endsAtMs) || !Number.isFinite(serverNowMs)) return direction;
+
+  const remainingMs = endsAtMs - serverNowMs;
+  if (remainingMs >= HOUR_MS) {
+    return `${journey.directionName ?? '历练'} · 约 ${Math.ceil(remainingMs / HOUR_MS)} 小时后归队`;
+  }
+  return `${journey.directionName ?? '历练'} · 约 ${Math.max(1, Math.ceil(remainingMs / MINUTE_MS))} 分钟后归队`;
+}
+
 export interface CultivationProgress {
   /** 0~100 的整数百分比（进度环用）。 */
   percent: number;

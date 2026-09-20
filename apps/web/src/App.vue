@@ -6,6 +6,7 @@ import {
   assign,
   breakthrough,
   challenge,
+  claimJourney,
   craftPill,
   expelDisciple,
   explore,
@@ -14,6 +15,7 @@ import {
   recruit,
   setDiscipleNote,
   setDefenseLineup,
+  startJourney,
   syncSect,
   upgradeBuilding,
   upgradeSect,
@@ -24,6 +26,8 @@ import type {
   CraftPillOutcome,
   EventLogView,
   ExpelDiscipleOutcome,
+  JourneyClaimOutcomeView,
+  JourneyDirection,
   ResourceView,
   SectStateView,
   UsePillOutcome,
@@ -447,6 +451,42 @@ function onExpelDisciple(discipleId: string): void {
   );
 }
 
+/**
+ * 0014 出发历练：方向与时长来自服务端预览，服务端重新校验资格与名额。
+ * 失败由 runAction 统一提示，不产生乐观收益，详情弹窗保持打开（选择留在弹窗里）。
+ */
+function onStartJourney(discipleId: string, direction: JourneyDirection, durationSeconds: number): void {
+  void runAction(
+    () => startJourney(discipleId, direction, durationSeconds),
+    () => ({
+      title: '弟子已出发',
+      message: '历练期间原岗位收益与静修暂停，到期按服务器时间归队。',
+    }),
+  );
+}
+
+/**
+ * 0014 领取历练收获：资源在服务端一次性入账，这里只按回执提示（文案沿用服务端 message，
+ * 再补一条本次入账的资源摘要）。受伤时降级为 warning，提示玩家去处理伤势。
+ */
+function onClaimJourney(journeyId: string): void {
+  void runAction(
+    () => claimJourney(journeyId),
+    (data) => {
+      const outcome = data.outcome as JourneyClaimOutcomeView | undefined;
+      if (outcome === undefined) {
+        return { title: '历练收获已领取', message: '资源已入账。' };
+      }
+      const gained = effectSummary(outcome.resources, data.state.resources);
+      return {
+        tone: outcome.injured ? 'warning' : 'success',
+        title: `${outcome.discipleName} 历练归来 · ${outcome.directionName}`,
+        message: gained === '' ? outcome.message : `${outcome.message}（${gained}）`,
+      };
+    },
+  );
+}
+
 async function onLogout(): Promise<void> {
   if (busy.value) return;
   busy.value = true;
@@ -564,6 +604,8 @@ onUnmounted(() => {
       @use-pill="onUsePill"
       @save-note="onSaveNote"
       @expel="onExpelDisciple"
+      @start-journey="onStartJourney"
+      @claim-journey="onClaimJourney"
       @notify="notify"
     />
 

@@ -9,6 +9,7 @@ import {
   isInjured,
   matchesSearch,
   realmOptions,
+  journeyBadge,
   type DiscipleFilter,
   type FilterableDisciple,
 } from '../../apps/web/src/utils/discipleFilter';
@@ -330,5 +331,47 @@ describe('境界筛选项与重置态', () => {
     expect(isFilterActive(withFilter({ assignment: 'idle' }))).toBe(true);
     expect(isFilterActive(withFilter({ status: 'injured' }))).toBe(true);
     expect(isFilterActive(withFilter({ sort: 'realm' }))).toBe(true);
+  });
+});
+
+describe('名册行上的历练标记（journeyBadge）', () => {
+  it('none / 没有历练字段时不显示标记', () => {
+    expect(journeyBadge({ status: 'none', directionName: null, endsAt: null }, SERVER_NOW)).toBeNull();
+    expect(journeyBadge(undefined, SERVER_NOW)).toBeNull();
+  });
+
+  it('已归队待领取显示明确入口文案（与服务端 status 一致）', () => {
+    expect(journeyBadge({ status: 'ready', directionName: '访道', endsAt: ONE_HOUR_AGO }, SERVER_NOW)).toBe(
+      '已归队 · 待领取',
+    );
+  });
+
+  it('在外且剩余 >= 1 小时时显示「约 N 小时后归队」（向上取整）', () => {
+    expect(
+      journeyBadge({ status: 'active', directionName: '访道', endsAt: '2026-01-01T15:00:00.000Z' }, SERVER_NOW),
+    ).toBe('访道 · 约 3 小时后归队');
+    // 2 小时零 1 毫秒也算 3 小时（向上取整），避免显示成不足的时间。
+    expect(
+      journeyBadge({ status: 'active', directionName: '采集', endsAt: '2026-01-01T14:00:00.001Z' }, SERVER_NOW),
+    ).toBe('采集 · 约 3 小时后归队');
+  });
+
+  it('在外且剩余不足 1 小时时显示「约 N 分钟后归队」', () => {
+    expect(
+      journeyBadge({ status: 'active', directionName: '采集', endsAt: '2026-01-01T12:30:00.000Z' }, SERVER_NOW),
+    ).toBe('采集 · 约 30 分钟后归队');
+    // 已经到期但服务端还没同步（status 仍是 active）时也不显示 0 分钟，至少 1 分钟。
+    expect(
+      journeyBadge({ status: 'active', directionName: '采集', endsAt: ONE_HOUR_AGO }, SERVER_NOW),
+    ).toBe('采集 · 约 1 分钟后归队');
+  });
+
+  it('endsAt 缺失或非法时只显示方向名（不猜剩余时间）', () => {
+    expect(journeyBadge({ status: 'active', directionName: '访道', endsAt: null }, SERVER_NOW)).toBe('访道');
+    expect(journeyBadge({ status: 'active', directionName: '访道', endsAt: '不是时间' }, SERVER_NOW)).toBe(
+      '访道',
+    );
+    // 方向名也缺失时给出中性兜底，不用空串占位。
+    expect(journeyBadge({ status: 'active', directionName: null, endsAt: null }, SERVER_NOW)).toBe('历练中');
   });
 });

@@ -10,6 +10,7 @@ import {
 } from './alchemy';
 import {
   CHALLENGE_DAILY_LIMIT,
+  lineupContainsDisciple,
   type ChallengeDayState,
   type DefenseMode,
   type RewardTier,
@@ -42,7 +43,22 @@ import type {
   PillInventoryRow,
   ResourceBalanceRow,
   SectRow,
+  DiscipleJourneyRow,
 } from './repository';
+import {
+  JOURNEY_HISTORY_LIMIT,
+  JOURNEY_MAX_CONCURRENT,
+  JOURNEY_MIN_DISCIPLES_AT_HOME,
+  findJourneyDirection,
+  journeyAwayIds,
+  journeyEligibilityBlockedReason,
+  journeyInjuryUntil,
+  journeyStatusOf,
+  type JourneyDirection,
+  type JourneyStatus,
+  asJourneyDirection,
+  parseJourneyRewardResources,
+} from './journey';
 import { cultivationRatePerHour, resourceRates, type DiscipleState, type SettleResult } from './settle';
 /**
  * 接口返回的视图类型（前端只读这些字段，不需要再读配置）。
@@ -120,6 +136,10 @@ export interface DiscipleView {
    * 只出现在登录玩家自己的 SectStateView；公开档案 / 排行榜 / 战报不含此字段。
    */
   note: string;
+  /**
+   * 0014 历练状态：none / active / ready + 名额与不可出发原因（全部服务端算好）。
+   */
+  journey: DiscipleJourneyView;
 }
 
 export interface BuildingView {
@@ -189,6 +209,135 @@ export interface AlchemyView {
   cultivationPillGain: number;
 }
 
+/** 单条历练对弟子的归约状态（none = 没有未领取记录）。 */
+export type JourneyStatusView = JourneyStatus;
+
+/** 历练结果（只在到期后公开；未领取时 claimedAt 为 null）。 */
+export interface JourneyOutcomeView {
+  /** 返程实际入账的修为（按返程时的剩余门槛封顶；最高阶段为 0）。 */
+  cultivationAwarded: number;
+  /** 出发时快照的计划修为（含额外收获，未按门槛截断）。 */
+  cultivationPlanned: number;
+  /** 资源奖励（最小单位；领取时一次性入账，不夹容量）。 */
+  resources: Record<string, string>;
+  /** 是否触发 15% 的额外收获。 */
+  extraHarvest: boolean;
+  /** 是否受伤（与额外收获独立，可同时发生）。 */
+  injured: boolean;
+  /** 出发时算出的实际受伤概率（基点）。 */
+  injuryChanceBp: number;
+  /** 伤势复原时间（从到期时间起算 30 分钟）；未受伤为 null。 */
+  injuredUntil: string | null;
+  completedAt: string | null;
+  claimedAt: string | null;
+}
+
+/** 单个弟子的历练状态（DiscipleView.journey）。 */
+export interface DiscipleJourneyView {
+  status: JourneyStatusView;
+  /** 未领取记录 id；status = 'none' 时为 null。 */
+  journeyId: string | null;
+  direction: JourneyDirection | null;
+  directionName: string | null;
+  durationSeconds: number | null;
+  startedAt: string | null;
+  /** 逻辑返程时间（服务器时间基准）。 */
+  endsAt: string | null;
+  /** 出发前岗位名（原岗位名额仍为该弟子保留）。 */
+  originalAssignmentName: string | null;
+  /** 已到期待领取时给出结果；未到期一律 null（不泄漏结果）。 */
+  outcome: JourneyOutcomeView | null;
+  /** 是否可以出发（只含与方向无关的资格）。方向自身限制见 GET /game/journey-preview。 */
+  canStart: boolean;
+  /** 不可出发的原因（status !== 'none' 时是归队 / 待领取说明）。 */
+  blockedReason: string | null;
+}
+
+/** 最近历练摘要条目（仅本宗可见）。 */
+export interface JourneyRecordView {
+  id: string;
+  discipleId: string;
+  discipleName: string;
+  direction: JourneyDirection;
+  directionName: string;
+  durationSeconds: number;
+  status: 'active' | 'ready' | 'claimed';
+  startedAt: string;
+  endsAt: string;
+  /** 未到期为 null。 */
+  outcome: JourneyOutcomeView | null;
+}
+
+/** 宗门历练面板：名额 + 最近 10 条摘要。 */
+export interface JourneyView {
+  /** 尚未到期的在外人数（已到期待领取不占名额）。 */
+  activeCount: number;
+  maxConcurrent: number;
+  /** 出发后至少要留的不在外弟子数。 */
+  minAtHome: number;
+  recent: JourneyRecordView[];
+}
+
+/** 单档时长的预览（GET /game/journey-preview 的 data；不展示随机结果）。 */
+export interface JourneyDurationPreviewView {
+  durationSeconds: number;
+  durationLabel: string;
+  /** 保底修为（已按当前剩余突破门槛截断；最高阶段为 0）。 */
+  cultivation: number;
+  /** true = 受当前突破门槛限制，展示为「最多」。 */
+  cultivationCapped: boolean;
+  /** 保底资源（最小单位）。 */
+  resources: Record<string, string>;
+  /** 额外收获概率（基点，固定 1500 = 15%）。 */
+  extraChanceBp: number;
+  /** 实际受伤概率（基点，已按出发时战力下调并 clamp 到方向下限）。 */
+  injuryChanceBp: number;
+  /** 预计返程时间（服务器时间基准）。 */
+  endsAt: string;
+}
+
+/** 单个方向的预览。 */
+export interface JourneyDirectionPreviewView {
+  direction: JourneyDirection;
+  name: string;
+  description: string;
+  /** 本方向当前是否可选；false 时 blockedReason 说明原因。 */
+  available: boolean;
+  blockedReason: string | null;
+  durations: JourneyDurationPreviewView[];
+}
+
+/** 历练预览（只读，不结算、不写库；最终资格以 POST /game/start-journey 为准）。 */
+export interface JourneyPreviewView {
+  discipleId: string;
+  discipleName: string;
+  /** 是否可以出发（与方向无关的资格）。 */
+  canStart: boolean;
+  blockedReason: string | null;
+  activeCount: number;
+  maxConcurrent: number;
+  directions: JourneyDirectionPreviewView[];
+  serverNow: string;
+}
+
+/** 领取回执（POST /game/claim-journey 的 outcome）：本次实际入账的结果。 */
+export interface JourneyClaimOutcomeView {
+  journeyId: string;
+  discipleId: string;
+  discipleName: string;
+  direction: JourneyDirection;
+  directionName: string;
+  /** 返程时实际入账的修为（受返程门槛封顶）。 */
+  cultivationAwarded: number;
+  /** 本次入账的资源（最小单位）。 */
+  resources: Record<string, string>;
+  extraHarvest: boolean;
+  injured: boolean;
+  /** 伤势复原时间（从到期时间起算 30 分钟）；未受伤为 null。 */
+  injuredUntil: string | null;
+  endsAt: string;
+  message: string;
+}
 export interface SectStateView {
   sect: {
     id: string;
@@ -230,6 +379,8 @@ export interface SectStateView {
     usedToday: number;
     remaining: number;
   };
+  /** 0014 历练面板：名额 + 最近 10 条摘要（仅本宗可见）。 */
+  journey: JourneyView;
 }
 
 /** 秘境列表视图（GET /game/realms）：规则（锁定/次数）由服务端算好，前端只渲染。 */
@@ -481,6 +632,10 @@ export interface SectStateInput {
   /** 今日已招募次数（由调用方按日期 key 归一）。 */
   recruitUsedToday: number;
   /** 宗门等级的资源容量倍率（影响所有资源的实际容量）。 */
+  /** 0014：本宗未领取的历练记录（在外中 + 待领取）。 */
+  journeys: readonly DiscipleJourneyRow[];
+  /** 0014：最近历练记录（含已领取，最多 10 条），新的在前。 */
+  recentJourneys: readonly DiscipleJourneyRow[];
   capacityMultiplier: number;
 }
 
@@ -496,21 +651,28 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
     settleResult,
     now,
     recruitUsedToday,
+    journeys,
+    recentJourneys,
     recentEventRows,
     capacityMultiplier,
   } = input;
   // 速率按「当前状态」现算，而不是沿用本次结算用的旧状态：派工 / 升级藏经阁返回的那一帧里，
   // 前端看到的「每时产出」与静修速率就已经是新值（结算本身仍只用旧状态计已经过去的那段时间）。
   // 建筑等级表只建一次：资源速率（含灵矿加成）与藏经阁加成共用同一份数据。
+  // 0014：仍在外的弟子（serverNow < endsAt）不贡献产出、静修速率为 0；到期后立即恢复（见 view 注释）。
   const buildingLevels: Record<string, number> = Object.fromEntries(
     buildings.map((building) => [building.def_id, building.level]),
   );
   const libraryLevel = buildingLevels[SCRIPTURE_LIBRARY_BUILDING_ID] ?? 0;
-  const resourceRatesNow = resourceRates(config, disciples.map(toDiscipleState), buildingLevels);
+  const awayIds = journeyAwayIds(journeys, now);
+  const rateDisciples = disciples.filter((disciple) => !awayIds.has(disciple.id));
+  const resourceRatesNow = resourceRates(config, rateDisciples.map(toDiscipleState), buildingLevels);
   const ratesByDisciple = new Map(
     disciples.map((disciple) => [
       disciple.id,
-      cultivationRatePerHour(config, toDiscipleState(disciple), libraryLevel),
+      awayIds.has(disciple.id)
+        ? 0
+        : cultivationRatePerHour(config, toDiscipleState(disciple), libraryLevel),
     ]),
   );
 
@@ -542,15 +704,38 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
     ...config.positions.map((position) => [position.id, position.name] as const),
   ]);
 
+  const pendingJourneys = new Map<string, DiscipleJourneyRow>();
+  for (const row of journeys) {
+    if (row.claimed_at === null) pendingJourneys.set(row.disciple_id, row);
+  }
+
+
   const discipleViews: DiscipleView[] = disciples.map((disciple) => {
     const realm = findRealm(disciple.realm_id);
     const stage = findStage(disciple.realm_id, disciple.stage);
     const cost = breakthroughEnergyCost(disciple.stage);
     const chanceBp = breakthroughChanceBp(config, arrayLevel);
     const injured = disciple.injured_until !== null && disciple.injured_until > now;
+    // 0014：历练状态（在外 / 待领取 / 名额与资格原因）全部在服务端算好，前端不复制公式。
+    const journeyRow = pendingJourneys.get(disciple.id);
+    const journeyView = buildDiscipleJourneyView({
+      disciple,
+      row: journeyRow,
+      now,
+      activeCount: awayIds.size,
+      discipleCount: disciples.length,
+      othersAwayCount:
+        awayIds.size - (journeyRow !== undefined && awayIds.has(disciple.id) ? 1 : 0),
+      inDefenseLineup: lineupContainsDisciple(sect.defense_lineup, disciple.id),
+      assignmentNames,
+    });
+    const away = journeyView.status === 'active';
 
     let blockedReason: string | null = null;
-    if (stage.requiredCultivation === null) {
+    if (away) {
+      // 在外期间不能破境（服务端也会拒绝），原因优先于修为/灵气。
+      blockedReason = '正在外历练，尚未归队';
+    } else if (stage.requiredCultivation === null) {
       blockedReason = '已达本版本最高境界（后续境界待开放）';
     } else if (injured) {
       blockedReason = `疗伤中（剩 ${Math.ceil(((disciple.injured_until ?? 0) - now) / 1000)} 秒）`;
@@ -610,6 +795,7 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
       bodyTemperingTarget: temperingTarget?.attribute ?? null,
       bodyTemperingGain: temperingTarget?.gain ?? 0,
       note: disciple.note,
+      journey: journeyView,
     };
   });
 
@@ -706,6 +892,9 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
     }),
   };
 
+  // 0014：宗门历练名额 + 最近 10 条摘要（仅本宗可见）。
+  const journeySlot = journeySlotView({ rows: journeys, recent: recentJourneys, now });
+
   return {
     sect: {
       id: sect.id,
@@ -759,6 +948,7 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
     },
     sectUpgrade,
     alchemy: alchemyView,
+    journey: journeySlot,
     challenge: {
       dailyLimit: CHALLENGE_DAILY_LIMIT,
       usedToday: challengeDay.usedToday,
@@ -962,5 +1152,144 @@ function toDiscipleState(row: DiscipleRow): DiscipleState {
     cultivationRemainder: Number(row.cultivation_remainder),
     assignment: row.assignment,
     talent: row.talent,
+  };
+}
+
+/* ---------- 0014 弟子历练：状态视图 ---------- */
+
+/**
+ * 单条历练结果（计划 4.4「不要向未到期状态泄漏结果」）：
+ * 未到期一律返回 null —— 即使在返回 JSON 的层面也看不到 `reward_*` 快照。
+ */
+function journeyOutcomeView(row: DiscipleJourneyRow, now: number): JourneyOutcomeView | null {
+  if (journeyStatusOf(row, now) === 'active') {
+    return null;
+  }
+  const injured = Number(row.injured) === 1;
+  return {
+    cultivationAwarded: Number(row.cultivation_awarded ?? 0),
+    cultivationPlanned: Number(row.reward_cultivation),
+    resources: parseJourneyRewardResources(row.reward_resources),
+    extraHarvest: Number(row.extra_harvest) === 1,
+    injured,
+    injuryChanceBp: Number(row.injury_chance_bp),
+    // 伤势固定从到期时间起算 30 分钟；晚登录可能已痊愈，但结果照实展示。
+    injuredUntil: injured ? new Date(journeyInjuryUntil(Number(row.ends_at))).toISOString() : null,
+    completedAt: row.completed_at === null ? null : new Date(Number(row.completed_at)).toISOString(),
+    claimedAt: row.claimed_at === null ? null : new Date(Number(row.claimed_at)).toISOString(),
+  };
+}
+
+/** 没有未领取记录时的弟子历练状态（纯展示，不参与任何判定）。 */
+function noJourneyView(blockedReason: string | null): DiscipleJourneyView {
+  return {
+    status: 'none',
+    journeyId: null,
+    direction: null,
+    directionName: null,
+    durationSeconds: null,
+    startedAt: null,
+    endsAt: null,
+    originalAssignmentName: null,
+    outcome: null,
+    canStart: blockedReason === null,
+    blockedReason,
+  };
+}
+
+/**
+ * 每名弟子的历练状态。`canStart` 只代表「与方向无关的资格全部满足」；
+ * 方向自身的限制（访道需要修为门槛）由 GET /game/journey-preview 逐方向给出，
+ * 前端不复制任何一条公式。
+ */
+function buildDiscipleJourneyView(input: {
+  disciple: DiscipleRow;
+  row: DiscipleJourneyRow | undefined;
+  now: number;
+  activeCount: number;
+  discipleCount: number;
+  othersAwayCount: number;
+  inDefenseLineup: boolean;
+  assignmentNames: ReadonlyMap<string, string>;
+}): DiscipleJourneyView {
+  const { disciple, row, now } = input;
+  const status: JourneyStatus = row === undefined ? 'none' : journeyStatusOf(row, now);
+  const blockedReason = journeyEligibilityBlockedReason({
+    realmId: disciple.realm_id,
+    injuredUntil: disciple.injured_until === null ? null : Number(disciple.injured_until),
+    pending:
+      row === undefined || status === 'none'
+        ? null
+        : { status, direction: asJourneyDirection(row.direction) },
+    activeCount: input.activeCount,
+    discipleCount: input.discipleCount,
+    othersAwayCount: input.othersAwayCount,
+    inDefenseLineup: input.inDefenseLineup,
+    now,
+  });
+
+  if (row === undefined || status === 'none') {
+    return noJourneyView(blockedReason);
+  }
+
+  const direction = asJourneyDirection(row.direction);
+  return {
+    status,
+    journeyId: row.id,
+    direction,
+    directionName: findJourneyDirection(direction).name,
+    durationSeconds: Number(row.duration_seconds),
+    startedAt: new Date(Number(row.started_at)).toISOString(),
+    endsAt: new Date(Number(row.ends_at)).toISOString(),
+    originalAssignmentName:
+      input.assignmentNames.get(row.original_assignment) ?? row.original_assignment,
+    outcome: journeyOutcomeView(row, now),
+    canStart: false,
+    blockedReason,
+  };
+}
+
+/** 历史摘要条目状态：已领取 / 已到期待领取 / 仍在在外。 */
+function journeyRecordStatus(row: DiscipleJourneyRow, now: number): 'active' | 'ready' | 'claimed' {
+  if (row.claimed_at !== null) {
+    return 'claimed';
+  }
+  return journeyStatusOf(row, now) === 'active' ? 'active' : 'ready';
+}
+
+/** 历史摘要（最近 10 条，仅本宗可见）；未到期条目同样不给 outcome。 */
+export function journeyRecordViews(
+  rows: readonly DiscipleJourneyRow[],
+  now: number,
+  limit: number,
+): JourneyRecordView[] {
+  return rows.slice(0, limit).map((row) => {
+    const direction = asJourneyDirection(row.direction);
+    return {
+      id: row.id,
+      discipleId: row.disciple_id,
+      discipleName: row.disciple_name,
+      direction,
+      directionName: findJourneyDirection(direction).name,
+      durationSeconds: Number(row.duration_seconds),
+      status: journeyRecordStatus(row, now),
+      startedAt: new Date(Number(row.started_at)).toISOString(),
+      endsAt: new Date(Number(row.ends_at)).toISOString(),
+      outcome: journeyOutcomeView(row, now),
+    };
+  });
+}
+
+/** 宗门历练面板（名额 + 每人状态由调用方拼进 DiscipleView.journey）。 */
+export function journeySlotView(input: {
+  rows: readonly DiscipleJourneyRow[];
+  recent: readonly DiscipleJourneyRow[];
+  now: number;
+}): JourneyView {
+  return {
+    activeCount: input.rows.filter((row) => row.claimed_at === null && row.ends_at > input.now).length,
+    maxConcurrent: JOURNEY_MAX_CONCURRENT,
+    minAtHome: JOURNEY_MIN_DISCIPLES_AT_HOME,
+    recent: journeyRecordViews(input.recent, input.now, JOURNEY_HISTORY_LIMIT),
   };
 }

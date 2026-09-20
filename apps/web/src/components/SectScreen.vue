@@ -1,10 +1,12 @@
 <script setup lang="ts">
-import { computed, onUnmounted, ref, watch } from 'vue';
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 
 import type {
   BuildingView,
   ChallengeResultView,
   DiscipleView,
+  JourneyDirection,
+  JourneyPreviewView,
   PublicSectView,
   RecruitPreview,
   SecretRealmView,
@@ -12,7 +14,7 @@ import type {
 } from '../api/game';
 import type { ToastTone } from '../types/ui';
 import { formatAmount, formatRate, formatTime } from '../utils/format';
-import { fetchRecruitPreview, refreshRecruitPreview } from '../api/game';
+import { fetchJourneyPreview, fetchRecruitPreview, refreshRecruitPreview } from '../api/game';
 import { resourceGlyph } from '../utils/glyph';
 import AlchemyPanel from './AlchemyPanel.vue';
 import ChallengeDialog from './ChallengeDialog.vue';
@@ -57,6 +59,13 @@ const emit = defineEmits<{
   'save-note': [discipleId: string, note: string];
   /** 详情底部二次确认后的驱逐请求；App.vue 绑定了这个名字。 */
   expel: [discipleId: string];
+  /**
+   * 0014 历练：预览只是只读请求，由本组件自己拉（见 requestJourneyPreview）；
+   * 仍按同一套事件名向 App.vue 转发一次，保持「详情 → 主界面 → App」的单一走向。
+   */
+  requestJourneyPreview: [discipleId: string];
+  startJourney: [discipleId: string, direction: JourneyDirection, durationSeconds: number];
+  claimJourney: [journeyId: string];
 }>();
 
 /** 操作条里的弹窗开关：天机录 / 历练探索 / 江湖榜 / 守擂阵容 / 演武录 / 炼丹（宗门晋升与建筑仍在右栏常驻）。 */
@@ -97,6 +106,18 @@ const challengeTarget = ref<PublicSectView | null>(null);
 const liveResources = ref<Record<string, number>>({});
 const liveCultivation = ref<Record<string, number>>({});
 
+/**
+ * 本地推进的服务端时钟：以 `state.serverNow` 为基准逐秒前进，绝不用 `Date.now()`。
+ * 历练倒计时与「到期触发一次同步」都读它，保证展示基准始终是服务器时间。
+ */
+const localNowMs = ref(Date.parse(props.state.serverNow));
+
+/**
+ * 已经为哪几条历练请求过同步：到期归队只由服务端结算（刷新后 status 才会变成 ready），
+ * 同一 journeyId 只请求一次，避免每秒重复打 refresh。
+ */
+const journeySyncRequested = new Set<string>();
+
 function seedFromState(): void {
   liveResources.value = Object.fromEntries(
     props.state.resources.map((resource) => [resource.id, Number(resource.balance)]),
@@ -104,9 +125,29 @@ function seedFromState(): void {
   liveCultivation.value = Object.fromEntries(
     props.state.disciples.map((disciple) => [disciple.id, disciple.cultivation]),
   );
+  localNowMs.value = Date.parse(props.state.serverNow);
 }
 
 watch(() => props.state, seedFromState, { immediate: true });
+
+/** 到期（或已过 ends_at）的在外历练各请求一次同步；能否领取仍由服务端决定。 */
+function syncExpiredJourneys(): void {
+  const pending = new Set<string>();
+  for (const disciple of props.state.disciples) {
+    const journey = disciple.journey;
+    if (journey.status !== 'active' || journey.journeyId === null || journey.endsAt === null) continue;
+    pending.add(journey.journeyId);
+    const endsAtMs = Date.parse(journey.endsAt);
+    if (!Number.isFinite(endsAtMs) || endsAtMs > localNowMs.value) continue;
+    if (journeySyncRequested.has(journey.journeyId)) continue;
+    journeySyncRequested.add(journey.journeyId);
+    emit('refresh');
+  }
+  // 已领取/已消失的记录不必继续记账，避免集合随会话无限增长。
+  for (const journeyId of [...journeySyncRequested]) {
+    if (!pending.has(journeyId)) journeySyncRequested.delete(journeyId);
+  }
+}
 
 const timer = window.setInterval(() => {
   const resources: Record<string, number> = { ...liveResources.value };
@@ -126,10 +167,24 @@ const timer = window.setInterval(() => {
     cultivation[disciple.id] = threshold === null ? next : Math.min(threshold, next);
   }
   liveCultivation.value = cultivation;
+
+  localNowMs.value += 1000;
+  syncExpiredJourneys();
 }, 1000);
+
+/** 切回标签页时补一次同步（App.vue 的 60 秒轮询在隐藏标签页里不跑）。 */
+function onVisibilityChange(): void {
+  if (document.hidden || props.busy) return;
+  emit('refresh');
+}
+
+onMounted(() => {
+  document.addEventListener('visibilitychange', onVisibilityChange);
+});
 
 onUnmounted(() => {
   window.clearInterval(timer);
+  document.removeEventListener('visibilitychange', onVisibilityChange);
 });
 
 const resourceName = computed<Record<string, string>>(() =>
@@ -327,6 +382,24 @@ const detailDisciple = computed<DiscipleView | null>(() => {
   return props.state.disciples.find((disciple) => disciple.id === detailId.value) ?? null;
 });
 
+/** 0014 历练预览（只读）：由本组件持有，弹窗关闭或换弟子时清掉，不缓存上一次的数值。 */
+const journeyPreview = ref<JourneyPreviewView | null>(null);
+const journeyPreviewLoading = ref(false);
+
+watch(detailId, () => {
+  journeyPreview.value = null;
+});
+
+/**
+ * 出发成功后该弟子在 state 里立刻变成在外（领取后变成 none），旧预览的预计归队时间随之过期；
+ * 这里只在「不再可出发」时丢弃预览——请求失败时状态仍是 none，选择因此不会被清掉。
+ */
+const detailJourneyStatus = computed(() => detailDisciple.value?.journey.status ?? 'none');
+
+watch(detailJourneyStatus, (status) => {
+  if (status !== 'none') journeyPreview.value = null;
+});
+
 // 所选弟子从 state.disciples 里消失（驱逐成功）时自动关闭详情，不依赖额外事件。
 watch(detailDisciple, (disciple) => {
   if (detailId.value !== null && disciple === null) detailId.value = null;
@@ -358,6 +431,38 @@ function onDetailSaveNote(discipleId: string, note: string): void {
 function onDetailExpel(discipleId: string): void {
   if (props.busy) return;
   emit('expel', discipleId);
+}
+
+/**
+ * 0014 拉历练预览：只读接口（不结算、不写库），所以由本组件自己调；
+ * 失败只提示、不产生任何乐观数值，弹窗保持打开，玩家可以重试。
+ */
+async function onDetailRequestJourneyPreview(discipleId: string): Promise<void> {
+  if (props.busy || journeyPreviewLoading.value) return;
+  emit('requestJourneyPreview', discipleId);
+  journeyPreviewLoading.value = true;
+  journeyPreview.value = null;
+  try {
+    journeyPreview.value = await fetchJourneyPreview(discipleId);
+  } catch (caught) {
+    emit('notify', 'error', '历练预览未成', caught instanceof Error ? caught.message : '预览获取失败');
+  } finally {
+    journeyPreviewLoading.value = false;
+  }
+}
+
+function onDetailStartJourney(
+  discipleId: string,
+  direction: JourneyDirection,
+  durationSeconds: number,
+): void {
+  if (props.busy) return;
+  emit('startJourney', discipleId, direction, durationSeconds);
+}
+
+function onDetailClaimJourney(journeyId: string): void {
+  if (props.busy) return;
+  emit('claimJourney', journeyId);
 }
 
 function onDetailNotify(tone: ToastTone, title: string, message: string): void {
@@ -701,11 +806,18 @@ function onDetailNotify(tone: ToastTone, title: string, message: string): void {
         :disciple="detailDisciple"
         :busy="busy"
         :live-cultivation="liveCultivation[detailDisciple.id] ?? null"
+        :journey-preview="journeyPreview"
+        :journey-preview-loading="journeyPreviewLoading"
+        :journey-recent="state.journey.recent"
+        :local-now-ms="localNowMs"
         @assign="onDetailAssign"
         @breakthrough="onDetailBreakthrough"
         @use-pill="onUsePill"
         @save-note="onDetailSaveNote"
         @expel="onDetailExpel"
+        @request-journey-preview="onDetailRequestJourneyPreview"
+        @start-journey="onDetailStartJourney"
+        @claim-journey="onDetailClaimJourney"
         @notify="onDetailNotify"
       />
     </ModalShell>

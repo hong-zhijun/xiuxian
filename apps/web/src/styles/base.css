@@ -2109,6 +2109,457 @@ ul {
   background: linear-gradient(180deg, #eda791, #c26853);
 }
 
+/* ---------- 0014 弟子历练（详情区块 + 名册标记） ---------- */
+/*
+ * 窄屏约束：这一整块都用 flex-wrap / auto-fit 网格，容器 min-width: 0，
+ * 不写固定宽度；长方向名、长弟子姓名与多资源标签都必须换行而不是撑破弹窗。
+ */
+.disciple-journey {
+  min-width: 0;
+}
+
+.disciple-journey-quota {
+  color: #647a70;
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.disciple-journey-quota strong {
+  color: var(--gold-bright);
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size: 14px;
+}
+
+.disciple-journey-launch,
+.disciple-journey-start {
+  width: 100%;
+  min-height: 42px;
+  justify-content: center;
+}
+
+.disciple-journey-planner,
+.journey-away,
+.journey-ready {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* minmax 的下限也用 min()：极窄视口下轨道不会大于容器，避免横向溢出。 */
+.journey-directions,
+.journey-durations {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: repeat(auto-fit, minmax(min(132px, 100%), 1fr));
+  gap: 8px;
+}
+
+.journey-direction {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.journey-direction-button {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+  padding: 9px 11px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.014);
+  color: #c4d1ca;
+  text-align: left;
+  transition: border-color 160ms cubic-bezier(0.22, 0.61, 0.36, 1),
+    background-color 160ms cubic-bezier(0.22, 0.61, 0.36, 1), transform 160ms ease-out;
+  animation: journey-card-in 240ms cubic-bezier(0.22, 0.61, 0.36, 1) backwards;
+  animation-delay: calc(var(--journey-order, 0) * 28ms);
+}
+
+.journey-direction-button strong {
+  font-family: 'STKaiti', 'KaiTi', serif;
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  overflow-wrap: anywhere;
+}
+
+.journey-direction-button small {
+  color: #657970;
+  font-size: 11px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.journey-direction-button.is-selected {
+  border-color: rgba(234, 209, 154, 0.62);
+  background: rgba(202, 169, 106, 0.1);
+  color: var(--gold-bright);
+}
+
+.journey-direction-button.is-selected small {
+  color: #b9ab8c;
+}
+
+.journey-direction-button:not(:disabled):hover {
+  border-color: rgba(119, 184, 154, 0.42);
+  transform: translateY(-1px);
+}
+
+.journey-direction-button:not(:disabled):active {
+  transform: translateY(0);
+}
+
+.journey-direction-button:disabled,
+.journey-direction-button.is-blocked {
+  border-color: rgba(167, 184, 173, 0.11);
+  background: rgba(255, 255, 255, 0.016);
+  color: #63756c;
+  cursor: not-allowed;
+}
+
+.journey-durations > li {
+  display: flex;
+  min-width: 0;
+}
+
+.journey-duration-chip {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 11px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.014);
+  color: #dce6e0;
+  text-align: left;
+  transition: border-color 160ms cubic-bezier(0.22, 0.61, 0.36, 1),
+    background-color 160ms cubic-bezier(0.22, 0.61, 0.36, 1), transform 160ms ease-out;
+  animation: journey-card-in 260ms cubic-bezier(0.22, 0.61, 0.36, 1) backwards;
+  animation-delay: calc(var(--journey-order, 0) * 36ms);
+}
+
+.journey-duration-chip:not(:disabled):hover {
+  border-color: rgba(119, 184, 154, 0.42);
+  transform: translateY(-1px);
+}
+
+.journey-duration-chip:not(:disabled):active {
+  transform: translateY(0);
+}
+
+.journey-duration-chip.is-selected {
+  border-color: rgba(234, 209, 154, 0.62);
+  background: rgba(202, 169, 106, 0.1);
+}
+
+.journey-duration-head {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+}
+
+.journey-duration-head strong {
+  font-family: 'STKaiti', 'KaiTi', serif;
+  font-size: 15px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+}
+
+.journey-duration-head em {
+  color: var(--jade-bright);
+  font-size: 12px;
+  font-style: normal;
+  overflow-wrap: anywhere;
+}
+
+.journey-duration-tags {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.journey-tag {
+  padding: 2px 6px;
+  border: 1px solid rgba(119, 184, 154, 0.18);
+  border-radius: 2px;
+  color: #a9bbb1;
+  background: rgba(119, 184, 154, 0.035);
+  font-size: 11px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.journey-tag.is-extra {
+  border-color: rgba(202, 169, 106, 0.32);
+  color: var(--gold-bright);
+  background: rgba(202, 169, 106, 0.08);
+}
+
+.journey-tag.is-risk {
+  border-color: rgba(224, 123, 104, 0.34);
+  color: var(--red-bright);
+  background: rgba(184, 81, 66, 0.1);
+}
+
+.journey-return {
+  color: #7f948a;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.journey-state-line {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+}
+
+.journey-state-badge {
+  padding: 2px 7px;
+  border: 1px solid rgba(119, 184, 154, 0.32);
+  border-radius: 2px;
+  color: var(--jade-bright);
+  background: rgba(119, 184, 154, 0.1);
+  font-size: 11px;
+}
+
+.journey-state-badge.is-ready {
+  border-color: rgba(234, 209, 154, 0.55);
+  color: var(--gold-bright);
+  background: rgba(202, 169, 106, 0.14);
+}
+
+.journey-duration {
+  color: #93a99e;
+  font-size: 12px;
+}
+
+/* 倒计时逐秒变化：等宽数字，避免数字跳动带动整行宽度抖动。 */
+.journey-countdown {
+  font-variant-numeric: tabular-nums;
+}
+
+.journey-reward-list {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+}
+
+.journey-reward-list li {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  overflow-wrap: anywhere;
+}
+
+.journey-reward-list strong {
+  color: var(--gold-bright);
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size: 14px;
+}
+
+.journey-flag {
+  padding: 7px 9px;
+  border-left: 2px solid rgba(119, 184, 154, 0.42);
+  color: #b9cdc3;
+  background: rgba(119, 184, 154, 0.05);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.journey-flag.is-extra {
+  border-left-color: rgba(202, 169, 106, 0.6);
+  color: var(--gold-bright);
+  background: rgba(202, 169, 106, 0.08);
+}
+
+.journey-flag.is-risk {
+  border-left-color: rgba(224, 123, 104, 0.6);
+  color: var(--red-bright);
+  background: rgba(184, 81, 66, 0.1);
+}
+
+.journey-history {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--line);
+}
+
+.disciple-journey-subtitle {
+  margin: 0;
+  color: #7f948a;
+  font-family: 'STKaiti', 'KaiTi', serif;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.12em;
+}
+
+.journey-history-list {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.journey-record {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.journey-record:last-child {
+  border-bottom: 0;
+}
+
+/* 在外用青色、待领取用金色、已领取保持灰：三种状态在长列表里也能一眼分开。 */
+.journey-record.is-active {
+  border-left: 2px solid rgba(119, 184, 154, 0.34);
+  padding-left: 8px;
+}
+
+.journey-record.is-ready {
+  border-left: 2px solid rgba(234, 209, 154, 0.5);
+  padding-left: 8px;
+}
+
+.journey-record-head {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+}
+
+.journey-record-name {
+  min-width: 0;
+  color: #dce6e0;
+  font-family: 'STKaiti', 'KaiTi', serif;
+  font-size: 13px;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.journey-record-status {
+  padding: 2px 6px;
+  border: 1px solid rgba(167, 184, 173, 0.22);
+  border-radius: 2px;
+  color: #93a99e;
+  background: rgba(255, 255, 255, 0.025);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.journey-record-status.is-active {
+  border-color: rgba(119, 184, 154, 0.34);
+  color: var(--jade-bright);
+}
+
+.journey-record-status.is-ready {
+  border-color: rgba(234, 209, 154, 0.5);
+  color: var(--gold-bright);
+}
+
+.journey-record-result {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 3px 10px;
+  color: #7f948a;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.journey-record-result li {
+  position: relative;
+  padding-left: 9px;
+  overflow-wrap: anywhere;
+}
+
+.journey-record-result li::before {
+  position: absolute;
+  left: 0;
+  color: #4d6157;
+  content: '·';
+}
+
+@keyframes journey-card-in {
+  from {
+    opacity: 0;
+    transform: translateY(5px);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* 名册行：在外 / 待领取各有自己的边色，待领取再把「详情」按钮点亮。 */
+.disciple-row.is-journey {
+  border-color: rgba(119, 184, 154, 0.28);
+}
+
+.disciple-row.is-journey-ready {
+  border-color: rgba(234, 209, 154, 0.55);
+  background: rgba(202, 169, 106, 0.07);
+}
+
+/* 长标记（方位 + 归队时间）在窄卡片里换行，不撑破行宽。 */
+.disciple-status.is-journey {
+  max-width: 100%;
+  border-color: rgba(119, 184, 154, 0.32);
+  color: var(--jade-bright);
+  background: rgba(119, 184, 154, 0.1);
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.disciple-status.is-journey-ready {
+  max-width: 100%;
+  border-color: rgba(234, 209, 154, 0.55);
+  color: var(--gold-bright);
+  background: rgba(202, 169, 106, 0.14);
+  line-height: 1.35;
+  white-space: normal;
+}
+
+.disciple-detail-button.is-journey-ready {
+  flex-wrap: wrap;
+  border-color: rgba(234, 209, 154, 0.7);
+  row-gap: 2px;
+}
+
+.journey-ready-marker {
+  padding: 0 4px;
+  border-radius: 2px;
+  color: #16220f;
+  background: var(--gold-bright);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+}
+
+/* ---------- Disciple attribute radar (four axes) ---------- */
 /* ---------- Disciple attribute radar (four axes) ---------- */
 .radar-figure {
   display: grid;

@@ -638,6 +638,7 @@ describe('驱逐与布阵/挑战的交错：快照守卫必须让整批回滚', 
       sect: savedSect!,
       balances: await new ResourceBalanceRepository(env.DB).findBySectId(sect.sectId),
       members: [{ id: victim }],
+      now: Date.now(),
     });
 
     const expelled = await expelPost(sect.api, victim);
@@ -668,6 +669,7 @@ describe('驱逐与布阵/挑战的交错：快照守卫必须让整批回滚', 
       sect: savedSect!,
       balances: await new ResourceBalanceRepository(env.DB).findBySectId(sect.sectId),
       members: [{ id: discipleId }],
+      now: Date.now(),
     });
 
     // 另一个请求先把弟子驱逐了：旧草稿不能再往这一行写备注。
@@ -702,6 +704,7 @@ describe('驱逐与布阵/挑战的交错：快照守卫必须让整批回滚', 
       sect: savedSect!,
       balances: await new ResourceBalanceRepository(env.DB).findBySectId(sect.sectId),
       members: [{ id: first }],
+      now: Date.now(),
       defenseLineup: savedSect!.defense_lineup,
     });
 
@@ -736,6 +739,7 @@ describe('驱逐与布阵/挑战的交错：快照守卫必须让整批回滚', 
       sect: savedSect!,
       balances: await new ResourceBalanceRepository(env.DB).findBySectId(sect.sectId),
       members: [{ id: first }],
+      now: Date.now(),
       defenseLineup: savedSect!.defense_lineup,
     });
 
@@ -775,6 +779,8 @@ describe('驱逐与布阵/挑战的交错：快照守卫必须让整批回滚', 
         level: Number(targetSect!.level),
         defenseLineup: targetSect!.defense_lineup,
       },
+      defenderIds: defender.discipleIds.slice(0, 3),
+      now: Date.now(),
     });
 
     // 攻方自己的一名出战弟子在提交前被驱逐：不能在日志里写一场「幽灵出战」。
@@ -818,6 +824,7 @@ describe('驱逐与布阵/挑战的交错：快照守卫必须让整批回滚', 
       sect: savedSect!,
       balances,
       members: [{ id: victim }],
+      now: Date.now(),
     });
 
     await setBalance(sect.sectId, 'herb', 100_000);
@@ -849,6 +856,7 @@ describe('驱逐与布阵/挑战的交错：快照守卫必须让整批回滚', 
       sect: savedSect!,
       balances: await new ResourceBalanceRepository(env.DB).findBySectId(sect.sectId),
       members: chosen.map((id) => ({ id })),
+      now: Date.now(),
     });
 
     // 要布的阵容里有一名弟子在提交前被驱逐了。

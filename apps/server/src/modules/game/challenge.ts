@@ -252,3 +252,19 @@ export function asRewardTier(value: string | null): RewardTier | null {
 export function asDefenseMode(value: string | null): DefenseMode | null {
   return value === 'configured' || value === 'automatic' ? value : null;
 }
+
+/**
+ * 0014 弟子历练：自动守擂的候选池 = 当前**不在外**的弟子。
+ *
+ * 手动阵容成员不可能在外（出发前就要求不在阵容里），所以把过滤后的列表交给
+ * planDefenseLineup 就够：一旦真有人在外，手动阵容会被判为无效并回退自动守擂，
+ * 自动守擂也不会抽到在外弟子。名单无人过滤时返回原列表，行为与 0014 之前一致。
+ */
+export function availableDefenders<T extends { id: string }>(
+  disciples: readonly T[],
+  awayIds: ReadonlySet<string>,
+): T[] {
+  return awayIds.size === 0
+    ? [...disciples]
+    : disciples.filter((disciple) => !awayIds.has(disciple.id));
+}

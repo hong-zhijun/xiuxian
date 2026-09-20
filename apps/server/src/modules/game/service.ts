@@ -15,6 +15,7 @@ import {
 } from './alchemy';
 import {
   CHALLENGE_DAILY_LIMIT,
+  availableDefenders,
   asDefenseMode,
   asRewardTier,
   challengeDayStateOf,
@@ -77,6 +78,7 @@ import {
   deleteAlchemySnapshotGuardStatement,
   deleteChallengeSnapshotGuardStatement,
   deleteDiscipleSnapshotGuardStatement,
+  deleteSettlementSnapshotGuardStatement,
   deleteDiscipleStatement,
   discipleSnapshotGuardStatement,
   insertBuildingStatement,
@@ -88,6 +90,7 @@ import {
   insertSectStatement,
   insertSparringLogStatement,
   resourceDeltaStatement,
+  settlementSnapshotGuardStatement,
   updateBuildingLevelStatement,
   updateDiscipleAssignmentStatement,
   updateDiscipleBodyTemperingStatement,
@@ -112,7 +115,47 @@ import {
   type ResourceBalanceRow,
   type SectRow,
 } from './repository';
+
+import {
+  DiscipleJourneyRepository,
+  claimDiscipleJourneyStatement,
+  completeDiscipleJourneyStatement,
+  deleteJourneyClaimSnapshotGuardStatement,
+  deleteJourneyStartSnapshotGuardStatement,
+  insertDiscipleJourneyStatement,
+  journeyClaimSnapshotGuardStatement,
+  journeyStartSnapshotGuardStatement,
+  updateDiscipleJourneyReturnStatement,
+} from './repository';
+import type { DiscipleJourneyRow } from './repository';
 import { settleEconomy, type SettleResult } from './settle';
+
+import {
+  JOURNEY_DIRECTIONS,
+  JOURNEY_DURATIONS_SECONDS,
+  JOURNEY_EXTRA_HARVEST_BP,
+  JOURNEY_HISTORY_LIMIT,
+  JOURNEY_MAX_CONCURRENT,
+  asJourneyDirection,
+  cultivateJourneyReturn,
+  findJourneyDirection,
+  isJourneyDirection,
+  isJourneyDuration,
+  journeyAwayIds,
+  journeyBaseRewardForDisciple,
+  journeyDirectionBlockedReason,
+  journeyDurationLabel,
+  journeyEligibilityBlock,
+  journeyEndsAt,
+  journeyFinalReward,
+  journeyInjuryUntil,
+  journeyStatusOf,
+  journeyThresholdOf,
+  parseJourneyRewardResources,
+  previewJourneyCultivation,
+  rollJourneyOutcome,
+  type JourneyBlock,
+} from './journey';
 import {
   breakthroughChanceBp,
   buildSectStateView,
@@ -134,6 +177,10 @@ import {
   type SparHistoryView,
   type SparHistoryEntryView,
   type SparResultView,
+  type JourneyClaimOutcomeView,
+  type JourneyDirectionPreviewView,
+  type JourneyDurationPreviewView,
+  type JourneyPreviewView,
 } from './view';
 
 /**
@@ -155,6 +202,10 @@ export interface SectSnapshot {
   challengeDay: ChallengeDayState;
   /** 读快照时库里的最近事件行；本次结算刚触发的在本层另行合并（见 view.ts）。 */
   recentEvents: EventLogRow[];
+  /** 0014：本宗未领取的历练记录（在外中 + 待领取）。 */
+  journeys: DiscipleJourneyRow[];
+  /** 0014：最近历练记录（含已领取，最多 10 条）。 */
+  recentJourneys: DiscipleJourneyRow[];
 }
 
 /** 全局唯一配置来源：启动期已校验过的配置内容（不在游戏模块里硬编码数值）。 */
@@ -189,23 +240,44 @@ async function loadSnapshot(
   if (sect === null) {
     return null;
   }
-  const [disciples, buildings, balances, pillInventories, recentEvents, challengeDay] =
-    await Promise.all([
-      new DiscipleRepository(db).findBySectId(sect.id),
-      new BuildingRepository(db).findBySectId(sect.id),
-      new ResourceBalanceRepository(db).findBySectId(sect.id),
-      new PillInventoryRepository(db).findBySectId(sect.id),
-      new EventLogRepository(db).findRecentBySectId(sect.id, RECENT_EVENTS_IN_SYNC),
-      loadChallengeDayState(db, sect, now),
-    ]);
-  return { sect, disciples, buildings, balances, pillInventories, challengeDay, recentEvents };
+  const [
+    disciples,
+    buildings,
+    balances,
+    pillInventories,
+    recentEvents,
+    challengeDay,
+    journeys,
+    recentJourneys,
+  ] = await Promise.all([
+    new DiscipleRepository(db).findBySectId(sect.id),
+    new BuildingRepository(db).findBySectId(sect.id),
+    new ResourceBalanceRepository(db).findBySectId(sect.id),
+    new PillInventoryRepository(db).findBySectId(sect.id),
+    new EventLogRepository(db).findRecentBySectId(sect.id, RECENT_EVENTS_IN_SYNC),
+    loadChallengeDayState(db, sect, now),
+    // 0014：未领取的历练（在外中 + 待领取）与最近历史（含已领取，最多 10 条）。
+    new DiscipleJourneyRepository(db).findOpenBySectId(sect.id),
+    new DiscipleJourneyRepository(db).findRecentBySectId(sect.id, JOURNEY_HISTORY_LIMIT),
+  ]);
+  return {
+    sect,
+    disciples,
+    buildings,
+    balances,
+    pillInventories,
+    challengeDay,
+    recentEvents,
+    journeys,
+    recentJourneys,
+  };
 }
 
 /**
  * 已结算的草稿：结算结果 + 命令附加语句。
  *
  * 结算的写回语句在构造时算好（只写真正变化的行），命令的写入用 `addStatement` 追加，
- * 最后 `commit()` 一次性提交，顺序即数组顺序（先结算，再消耗/产出）。
+   * 最后 `commit()` 以快照守卫和写回同批提交，顺序即数组顺序（先结算，再消耗/产出）。
  */
 class SectDraft {
   readonly config: GameConfigContent;
@@ -228,6 +300,14 @@ class SectDraft {
   readonly recruitUsedToday: number;
 
   private readonly statements: ParameterizedQuery[] = [];
+  /** 0014：未领取的历练记录（在外中 + 待领取）；本批可能被完成 / 领取而改变。 */
+  journeys: DiscipleJourneyRow[];
+  /** 0014：读快照时的最近历练记录（含已领取）；与 journeys 合并去重后交给 view。 */
+  recentJourneys: DiscipleJourneyRow[];
+  /** 0014：本批归队入账产生的语句（附在结算写回之后同批提交）。 */
+  private readonly journeyReturnStatements: ParameterizedQuery[] = [];
+  /** 0014：本批已完成归队的弟子 id（他们的修为/伤势由归队语句一次写完）。 */
+  private readonly journeyReturnedDiscipleIds = new Set<string>();
 
   constructor(
     private readonly db: D1Database,
@@ -242,7 +322,18 @@ class SectDraft {
     this.buildingCapacity = levelDef.buildingCapacity;
     this.capacityMultiplier = levelDef.capacityMultiplier;
 
+    // 0014：未领取的历练记录（在外中 + 待领取）；最近历史另查一次，供摘要用。
+    this.journeys = base.journeys.map((row) => ({ ...row }));
+    this.recentJourneys = base.recentJourneys.map((row) => ({ ...row }));
+
     const lastSettledAt = Number(base.sect.last_settled_at);
+    // 0014：未领取的历练就是「在外区间」；结算只屏蔽这些区间内的岗位产出与静修，
+    // 结算窗口（含唯一的 12 小时上限）与随机事件判定仍然各只有一份。
+    const absences = this.journeys.map((row) => ({
+      discipleId: row.disciple_id,
+      startMs: Number(row.started_at),
+      endMs: Number(row.ends_at),
+    }));
     this.settleResult = settleEconomy({
       config: this.config,
       lastSettledAt,
@@ -264,6 +355,7 @@ class SectDraft {
       })),
       capacityMultiplier: this.capacityMultiplier,
       buildingLevels: Object.fromEntries(base.buildings.map((row) => [row.def_id, row.level])),
+      absences,
     });
 
     this.sect = { ...base.sect, last_settled_at: this.settleResult.lastSettledAt };
@@ -287,7 +379,11 @@ class SectDraft {
 
     const dateKey = dateKeyUtc8(now);
     this.recruitUsedToday = base.sect.recruit_date_key === dateKey ? Number(base.sect.recruit_count) : 0;
-    this.statements = this.settlementStatements(lastSettledAt);
+
+    // 0014：到期归队先于写回生成 —— 归队语句一次写完修为/余数/伤势，
+    // settlementStatements 跳过这些弟子，避免同一列被两条 UPDATE 互相覆盖。
+    this.applyJourneyReturns();
+    this.statements = [...this.settlementStatements(lastSettledAt), ...this.journeyReturnStatements];
   }
 
   /** 结算写回：只写发生变化的行，避免无意义的 UPDATE。 */
@@ -305,6 +401,10 @@ class SectDraft {
       }
     }
     for (const [index, row] of this.disciples.entries()) {
+      // 0014：本批已归队的弟子由归队语句一次写完（修为 + 余数 + 伤势），这里不重复写同一列。
+      if (this.journeyReturnedDiscipleIds.has(row.id)) {
+        continue;
+      }
       const before = this.base.disciples[index];
       if (
         before !== undefined &&
@@ -458,6 +558,8 @@ class SectDraft {
       recruitUsedToday: this.recruitUsedToday,
       recentEventRows: this.base.recentEvents,
       capacityMultiplier: levelDef.capacityMultiplier,
+      journeys: this.journeys,
+      recentJourneys: this.recentRowsForView(),
     });
   }
 
@@ -465,7 +567,25 @@ class SectDraft {
     if (this.statements.length === 0) {
       return;
     }
-    await this.db.batch(prepareStatements(this.db, this.statements));
+    const commandId = crypto.randomUUID();
+    const guard = settlementSnapshotGuardStatement(commandId, {
+      sect: this.base.sect,
+      balances: this.base.balances,
+      disciples: this.base.disciples,
+    });
+    try {
+      await this.db.batch(prepareStatements(this.db, [
+        guard,
+        ...this.statements,
+        deleteSettlementSnapshotGuardStatement(commandId),
+      ]));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (/CHECK constraint failed: (?:valid = 1|mutation_guards)/i.test(message)) {
+        throw new AppError('INVALID_STATUS', '宗门状态已变化，请刷新后重试');
+      }
+      throw error;
+    }
   }
 
   async commitAlchemy(pillId: string, discipleId?: string): Promise<void> {
@@ -504,12 +624,21 @@ class SectDraft {
   async commitDisciple(
     members: readonly { id: string }[],
     defenseLineup?: string | null,
+    options?: {
+      /**
+       * 0014：是否允许成员此刻仍在「尚未到期的历练」中。
+       * 只有保存私有备注是 true（计划 2.3 明确允许在外保存备注），其余一律 false。
+       */
+      allowActiveJourney?: boolean;
+    },
   ): Promise<void> {
     const commandId = crypto.randomUUID();
     const guard = discipleSnapshotGuardStatement(commandId, {
       sect: this.base.sect,
       balances: this.base.balances,
       members,
+      now: this.now,
+      rejectAwayMembers: options?.allowActiveJourney !== true,
       ...(defenseLineup === undefined ? {} : { defenseLineup }),
     });
     try {
@@ -541,6 +670,7 @@ class SectDraft {
   async commitChallenge(
     target: { id: string; level: number; defenseLineup: string | null },
     members: readonly { id: string }[],
+    defenderIds: readonly string[],
   ): Promise<void> {
     const commandId = crypto.randomUUID();
     const guard = challengeSnapshotGuardStatement(commandId, {
@@ -548,6 +678,8 @@ class SectDraft {
       balances: this.base.balances,
       members,
       target,
+      defenderIds,
+      now: this.now,
     });
     try {
       await this.db.batch(prepareStatements(this.db, [
@@ -562,6 +694,280 @@ class SectDraft {
       }
       if (/UNIQUE constraint failed: challenge_log/i.test(message)) {
         throw new AppError('DAILY_LIMIT', '今日已挑战过该宗门（同一目标每日 1 次）');
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * 0014：到期归队（在结算之后、写回生成之前调用）。
+   *
+   * - 修为按**返程时的剩余门槛**入账，`cultivation_awarded` 记录实际增加量（最高阶段为 0）；
+   * - 伤势固定从到期时间起算 30 分钟，且只做一次（completed_at 非空不再进入），
+   *   因此不会覆盖更晚的旧伤，也不会复活随后服用回春丹清掉的伤势；
+   * - 归队语句与结算、领取同批提交；并发下 `completed_at IS NULL` 的条件让它最多生效一次。
+   */
+  private applyJourneyReturns(): void {
+    for (const journey of this.journeys) {
+      if (journey.completed_at !== null || Number(journey.ends_at) > this.now) {
+        continue;
+      }
+      const index = this.disciples.findIndex((row) => row.id === journey.disciple_id);
+      if (index === -1) {
+        // 弟子行已不在本宗（正常路径不可达：未领取前不可驱逐，且守卫会兜住并发）。
+        // 仍然要把记录收口：修为无处可入（记 0），但必须写 completed_at ——
+        // 否则 claim 的条件更新永远不成立，玩家可以无限重复领取同一份资源。
+        journey.completed_at = this.now;
+        journey.cultivation_awarded = 0;
+        this.journeyReturnStatements.push(
+          completeDiscipleJourneyStatement(journey.id, journey.disciple_id, this.now, 0),
+        );
+        continue;
+      }
+      const disciple = this.disciples[index]!;
+      const snapshotRow = this.base.disciples.find((row) => row.id === disciple.id);
+      const result = cultivateJourneyReturn({
+        // 在外期间不积累修为，所以「返程时的修为」就是结算开始时的值。
+        beforeReturn:
+          snapshotRow === undefined ? Number(disciple.cultivation) : Number(snapshotRow.cultivation),
+        settledCultivation: Number(disciple.cultivation),
+        settledRemainder: Number(disciple.cultivation_remainder),
+        requiredCultivation: journeyThresholdOf(disciple.realm_id, Number(disciple.stage)),
+        plannedCultivation: Number(journey.reward_cultivation),
+      });
+      const injuredUntil =
+        Number(journey.injured) === 1
+          ? Math.max(
+              disciple.injured_until === null ? 0 : Number(disciple.injured_until),
+              journeyInjuryUntil(Number(journey.ends_at)),
+            )
+          : disciple.injured_until === null
+            ? null
+            : Number(disciple.injured_until);
+
+      this.disciples[index] = {
+        ...disciple,
+        cultivation: result.cultivation,
+        cultivation_remainder: result.remainder,
+        injured_until: injuredUntil,
+      };
+      journey.completed_at = this.now;
+      journey.cultivation_awarded = result.awarded;
+      this.journeyReturnedDiscipleIds.add(disciple.id);
+      this.journeyReturnStatements.push(
+        updateDiscipleJourneyReturnStatement(journey.id, disciple.id, this.sect.id, {
+          cultivation: result.cultivation,
+          remainder: result.remainder,
+          injuredUntil,
+        }),
+        completeDiscipleJourneyStatement(journey.id, disciple.id, this.now, result.awarded),
+      );
+    }
+  }
+
+  /** 0014：仍未到期（在外）的人数；已到期待领取不占名额。 */
+  activeJourneyCount(): number {
+    return this.journeys.filter(
+      (row) => row.claimed_at === null && Number(row.ends_at) > this.now,
+    ).length;
+  }
+
+  /** 0014：仍在外的弟子 id 集合（唯一在外判定入口，所有写路径与视图共用）。 */
+  awayDiscipleIds(): Set<string> {
+    return journeyAwayIds(this.journeys, this.now);
+  }
+
+  /** 0014：该弟子未领取的历练记录（每名弟子最多一条，由唯一部分索引保证）。 */
+  pendingJourneyOf(discipleId: string): DiscipleJourneyRow | undefined {
+    return this.journeys.find((row) => row.disciple_id === discipleId && row.claimed_at === null);
+  }
+
+  /** 0014：按 id 取本宗**未领取**的记录（跨宗 / 已领取都返回 undefined）。 */
+  openJourneyById(journeyId: string): DiscipleJourneyRow | undefined {
+    return this.journeys.find((row) => row.id === journeyId && row.claimed_at === null);
+  }
+
+  /** 0014：读快照时的未领取记录（守卫必须用库值，不能用本批改过的内存值）。 */
+  baseJourneyById(journeyId: string): DiscipleJourneyRow | undefined {
+    return this.base.journeys.find((row) => row.id === journeyId);
+  }
+
+  /** 0014：本批是否已为该弟子完成归队入账（领取守卫据此决定要不要核对弟子行）。 */
+  journeyReturnedInThisBatch(discipleId: string): boolean {
+    return this.journeyReturnedDiscipleIds.has(discipleId);
+  }
+
+  /** 0014：出发写入（同一弟子重复出发由唯一部分索引兜底）。 */
+  addJourney(row: DiscipleJourneyRow): void {
+    this.journeys = [...this.journeys, row];
+    this.recentJourneys = [row, ...this.recentJourneys];
+    this.addStatement(
+      insertDiscipleJourneyStatement({
+        id: row.id,
+        sectId: row.sect_id,
+        discipleId: row.disciple_id,
+        discipleName: row.disciple_name,
+        direction: row.direction,
+        durationSeconds: Number(row.duration_seconds),
+        originalAssignment: row.original_assignment,
+        startedAt: Number(row.started_at),
+        endsAt: Number(row.ends_at),
+        rewardCultivation: Number(row.reward_cultivation),
+        rewardResources: row.reward_resources,
+        extraHarvest: Number(row.extra_harvest) === 1,
+        injured: Number(row.injured) === 1,
+        injuryChanceBp: Number(row.injury_chance_bp),
+        now: this.now,
+      }),
+    );
+  }
+
+  /**
+   * 0014：领取入账（直接加余额、**不夹容量**，与秘境 / 挑战奖励同一口径；
+   * 余额可能因此超过容量，下一次结算的 room 截断会处理）。
+   */
+  grantResource(resourceId: string, amount: number): void {
+    if (amount === 0) {
+      return;
+    }
+    const existing = this.balances.find((row) => row.resource_id === resourceId);
+    if (existing === undefined) {
+      const row: ResourceBalanceRow = {
+        id: crypto.randomUUID(),
+        sect_id: this.sect.id,
+        resource_id: resourceId,
+        balance: amount,
+        remainder: 0,
+        updated_at: this.now,
+      };
+      this.balances = [...this.balances, row];
+      this.addStatement(
+        insertResourceBalanceStatement({
+          id: row.id,
+          sectId: this.sect.id,
+          resourceId,
+          balance: amount,
+          remainder: 0,
+          now: this.now,
+        }),
+      );
+      return;
+    }
+    this.addStatement(resourceDeltaStatement(this.sect.id, resourceId, amount, this.now));
+    this.balances = this.balances.map((row) =>
+      row.resource_id === resourceId
+        ? { ...row, balance: Number(row.balance) + amount, updated_at: this.now }
+        : row,
+    );
+  }
+
+  /** 0014：领取标记（条件更新 + 内存同步）。 */
+  markJourneyClaimed(journey: DiscipleJourneyRow): void {
+    journey.claimed_at = this.now;
+    this.addStatement(claimDiscipleJourneyStatement(journey.id, this.sect.id, this.now));
+  }
+
+  /** 0014：最近记录（与未领取记录合并去重，未领取的一方优先；新的在前，最多 10 条）。 */
+  private recentRowsForView(): DiscipleJourneyRow[] {
+    const byId = new Map<string, DiscipleJourneyRow>();
+    for (const row of this.recentJourneys) {
+      byId.set(row.id, row);
+    }
+    for (const row of this.journeys) {
+      byId.set(row.id, row);
+    }
+    return [...byId.values()]
+      .sort(
+        (a, b) =>
+          Number(b.started_at) - Number(a.started_at) || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0),
+      )
+      .slice(0, JOURNEY_HISTORY_LIMIT);
+  }
+
+  /**
+   * 0014：出发的受保护提交。守卫在 batch 执行时复核宗门行（含守擂阵容原值）、资源余额、
+   * 在外人数与不在外人数（堵住不同弟子并发出发绕过两人上限）、目标弟子的境界 / 伤势 /
+   * 岗位 / 归属，以及「该弟子没有未领取记录」。
+   */
+  async commitJourneyStart(
+    discipleId: string,
+    activeCount: number,
+    atHomeCount: number,
+  ): Promise<void> {
+    const commandId = crypto.randomUUID();
+    const disciple = this.base.disciples.find((row) => row.id === discipleId);
+    if (disciple === undefined) {
+      throw new AppError('NOT_FOUND', '弟子不存在');
+    }
+    const guard = journeyStartSnapshotGuardStatement(commandId, {
+      sect: this.base.sect,
+      balances: this.base.balances,
+      disciple,
+      activeCount,
+      atHomeCount,
+      now: this.now,
+    });
+    try {
+      await this.db.batch(
+        prepareStatements(this.db, [
+          guard,
+          ...this.statements,
+          deleteJourneyStartSnapshotGuardStatement(commandId),
+        ]),
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (/CHECK constraint failed: (?:valid = 1|mutation_guards)/i.test(message)) {
+        throw new AppError('INVALID_STATUS', '宗门状态已变化，请刷新后重试');
+      }
+      if (/UNIQUE constraint failed/i.test(message) && /disciple_journeys/i.test(message)) {
+        throw new AppError('INVALID_STATUS', '该弟子已有未领取的历练记录');
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * 0014：领取的受保护提交。领取是唯一真正发放资源的命令：
+   * 守卫在 batch 执行时复核记录仍未领取、完成状态与奖赏快照未变，以及（本批同时归队时）
+   * 弟子行未被并发改动；任一冲突整批回滚并映射为业务错误，绝不重复发奖。
+   */
+  async commitJourneyClaim(journeyId: string, returnDiscipleId: string | null): Promise<void> {
+    const commandId = crypto.randomUUID();
+    const journey = this.base.journeys.find((row) => row.id === journeyId);
+    if (journey === undefined) {
+      throw new AppError('NOT_FOUND', '历练记录不存在');
+    }
+    const disciple =
+      returnDiscipleId === null
+        ? undefined
+        : this.base.disciples.find((row) => row.id === returnDiscipleId);
+    const guard = journeyClaimSnapshotGuardStatement(commandId, {
+      sect: this.base.sect,
+      balances: this.base.balances,
+      journey,
+      ...(disciple === undefined ? {} : { disciple }),
+    });
+    try {
+      await this.db.batch(
+        prepareStatements(this.db, [
+          guard,
+          ...this.statements,
+          deleteJourneyClaimSnapshotGuardStatement(commandId),
+        ]),
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (/CHECK constraint failed: (?:valid = 1|mutation_guards)/i.test(message)) {
+        // 区分「并发已领取」与普通快照冲突，给出诚实的文案（不改动任何数据）。
+        const current = await new DiscipleJourneyRepository(this.db).findByIdForSect(
+          journeyId,
+          this.sect.id,
+        );
+        if (current !== null && current.claimed_at !== null) {
+          throw new AppError('INVALID_STATUS', '该历练收获已领取');
+        }
+        throw new AppError('INVALID_STATUS', '宗门状态已变化，请刷新后重试');
       }
       throw error;
     }
@@ -582,13 +988,21 @@ export async function getSectState(
   userId: string,
   now: number,
 ): Promise<SectStateView | null> {
-  const snapshot = await loadSnapshot(db, userId, now);
-  if (snapshot === null) {
-    return null;
+  // 与写请求交错时重新读取快照，不能让旧 sync 的绝对结算值覆盖新余额。
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const snapshot = await loadSnapshot(db, userId, now);
+    if (snapshot === null) return null;
+    const draft = new SectDraft(db, snapshot, now);
+    try {
+      await draft.commit();
+      return draft.view();
+    } catch (error) {
+      if (!(error instanceof AppError && error.code === 'INVALID_STATUS') || attempt === 2) {
+        throw error;
+      }
+    }
   }
-  const draft = new SectDraft(db, snapshot, now);
-  await draft.commit();
-  return draft.view();
+  throw new AppError('INVALID_STATUS', '宗门状态已变化，请刷新后重试');
 }
 
 /** 创建宗门：初始弟子/建筑/资源按配置一次写入。 */
@@ -726,6 +1140,9 @@ export async function createSect(
         now,
       ),
       recentEvents: [],
+      // 0014：新宗门还没有任何历练记录。
+      journeys: [],
+      recentJourneys: [],
     },
     now,
   );
@@ -1014,6 +1431,9 @@ export async function assignDisciple(
 
   const disciple = draft.discipleById(discipleId);
 
+  // 0014：在外弟子不能转岗（原岗位名额仍为他保留，归队后自动恢复产出）。
+  requireNotAway(draft, disciple, '转岗');
+
   // V5.1 改动三：采灵岗位有人数上限（宗门 6 级前 1 人、6 级起 2 人）。
   // item.id !== discipleId：弟子本来就在采灵岗位时，重复派工不该算占位。
   if (assignment === STONE_MINING_ASSIGNMENT) {
@@ -1088,6 +1508,9 @@ export async function breakthrough(
 ): Promise<{ state: SectStateView; outcome: BreakthroughOutcome }> {
   const draft = await draftFor(db, userId, now);
   const disciple = draft.discipleById(discipleId);
+
+  // 0014：在外弟子不能破境（服务端裁决）。
+  requireNotAway(draft, disciple, '破境');
   const { config } = draft;
 
   const stage = findStage(disciple.realm_id, disciple.stage);
@@ -1217,7 +1640,8 @@ export async function setDiscipleNote(
   draft.addStatement(updateDiscipleNoteStatement(disciple.id, draft.sect.id, normalized));
   disciple.note = normalized;
 
-  await draft.commitDisciple([{ id: disciple.id }]);
+  // 计划 2.3：在外期间**可以**继续保存私有备注，所以这条路径不要求成员「不在外」。
+  await draft.commitDisciple([{ id: disciple.id }], undefined, { allowActiveJourney: true });
   return draft.view();
 }
 
@@ -1254,6 +1678,9 @@ export async function expelDisciple(
 ): Promise<{ state: SectStateView; outcome: ExpelDiscipleOutcome }> {
   const draft = await draftFor(db, userId, now);
   const disciple = draft.discipleById(discipleId);
+
+  // 0014：在外弟子不能被驱逐；已归队但未领取的也要先领取。
+  requireJourneySettled(draft, disciple, '驱逐');
 
   // 阵容守卫必须用「读到的库值」：守卫是本批第一条语句，此时本批写入还没执行。
   const lineupSnapshot = draft.sect.defense_lineup;
@@ -1488,6 +1915,8 @@ export async function exploreSectRealm(
   }[] = [];
   for (const id of discipleIds) {
     const disciple = draft.discipleById(id);
+    // 0014：在外弟子不能出战探索。
+    requireNotAway(draft, disciple, '出战');
     if (disciple.injured_until !== null && Number(disciple.injured_until) > now) {
       throw new AppError('INVALID_STATUS', `${disciple.name}正在疗伤，无法出战`);
     }
@@ -1735,7 +2164,15 @@ export async function getPublicSect(
   ]);
   const config = gameConfig();
 
-  const plan = planDefenseLineup(sect.defense_lineup, disciples);
+  // 0014：守方实时在外状态参与裁决（跨宗读取只用于能否应战的安全判断，不公开他人结果）。
+  const defenderAwayIds = journeyAwayIds(
+    await new DiscipleJourneyRepository(db).findOpenBySectId(sectId),
+    now,
+  );
+  const plan = planDefenseLineup(
+    sect.defense_lineup,
+    availableDefenders(disciples, defenderAwayIds),
+  );
   let challenge: PublicSectChallengeView | null = null;
   if (viewerSect !== null) {
     const isSelf = viewerSect.id === sect.id;
@@ -2093,7 +2530,9 @@ export async function setDefenseLineup(
   }
   for (const id of discipleIds) {
     // 归属校验：只看自己的弟子，不存在（含不属于本宗）抛 NOT_FOUND。
-    draft.discipleById(id);
+    const member = draft.discipleById(id);
+    // 0014：在外弟子不能进入新守擂阵容（服务端裁决，不只靠前端禁用）。
+    requireNotAway(draft, member, '进入守擂阵容');
   }
 
   const lineupJson = JSON.stringify(discipleIds);
@@ -2170,6 +2609,8 @@ export async function challengeSect(
   const attackerMembers: ChallengeMember[] = [];
   for (const id of discipleIds) {
     const disciple = draft.discipleById(id);
+    // 0014：在外弟子不能出战挑战。
+    requireNotAway(draft, disciple, '出战');
     if (disciple.injured_until !== null && Number(disciple.injured_until) > now) {
       throw new AppError('INVALID_STATUS', `${disciple.name}正在疗伤，无法出战`);
     }
@@ -2189,7 +2630,15 @@ export async function challengeSect(
 
   // 6-7. 守方阵容：有效手动阵容按原顺序；否则临时自动守擂（弟子 < 3 拒绝，不消耗次数）
   const defenderDisciples = await new DiscipleRepository(db).findBySectId(targetSect.id);
-  const plan = planDefenseLineup(targetSect.defense_lineup, defenderDisciples);
+  // 0014：被动挑战也要检查守方弟子的实时在外状态 —— 自动守擂只从未在外的弟子中选人
+  // （跨宗读取只用于安全裁决，不公开他人的历练结果）。
+  const defenderAwayIds = journeyAwayIds(
+    await new DiscipleJourneyRepository(db).findOpenBySectId(targetSect.id),
+    now,
+  );
+  // 候选池 = 不在外的守方弟子；手动阵容与自动守擂都只看这一份名单。
+  const defenders = availableDefenders(defenderDisciples, defenderAwayIds);
+  const plan = planDefenseLineup(targetSect.defense_lineup, defenders);
   if (!plan.canDefend) {
     throw new AppError('INVALID_STATUS', '对方门下弟子不足 3 人，暂时无法应战');
   }
@@ -2198,7 +2647,7 @@ export async function challengeSect(
   if (plan.mode === 'configured') {
     // 手动阵容按玩家设置的顺序使用；成员此刻必然都在守方（planDefenseLineup 已校验）。
     defenderMembers = plan.manualIds.map((id) => {
-      const disciple = defenderDisciples.find((row) => row.id === id)!;
+      const disciple = defenders.find((row) => row.id === id)!;
       return {
         discipleId: disciple.id,
         name: disciple.name,
@@ -2214,8 +2663,8 @@ export async function challengeSect(
     });
   } else {
     // 自动守擂：等概率不重复抽 3 名并随机排序，可含受伤弟子；
-    // 战斗、返回结果和历史记录使用同一份快照。
-    const candidates = defenderDisciples.map((disciple) => ({
+    // 战斗、返回结果和历史记录使用同一份快照。在外弟子不参与抽取。
+    const candidates = defenders.map((disciple) => ({
       discipleId: disciple.id,
       name: disciple.name,
       power: discipleCombatPower(
@@ -2294,6 +2743,7 @@ export async function challengeSect(
     },
     // 0013：提交时重新核对攻方出战弟子仍属本宗（与驱逐交错时不出现幽灵出战）。
     attackerMembers.map((member) => ({ id: member.discipleId })),
+    defenderMembers.map((member) => member.discipleId),
   );
 
   // 13. 提交成功后返回含最新剩余次数的 state 与完整战斗结果。
@@ -2522,6 +2972,9 @@ export async function usePill(
   const recipe = requirePillRecipe(pillId);
   const disciple = draft.discipleById(discipleId);
 
+  // 0014：在外 / 有待领取记录的弟子不能服药（服务端裁决，不只禁用按钮）。
+  requireNotAway(draft, disciple, '服药');
+
   if (recipe.id === 'healingPill') {
     if (disciple.injured_until === null || Number(disciple.injured_until) <= now) {
       throw new AppError('INVALID_STATUS', `${disciple.name}没有需要治疗的伤势`);
@@ -2607,6 +3060,376 @@ export async function usePill(
       discipleId: disciple.id,
       discipleName: disciple.name,
       effect: { kind: 'bodyTempering', gain: target.gain, attribute: target.attribute },
+    },
+  };
+}
+
+/* ---------- 弟子历练（0014 迁移：预览 / 出发 / 领取） ---------- */
+/**
+ * 0014：任何会读取或改变弟子出战资格的命令都复用同一「在外」判定
+ * （计划 2.3「所有相关写路径在服务端检查，不能只禁用按钮」）。
+ *
+ * 只有**尚未到期**（status = 'active'）的弟子被挡住：转岗 / 破境 / 服药 / 探索 / 挑战 /
+ * 进守擂阵容 / 驱逐都不能做。已归队待领取（status = 'ready'）的弟子已在外归来，
+ * 可以正常工作与操作，只是不能再次出发、也不能被驱逐（见 requireJourneySettled）。
+ *
+ * 保存私有备注不在限制之列（计划 2.3 明确允许）。
+ */
+function requireNotAway(draft: SectDraft, disciple: DiscipleRow, action: string): void {
+  const pending = draft.pendingJourneyOf(disciple.id);
+  if (pending === undefined || journeyStatusOf(pending, draft.now) !== 'active') {
+    return;
+  }
+  throw new AppError('INVALID_STATUS', `${disciple.name}正在外历练，尚未归队，无法${action}`);
+}
+
+/**
+ * 0014：既在外又占用「未领取记录」的操作（驱逐）：已归队的也必须先领取
+ * —— 否则未领取的收获会随着弟子一起消失。
+ */
+function requireJourneySettled(draft: SectDraft, disciple: DiscipleRow, action: string): void {
+  const pending = draft.pendingJourneyOf(disciple.id);
+  if (pending === undefined) {
+    return;
+  }
+  if (journeyStatusOf(pending, draft.now) === 'active') {
+    throw new AppError('INVALID_STATUS', `${disciple.name}正在外历练，尚未归队，无法${action}`);
+  }
+  throw new AppError('INVALID_STATUS', `${disciple.name}有未领取的历练收获，先领取后才能${action}`);
+}
+
+/**
+ * 与方向无关的出发资格（预览与出发共用同一份输入装配，保证两处口径一致）。
+ * 只读：不写库、不结算。
+ */
+function journeyEligibilityOf(input: {
+  sect: SectRow;
+  disciple: DiscipleRow;
+  disciples: readonly DiscipleRow[];
+  journeys: readonly DiscipleJourneyRow[];
+  now: number;
+}): JourneyBlock | null {
+  const awayIds = journeyAwayIds(input.journeys, input.now);
+  const pending = input.journeys.find(
+    (row) => row.disciple_id === input.disciple.id && row.claimed_at === null,
+  );
+  return journeyEligibilityBlock({
+    realmId: input.disciple.realm_id,
+    injuredUntil: input.disciple.injured_until === null ? null : Number(input.disciple.injured_until),
+    pending:
+      pending === undefined
+        ? null
+        : {
+            status: journeyStatusOf(pending, input.now) === 'active' ? 'active' : 'ready',
+            direction: asJourneyDirection(pending.direction),
+          },
+    activeCount: input.journeys.filter(
+      (row) => row.claimed_at === null && Number(row.ends_at) > input.now,
+    ).length,
+    discipleCount: input.disciples.length,
+    othersAwayCount: awayIds.size - (awayIds.has(input.disciple.id) ? 1 : 0),
+    inDefenseLineup: lineupContainsDisciple(input.sect.defense_lineup, input.disciple.id),
+    now: input.now,
+  });
+}
+
+/** 计算奖励快照所需的弟子属性子集（出发时一次性快照，之后不再重算）。 */
+function journeyRewardInputOf(disciple: DiscipleRow): {
+  realmId: string;
+  stage: number;
+  aptitude: number;
+  talent: string;
+  attack: number;
+  defense: number;
+  speed: number;
+} {
+  return {
+    realmId: disciple.realm_id,
+    stage: Number(disciple.stage),
+    aptitude: Number(disciple.aptitude),
+    talent: disciple.talent,
+    attack: Number(disciple.attack),
+    defense: Number(disciple.defense),
+    speed: Number(disciple.speed),
+  };
+}
+
+/**
+ * 历练预览（GET /game/journey-preview 的 data）：**只读**，不做挂机结算、不写库 ——
+ * 与招募预览同理，预览不该因为「打开一次弹窗」就触发结算与随机事件。
+ * 最终资格以 POST /game/start-journey 的服务端校验为准；预览不展示任何随机结果。
+ */
+export async function previewJourney(
+  db: D1Database,
+  userId: string,
+  discipleId: string,
+  now: number,
+): Promise<JourneyPreviewView> {
+  const snapshot = await loadSnapshot(db, userId, now);
+  if (snapshot === null) {
+    throw new AppError('NOT_FOUND', '尚未创建宗门');
+  }
+  const disciple = snapshot.disciples.find((row) => row.id === discipleId);
+  if (disciple === undefined) {
+    throw new AppError('NOT_FOUND', '弟子不存在');
+  }
+
+  const eligibility = journeyEligibilityOf({
+    sect: snapshot.sect,
+    disciple,
+    disciples: snapshot.disciples,
+    journeys: snapshot.journeys,
+    now,
+  });
+  const threshold = journeyThresholdOf(disciple.realm_id, Number(disciple.stage));
+  const cultivation = Number(disciple.cultivation);
+  const rewardInput = journeyRewardInputOf(disciple);
+
+  const directions: JourneyDirectionPreviewView[] = JOURNEY_DIRECTIONS.map((definition) => {
+    const directionBlocked = journeyDirectionBlockedReason(definition.id, threshold, cultivation);
+    const durations: JourneyDurationPreviewView[] = JOURNEY_DURATIONS_SECONDS.map(
+      (durationSeconds) => {
+        const base = journeyBaseRewardForDisciple(rewardInput, definition.id, durationSeconds);
+        // 方向 × 时长都在 JOURNEY_PLANS 白名单里；查不到只可能是常量表被改坏了。
+        const reward = base ?? { cultivation: 0, resources: {}, injuryChanceBp: 0 };
+        // 修为按当前剩余门槛截断（「最多」语义）；实际入账以返程时的剩余门槛为准。
+        const preview = previewJourneyCultivation(reward.cultivation, threshold, cultivation);
+        const resources: Record<string, string> = {};
+        for (const [resourceId, amount] of Object.entries(reward.resources)) {
+          resources[resourceId] = String(amount);
+        }
+        return {
+          durationSeconds,
+          durationLabel: journeyDurationLabel(durationSeconds),
+          cultivation: preview.cultivation,
+          cultivationCapped: preview.capped,
+          resources,
+          extraChanceBp: JOURNEY_EXTRA_HARVEST_BP,
+          injuryChanceBp: reward.injuryChanceBp,
+          endsAt: new Date(journeyEndsAt(now, durationSeconds)).toISOString(),
+        };
+      },
+    );
+    return {
+      direction: definition.id,
+      name: definition.name,
+      description: definition.description,
+      available: eligibility === null && directionBlocked === null,
+      // 整体不合格时也要给出原因，前端不必自己推断。
+      blockedReason: directionBlocked ?? eligibility?.message ?? null,
+      durations,
+    };
+  });
+
+  return {
+    discipleId: disciple.id,
+    discipleName: disciple.name,
+    canStart: eligibility === null,
+    blockedReason: eligibility?.message ?? null,
+    activeCount: snapshot.journeys.filter(
+      (row) => row.claimed_at === null && Number(row.ends_at) > now,
+    ).length,
+    maxConcurrent: JOURNEY_MAX_CONCURRENT,
+    directions,
+    serverNow: new Date(now).toISOString(),
+  };
+}
+
+/**
+ * 出发（POST /game/start-journey）：结算到出发时刻 → 校验资格 → 出发时抽一次随机
+ * （额外收获 + 受伤各一次、互相独立）并落库 → 受保护提交。
+ *
+ * - 奖励快照与随机结果在**出发时**确定并保存，到期前不向前端公开；刷新 / 重复领取不会重抽；
+ * - 所有校验都在写库之前完成，失败不产生半写；
+ * - 提交走 commitJourneyStart：批内复核名额、留守人数、弟子状态与守擂阵容快照，
+ *   不同弟子并发出发也无法绕过两人上限。
+ */
+export async function startJourney(
+  db: D1Database,
+  userId: string,
+  discipleId: string,
+  direction: string,
+  durationSeconds: number,
+  now: number,
+): Promise<SectStateView> {
+  if (!isJourneyDirection(direction)) {
+    throw new AppError('VALIDATION_ERROR', '未知历练方向', { direction });
+  }
+  if (!isJourneyDuration(durationSeconds)) {
+    throw new AppError('VALIDATION_ERROR', '未知历练时长', { durationSeconds });
+  }
+
+  const draft = await draftFor(db, userId, now);
+  const disciple = draft.discipleById(discipleId);
+
+  const eligibility = journeyEligibilityOf({
+    sect: draft.sect,
+    disciple,
+    disciples: draft.disciples,
+    journeys: draft.journeys,
+    now,
+  });
+  if (eligibility !== null) {
+    throw new AppError(eligibility.code, eligibility.message);
+  }
+  const directionBlocked = journeyDirectionBlockedReason(
+    direction,
+    journeyThresholdOf(disciple.realm_id, Number(disciple.stage)),
+    Number(disciple.cultivation),
+  );
+  if (directionBlocked !== null) {
+    throw new AppError('INVALID_STATUS', directionBlocked);
+  }
+
+  // 名额与留守人数必须用「写入前」的库值：守卫在 batch 执行时按同一口径再复核一次。
+  const activeCount = draft.activeJourneyCount();
+  const atHomeCount = draft.disciples.length - draft.awayDiscipleIds().size;
+
+  const base = journeyBaseRewardForDisciple(
+    journeyRewardInputOf(disciple),
+    direction,
+    durationSeconds,
+  );
+  if (base === null) {
+    throw new AppError('VALIDATION_ERROR', '该方向没有这个时长', { direction, durationSeconds });
+  }
+  const roll = rollJourneyOutcome(base.injuryChanceBp);
+  const reward = journeyFinalReward(base, roll.extraHarvest);
+  const endsAt = journeyEndsAt(now, durationSeconds);
+  const resources: Record<string, number> = {};
+  for (const [resourceId, amount] of Object.entries(reward.resources)) {
+    resources[resourceId] = amount;
+  }
+
+  draft.addJourney({
+    id: crypto.randomUUID(),
+    sect_id: draft.sect.id,
+    disciple_id: disciple.id,
+    disciple_name: disciple.name,
+    direction,
+    duration_seconds: durationSeconds,
+    // 岗位快照：disciples.assignment 本身保持不变（原岗位名额继续为他保留）。
+    original_assignment: disciple.assignment,
+    started_at: now,
+    ends_at: endsAt,
+    completed_at: null,
+    claimed_at: null,
+    reward_cultivation: reward.cultivation,
+    reward_resources: JSON.stringify(resources),
+    extra_harvest: roll.extraHarvest ? 1 : 0,
+    injured: roll.injured ? 1 : 0,
+    injury_chance_bp: base.injuryChanceBp,
+    cultivation_awarded: null,
+    created_at: now,
+  });
+
+  await draft.commitJourneyStart(disciple.id, activeCount, atHomeCount);
+  return draft.view();
+}
+
+/** 领取回执文案（服务端拼好；前端不复制规则）。 */
+function journeyClaimMessage(input: {
+  discipleName: string;
+  directionName: string;
+  cultivationAwarded: number;
+  extraHarvest: boolean;
+  injured: boolean;
+}): string {
+  const parts = [`${input.discipleName}${input.directionName}归来`];
+  parts.push(
+    input.cultivationAwarded > 0 ? `修为 +${String(input.cultivationAwarded)}` : '修为已至门槛',
+  );
+  if (input.extraHarvest) {
+    parts.push('另有额外收获');
+  }
+  parts.push(input.injured ? '途中受伤' : '平安无事');
+  return parts.join('，');
+}
+
+/**
+ * 领取（POST /game/claim-journey）：结算 → （到期则）归队入账 → 资源一次性入账 → 标记已领取，
+ * 全部在**同一次**受保护 batch 里完成。
+ *
+ * - 未先 sync 就直接领取也能正常工作（计划 2.3「领取与完成可能在同一请求发生」）；
+ * - 资源在领取时一次性入账、领取前不占容量，领取后返回完整最新状态与实际结果；
+ * - 重复 / 并发领取由 batch 首条守卫 + 条件更新共同兜底，绝不重复发奖；
+ * - 守卫冲突时整批回滚：不改资源、不动记录。
+ */
+export async function claimJourney(
+  db: D1Database,
+  userId: string,
+  journeyId: string,
+  now: number,
+): Promise<{ state: SectStateView; outcome: JourneyClaimOutcomeView }> {
+  const draft = await draftFor(db, userId, now);
+
+  // 库值用于区分「不存在 / 不属于本宗」与「已领取」；跨宗 id 一律 NOT_FOUND（不泄露他人记录）。
+  const stored = await new DiscipleJourneyRepository(db).findByIdForSect(journeyId, draft.sect.id);
+  if (stored === null) {
+    throw new AppError('NOT_FOUND', '历练记录不存在');
+  }
+  if (stored.claimed_at !== null) {
+    throw new AppError('INVALID_STATUS', '该历练收获已领取');
+  }
+  const journey = draft.openJourneyById(journeyId);
+  if (journey === undefined) {
+    throw new AppError('INVALID_STATUS', '该历练收获已领取');
+  }
+  if (journeyStatusOf(journey, now) === 'active') {
+    throw new AppError('INVALID_STATUS', '尚未归队，无法领取');
+  }
+
+  const resources: Record<string, string> = {};
+  for (const [resourceId, amount] of Object.entries(
+    parseJourneyRewardResources(journey.reward_resources),
+  )) {
+    // 只入账「配置里存在、且是安全的非负整数」的资源：
+    // 脏数据不该把余额写坏（NaN / 负数都不行），也不该凭空造资源。
+    const parsed = Number(amount);
+    if (
+      draft.config.resources.some((item) => item.id === resourceId) &&
+      Number.isSafeInteger(parsed) &&
+      parsed > 0
+    ) {
+      resources[resourceId] = String(parsed);
+      draft.grantResource(resourceId, parsed);
+    }
+  }
+  draft.markJourneyClaimed(journey);
+
+  await draft.commitJourneyClaim(
+    journeyId,
+    draft.journeyReturnedInThisBatch(journey.disciple_id) ? journey.disciple_id : null,
+  );
+
+  const direction = asJourneyDirection(journey.direction);
+  const directionName = findJourneyDirection(direction).name;
+  const injured = Number(journey.injured) === 1;
+  const extraHarvest = Number(journey.extra_harvest) === 1;
+  const cultivationAwarded = Number(journey.cultivation_awarded ?? 0);
+  return {
+    state: draft.view(),
+    outcome: {
+      journeyId: journey.id,
+      discipleId: journey.disciple_id,
+      discipleName: journey.disciple_name,
+      direction,
+      directionName,
+      cultivationAwarded,
+      resources: { ...resources },
+      extraHarvest,
+      injured,
+      injuredUntil: injured
+        ? new Date(journeyInjuryUntil(Number(journey.ends_at))).toISOString()
+        : null,
+      endsAt: new Date(Number(journey.ends_at)).toISOString(),
+      message: journeyClaimMessage({
+        discipleName: journey.disciple_name,
+        directionName,
+        cultivationAwarded,
+        extraHarvest,
+        injured,
+      }),
     },
   };
 }

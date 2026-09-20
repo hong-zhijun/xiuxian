@@ -81,3 +81,26 @@ export const setDiscipleNoteRequestSchema = z.strictObject({
 export const expelDiscipleRequestSchema = z.strictObject({
   discipleId: z.string().min(1).max(64),
 });
+
+/**
+ * 0014 历练预览：只带目标弟子 id；方向/时长的合法性由服务端按 JOURNEY_DIRECTIONS /
+ * JOURNEY_DURATIONS_SECONDS 校验，这里只挡住空值与超长。
+ */
+export const journeyPreviewQuerySchema = z.strictObject({
+  discipleId: z.string().min(1).max(64),
+});
+
+/**
+ * 0014 出发：方向与时长只做「类型 + 宽松长度」的第一道防线，
+ * 真正的白名单（daoSeeking/gathering × 7200/21600）在 journey.ts 里判定。
+ */
+export const startJourneyRequestSchema = z.strictObject({
+  discipleId: z.string().min(1).max(64),
+  direction: z.string().min(1).max(32),
+  durationSeconds: z.number().int().positive(),
+});
+
+/** 0014 领取：只带历练记录 id；归属与状态由 service 判定（跨宗 id 一律 NOT_FOUND）。 */
+export const claimJourneyRequestSchema = z.strictObject({
+  journeyId: z.string().min(1).max(64),
+});
