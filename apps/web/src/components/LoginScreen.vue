@@ -86,7 +86,7 @@ onMounted(() => {
   <main class="auth-stage">
     <section class="auth-lore" aria-labelledby="world-title">
       <div class="lore-brand">
-        <span class="lore-seal" aria-hidden="true"><i>宗</i></span>
+        <img class="lore-logo" src="/brand-logo.png" alt="" aria-hidden="true" />
         <div>
           <p class="eyebrow">太初界 · 宗门志</p>
           <h1 id="world-title">万法归山海<br /><span>一念启仙途</span></h1>

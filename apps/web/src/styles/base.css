@@ -435,27 +435,13 @@ ul {
   gap: 24px;
 }
 
-.lore-seal {
-  position: relative;
-  display: flex;
-  width: 72px;
-  height: 72px;
-  flex: 0 0 72px;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid rgba(202, 169, 106, 0.54);
-  color: var(--gold-bright);
-  font-family: 'STKaiti', 'KaiTi', serif;
-  font-size: 31px;
-  background: rgba(11, 29, 24, 0.7);
-  box-shadow: inset 0 0 0 6px rgba(202, 169, 106, 0.06), 0 12px 40px rgba(0, 0, 0, 0.24);
-  transform: rotate(45deg);
-}
-
-.lore-seal i {
+.lore-logo {
   display: block;
-  font-style: normal;
-  transform: rotate(-45deg);
+  width: 86px;
+  height: 86px;
+  flex: 0 0 86px;
+  object-fit: contain;
+  filter: drop-shadow(0 12px 28px rgba(0, 0, 0, 0.35));
 }
 
 
@@ -1022,23 +1008,13 @@ ul {
   gap: 14px;
 }
 
-.sect-emblem {
-  display: flex;
-  width: 51px;
-  height: 51px;
-  flex: 0 0 51px;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid rgba(202, 169, 106, 0.42);
-  color: var(--gold-bright);
-  background: linear-gradient(145deg, rgba(202, 169, 106, 0.11), rgba(119, 184, 154, 0.06));
-  transform: rotate(45deg);
-}
-
-.sect-emblem span {
-  font-family: 'STKaiti', 'KaiTi', serif;
-  font-size: 21px;
-  transform: rotate(-45deg);
+.sect-logo {
+  display: block;
+  width: 56px;
+  height: 56px;
+  flex: 0 0 56px;
+  object-fit: contain;
+  filter: drop-shadow(0 7px 16px rgba(0, 0, 0, 0.28));
 }
 
 .sect-identity h1 {
@@ -1341,28 +1317,10 @@ ul {
 }
 
 .disciple-list {
-  display: flex;
-  flex-direction: column;
-  gap: 9px;
-}
-
-.disciple-card {
-  position: relative;
   display: grid;
-  min-width: 0;
-  grid-template-columns: 56px minmax(210px, 1fr) minmax(238px, 0.68fr);
-  align-items: center;
-  gap: 15px;
-  padding: 13px;
-  border: 1px solid rgba(182, 204, 191, 0.1);
-  border-radius: 3px;
-  background: rgba(3, 14, 11, 0.28);
-  transition: border-color 160ms ease, background-color 160ms ease;
-}
-
-.disciple-card:hover {
-  border-color: rgba(119, 184, 154, 0.23);
-  background: rgba(6, 20, 16, 0.43);
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  align-items: start;
+  gap: 7px;
 }
 
 .disciple-avatar {
@@ -1433,40 +1391,6 @@ ul {
   color: #efae8d;
 }
 
-.disciple-info {
-  min-width: 0;
-}
-
-.disciple-name-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.disciple-name-row > div {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 8px;
-}
-
-.disciple-name-row strong {
-  overflow: hidden;
-  color: #e4ece6;
-  font-family: 'STKaiti', 'KaiTi', serif;
-  font-size: 17px;
-  font-weight: 500;
-  letter-spacing: 0.08em;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.realm-tag,
-.aptitude-badge {
-  white-space: nowrap;
-}
-
 .realm-tag {
   padding: 2px 6px;
   border: 1px solid rgba(119, 184, 154, 0.18);
@@ -1474,73 +1398,809 @@ ul {
   color: var(--jade);
   background: rgba(119, 184, 154, 0.035);
   font-size: 11px;
+  white-space: nowrap;
+}
+/* ---------- Disciple roster (toolbar / rows / progress ring) ---------- */
+.disciple-roster {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
 }
 
-.aptitude-badge {
-  color: var(--gold);
+.disciple-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 9px;
+  padding-bottom: 11px;
+  border-bottom: 1px solid var(--line);
+}
+
+.disciple-field {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.disciple-field-search {
+  flex: 1 1 180px;
+}
+
+.disciple-field-label {
+  color: #5d7268;
+  font-size: 11px;
+  letter-spacing: 0.1em;
+}
+
+.disciple-input {
+  width: 100%;
+  min-width: 0;
+  height: 36px;
+  padding: 0 10px;
+  border: 1px solid rgba(181, 203, 190, 0.14);
+  border-radius: 3px;
+  color: #dce6e0;
+  background: rgba(5, 17, 14, 0.68);
+  font-size: 13px;
+  transition: border-color 150ms ease, background-color 150ms ease;
+}
+
+.disciple-input::placeholder {
+  color: #566b61;
+}
+
+.disciple-input:hover,
+.disciple-input:focus {
+  border-color: rgba(202, 169, 106, 0.42);
+}
+
+/* 原生 select：去掉系统箭头，用 ::after 画一个主题一致的折角。 */
+.disciple-select {
+  position: relative;
+  display: block;
+  min-width: 116px;
+}
+
+.disciple-select select {
+  padding-right: 26px;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+}
+
+.disciple-select::after {
+  position: absolute;
+  top: 50%;
+  right: 11px;
+  width: 7px;
+  height: 7px;
+  margin-top: -5px;
+  border-right: 1.4px solid var(--gold);
+  border-bottom: 1.4px solid var(--gold);
+  content: '';
+  transform: rotate(45deg);
+  pointer-events: none;
+}
+
+.disciple-select option {
+  color: var(--ink-text);
+  background: #10251f;
+}
+
+.disciple-reset {
+  align-self: flex-end;
+  margin-bottom: 2px;
+}
+
+.disciple-reset:disabled {
+  color: #4f6159;
+  cursor: not-allowed;
+}
+
+.disciple-count {
+  margin: 10px 0 9px;
+  color: #657b70;
   font-size: 12px;
 }
 
-.cultivation-row {
-  position: relative;
-  margin-top: 10px;
-  padding-right: 77px;
+.disciple-count strong {
+  color: var(--gold-bright);
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size: 14px;
 }
 
-.cultivation-label {
-  display: flex;
+/* 卡片基础外观；具体竖版网格只在下方最终规则中定义。 */
+.disciple-row {
+  min-width: 0;
+  border: 1px solid rgba(182, 204, 191, 0.1);
+  border-radius: 3px;
+  background: rgba(3, 14, 11, 0.28);
+  transition: border-color 160ms ease, background-color 160ms ease;
+  animation: disciple-row-in 240ms cubic-bezier(0.22, 0.61, 0.36, 1) backwards;
+  animation-delay: calc(var(--row-order, 0) * 24ms);
+}
+
+.disciple-row:hover {
+  border-color: rgba(119, 184, 154, 0.23);
+  background: rgba(6, 20, 16, 0.43);
+}
+
+/* 行左侧窄边只用于疗伤警示；可破境由满修为环表达。 */
+.disciple-row.status-injured {
+  border-left: 2px solid rgba(184, 81, 66, 0.55);
+}
+
+@keyframes disciple-row-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* 同一个圆：外层 conic-gradient 是修为进度，内部就是头像。 */
+.disciple-ring {
+  --ring-color: var(--jade);
+  --progress-angle: 0deg;
+  position: relative;
+  border-radius: 50%;
+  background: conic-gradient(var(--ring-color) var(--progress-angle), rgba(255, 255, 255, 0.07) 0);
+  box-shadow: 0 0 0 1px rgba(119, 184, 154, 0.1);
+}
+
+.disciple-ring .disciple-avatar {
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  border: 2px solid #0c211b;
+}
+
+.disciple-ring .disciple-avatar::before,
+.disciple-ring .disciple-avatar::after {
+  display: none;
+}
+
+.disciple-ring.is-ready {
+  --ring-color: var(--gold-bright);
+}
+
+.disciple-ring.is-full {
+  --ring-color: var(--jade-bright);
+}
+
+.disciple-ring.is-capped {
+  --ring-color: #6d8378;
+}
+
+.disciple-row-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 112px;
+  overflow: hidden;
+  color: #e4ece6;
+  font-family: 'STKaiti', 'KaiTi', serif;
+  font-size: 15px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.disciple-status {
+  flex: 0 0 auto;
+  padding: 1px 5px;
+  border: 1px solid rgba(167, 184, 173, 0.2);
+  border-radius: 2px;
+  color: #a9bbb1;
+  background: rgba(255, 255, 255, 0.025);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.disciple-status.is-injured {
+  border-color: rgba(224, 123, 104, 0.45);
+  color: var(--red-bright);
+  background: rgba(184, 81, 66, 0.12);
+}
+
+.disciple-status.is-capped {
+  color: #7f948a;
+}
+
+.disciple-status.is-cultivationFull {
+  border-color: rgba(119, 184, 154, 0.4);
+  color: var(--jade-bright);
+  background: rgba(119, 184, 154, 0.1);
+}
+
+.disciple-status.is-assignment {
+  color: #93a99e;
+}
+
+.disciple-row-power {
+  flex: 0 0 auto;
+  color: #b8c8bf;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.disciple-detail-button {
+  display: inline-flex;
+  min-height: 30px;
   align-items: center;
-  justify-content: space-between;
-  margin-bottom: 4px;
-  color: #657b70;
+  gap: 4px;
+  padding: 0 8px;
+  border: 1px solid rgba(202, 169, 106, 0.3);
+  border-radius: 3px;
+  color: var(--gold-bright);
+  background: linear-gradient(135deg, rgba(202, 169, 106, 0.09), rgba(202, 169, 106, 0.02));
+  font-size: 12px;
+  transition: border-color 150ms ease, background-color 150ms ease, transform 150ms ease;
+}
+
+.disciple-detail-button:hover {
+  border-color: rgba(234, 209, 154, 0.7);
+  background: rgba(202, 169, 106, 0.14);
+}
+
+.disciple-detail-button:active {
+  transform: translateY(1px);
+}
+
+/* 竖版弟子卡：头像、身份、摘要、备注、详情由上到下排列。 */
+.disciple-row {
+  position: relative;
+  display: grid;
+  min-height: 0;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto auto auto 14px 28px;
+  align-items: center;
+  gap: 3px;
+  padding: 7px 8px 6px;
+  text-align: center;
+}
+
+.disciple-row-media {
+  grid-row: 1;
+  grid-column: 1;
+  width: 48px;
+  height: 48px;
+  margin: 0 auto;
+}
+
+.disciple-ring {
+  width: 48px;
+  height: 48px;
+  padding: 3px;
+  outline: none;
+}
+
+.disciple-ring .disciple-avatar {
+  font-size: 16px;
+}
+
+.disciple-ring .disciple-avatar i {
+  right: -2px;
+  bottom: -1px;
+  width: 14px;
+  height: 14px;
+  font-size: 8px;
+}
+
+/* 修为数字只在头像进度环 hover / 键盘聚焦时出现。 */
+.disciple-ring::after {
+  position: absolute;
+  z-index: 6;
+  top: calc(100% + 5px);
+  left: 50%;
+  width: max-content;
+  max-width: 180px;
+  padding: 4px 7px;
+  border: 1px solid rgba(202, 169, 106, 0.34);
+  border-radius: 3px;
+  color: #e3ece6;
+  background: #10231d;
+  box-shadow: 0 5px 16px rgba(0, 0, 0, 0.34);
+  content: attr(data-progress);
+  font-size: 11px;
+  line-height: 1.35;
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, -3px);
+  transition: opacity 130ms ease, transform 130ms ease;
+  white-space: nowrap;
+}
+
+.disciple-ring:hover::after,
+.disciple-ring:focus-visible::after {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
+.disciple-ring:focus-visible {
+  box-shadow: 0 0 0 2px rgba(202, 169, 106, 0.28);
+}
+
+.disciple-row-info {
+  grid-row: 2;
+  grid-column: 1;
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  overflow: visible;
+}
+
+.disciple-row-name {
+  max-width: 100%;
+  font-size: 16px;
+}
+
+.disciple-card-tags {
+  display: flex;
+  max-width: 100%;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 3px;
+}
+
+.disciple-card-meta {
+  grid-row: 3;
+  grid-column: 1;
+  display: flex;
+  min-width: 0;
+  min-height: 15px;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 3px 7px;
+  overflow: visible;
+}
+
+.disciple-row-note {
+  grid-row: 4;
+  grid-column: 1;
+  display: block;
+  height: 14px;
+  flex: 0 0 14px;
+  width: 100%;
+  margin: 0;
+  overflow: hidden;
+  color: #7f948a;
+  font-size: 11px;
+  line-height: 14px;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.disciple-row-note.is-empty {
+  visibility: hidden;
+}
+
+.disciple-detail-button {
+  grid-row: 5;
+  grid-column: 1;
+  width: 100%;
+  min-height: 28px;
+  justify-content: center;
+  margin-top: 2px;
+}
+
+.disciple-row:hover,
+.disciple-row:focus-within {
+  z-index: 2;
+}
+
+/* 无结果态：与空列表态区分，并给一个就地重置的入口。 */
+.disciple-empty-filter .quiet-button {
+  margin-top: 9px;
+  padding: 7px 15px;
+  border: 1px solid rgba(202, 169, 106, 0.28);
+  border-radius: 3px;
+  color: var(--gold);
+}
+
+/* ---------- Disciple detail (modal content) ---------- */
+.disciple-detail {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.disciple-detail-name {
+  overflow-wrap: anywhere;
+  font-family: 'STKaiti', 'KaiTi', serif;
+  font-size: 22px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+}
+
+.disciple-detail-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 13px 0;
+  border-top: 1px solid var(--line);
+}
+
+.disciple-detail-title {
+  margin: 0;
+  color: #93a99e;
+  font-family: 'STKaiti', 'KaiTi', serif;
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.16em;
+}
+
+.disciple-note-row {
+  display: flex;
+  min-width: 0;
+  gap: 8px;
+}
+
+.disciple-note-row .disciple-input {
+  flex: 1 1 auto;
+}
+
+.disciple-note-save {
+  min-height: 36px;
+  flex: 0 0 auto;
+  padding: 6px 15px;
+  font-size: 13px;
+}
+
+.disciple-note-save.is-dirty:not(:disabled) {
+  border-color: rgba(234, 209, 154, 0.6);
+  color: var(--gold-bright);
+  background: rgba(202, 169, 106, 0.1);
+}
+
+.disciple-note-meta {
+  color: #647a70;
   font-size: 11px;
 }
 
-.cultivation-label span:last-child {
+.disciple-note-meta.is-error {
+  color: var(--red-bright);
+}
+
+.disciple-detail-realm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  color: #c4d1ca;
+  font-size: 13px;
+}
+
+.disciple-detail-progress {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
   color: #93a99e;
-  font-family: Georgia, 'Times New Roman', serif;
   font-size: 12px;
 }
 
-.cultivation-track {
-  height: 4px;
+.disciple-detail-progress span:first-child {
+  color: #dce6e0;
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size: 15px;
+}
+
+.disciple-cultivation-track {
+  height: 5px;
   overflow: hidden;
   border-radius: 4px;
   background: rgba(255, 255, 255, 0.05);
 }
 
-.cultivation-track span {
+.disciple-cultivation-track span {
   display: block;
   height: 100%;
   max-width: 100%;
   border-radius: inherit;
   background: linear-gradient(90deg, var(--jade-dark), var(--jade-bright), var(--gold));
   box-shadow: 0 0 8px rgba(119, 184, 154, 0.32);
-  transition: width 350ms linear;
+  transition: width 320ms cubic-bezier(0.22, 0.61, 0.36, 1);
 }
 
-.cultivation-rate {
-  position: absolute;
-  right: 0;
-  bottom: -2px;
-  color: var(--jade);
+.disciple-detail-hint {
+  color: #657970;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.disciple-detail-injury {
+  color: var(--red-bright);
+  font-size: 13px;
+}
+
+.disciple-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+  gap: 8px;
+}
+
+.disciple-facts > div {
+  padding: 9px 11px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.014);
+}
+
+.disciple-facts dt {
+  color: #647a70;
   font-size: 11px;
+  letter-spacing: 0.08em;
 }
 
-.disciple-controls {
+.disciple-facts dd {
+  margin-top: 2px;
+  color: #dce6e0;
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size: 15px;
+}
+
+.disciple-break-button {
+  width: 100%;
+  min-height: 42px;
+  justify-content: center;
+}
+
+.disciple-break-button.is-disabled,
+.disciple-break-button.is-disabled:hover {
+  border-color: rgba(167, 184, 173, 0.11);
+  color: #63756c;
+  background: rgba(255, 255, 255, 0.016);
+  box-shadow: none;
+  cursor: help;
+  transform: none;
+}
+
+.disciple-pill-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.disciple-pill {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.disciple-pill:last-child {
+  border-bottom: 0;
+}
+
+.disciple-pill.is-blocked .disciple-pill-desc {
+  color: #566b61;
+}
+
+.disciple-pill-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.disciple-pill-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  color: #dce6e0;
+}
+
+.disciple-pill-title strong {
+  font-family: 'STKaiti', 'KaiTi', serif;
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+}
+
+.disciple-pill-desc {
+  color: #657970;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.disciple-pill-effect {
+  color: var(--jade-bright);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.disciple-pill-button {
+  min-width: 74px;
+  flex: 0 0 auto;
+  padding: 7px 12px;
+  font-size: 12px;
+}
+
+.disciple-pill-button.is-disabled {
+  border-color: rgba(167, 184, 173, 0.11);
+  color: #63756c;
+  background: rgba(255, 255, 255, 0.016);
+  cursor: help;
+}
+
+.disciple-danger {
+  border-top: 1px dashed rgba(184, 81, 66, 0.35);
+}
+
+.disciple-danger-button {
+  align-self: flex-start;
+  min-height: 40px;
+  border-color: rgba(184, 81, 66, 0.5);
+  color: var(--red-bright);
+}
+
+.disciple-danger-button:not(:disabled):hover {
+  border-color: var(--red-bright);
+  background: rgba(184, 81, 66, 0.12);
+}
+
+.disciple-expel-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 11px 12px;
+  border: 1px solid rgba(184, 81, 66, 0.45);
+  border-radius: 3px;
+  background: rgba(184, 81, 66, 0.08);
+}
+
+.disciple-expel-question {
+  color: #f0bdb1;
+  font-family: 'STKaiti', 'KaiTi', serif;
+  font-size: 15px;
+}
+
+.disciple-expel-warnings {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: #d3a59b;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.disciple-expel-warnings li {
+  position: relative;
+  padding-left: 12px;
+}
+
+.disciple-expel-warnings li::before {
+  position: absolute;
+  left: 0;
+  color: var(--red-bright);
+  content: '·';
+}
+
+.disciple-expel-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.disciple-expel-actions .action-button {
+  min-height: 40px;
+  flex: 1 1 120px;
+}
+
+.disciple-expel-confirm-button {
+  border-color: rgba(224, 123, 104, 0.8);
+  color: #1a0d0a;
+  background: linear-gradient(180deg, #e2927c, #b45a47);
+}
+
+.disciple-expel-confirm-button:not(:disabled):hover {
+  background: linear-gradient(180deg, #eda791, #c26853);
+}
+
+/* ---------- Disciple attribute radar (four axes) ---------- */
+.radar-figure {
   display: grid;
   min-width: 0;
-  grid-template-columns: minmax(104px, 1fr) minmax(112px, 1fr);
-  align-items: end;
+  grid-template-columns: minmax(150px, 220px) minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  margin: 0;
+}
+
+.radar-chart {
+  width: 100%;
+  max-width: 240px;
+  height: auto;
+}
+
+.radar-grid polygon {
+  fill: none;
+  stroke: var(--line);
+  stroke-width: 1;
+}
+
+.radar-axis line {
+  stroke: rgba(192, 216, 199, 0.16);
+  stroke-width: 1;
+}
+
+.radar-area {
+  fill: rgba(119, 184, 154, 0.18);
+  stroke: var(--jade-bright);
+  stroke-width: 1.6;
+  stroke-linejoin: round;
+}
+
+.radar-dot {
+  fill: var(--gold-bright);
+}
+
+.radar-labels text {
+  fill: var(--muted);
+  font-size: 12px;
+}
+
+.radar-values {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
   gap: 7px;
 }
 
-.control-caption {
-  grid-column: 1 / -1;
-  margin-bottom: -3px;
-  color: #5d7268;
-  font-size: 11px;
-  letter-spacing: 0.08em;
+.radar-value-row {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 40px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+}
+
+.radar-value-row dt {
+  color: #93a99e;
+  font-size: 12px;
+}
+
+.radar-value-row dd {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.radar-value-number {
+  min-width: 26px;
+  color: #dce6e0;
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size: 14px;
+}
+
+.radar-value-track {
+  display: block;
+  height: 4px;
+  flex: 1 1 auto;
+  overflow: hidden;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.radar-value-track i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--jade-dark), var(--jade-bright));
+  transition: width 320ms cubic-bezier(0.22, 0.61, 0.36, 1);
 }
 
 .assignment-select {
@@ -1684,62 +2344,12 @@ ul {
   white-space: nowrap;
 }
 
-.breakthrough-button {
-  display: flex;
-  height: 42px;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 5px 8px 5px 11px;
-  border: 1px solid rgba(202, 169, 106, 0.34);
-  border-radius: 3px;
-  color: var(--gold-bright);
-  background: linear-gradient(135deg, rgba(202, 169, 106, 0.09), rgba(202, 169, 106, 0.025));
-  transition: border-color 150ms ease, background-color 150ms ease, transform 150ms ease;
-}
-
-.breakthrough-button:not(:disabled):not(.is-disabled):hover {
-  border-color: rgba(234, 209, 154, 0.7);
-  background: rgba(202, 169, 106, 0.13);
-  transform: translateY(-1px);
-}
-
-.breakthrough-button > span,
-.breakthrough-button b,
-.breakthrough-button small {
-  display: block;
-}
-
-.breakthrough-button b {
-  font-size: 13px;
-  font-weight: 600;
-  letter-spacing: 0.12em;
-}
-
-.breakthrough-button small {
-  margin-top: 1px;
-  color: #8c7650;
-  font-size: 10px;
-  white-space: nowrap;
-}
-
-.breakthrough-button svg {
-  width: 19px;
-  height: 19px;
-  flex: 0 0 19px;
-}
-
-.breakthrough-button.is-disabled,
 .upgrade-button.is-disabled {
   border-color: rgba(167, 184, 173, 0.11);
   color: #63756c;
   background: rgba(255, 255, 255, 0.016);
   box-shadow: none;
   cursor: help;
-}
-
-.breakthrough-button.is-disabled small {
-  color: #526159;
 }
 
 .empty-state {
@@ -3389,6 +3999,10 @@ ul {
     grid-template-columns: 1fr;
   }
 
+  .disciple-list {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+
   .management-rail {
     display: grid;
     grid-template-columns: minmax(280px, 0.7fr) minmax(0, 1.3fr);
@@ -3402,6 +4016,15 @@ ul {
   .sect-upgrade-panel {
     order: 2;
     grid-column: 1 / -1;
+  }
+
+  /* 名册与详情在中屏：工具条字段等宽换行，雷达图与数值仍并排。 */
+  .disciple-toolbar .disciple-field {
+    flex: 1 1 140px;
+  }
+
+  .radar-figure {
+    grid-template-columns: minmax(140px, 190px) minmax(0, 1fr);
   }
 
 }
@@ -3471,13 +4094,27 @@ ul {
     flex: 1;
   }
 
-  .disciple-card {
-    grid-template-columns: 56px minmax(0, 1fr);
+  .disciple-toolbar {
+    gap: 10px;
   }
 
-  .disciple-controls {
-    grid-column: 2;
+  .disciple-select {
+    min-width: 108px;
   }
+
+  .disciple-list {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+.disciple-pill-launch {
+  width: 100%;
+  min-height: 42px;
+  justify-content: center;
+}
+
+.disciple-pill-picker {
+  min-width: 0;
 }
 
 @media (max-width: 680px) {
@@ -3495,10 +4132,10 @@ ul {
     gap: 20px;
   }
 
-  .lore-seal {
-    width: 61px;
-    height: 61px;
-    flex-basis: 61px;
+  .lore-logo {
+    width: 74px;
+    height: 74px;
+    flex-basis: 74px;
   }
 
   .lore-brand h1 {
@@ -3571,10 +4208,10 @@ ul {
     padding: 12px 13px;
   }
 
-  .sect-emblem {
-    width: 43px;
-    height: 43px;
-    flex-basis: 43px;
+  .sect-logo {
+    width: 46px;
+    height: 46px;
+    flex-basis: 46px;
   }
 
   .sect-identity h1 {
@@ -3639,10 +4276,8 @@ ul {
     min-height: 87px;
   }
 
-  .disciple-card {
-    grid-template-columns: 48px minmax(0, 1fr);
-    gap: 12px;
-    padding: 13px 11px;
+  .disciple-list {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .disciple-avatar {
@@ -3650,21 +4285,25 @@ ul {
     height: 45px;
   }
 
-  .disciple-controls {
-    grid-column: 1 / -1;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-    margin-top: 3px;
+  .disciple-toolbar .disciple-field {
+    flex: 1 1 calc(50% - 5px);
   }
 
-  .cultivation-row {
-    padding-right: 0;
+  .disciple-toolbar .disciple-field-search {
+    flex: 1 1 100%;
   }
 
-  .cultivation-rate {
-    position: static;
-    display: block;
-    margin-top: 4px;
-    text-align: right;
+  .radar-figure {
+    grid-template-columns: minmax(0, 1fr);
+    justify-items: center;
+  }
+
+  .radar-values {
+    width: 100%;
+  }
+
+  .disciple-expel-actions .action-button {
+    flex: 1 1 100%;
   }
 
   .management-rail {
@@ -3727,22 +4366,13 @@ ul {
     font-size: 20px;
   }
 
-  .disciple-name-row {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 3px;
+  /* 最窄屏筛选逐行；名册行的两行布局从 560px 起单独处理。 */
+  .disciple-toolbar .disciple-field {
+    flex: 1 1 100%;
   }
 
-  .disciple-name-row > div {
-    width: 100%;
-  }
-
-  .disciple-controls {
-    grid-template-columns: 1fr;
-  }
-
-  .control-caption {
-    grid-column: auto;
+  .disciple-select {
+    min-width: 100%;
   }
 
   .assignment-menu {
@@ -3752,6 +4382,41 @@ ul {
   .game-footer i,
   .game-footer span:first-child {
     display: none;
+  }
+}
+
+@media (max-width: 560px) {
+  .disciple-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .disciple-row {
+    min-height: 0;
+    padding: 7px 7px 6px;
+  }
+
+  .disciple-ring,
+  .disciple-row-media {
+    width: 46px;
+    height: 46px;
+  }
+
+  .disciple-ring .disciple-avatar {
+    width: 100%;
+    height: 100%;
+  }
+
+}
+
+@media (max-width: 380px) {
+  .disciple-list {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (min-width: 1600px) {
+  .disciple-list {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
   }
 }
 
@@ -3892,66 +4557,15 @@ ul {
   padding: 8px 14px;
 }
 
-.alchemy-use-section {
+/* 弟子服药入口已迁入弟子详情，这里只留一句指引。 */
+.alchemy-note {
   margin-top: 14px;
   padding-top: 12px;
   border-top: 1px dashed var(--line);
-}
-
-.alchemy-use-title {
-  margin: 0 0 6px;
-  color: #93a99e;
-  font-family: 'STKaiti', 'KaiTi', serif;
-  font-size: 13px;
-  font-weight: 500;
-  letter-spacing: 0.14em;
-}
-
-.alchemy-use-list {
-  display: flex;
-  flex-direction: column;
-}
-
-.alchemy-use-row {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 9px 2px;
-  border-bottom: 1px solid var(--line);
-}
-
-.alchemy-use-row:last-child {
-  border-bottom: 0;
-}
-
-.alchemy-use-copy {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.alchemy-use-copy strong {
-  color: #dce6e0;
-  font-family: 'STKaiti', 'KaiTi', serif;
-  font-size: 14px;
-  font-weight: 500;
-}
-
-.alchemy-use-copy span {
-  color: #657970;
+  color: #7d9186;
   font-size: 12px;
+  line-height: 1.55;
 }
-
-.alchemy-use-empty {
-  margin: 6px 0 0;
-  color: #657970;
-  font-size: 12px;
-  line-height: 1.5;
-}
-
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

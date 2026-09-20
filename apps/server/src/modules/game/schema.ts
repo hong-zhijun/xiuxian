@@ -66,3 +66,18 @@ export const usePillRequestSchema = z.strictObject({
   pillId: z.string().min(1).max(64),
   discipleId: z.string().min(1).max(64),
 });
+
+/**
+ * 0013 弟子私有备注：只做「类型 + 宽松长度上限」的第一道防线，
+ * 真正的规则（trim / 单行纯文本 / 无控制字符 / ≤60 个 Unicode 字符）在
+ * service.normalizeDiscipleNote 里按码点判定，与 0013 迁移的 CHECK 保持一致。
+ */
+export const setDiscipleNoteRequestSchema = z.strictObject({
+  discipleId: z.string().min(1).max(64),
+  note: z.string().max(240),
+});
+
+/** 0013 驱逐弟子：只带目标 id；归属与人数规则由 service 判定。 */
+export const expelDiscipleRequestSchema = z.strictObject({
+  discipleId: z.string().min(1).max(64),
+});

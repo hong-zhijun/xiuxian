@@ -18,6 +18,7 @@ import {
   asDefenseMode,
   asRewardTier,
   challengeDayStateOf,
+  lineupContainsDisciple,
   planDefenseLineup,
   rewardTierForLevelDifference,
   shufflePick,
@@ -75,6 +76,9 @@ import {
   challengeSnapshotGuardStatement,
   deleteAlchemySnapshotGuardStatement,
   deleteChallengeSnapshotGuardStatement,
+  deleteDiscipleSnapshotGuardStatement,
+  deleteDiscipleStatement,
+  discipleSnapshotGuardStatement,
   insertBuildingStatement,
   insertChallengeLogStatement,
   insertDiscipleStatement,
@@ -89,6 +93,7 @@ import {
   updateDiscipleBodyTemperingStatement,
   updateDiscipleCultivationStatement,
   updateDiscipleInjuryStatement,
+  updateDiscipleNoteStatement,
   updateDiscipleProgressStatement,
   updatePillInventoryQuantityStatement,
   updateResourceSettledStatement,
@@ -492,20 +497,56 @@ class SectDraft {
   }
 
   /**
+   * 弟子命令的受保护提交（0013：备注 / 驱逐 / 守擂布阵共用）：
+   * 首条 mutation_guards 快照语句重新核对宗门行、资源余额、members 每名弟子仍属本宗，
+   * 以及（驱逐时）守擂阵容仍与读到的快照一致；任一并发改动让整批回滚并映射为业务错误。
+   */
+  async commitDisciple(
+    members: readonly { id: string }[],
+    defenseLineup?: string | null,
+  ): Promise<void> {
+    const commandId = crypto.randomUUID();
+    const guard = discipleSnapshotGuardStatement(commandId, {
+      sect: this.base.sect,
+      balances: this.base.balances,
+      members,
+      ...(defenseLineup === undefined ? {} : { defenseLineup }),
+    });
+    try {
+      await this.db.batch(prepareStatements(this.db, [
+        guard,
+        ...this.statements,
+        deleteDiscipleSnapshotGuardStatement(commandId),
+      ]));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (/CHECK constraint failed: (?:valid = 1|mutation_guards)/i.test(message)) {
+        throw new AppError('INVALID_STATUS', '宗门状态已变化，请刷新后重试');
+      }
+      throw error;
+    }
+  }
+
+  /**
    * 挑战 batch（0012）：守卫 + 结算 + 计数/奖励/日志 + 清理守卫一次提交。
    *
    * 并发保护（计划 5.7）：
    * - 首条 mutation_guards 快照语句在 batch 执行时重新校验攻方宗门行（等级/声望/
-   *   结算时间/挑战日期键/计数）、资源余额与守方等级/阵容；任何一个并发改动都会让
-   *   CHECK 失败并回滚整批，所以「成功场次 <= 3」和「奖励与日志同生共死」由数据库保证。
+   *   结算时间/挑战日期键/计数）、资源余额、攻方出战弟子归属与守方等级/阵容；
+   *   任何一个并发改动都会让 CHECK 失败并回滚整批，所以「成功场次 <= 3」和
+   *   「奖励与日志同生共死」由数据库保证。
    * - challenge_log 的唯一部分索引（attacker, defender, challenge_date_key）兜底同日
    *   同目标的并发挑战，冲突映射成 DAILY_LIMIT 业务错误，不向前端暴露 SQL。
    */
-  async commitChallenge(target: { id: string; level: number; defenseLineup: string | null }): Promise<void> {
+  async commitChallenge(
+    target: { id: string; level: number; defenseLineup: string | null },
+    members: readonly { id: string }[],
+  ): Promise<void> {
     const commandId = crypto.randomUUID();
     const guard = challengeSnapshotGuardStatement(commandId, {
       sect: this.base.sect,
       balances: this.base.balances,
+      members,
       target,
     });
     try {
@@ -594,6 +635,7 @@ export async function createSect(
       assignment: template.assignment,
       injured_until: null,
       body_tempering_count: 0,
+      note: '',
       created_at: now,
     };
     statements.push(
@@ -869,6 +911,7 @@ export async function recruitDisciple(
     assignment: IDLE_ASSIGNMENT,
     injured_until: null,
     body_tempering_count: 0,
+    note: '',
     created_at: now,
   };
   draft.addDisciple(disciple);
@@ -990,7 +1033,8 @@ export async function assignDisciple(
   draft.addStatement(updateDiscipleAssignmentStatement(disciple.id, nextAssignment));
   disciple.assignment = nextAssignment;
 
-  await draft.commit();
+  // 驱逐可能在读快照后先提交；不能对已离宗弟子返回一次成功派工。
+  await draft.commitDisciple([{ id: disciple.id }]);
   return draft.view();
 }
 
@@ -1106,7 +1150,8 @@ export async function breakthrough(
     disciple.injured_until = injuredUntil;
   }
 
-  await draft.commit();
+  // 同批核对弟子仍属本宗，避免驱逐先提交后白扣灵气、破境写入影响 0 行。
+  await draft.commitDisciple([{ id: disciple.id }]);
   return {
     state: draft.view(),
     outcome: {
@@ -1120,6 +1165,115 @@ export async function breakthrough(
         : `${disciple.name} 突破失败，修为跌落（保留 ${String(
             Math.floor((stage.requiredCultivation * config.breakthrough.failureKeepBp) / 10_000),
           )}）`,
+    },
+  };
+}
+
+/* ---------- 弟子管理（0013 迁移：私有备注 / 驱逐出师门） ---------- */
+
+/** 私有备注上限（Unicode 码点；与 0013 迁移的 CHECK (length(note) <= 60) 同一口径）。 */
+export const DISCIPLE_NOTE_MAX_CHARS = 60;
+
+/**
+ * 备注归一化（计划 2.4）：trim → 校验「单行纯文本、无控制字符、≤60 个 Unicode 字符」。
+ *
+ * - 允许空串（= 清空备注）；超长 / 含换行或控制字符一律 VALIDATION_ERROR，不静默截断；
+ * - 按码点计数：SQLite 的 length() 对 TEXT 也按字符（码点）计数，两侧口径一致；
+ * - 前端只做长度提示，服务端是最终裁决。
+ */
+export function normalizeDiscipleNote(raw: string): string {
+  const note = raw.trim();
+  // 覆盖 C0（\u0000-\u001F）、DEL、C1 控制区（\u0080-\u009F）与 U+2028/U+2029 行分隔符：
+  // 这些都是「能造出折行或不可见控制」的字符，接口层必须自己挡住，不能只靠 UI 单行输入。
+  if (/[\u0000-\u001F\u007F-\u009F\u2028\u2029]/.test(note)) {
+    throw new AppError('VALIDATION_ERROR', '备注只能是一行纯文本，不能包含换行或控制字符');
+  }
+  if ([...note].length > DISCIPLE_NOTE_MAX_CHARS) {
+    throw new AppError('VALIDATION_ERROR', `备注最多 ${String(DISCIPLE_NOTE_MAX_CHARS)} 个字符`, {
+      maxChars: DISCIPLE_NOTE_MAX_CHARS,
+    });
+  }
+  return note;
+}
+
+/**
+ * 保存弟子私有备注（计划 2.4）：结算 → 归属校验 → 归一化 → 单列写回。
+ *
+ * - 归属：discipleById 只在当前宗门的弟子里找，非本宗 / 不存在统一 NOT_FOUND；
+ * - 幂等：只写 note 一列，不扣资源、不动计数、不触发事件，重复保存相同内容无额外游戏效果；
+ * - 提交走 commitDisciple：批内重新核对宗门行、资源余额与目标弟子归属，并发时不产生半写。
+ */
+export async function setDiscipleNote(
+  db: D1Database,
+  userId: string,
+  discipleId: string,
+  note: string,
+  now: number,
+): Promise<SectStateView> {
+  const draft = await draftFor(db, userId, now);
+  const disciple = draft.discipleById(discipleId);
+  const normalized = normalizeDiscipleNote(note);
+
+  draft.addStatement(updateDiscipleNoteStatement(disciple.id, draft.sect.id, normalized));
+  disciple.note = normalized;
+
+  await draft.commitDisciple([{ id: disciple.id }]);
+  return draft.view();
+}
+
+/** 驱逐回执（纯命令结果，前端据此提示是否需要重新布阵）；不属于任何公开视图。 */
+export interface ExpelDiscipleOutcome {
+  discipleId: string;
+  discipleName: string;
+  /** 该弟子被驱逐前是否占用手动守擂阵容（true = 阵容已同批清空，需要重新布阵）。 */
+  lineupCleared: boolean;
+  /** 驱逐后宗门剩余弟子数（< 3 时无法组成主动挑战阵容、也不能被挑战）。 */
+  remainingDisciples: number;
+}
+
+/**
+ * 驱逐弟子（计划 2.5）：结算 → 归属校验 → 同一原子 batch 删除弟子行（含必要的阵容清理）。
+ *
+ * - 只允许驱逐自己的现存弟子；不存在 / 非本宗统一 NOT_FOUND（不泄露他人门人信息）；
+ * - 允许驱逐到不足 3 人甚至 0 人：不返还资源 / 招募次数 / 培养成本，不降低宗门等级；
+ * - 先结算该弟子截至当时的修为与岗位收益（结算写回与删除同在一条 batch 里，结算在前）；
+ * - 以 `id + sect_id` 删除；若 ID 在本宗手动守擂阵容内，同批把阵容写成 NULL（提示重新布阵）；
+ *   不在阵容内时阵容一个字都不改；
+ * - 历史快照（challenge_log / sparring_log / explorations）与公开档案不回写；返回的 state 里
+ *   人数相关视图（招募容量、宗门升级要求、守擂）已经是新人数。
+ *
+ * 并发（计划 2.5 末条）：commitDisciple 的首条快照守卫在 batch 执行时重新核对宗门行、资源
+ * 余额、被驱逐弟子仍属本宗，以及阵容仍与读到的快照一致；任一冲突整批回滚并映射成
+ * INVALID_STATUS，不会出现幽灵成功、失效手动阵容或半写。
+ */
+export async function expelDisciple(
+  db: D1Database,
+  userId: string,
+  discipleId: string,
+  now: number,
+): Promise<{ state: SectStateView; outcome: ExpelDiscipleOutcome }> {
+  const draft = await draftFor(db, userId, now);
+  const disciple = draft.discipleById(discipleId);
+
+  // 阵容守卫必须用「读到的库值」：守卫是本批第一条语句，此时本批写入还没执行。
+  const lineupSnapshot = draft.sect.defense_lineup;
+  const lineupCleared = lineupContainsDisciple(lineupSnapshot, disciple.id);
+
+  draft.disciples = draft.disciples.filter((row) => row.id !== disciple.id);
+  draft.addStatement(deleteDiscipleStatement(disciple.id, draft.sect.id));
+  if (lineupCleared) {
+    draft.addStatement(updateSectDefenseLineupStatement(draft.sect.id, null));
+    draft.sect.defense_lineup = null;
+  }
+
+  await draft.commitDisciple([{ id: disciple.id }], lineupSnapshot);
+  return {
+    state: draft.view(),
+    outcome: {
+      discipleId: disciple.id,
+      discipleName: disciple.name,
+      lineupCleared,
+      remainingDisciples: draft.disciples.length,
     },
   };
 }
@@ -1159,19 +1313,21 @@ export async function upgradeSect(
     }
   }
 
-  // 3. 弟子境界条件
+  // 3. 弟子境界条件；提交时仍需确认用于晋升的弟子没有被并发驱逐。
+  const requiredDisciples = new Set<string>();
   for (const requirement of next.discipleRequirements) {
     const requiredRealmIndex = realmIndex(requirement.minRealmId);
     const qualified = draft.disciples.filter(
       (disciple) => realmIndex(disciple.realm_id) >= requiredRealmIndex,
-    ).length;
-    if (qualified < requirement.count) {
+    );
+    if (qualified.length < requirement.count) {
       const realmName = findRealm(requirement.minRealmId).name;
       throw new AppError(
         'INVALID_STATUS',
-        `需要 ${requirement.count} 名${realmName}及以上弟子（当前 ${qualified} 名）`,
+        `需要 ${requirement.count} 名${realmName}及以上弟子（当前 ${qualified.length} 名）`,
       );
     }
+    for (const disciple of qualified.slice(0, requirement.count)) requiredDisciples.add(disciple.id);
   }
 
   // 4. 提级
@@ -1202,7 +1358,7 @@ export async function upgradeSect(
     );
   }
 
-  await draft.commit();
+  await draft.commitDisciple([...requiredDisciples].map((id) => ({ id })));
   return draft.view();
 }
 
@@ -1412,7 +1568,8 @@ export async function exploreSectRealm(
     }),
   );
 
-  await draft.commit();
+  // 结算、入场费、奖励/伤势与日志一起受成员归属守卫保护。
+  await draft.commitDisciple(discipleIds.map((id) => ({ id })));
   return {
     state: draft.view(),
     result: {
@@ -1943,7 +2100,8 @@ export async function setDefenseLineup(
   draft.addStatement(updateSectDefenseLineupStatement(draft.sect.id, lineupJson));
   draft.sect.defense_lineup = lineupJson;
 
-  await draft.commit();
+  // 0013：提交时重新核对选中弟子仍属本宗 —— 与驱逐交错时不写入引用已离开弟子的失效阵容。
+  await draft.commitDisciple(discipleIds.map((id) => ({ id })));
   return draft.view();
 }
 
@@ -2128,11 +2286,15 @@ export async function challengeSect(
   );
 
   // 10-3. 唯一的一次受保护提交：守卫 + 结算 + 计数 + 奖励 + 日志同一个 batch。
-  await draft.commitChallenge({
-    id: targetSect.id,
-    level: defenderLevel,
-    defenseLineup: targetSect.defense_lineup,
-  });
+  await draft.commitChallenge(
+    {
+      id: targetSect.id,
+      level: defenderLevel,
+      defenseLineup: targetSect.defense_lineup,
+    },
+    // 0013：提交时重新核对攻方出战弟子仍属本宗（与驱逐交错时不出现幽灵出战）。
+    attackerMembers.map((member) => ({ id: member.discipleId })),
+  );
 
   // 13. 提交成功后返回含最新剩余次数的 state 与完整战斗结果。
   draft.challengeDay = {

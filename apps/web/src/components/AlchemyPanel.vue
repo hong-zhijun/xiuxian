@@ -1,14 +1,14 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 
-import type { AlchemyRecipeView, DiscipleView, SectStateView } from '../api/game';
+import type { AlchemyRecipeView, SectStateView } from '../api/game';
 import { formatAmount } from '../utils/format';
 
 /**
- * 炼丹面板（弹窗内容）：配方炼制 + 弟子服药。
+ * 炼丹面板（弹窗内容）：**只负责配方炼制**。弟子服药入口已迁到弟子详情（计划 2.3：不保留
+ * 两个相互冲突的服药入口）。
  *
- * 规则全部以服务端算好的 alchemy / disciples 字段为准：canCraft、blockedReason、
- * 淬体短板预览（bodyTemperingTarget / bodyTemperingGain）都不在前端复算；
+ * 规则全部以服务端算好的 alchemy 字段为准：unlocked、canCraft、blockedReason 都不在前端复算；
  * 前端只做数量步进（1~5）与按钮派发。
  */
 const props = defineProps<{
@@ -18,7 +18,6 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   craft: [pillId: string, quantity: number];
-  use: [pillId: string, discipleId: string];
 }>();
 
 const QUANTITY_MIN = 1;
@@ -60,80 +59,14 @@ function canCraftSelected(recipe: AlchemyRecipeView): boolean {
   );
 }
 
-function recipeOwned(pillId: string): number {
-  return props.state.alchemy.recipes.find((recipe) => recipe.id === pillId)?.owned ?? 0;
-}
+/** 丹库总量（角标用）；原来的「N 条用药建议」随全局用药区块一起移除。 */
+const totalOwned = computed(() =>
+  props.state.alchemy.recipes.reduce((sum, recipe) => sum + recipe.owned, 0),
+);
 
 function onCraft(recipe: AlchemyRecipeView): void {
   if (props.busy || !canCraftSelected(recipe)) return;
   emit('craft', recipe.id, quantities.value[recipe.id] ?? QUANTITY_MIN);
-}
-
-const ATTRIBUTE_NAMES: Record<string, string> = { attack: '攻击', defense: '防御', speed: '身法' };
-
-function attributeName(attribute: string): string {
-  return ATTRIBUTE_NAMES[attribute] ?? attribute;
-}
-
-/** 一条可执行的服药建议：目标弟子 + 丹药 + 效果预览 + 禁用原因。 */
-interface UseOption {
-  key: string;
-  discipleId: string;
-  discipleName: string;
-  pillId: string;
-  pillName: string;
-  preview: string;
-  stock: number;
-}
-
-/** 弟子用药建议（服务端规则的镜像展示；真正能否服用由服务端最终校验）。 */
-const useOptions = computed<UseOption[]>(() => {
-  if (!props.state.alchemy.unlocked) return [];
-  const serverNow = Date.parse(props.state.serverNow);
-  const pillName = (pillId: string): string =>
-    props.state.alchemy.recipes.find((recipe) => recipe.id === pillId)?.name ?? pillId;
-
-  const options: UseOption[] = [];
-  const push = (
-    disciple: DiscipleView,
-    pillId: string,
-    preview: string,
-  ): void => {
-    options.push({
-      key: `${disciple.id}:${pillId}`,
-      discipleId: disciple.id,
-      discipleName: disciple.name,
-      pillId,
-      pillName: pillName(pillId),
-      preview,
-      stock: recipeOwned(pillId),
-    });
-  };
-
-  for (const disciple of props.state.disciples) {
-    const injured =
-      disciple.injuredUntil !== null && Date.parse(disciple.injuredUntil) > serverNow;
-    if (injured) {
-      push(disciple, 'healingPill', '清除伤势，立刻可再出战');
-    }
-    if (disciple.requiredCultivation !== null && disciple.cultivation < disciple.requiredCultivation) {
-      const gain = Math.min(120, disciple.requiredCultivation - disciple.cultivation);
-      push(disciple, 'cultivationPill', `修为 +${gain}（达到 ${disciple.requiredCultivation} 门槛为止）`);
-    }
-    if (disciple.bodyTemperingTarget !== null) {
-      push(
-        disciple,
-        'bodyTemperingPill',
-        `本次补：${attributeName(disciple.bodyTemperingTarget)} +${disciple.bodyTemperingGain}`,
-      );
-    }
-  }
-  return options;
-});
-
-function onUse(option: UseOption): void {
-  if (props.busy || option.stock < 1) return;
-  emit('use', option.pillId, option.discipleId);
 }
 </script>
 
@@ -144,7 +77,7 @@ function onUse(option: UseOption): void {
         <p class="eyebrow">灵药园 · 丹房</p>
         <h2 id="alchemy-title">炼丹</h2>
       </div>
-      <span class="count-badge">{{ useOptions.length }} 条用药建议</span>
+      <span class="count-badge">丹库 {{ totalOwned }} 颗</span>
     </header>
 
     <div v-if="!state.alchemy.unlocked" class="empty-state alchemy-locked">
@@ -203,29 +136,9 @@ function onUse(option: UseOption): void {
         </li>
       </ul>
 
-      <div class="alchemy-use-section">
-        <h3 class="alchemy-use-title">弟子用药</h3>
-        <ul v-if="useOptions.length > 0" class="alchemy-use-list">
-          <li v-for="option in useOptions" :key="option.key" class="alchemy-use-row">
-            <div class="alchemy-use-copy">
-              <strong>{{ option.discipleName }}</strong>
-              <span>{{ option.pillName }} · {{ option.preview }}</span>
-            </div>
-            <button
-              class="upgrade-button"
-              :class="{ 'is-disabled': option.stock < 1 }"
-              type="button"
-              :disabled="busy"
-              :aria-disabled="option.stock < 1"
-              :title="option.stock < 1 ? '丹药库存不足' : undefined"
-              @click="onUse(option)"
-            >
-              <span>{{ option.stock < 1 ? '无库存' : '服用' }}</span>
-            </button>
-          </li>
-        </ul>
-        <p v-else class="alchemy-use-empty">目前没有弟子需要服药：无人受伤、修为未满门槛且没有可补的属性短板。</p>
-      </div>
+      <p class="alchemy-note">
+        弟子服药已移至「弟子详情」：在门人名册里点某位弟子的「详情」，即可按他的伤势、修为与属性短板服用丹药。
+      </p>
     </template>
   </section>
 </template>

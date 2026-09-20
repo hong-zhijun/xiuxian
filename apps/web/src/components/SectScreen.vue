@@ -11,14 +11,15 @@ import type {
   SectStateView,
 } from '../api/game';
 import type { ToastTone } from '../types/ui';
-import { formatAmount, formatBp, formatRate, formatTime } from '../utils/format';
+import { formatAmount, formatRate, formatTime } from '../utils/format';
 import { fetchRecruitPreview, refreshRecruitPreview } from '../api/game';
 import { resourceGlyph } from '../utils/glyph';
 import AlchemyPanel from './AlchemyPanel.vue';
-import AssignmentSelect from './AssignmentSelect.vue';
 import ChallengeDialog from './ChallengeDialog.vue';
 import ChallengeHistoryPanel from './ChallengeHistoryPanel.vue';
 import DefenseLineupPanel from './DefenseLineupPanel.vue';
+import DiscipleDetailDialog from './DiscipleDetailDialog.vue';
+import DiscipleRoster from './DiscipleRoster.vue';
 import EventLogPanel from './EventLogPanel.vue';
 import ExplorePanel from './ExplorePanel.vue';
 import ExplorePartyDialog from './ExplorePartyDialog.vue';
@@ -52,6 +53,10 @@ const emit = defineEmits<{
   'craft-pill': [pillId: string, quantity: number];
   'use-pill': [pillId: string, discipleId: string];
   notify: [tone: ToastTone, title: string, message: string];
+  /** 详情里保存私有备注（note 为空串 = 清空）；App.vue 绑定了这个名字。 */
+  'save-note': [discipleId: string, note: string];
+  /** 详情底部二次确认后的驱逐请求；App.vue 绑定了这个名字。 */
+  expel: [discipleId: string];
 }>();
 
 /** 操作条里的弹窗开关：天机录 / 历练探索 / 江湖榜 / 守擂阵容 / 演武录 / 炼丹（宗门晋升与建筑仍在右栏常驻）。 */
@@ -131,6 +136,9 @@ const resourceName = computed<Record<string, string>>(() =>
   Object.fromEntries(props.state.resources.map((resource) => [resource.id, resource.name])),
 );
 
+/** 服务端当前时间（毫秒）：疗伤等时间判定统一用它，不受本机时钟影响。 */
+const serverNowMs = computed(() => Date.parse(props.state.serverNow));
+
 const settlementText = computed(() => {
   const seconds = props.state.settle.durationSeconds;
   if (seconds < 60) return '方才完成结算';
@@ -143,12 +151,6 @@ function costText(cost: Record<string, string> | null): string {
   return Object.entries(cost)
     .map(([resourceId, amount]) => `${resourceName.value[resourceId] ?? resourceId} ${formatAmount(amount)}`)
     .join(' · ');
-}
-
-function progressPercent(discipleId: string, required: number | null): number {
-  if (required === null || required === 0) return 100;
-  const current = liveCultivation.value[discipleId] ?? 0;
-  return Math.min(100, Math.round((current / required) * 100));
 }
 
 function resourcePercent(resourceId: string, capacity: string): number {
@@ -300,25 +302,66 @@ function onSetLineupChoice(discipleIds: string[]): void {
   emit('setDefenseLineup', discipleIds);
 }
 
-function requestBreakthrough(disciple: DiscipleView): void {
-  if (props.busy) return;
-  if (!disciple.canBreakthrough) {
-    emit('notify', 'warning', `${disciple.name}暂不可突破`, disciple.blockedReason ?? '当前条件尚未满足。');
-    return;
-  }
-  emit('breakthrough', disciple.id);
-}
-
 /** 炼丹面板里点「炼制」：数量已在面板内选好（1~5），转发给上层调接口。 */
 function onCraftPill(pillId: string, quantity: number): void {
   if (props.busy) return;
   emit('craft-pill', pillId, quantity);
 }
 
-/** 炼丹面板里点「服用」：目标弟子由服务端校验归属与状态，转发给上层调接口。 */
+/**
+ * 弟子详情里点「服用」：目标弟子与服务端状态由服务端校验，转发给上层调接口。
+ * （原文的全局「弟子用药」区块已迁入详情，炼丹面板只负责炼制。）
+ */
 function onUsePill(pillId: string, discipleId: string): void {
   if (props.busy) return;
   emit('use-pill', pillId, discipleId);
+}
+
+/* ---------- 弟子详情：只存 discipleId，每次渲染都从最新 state.disciples 取对象 ---------- */
+
+const detailId = ref<string | null>(null);
+
+/** 详情对应的弟子；驱逐成功后返回 null，弹窗随之关闭。 */
+const detailDisciple = computed<DiscipleView | null>(() => {
+  if (detailId.value === null) return null;
+  return props.state.disciples.find((disciple) => disciple.id === detailId.value) ?? null;
+});
+
+// 所选弟子从 state.disciples 里消失（驱逐成功）时自动关闭详情，不依赖额外事件。
+watch(detailDisciple, (disciple) => {
+  if (detailId.value !== null && disciple === null) detailId.value = null;
+});
+
+function openDetail(discipleId: string): void {
+  detailId.value = discipleId;
+}
+
+function closeDetail(): void {
+  detailId.value = null;
+}
+
+function onDetailAssign(discipleId: string, assignment: string): void {
+  if (props.busy) return;
+  emit('assign', discipleId, assignment);
+}
+
+function onDetailBreakthrough(discipleId: string): void {
+  if (props.busy) return;
+  emit('breakthrough', discipleId);
+}
+
+function onDetailSaveNote(discipleId: string, note: string): void {
+  if (props.busy) return;
+  emit('save-note', discipleId, note);
+}
+
+function onDetailExpel(discipleId: string): void {
+  if (props.busy) return;
+  emit('expel', discipleId);
+}
+
+function onDetailNotify(tone: ToastTone, title: string, message: string): void {
+  emit('notify', tone, title, message);
 }
 </script>
 
@@ -326,7 +369,7 @@ function onUsePill(pillId: string, discipleId: string): void {
   <main class="game-shell" :aria-busy="busy">
     <header class="game-topbar">
       <div class="sect-identity">
-        <div class="sect-emblem" aria-hidden="true"><span>{{ state.sect.name.slice(0, 1) }}</span></div>
+        <img class="sect-logo" src="/brand-logo.png" alt="" aria-hidden="true" />
         <div>
           <p class="eyebrow">太初界 · 掌门府</p>
           <h1>{{ state.sect.name }}</h1>
@@ -461,78 +504,15 @@ function onUsePill(pillId: string, discipleId: string): void {
           <span class="count-badge">{{ state.disciples.length }} 位门人</span>
         </header>
 
-        <ul v-if="state.disciples.length > 0" class="disciple-list">
-          <li v-for="disciple in state.disciples" :key="disciple.id" class="disciple-card">
-            <div class="disciple-avatar" :class="`realm-${disciple.realmId}`" aria-hidden="true">
-              <span>{{ disciple.name.slice(0, 1) }}</span>
-              <i>{{ disciple.gender === 'female' ? '坤' : '乾' }}</i>
-            </div>
-
-            <div class="disciple-info">
-              <div class="disciple-name-row">
-                <div>
-                  <strong>{{ disciple.name }}</strong>
-                  <span class="realm-tag">{{ disciple.stageName }}</span>
-                </div>
-                <span class="aptitude-badge">资质 {{ disciple.aptitude }}</span>
-              </div>
-
-              <div class="disciple-stats">
-                <span class="stat-tag stat-attack">攻 {{ disciple.attack }}</span>
-                <span class="stat-tag stat-defense">防 {{ disciple.defense }}</span>
-                <span class="stat-tag stat-speed">速 {{ disciple.speed }}</span>
-                <span class="stat-tag stat-talent">{{ disciple.talentName }}</span>
-                <span class="stat-tag stat-power">战力 {{ disciple.combatPower }}</span>
-              </div>
-
-              <div class="cultivation-row">
-                <div class="cultivation-label">
-                  <span>修为进境</span>
-                  <span>
-                    {{ Math.floor(liveCultivation[disciple.id] ?? 0) }}
-                    <template v-if="disciple.requiredCultivation !== null"> / {{ disciple.requiredCultivation }}</template>
-                    <template v-else> · 已臻当前绝顶</template>
-                  </span>
-                </div>
-                <div class="cultivation-track" role="progressbar" :aria-label="`${disciple.name}修为进境`" :aria-valuenow="progressPercent(disciple.id, disciple.requiredCultivation)" aria-valuemin="0" aria-valuemax="100">
-                  <span :style="{ width: `${progressPercent(disciple.id, disciple.requiredCultivation)}%` }" />
-                </div>
-                <span class="cultivation-rate">静修 +{{ disciple.cultivationRatePerHour }}/时</span>
-              </div>
-            </div>
-
-            <div class="disciple-controls">
-              <span class="control-caption">当前差遣</span>
-              <AssignmentSelect
-                :model-value="disciple.assignment"
-                :options="state.assignments"
-                :disabled="busy"
-                :label="disciple.name"
-                @change="emit('assign', disciple.id, $event)"
-              />
-              <button
-                class="breakthrough-button"
-                :class="{ 'is-disabled': !disciple.canBreakthrough }"
-                type="button"
-                :disabled="busy"
-                :aria-disabled="!disciple.canBreakthrough"
-                @click="requestBreakthrough(disciple)"
-              >
-                <span>
-                  <b>破境</b>
-                  <small>{{ formatBp(disciple.breakthroughChanceBp) }} 胜算 · 灵气 {{ formatAmount(disciple.breakthroughCost) }}</small>
-                </span>
-                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 15 5-8 5 8m-10 3h10" /></svg>
-              </button>
-            </div>
-          </li>
-        </ul>
-
-        <div v-else class="empty-state">
-          <span aria-hidden="true">寂</span>
-          <strong>门下尚无弟子</strong>
-          <p>可从上方操作栏的「招贤台」张榜迎接有缘之人。</p>
-        </div>
+        <DiscipleRoster
+          :disciples="state.disciples"
+          :assignments="state.assignments"
+          :server-now-ms="serverNowMs"
+          :live-cultivation="liveCultivation"
+          :busy="busy"
+          :detail-id="detailId"
+          @open-detail="openDetail"
+        />
       </section>
 
       <aside class="management-rail">
@@ -636,13 +616,12 @@ function onUsePill(pillId: string, discipleId: string): void {
       <ExplorePanel :state="state" :busy="busy" @select="onSelectRealm" />
     </ModalShell>
 
-    <!-- 炼丹：解锁/库存/canCraft 都由服务端算好；炼制与服药后 state 整体刷新，面板就地更新。 -->
+    <!-- 炼丹：解锁/库存/canCraft 都由服务端算好，只保留炼制；弟子服药入口已移入弟子详情。 -->
     <ModalShell v-if="openPanel === 'alchemy'" label="炼丹" @close="openPanel = null">
       <AlchemyPanel
         :state="state"
         :busy="busy"
         @craft="onCraftPill"
-        @use="onUsePill"
       />
     </ModalShell>
 
@@ -703,6 +682,31 @@ function onUsePill(pillId: string, discipleId: string): void {
         :refreshing="recruitRefreshing"
         @choose="onRecruitChoose"
         @refresh="requestRecruitRefresh"
+      />
+    </ModalShell>
+
+    <!--
+      弟子详情：只存 discipleId，每次渲染都从最新 state.disciples 取对象（不缓存快照）；
+      key 绑定 id，切换弟子时重置内部草稿（备注、驱逐确认步）。驱逐成功后该 id 从 state 里
+      消失，watch 会关掉弹窗并把焦点还给名册里对应的「详情」按钮。
+    -->
+    <ModalShell
+      v-if="detailDisciple"
+      :label="`弟子详情 · ${detailDisciple.name}`"
+      @close="closeDetail"
+    >
+      <DiscipleDetailDialog
+        :key="detailDisciple.id"
+        :state="state"
+        :disciple="detailDisciple"
+        :busy="busy"
+        :live-cultivation="liveCultivation[detailDisciple.id] ?? null"
+        @assign="onDetailAssign"
+        @breakthrough="onDetailBreakthrough"
+        @use-pill="onUsePill"
+        @save-note="onDetailSaveNote"
+        @expel="onDetailExpel"
+        @notify="onDetailNotify"
       />
     </ModalShell>
   </main>

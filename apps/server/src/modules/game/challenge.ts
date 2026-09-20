@@ -196,6 +196,28 @@ function parseManualLineupIds(lineupJson: string | null): string[] | null {
 }
 
 /**
+ * 手动守擂阵容 JSON 里是否包含某名弟子（驱逐时的「是否需要清空阵容」判断）。
+ *
+ * JSON 非法 / 不是数组时视为不包含：这种阵容本来就会被 planDefenseLineup 判为无效并回退
+ * 自动守擂，不构成有效配置，驱逐时无需改写它。
+ */
+export function lineupContainsDisciple(lineupJson: string | null, discipleId: string): boolean {
+  if (lineupJson === null) {
+    return false;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(lineupJson);
+  } catch {
+    return false;
+  }
+  if (!Array.isArray(parsed)) {
+    return false;
+  }
+  return (parsed as unknown[]).some((item) => item === discipleId);
+}
+
+/**
  * 不改写原数组的 Fisher-Yates 洗牌 + 取前 count 个：
  * 自动守擂「等概率、不重复抽 3 名并随机排序」用同一个函数完成；
  * `random` 可注入以便测试（生产用默认 Math.random）。

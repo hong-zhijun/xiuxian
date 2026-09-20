@@ -6,6 +6,7 @@ import {
   firstInsufficientResource,
   BODY_TEMPERING_MAX_USES,
   PILL_RECIPES,
+  CULTIVATION_PILL_GAIN,
 } from './alchemy';
 import {
   CHALLENGE_DAILY_LIMIT,
@@ -90,6 +91,11 @@ export interface DiscipleView {
   realmId: string;
   realmName: string;
   stage: number;
+  /**
+   * 境界在服务端 REALMS 表里的下标（0 = 最低，未知 id 视为 0）。
+   * 只给前端排序用：境界高低不能按名称字符串比较。
+   */
+  realmOrder: number;
   stageName: string;
   cultivation: number;
   /** 突破门槛；null 表示已是本版本最高阶段。 */
@@ -109,6 +115,11 @@ export interface DiscipleView {
   bodyTemperingTarget: 'attack' | 'defense' | 'speed' | null;
   /** 本次服用淬体丹的提升量；无短板时为 0。 */
   bodyTemperingGain: number;
+  /**
+   * 0013 掌门私有备注（单行纯文本，≤60 字，空串 = 未填写）。
+   * 只出现在登录玩家自己的 SectStateView；公开档案 / 排行榜 / 战报不含此字段。
+   */
+  note: string;
 }
 
 export interface BuildingView {
@@ -171,6 +182,11 @@ export interface AlchemyView {
   unlocked: boolean;
   blockedReason: string | null;
   recipes: AlchemyRecipeView[];
+  /**
+   * 聚气丹单次修为增益（= 服务端 alchemy.ts 的 CULTIVATION_PILL_GAIN）。
+   * 由服务端下发，前端只渲染，避免在 UI 里复制一份丹药常量（计划 2.3「不复制判定公式」）。
+   */
+  cultivationPillGain: number;
 }
 
 export interface SectStateView {
@@ -575,6 +591,8 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
       ),
       realmId: realm.id,
       realmName: realm.name,
+      // 境界高低用服务端的 REALMS 下标（前端排序只认这个，不按境界名字符串比较）。
+      realmOrder: realmIndex(realm.id),
       stage: disciple.stage,
       stageName: stage.name,
       cultivation: Number(disciple.cultivation),
@@ -591,6 +609,7 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
       bodyTemperingRemaining: Math.max(0, BODY_TEMPERING_MAX_USES - temperingUses),
       bodyTemperingTarget: temperingTarget?.attribute ?? null,
       bodyTemperingGain: temperingTarget?.gain ?? 0,
+      note: disciple.note,
     };
   });
 
@@ -663,6 +682,7 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
   const alchemyLockedReason = alchemyUnlockBlockedReason(Number(sect.level), buildingLevelsForAlchemy);
   const alchemyView: AlchemyView = {
     unlocked: alchemyLockedReason === null,
+    cultivationPillGain: CULTIVATION_PILL_GAIN,
     blockedReason: alchemyLockedReason,
     recipes: PILL_RECIPES.map((recipe) => {
       const ownedRow = pillInventories.find((row) => row.pill_id === recipe.id);

@@ -53,6 +53,8 @@ export interface DiscipleRow {
   injured_until: number | null;
   /** 已服用淬体丹次数（上限 BODY_TEMPERING_MAX_USES，见 alchemy.ts）。 */
   body_tempering_count: number;
+  /** 0013 掌门私有备注（单行纯文本，≤60 字；只进登录玩家自己的视图）。 */
+  note: string;
   created_at: number;
 }
 
@@ -173,7 +175,7 @@ export class DiscipleRepository extends ParamRepository {
     return this.all<DiscipleRow>({
       sql: `SELECT id, sect_id, name, gender, aptitude, attack, defense, speed, talent,
                    realm_id, stage, cultivation, cultivation_remainder,
-                   assignment, injured_until, body_tempering_count, created_at
+                   assignment, injured_until, body_tempering_count, note, created_at
             FROM disciples WHERE sect_id = ? ORDER BY created_at ASC, id ASC`,
       params: [sectId],
     });
@@ -183,7 +185,7 @@ export class DiscipleRepository extends ParamRepository {
     return this.one<DiscipleRow>({
       sql: `SELECT id, sect_id, name, gender, aptitude, attack, defense, speed, talent,
                    realm_id, stage, cultivation, cultivation_remainder,
-                   assignment, injured_until, body_tempering_count, created_at
+                   assignment, injured_until, body_tempering_count, note, created_at
             FROM disciples WHERE id = ?`,
       params: [discipleId],
     });
@@ -712,14 +714,40 @@ export function updateSectReputationStatement(sectId: string, delta: number): Pa
   };
 }
 
-/** 守擂阵容写回（V5 2.2）：defense_lineup 是弟子 id 数组的 JSON 字符串。 */
+/**
+ * 守擂阵容写回（V5 2.2 / 0013）：defense_lineup 是弟子 id 数组的 JSON 字符串；
+ * 传 null = 清空阵容（驱逐守擂成员时与删除弟子同一 batch 写入）。
+ */
 export function updateSectDefenseLineupStatement(
   sectId: string,
-  lineupJson: string,
+  lineupJson: string | null,
 ): ParameterizedQuery {
   return {
     sql: 'UPDATE sects SET defense_lineup = ? WHERE id = ?',
     params: [lineupJson, sectId],
+  };
+}
+
+/**
+ * 0013 备注写回：note 已在服务层 trim 并校验（≤60 字、单行、无控制字符）。
+ * 与驱逐删除保持一致用 `id + sect_id` 双条件：身份写错行时影响 0 行（批内快照守卫再兜一层）。
+ */
+export function updateDiscipleNoteStatement(
+  discipleId: string,
+  sectId: string,
+  note: string,
+): ParameterizedQuery {
+  return {
+    sql: 'UPDATE disciples SET note = ? WHERE id = ? AND sect_id = ?',
+    params: [note, discipleId, sectId],
+  };
+}
+
+/** 0013 驱逐：id + sect_id 双条件删除；弟子已不属于本宗时影响 0 行（配合快照守卫兜底）。 */
+export function deleteDiscipleStatement(discipleId: string, sectId: string): ParameterizedQuery {
+  return {
+    sql: 'DELETE FROM disciples WHERE id = ? AND sect_id = ?',
+    params: [discipleId, sectId],
   };
 }
 
@@ -792,14 +820,16 @@ export function updateSectChallengeCounterStatement(
 /**
  * 挑战 batch 的首条语句（与炼丹的 alchemySnapshotGuardStatement 同一模式）：
  * 快照过期时插入 valid=0 触发 mutation_guards 的 CHECK，让同批的结算、计数、奖励、
- * 日志一起回滚。校验攻方宗门行（等级/声望/结算时间/挑战日期键/计数）、全部资源余额，
- * 以及守方宗门的等级与守擂阵容（奖励档位与阵容都以开战快照为准）。
+ * 日志一起回滚。校验攻方宗门行（等级/声望/结算时间/挑战日期键/计数）、全部资源余额、
+ * 攻方出战弟子仍属于本宗（0013：与驱逐交错时不出现幽灵出战），以及守方宗门的等级
+ * 与守擂阵容（奖励档位与阵容都以开战快照为准）。
  */
 export function challengeSnapshotGuardStatement(
   commandId: string,
   snapshot: {
     sect: SectRow;
     balances: readonly ResourceBalanceRow[];
+    members: readonly { id: string }[];
     target: {
       id: string;
       level: number;
@@ -807,7 +837,7 @@ export function challengeSnapshotGuardStatement(
     };
   },
 ): ParameterizedQuery {
-  const { sect, balances, target } = snapshot;
+  const { sect, balances, members, target } = snapshot;
   const checks = [
     `EXISTS (SELECT 1 FROM sects WHERE id = ? AND level = ? AND reputation = ?
       AND last_settled_at = ? AND challenge_date_key = ? AND challenge_count = ?)`,
@@ -825,6 +855,10 @@ export function challengeSnapshotGuardStatement(
       'EXISTS (SELECT 1 FROM resource_balances WHERE id = ? AND sect_id = ? AND balance = ? AND remainder = ?)',
     );
     params.push(row.id, sect.id, row.balance, row.remainder);
+  }
+  for (const member of members) {
+    checks.push('EXISTS (SELECT 1 FROM disciples WHERE id = ? AND sect_id = ?)');
+    params.push(member.id, sect.id);
   }
 
   return {
@@ -947,6 +981,63 @@ export function alchemySnapshotGuardStatement(
 }
 
 export function deleteAlchemySnapshotGuardStatement(commandId: string): ParameterizedQuery {
+  return {
+    sql: 'DELETE FROM mutation_guards WHERE command_id = ?',
+    params: [commandId],
+  };
+}
+
+/* ---------- 弟子管理（0013 迁移：备注 / 驱逐 / 布阵的快照守卫） ---------- */
+
+/**
+ * 弟子命令 batch 的首条语句（与炼丹/挑战守卫同一模式）：快照过期时插入 valid=0，
+ * 触发 mutation_guards 的 CHECK，让同批的结算写回与命令写入一起回滚。
+ *
+ * 校验：
+ * - 宗门行（等级/结算时间）与全部资源余额：防止与任何并发命令双重结算；
+ * - members 每名弟子仍属于本宗：备注/驱逐/布阵提交时的成员有效性核对，
+ *   驱逐与服药/布阵/挑战交错时不会出现幽灵成功或失效手动阵容；
+ * - defenseLineup（可选）：读到的守擂阵容快照在提交时未变（驱逐守擂成员用，
+ *   阵容若被并发改动，「是否需要清空阵容」的判断就不再可靠，整批回滚）。
+ */
+export function discipleSnapshotGuardStatement(
+  commandId: string,
+  snapshot: {
+    sect: SectRow;
+    balances: readonly ResourceBalanceRow[];
+    members: readonly { id: string }[];
+    defenseLineup?: string | null;
+  },
+): ParameterizedQuery {
+  const { sect, balances, members, defenseLineup } = snapshot;
+  const checks = [
+    'EXISTS (SELECT 1 FROM sects WHERE id = ? AND level = ? AND last_settled_at = ?)',
+  ];
+  const params: (string | number | null)[] = [commandId, sect.id, sect.level, sect.last_settled_at];
+
+  for (const row of balances) {
+    checks.push(
+      'EXISTS (SELECT 1 FROM resource_balances WHERE id = ? AND sect_id = ? AND balance = ? AND remainder = ?)',
+    );
+    params.push(row.id, sect.id, row.balance, row.remainder);
+  }
+  for (const member of members) {
+    checks.push('EXISTS (SELECT 1 FROM disciples WHERE id = ? AND sect_id = ?)');
+    params.push(member.id, sect.id);
+  }
+  if (defenseLineup !== undefined) {
+    checks.push('EXISTS (SELECT 1 FROM sects WHERE id = ? AND defense_lineup IS ?)');
+    params.push(sect.id, defenseLineup);
+  }
+
+  return {
+    sql: `INSERT INTO mutation_guards (command_id, valid)
+          SELECT ?, CASE WHEN ${checks.join(' AND ')} THEN 1 ELSE 0 END`,
+    params,
+  };
+}
+
+export function deleteDiscipleSnapshotGuardStatement(commandId: string): ParameterizedQuery {
   return {
     sql: 'DELETE FROM mutation_guards WHERE command_id = ?',
     params: [commandId],

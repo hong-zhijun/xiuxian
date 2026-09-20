@@ -7,10 +7,12 @@ import {
   breakthrough,
   challenge,
   craftPill,
+  expelDisciple,
   explore,
   fetchMe,
   logout as apiLogout,
   recruit,
+  setDiscipleNote,
   setDefenseLineup,
   syncSect,
   upgradeBuilding,
@@ -21,6 +23,7 @@ import type {
   ChallengeResultView,
   CraftPillOutcome,
   EventLogView,
+  ExpelDiscipleOutcome,
   ResourceView,
   SectStateView,
   UsePillOutcome,
@@ -408,6 +411,42 @@ function onUsePill(pillId: string, discipleId: string): void {
   );
 }
 
+/** 0013 保存私有备注：内容规则由服务端裁决，成功与否则由返回的 state 决定提示文案。 */
+function onSaveNote(discipleId: string, note: string): void {
+  void runAction(
+    () => setDiscipleNote(discipleId, note),
+    (data) => {
+      const saved = data.state.disciples.find((item) => item.id === discipleId)?.note ?? '';
+      return {
+        title: '备注已记下',
+        message: saved === '' ? '这条备注已清空。' : `备注存为「${saved}」，只有你看得到。`,
+      };
+    },
+  );
+}
+
+/**
+ * 0013 驱逐弟子：二次确认在详情弹窗里完成（此处只会收到已确认的请求）。
+ * 阵容清理与人数不足 3 人的后果都以服务端回执为准，前端不自己推算。
+ */
+function onExpelDisciple(discipleId: string): void {
+  void runAction(
+    () => expelDisciple(discipleId),
+    (data) => {
+      const outcome = data.outcome as ExpelDiscipleOutcome | undefined;
+      const remaining = outcome?.remainingDisciples ?? data.state.disciples.length;
+      const parts = [`${outcome?.discipleName ?? '该弟子'}已离开山门。`];
+      if (outcome?.lineupCleared === true) {
+        parts.push('该弟子原在守擂阵容中，阵容已清空，请重新布阵。');
+      }
+      if (remaining < 3) {
+        parts.push(`门下仅剩 ${String(remaining)} 人，人数不足 3 人时无法出战挑战。`);
+      }
+      return { tone: 'warning', title: '弟子已驱逐', message: parts.join('') };
+    },
+  );
+}
+
 async function onLogout(): Promise<void> {
   if (busy.value) return;
   busy.value = true;
@@ -523,6 +562,8 @@ onUnmounted(() => {
       @breakthrough="onBreakthrough"
       @craft-pill="onCraftPill"
       @use-pill="onUsePill"
+      @save-note="onSaveNote"
+      @expel="onExpelDisciple"
       @notify="notify"
     />
 

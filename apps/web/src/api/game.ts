@@ -37,6 +37,8 @@ export interface DiscipleView {
   aptitude: number;
   realmId: string;
   realmName: string;
+  /** 境界在服务端境界表里的下标（0 = 最低）：排序用，不按境界名字符串比较。 */
+  realmOrder: number;
   stage: number;
   stageName: string;
   cultivation: number;
@@ -62,6 +64,8 @@ export interface DiscipleView {
   bodyTemperingRemaining: number;
   bodyTemperingTarget: 'attack' | 'defense' | 'speed' | null;
   bodyTemperingGain: number;
+  /** 0013 掌门私有备注（单行纯文本，≤60 字；空串 = 未填写）。只在自己的 sync 状态里有值。 */
+  note: string;
 }
 
 export interface BuildingView {
@@ -165,6 +169,8 @@ export interface AlchemyView {
   unlocked: boolean;
   blockedReason: string | null;
   recipes: AlchemyRecipeView[];
+  /** 聚气丹单次修为增益（服务端下发，前端只渲染，不复制丹药常量）。 */
+  cultivationPillGain: number;
 }
 
 export interface BreakthroughOutcome {
@@ -594,4 +600,40 @@ export async function usePill(pillId: string, discipleId: string): Promise<{
     method: 'POST',
     body: { pillId, discipleId },
   });
+}
+
+/**
+ * 0013 保存弟子私有备注（POST /game/set-disciple-note）：note 为空串表示清空；
+ * 服务端 trim 后校验「单行纯文本、≤60 个 Unicode 字符」，返回写库后的完整状态。
+ */
+export async function setDiscipleNote(discipleId: string, note: string): Promise<SectStateView> {
+  const data = await apiRequest<{ state: SectStateView }>('/api/v1/game/set-disciple-note', {
+    method: 'POST',
+    body: { discipleId, note },
+  });
+  return data.state;
+}
+
+/** 驱逐回执（与后端 service.ts 的 ExpelDiscipleOutcome 一一对应）。 */
+export interface ExpelDiscipleOutcome {
+  discipleId: string;
+  discipleName: string;
+  /** 该弟子被驱逐前占用手动守擂阵容，阵容已被同批清空（需要重新布阵）。 */
+  lineupCleared: boolean;
+  /** 驱逐后宗门剩余弟子数（< 3 时无法组成主动挑战阵容、也不能被挑战）。 */
+  remainingDisciples: number;
+}
+
+/**
+ * 0013 驱逐弟子（POST /game/expel-disciple）：只允许自己的现存弟子；
+ * 不返还资源/招募次数，不降低宗门等级；成功后该弟子不再出现在返回的 state 里。
+ */
+export async function expelDisciple(discipleId: string): Promise<{
+  state: SectStateView;
+  outcome: ExpelDiscipleOutcome;
+}> {
+  return apiRequest<{ state: SectStateView; outcome: ExpelDiscipleOutcome }>(
+    '/api/v1/game/expel-disciple',
+    { method: 'POST', body: { discipleId } },
+  );
 }

@@ -10,9 +10,11 @@ import {
   challengeRequestSchema,
   craftPillRequestSchema,
   createSectRequestSchema,
+  expelDiscipleRequestSchema,
   exploreRequestSchema,
   recruitRequestSchema,
   setDefenseLineupSchema,
+  setDiscipleNoteRequestSchema,
   upgradeBuildingRequestSchema,
   usePillRequestSchema,
 } from './schema';
@@ -22,6 +24,7 @@ import {
   challengeSect,
   craftPill,
   createSect,
+  expelDisciple,
   exploreSectRealm,
   getPublicSect,
   getSectState,
@@ -32,6 +35,7 @@ import {
   previewRecruit,
   recruitDisciple,
   refreshRecruit,
+  setDiscipleNote,
   setDefenseLineup,
   upgradeBuilding,
   upgradeSect,
@@ -206,6 +210,22 @@ export function createGameRoutes(): Hono<AppEnv> {
     const userId = requireUserId(c);
     const body = await parseStrictJson(usePillRequestSchema, c);
     const result = await usePill(getDb(c.env), userId, body.pillId, body.discipleId, Date.now());
+    return respondOk(c, { state: result.state, outcome: result.outcome });
+  });
+
+  // 0013：保存弟子私有备注（结算 → 归属校验 → 归一化 → 单列写回，一次受保护 batch）。
+  routes.post('/game/set-disciple-note', async (c) => {
+    const userId = requireUserId(c);
+    const body = await parseStrictJson(setDiscipleNoteRequestSchema, c);
+    const state = await setDiscipleNote(getDb(c.env), userId, body.discipleId, body.note, Date.now());
+    return respondOk(c, { state });
+  });
+
+  // 0013：驱逐弟子（结算 + 删除 + 守擂阵容清理同一原子 batch；历史快照原样保留）。
+  routes.post('/game/expel-disciple', async (c) => {
+    const userId = requireUserId(c);
+    const body = await parseStrictJson(expelDiscipleRequestSchema, c);
+    const result = await expelDisciple(getDb(c.env), userId, body.discipleId, Date.now());
     return respondOk(c, { state: result.state, outcome: result.outcome });
   });
 
