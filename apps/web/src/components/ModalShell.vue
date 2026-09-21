@@ -2,6 +2,7 @@
 import { onMounted, onUnmounted, ref } from 'vue';
 
 import { isTopModalLayer, modalLayerCount, popModalLayer, pushModalLayer } from '../utils/modalStack';
+import LoadingState from './LoadingState.vue';
 
 /**
  * 通用弹窗外壳：遮罩 + 面板容器 + 右上角关闭按钮。
@@ -12,13 +13,16 @@ import { isTopModalLayer, modalLayerCount, popModalLayer, pushModalLayer } from 
  * 内容自己滚（`.modal-card` 与弹窗内的滚动区各自滚动，滚动条全局隐藏）。
  * 关闭后把焦点还给打开它的那个控件（二级弹窗因此回到「服用丹药」这类入口）。
  */
-defineProps<{
+const props = defineProps<{
   /** 给读屏用的弹窗名称（内容里的标题通常已有 h2，这里只补一个简短标签）。 */
   label: string;
   /** 窄一点的弹窗（二级弹窗用）。 */
   narrow?: boolean;
   /** 固定为稳定的视口内高度，内容组件自行提供内部滚动区。 */
   fixedHeight?: boolean;
+  /** 弹窗内请求进行中：统一遮罩内容并阻止重复操作。 */
+  loading?: boolean;
+  loadingText?: string;
 }>();
 
 const emit = defineEmits<{
@@ -44,6 +48,7 @@ const FOCUSABLE_SELECTOR = [
 
 /** 当前弹窗里可见（未被 display:none 隐藏）的可操作控件，按 DOM 顺序。 */
 function focusableElements(): HTMLElement[] {
+  if (props.loading) return [];
   const card = dialog.value;
   if (card === null) return [];
   return [...card.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)].filter(
@@ -58,6 +63,10 @@ function onKeydown(event: KeyboardEvent): void {
     return;
   }
   if (event.key === 'Escape') {
+    if (props.loading) {
+      event.preventDefault();
+      return;
+    }
     emit('close');
     return;
   }
@@ -92,6 +101,11 @@ function onKeydown(event: KeyboardEvent): void {
     event.preventDefault();
     first.focus();
   }
+}
+
+function requestClose(): void {
+  if (props.loading) return;
+  emit('close');
 }
 
 onMounted(() => {
@@ -130,22 +144,26 @@ function restoreFocus(): void {
 </script>
 
 <template>
-  <div class="modal-backdrop" @click.self="emit('close')">
+  <div class="modal-backdrop" @click.self="requestClose">
     <div
       ref="dialog"
       class="modal-card game-panel"
-      :class="{ 'is-narrow': narrow, 'is-fixed-height': fixedHeight }"
+      :class="{ 'is-narrow': narrow, 'is-fixed-height': fixedHeight, 'is-loading': loading }"
       role="dialog"
       aria-modal="true"
       :aria-label="label"
+      :aria-busy="loading"
       tabindex="-1"
     >
-      <button class="modal-close" type="button" aria-label="关闭" @click="emit('close')">
+      <button class="modal-close" type="button" aria-label="关闭" :disabled="loading" @click="requestClose">
         <svg viewBox="0 0 20 20" aria-hidden="true">
           <path d="m5 5 10 10M15 5 5 15" />
         </svg>
       </button>
       <slot />
+      <div v-if="loading" class="modal-loading-layer">
+        <LoadingState :label="loadingText ?? '正在处理请求'" />
+      </div>
     </div>
   </div>
 </template>

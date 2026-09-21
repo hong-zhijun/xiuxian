@@ -1,5 +1,5 @@
 /**
- * 弟子名册的搜索 / 筛选 / 排序 / 状态派生（纯函数，不碰 DOM、不依赖 Vue）。
+ * 弟子名册的筛选 / 排序 / 状态派生（纯函数，不碰 DOM、不依赖 Vue）。
  *
  * 为什么这里不直接 import `DiscipleView`：本文件会被根级 node 测试直接 import
  * （根 `tsconfig.json` 的 lib 只有 ES2022，没有 DOM），而 `../api/game` 会连带把使用
@@ -16,8 +16,6 @@
 export interface FilterableDisciple {
   id: string;
   name: string;
-  /** 掌门私有备注，空串 = 未填写。 */
-  note: string;
   realmId: string;
   realmName: string;
   /** 境界在服务端境界表里的下标（0 = 最低）。 */
@@ -81,8 +79,6 @@ export type DiscipleSortKey =
   | 'cultivationRateAsc';
 
 export interface DiscipleFilter {
-  /** 姓名 / 备注搜索词（空串 = 不过滤）。 */
-  search: string;
   /** 境界 id（空串 = 全部境界）。 */
   realmId: string;
   /** 境界内的阶段序号（null = 不限）；只在选了境界时生效，换境界会清空。 */
@@ -96,7 +92,6 @@ export interface DiscipleFilter {
 }
 
 export const DEFAULT_DISCIPLE_FILTER: DiscipleFilter = {
-  search: '',
   realmId: '',
   stage: null,
   assignment: '',
@@ -325,15 +320,6 @@ export function cultivationProgress(
   };
 }
 
-/** 搜索：trim、不区分大小写、包含匹配；空备注不匹配（避免空串命中所有弟子）。 */
-export function matchesSearch(disciple: FilterableDisciple, search: string): boolean {
-  const query = search.trim().toLowerCase();
-  if (query === '') return true;
-  if (disciple.name.toLowerCase().includes(query)) return true;
-  const note = disciple.note.trim();
-  return note !== '' && note.toLowerCase().includes(query);
-}
-
 /**
  * 状态筛选：全部 / 可破境 / 疗伤 / 修为已满（含已达当前版本上限）/ 闲置。
  *
@@ -355,13 +341,12 @@ export function matchesStatusFilter(
   return disciple.assignment === IDLE_ASSIGNMENT_ID;
 }
 
-/** 搜索 / 境界 / 阶段 / 岗位 / 状态 / 进度六项组合筛选（每项空值或 all 表示不限）。 */
+/** 境界 / 阶段 / 岗位 / 状态 / 进度五项组合筛选（每项空值或 all 表示不限）。 */
 export function matchesFilters(
   disciple: FilterableDisciple,
   filter: DiscipleFilter,
   serverNowMs: number,
 ): boolean {
-  if (!matchesSearch(disciple, filter.search)) return false;
   if (filter.realmId !== '' && disciple.realmId !== filter.realmId) return false;
   // 阶段是从属筛选：没选境界时它不参与判定（UI 也会禁用并在换境界时清空，不留隐藏条件）。
   if (filter.realmId !== '' && filter.stage !== null && disciple.stage !== filter.stage) return false;
@@ -464,7 +449,6 @@ export function stageOptions(
 /** 是否处于非默认筛选（决定「重置」按钮与无结果文案）。 */
 export function isFilterActive(filter: DiscipleFilter): boolean {
   return (
-    filter.search.trim() !== '' ||
     filter.realmId !== '' ||
     filter.stage !== null ||
     filter.assignment !== '' ||

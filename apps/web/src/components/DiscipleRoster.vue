@@ -27,13 +27,16 @@ import {
 import DiscipleAvatar from './DiscipleAvatar.vue';
 
 /**
- * 门人名册：搜索 / 境界 / 阶段 / 岗位 / 状态 / 修为进度筛选 + 排序 + 精简列表行 +
+ * 门人名册：境界 / 阶段 / 岗位 / 状态 / 修为进度筛选 + 排序 + 精简列表行 +
  * 头像快捷破境入口 + 「详情」入口。
  *
  * 所有筛选、排序、状态派生都在 `utils/discipleFilter.ts` 的纯函数里，本组件只持有筛选状态。
- * 列表只显示：头像外圈修为进度 + 常显的修为数字、姓名、私有备注、境界阶段、战力与综合评分、
- * 当前状态、头像破境入口或「详情」；备注为空时整行不渲染备注（不占位）。
- * 战力与综合评分同处第 3 行（meta），窄屏折行时只会把这一行变高，不会遮住状态标签或备注行。
+ * 列表行的行序固定为：① 头像 + 修为环 ② 姓名 + 境界阶段 ③ 当前状态
+ * ④ 战力 + 综合评分 ⑤ 私有备注 ⑥ 头像破境入口或「详情」。
+ * 修为数字不再常显：进度只看环长，具体数值在进度环 focus / hover 的气泡与读屏文案里。
+ * 备注为空时这一行照样占位（只把文字换成占位符），卡片总高不随备注有无变化。
+ * ③④ 两行各有最小高度，窄屏折行时只会把该行变高，不会遮住相邻行。
+ * ③④ 两行各有最小高度，窄屏折行时只会把该行变高，不会遮住相邻行。
  *
  * 本地每秒平滑的修为只用于显示（进度环与数字），能不能破境一律看服务端状态：
  * 头像只有在 `requiredCultivation !== null && cultivation >= requiredCultivation` 时才是按钮，
@@ -60,6 +63,12 @@ const emit = defineEmits<{
 }>();
 
 const filter = ref<DiscipleFilter>({ ...DEFAULT_DISCIPLE_FILTER });
+const showMoreFilters = ref(false);
+const activeMoreCount = computed(() =>
+  Number(filter.value.stage !== null) +
+  Number(filter.value.assignment !== '') +
+  Number(filter.value.progress !== 'all'),
+);
 
 /**
  * 行内状态标签：历练状态优先（在外 / 待领取），其次疗伤，最后当前岗位。
@@ -124,10 +133,7 @@ const anyFilterActive = computed(() => isFilterActive(filter.value));
 
 function resetFilter(): void {
   filter.value = { ...DEFAULT_DISCIPLE_FILTER };
-}
-
-function onSearchInput(event: Event): void {
-  filter.value = { ...filter.value, search: (event.target as HTMLInputElement).value };
+  showMoreFilters.value = false;
 }
 
 /** 换境界时清掉阶段：阶段是从属筛选，不能留下一个看不见的隐藏条件。 */
@@ -187,17 +193,6 @@ function ringTooltip(row: RosterRow): string {
   return row.progress.capped ? '已达当前版本上限' : `修为 ${row.progress.text}`;
 }
 
-/** 常显的修为数字（触屏没有 hover，不能只靠进度环的提示气泡）。 */
-function progressText(row: RosterRow): string {
-  if (row.progress.capped) return `修为 ${row.progress.text}`;
-  return `修为 ${row.progress.text} · ${row.progress.percent}%`;
-}
-
-function progressTextClass(row: RosterRow): string {
-  if (row.breakthroughEligible) return 'is-ready';
-  return row.progress.capped ? 'is-capped' : '';
-}
-
 /**
  * 头像按钮的可读名称：用服务端修为（不是本地动画值）说明为什么这里可以点，
  * 并明确这是「查看确认」而不是「立即破境」。
@@ -215,7 +210,7 @@ function rowIndexStyle(index: number): Record<string, string> {
 const rowButtons = ref<Record<string, HTMLButtonElement | null>>({});
 /** 头像（破境入口）按钮引用：确认弹窗关闭后把焦点还回头像。 */
 const avatarButtons = ref<Record<string, HTMLButtonElement | null>>({});
-const searchInput = ref<HTMLInputElement | null>(null);
+const realmSelect = ref<HTMLSelectElement | null>(null);
 
 function setRowButton(discipleId: string, element: Element | null): void {
   if (element instanceof HTMLButtonElement) {
@@ -239,9 +234,9 @@ watch(
     if (previous === null || previous === undefined || next !== null) return;
     void nextTick(() => {
       const button = rowButtons.value[previous];
-      // 驱逐后该行已不存在；焦点退回始终存在的搜索框，不能留在被移除的弹窗里。
+      // 驱逐后该行已不存在；焦点退回始终存在的境界筛选框。
       if (button && document.contains(button)) button.focus();
-      else searchInput.value?.focus();
+      else realmSelect.value?.focus();
     });
   },
 );
@@ -252,9 +247,9 @@ watch(
     if (previous === null || previous === undefined || next !== null) return;
     void nextTick(() => {
       const button = avatarButtons.value[previous];
-      // 修为/资格变化后头像可能不再是按钮（例如被派出去历练）；此时退回搜索框。
+      // 修为/资格变化后头像可能不再是按钮（例如被派出去历练）；此时退回境界筛选框。
       if (button && document.contains(button)) button.focus();
-      else searchInput.value?.focus();
+      else realmSelect.value?.focus();
     });
   },
 );
@@ -263,97 +258,95 @@ watch(
 <template>
   <div class="disciple-roster">
     <div class="disciple-toolbar">
-      <label class="disciple-field disciple-field-search">
-        <span class="disciple-field-label">搜索</span>
-        <input
-          ref="searchInput"
-          class="disciple-input"
-          type="search"
-          placeholder="姓名或备注"
-          :value="filter.search"
-          @input="onSearchInput"
-        />
-      </label>
+      <div class="disciple-toolbar-main">
+        <label class="disciple-field">
+          <span class="disciple-field-label">境界</span>
+          <span class="disciple-select">
+            <select ref="realmSelect" class="disciple-input" :value="filter.realmId" @change="onRealmChange">
+              <option value="">全部境界</option>
+              <option v-for="realm in realmFilters" :key="realm.realmId" :value="realm.realmId">
+                {{ realm.realmName }}
+              </option>
+            </select>
+          </span>
+        </label>
 
-      <label class="disciple-field">
-        <span class="disciple-field-label">境界</span>
-        <span class="disciple-select">
-          <select class="disciple-input" :value="filter.realmId" @change="onRealmChange">
-            <option value="">全部境界</option>
-            <option v-for="realm in realmFilters" :key="realm.realmId" :value="realm.realmId">
-              {{ realm.realmName }}
-            </option>
-          </select>
-        </span>
-      </label>
+        <label class="disciple-field">
+          <span class="disciple-field-label">状态</span>
+          <span class="disciple-select">
+            <select class="disciple-input" :value="filter.status" @change="onStatusChange">
+              <option v-for="option in DISCIPLE_STATUS_FILTERS" :key="option.value" :value="option.value">
+                {{ option.label }}
+              </option>
+            </select>
+          </span>
+        </label>
 
-      <!-- 阶段是从属筛选：没选境界时禁用，换境界时已选阶段会被清掉。 -->
-      <label class="disciple-field">
-        <span class="disciple-field-label">阶段</span>
-        <span class="disciple-select">
-          <select
-            class="disciple-input"
-            :value="stageValue"
-            :disabled="!stageFilterEnabled"
-            @change="onStageChange"
-          >
-            <option value="">{{ stageFilterEnabled ? '全部阶段' : '先选境界' }}</option>
-            <option v-for="option in stageFilters" :key="option.stage" :value="String(option.stage)">
-              {{ option.stageName }}
-            </option>
-          </select>
-        </span>
-      </label>
+        <label class="disciple-field disciple-field-sort">
+          <span class="disciple-field-label">排序</span>
+          <span class="disciple-select">
+            <select class="disciple-input" :value="filter.sort" @change="onSortChange">
+              <option v-for="option in DISCIPLE_SORT_OPTIONS" :key="option.value" :value="option.value">
+                {{ option.label }}
+              </option>
+            </select>
+          </span>
+        </label>
 
-      <label class="disciple-field">
-        <span class="disciple-field-label">岗位</span>
-        <span class="disciple-select">
-          <select class="disciple-input" :value="filter.assignment" @change="onAssignmentChange">
-            <option value="">全部岗位</option>
-            <option v-for="option in assignments" :key="option.id" :value="option.id">
-              {{ option.name }}
-            </option>
-          </select>
-        </span>
-      </label>
+        <button
+          class="quiet-button disciple-more"
+          :class="{ 'is-active': activeMoreCount > 0 || showMoreFilters }"
+          type="button"
+          aria-controls="disciple-extra-filters"
+          :aria-expanded="showMoreFilters"
+          @click="showMoreFilters = !showMoreFilters"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16l-6.5 7v5l-3 1v-6L4 6Z" /></svg>
+          <span>更多筛选</span>
+          <span v-if="activeMoreCount > 0" class="disciple-more-count">{{ activeMoreCount }}</span>
+        </button>
+        <button class="quiet-button disciple-reset" type="button" :disabled="!anyFilterActive" @click="resetFilter">
+          重置
+        </button>
+      </div>
 
-      <label class="disciple-field">
-        <span class="disciple-field-label">状态</span>
-        <span class="disciple-select">
-          <select class="disciple-input" :value="filter.status" @change="onStatusChange">
-            <option v-for="option in DISCIPLE_STATUS_FILTERS" :key="option.value" :value="option.value">
-              {{ option.label }}
-            </option>
-          </select>
-        </span>
-      </label>
+      <div id="disciple-extra-filters" v-show="showMoreFilters" class="disciple-toolbar-extra">
+        <!-- 阶段依附境界；换境界时阶段选择会清空。 -->
+        <label class="disciple-field">
+          <span class="disciple-field-label">阶段</span>
+          <span class="disciple-select">
+            <select class="disciple-input" :value="stageValue" :disabled="!stageFilterEnabled" @change="onStageChange">
+              <option value="">{{ stageFilterEnabled ? '全部阶段' : '先选境界' }}</option>
+              <option v-for="option in stageFilters" :key="option.stage" :value="String(option.stage)">
+                {{ option.stageName }}
+              </option>
+            </select>
+          </span>
+        </label>
 
-      <!-- 修为进度按服务端原始比例分档（与「状态」里的可破境是两件事，文案已区分）。 -->
-      <label class="disciple-field">
-        <span class="disciple-field-label">修为进度</span>
-        <span class="disciple-select">
-          <select class="disciple-input" :value="filter.progress" @change="onProgressChange">
-            <option v-for="option in CULTIVATION_PROGRESS_FILTERS" :key="option.value" :value="option.value">
-              {{ option.label }}
-            </option>
-          </select>
-        </span>
-      </label>
+        <label class="disciple-field">
+          <span class="disciple-field-label">岗位</span>
+          <span class="disciple-select">
+            <select class="disciple-input" :value="filter.assignment" @change="onAssignmentChange">
+              <option value="">全部岗位</option>
+              <option v-for="option in assignments" :key="option.id" :value="option.id">
+                {{ option.name }}
+              </option>
+            </select>
+          </span>
+        </label>
 
-      <label class="disciple-field">
-        <span class="disciple-field-label">排序</span>
-        <span class="disciple-select">
-          <select class="disciple-input" :value="filter.sort" @change="onSortChange">
-            <option v-for="option in DISCIPLE_SORT_OPTIONS" :key="option.value" :value="option.value">
-              {{ option.label }}
-            </option>
-          </select>
-        </span>
-      </label>
-
-      <button class="quiet-button disciple-reset" type="button" :disabled="!anyFilterActive" @click="resetFilter">
-        重置
-      </button>
+        <label class="disciple-field">
+          <span class="disciple-field-label">修为进度</span>
+          <span class="disciple-select">
+            <select class="disciple-input" :value="filter.progress" @change="onProgressChange">
+              <option v-for="option in CULTIVATION_PROGRESS_FILTERS" :key="option.value" :value="option.value">
+                {{ option.label }}
+              </option>
+            </select>
+          </span>
+        </label>
+      </div>
     </div>
 
     <p class="disciple-count" role="status" aria-live="polite">
@@ -371,7 +364,7 @@ watch(
         <div class="disciple-row-media">
           <!--
             可破境：头像本身是按钮（点开确认弹窗，不发请求）。
-            按钮内部不再嵌可聚焦的进度条，进度用 aria-label 与下方常显数字表达。
+            按钮内部不再嵌可聚焦的进度条，进度用 aria-label 表达（具体数值在进度环的气泡里）。
           -->
           <button
             v-if="row.breakthroughEligible"
@@ -415,19 +408,22 @@ watch(
               :frame-id="row.disciple.avatarFrameId"
             />
           </div>
-
-          <p class="disciple-progress-text" :class="progressTextClass(row)">{{ progressText(row) }}</p>
         </div>
 
         <div class="disciple-row-info">
-          <strong class="disciple-row-name" :title="row.disciple.name">{{ row.disciple.name }}</strong>
-          <div class="disciple-card-tags">
+          <!-- 姓名与境界阶段合并到同一行；修为数字不再常显，进度只看环长。 -->
+          <p class="disciple-row-head">
+            <strong class="disciple-row-name" :title="row.disciple.name">{{ row.disciple.name }}</strong>
             <span class="realm-tag">{{ row.disciple.stageName }}</span>
-            <!-- 历练标记（在外 / 待领取）优先，玩家一眼能看出这名弟子不在宗门正常当值。 -->
-            <span class="disciple-status" :class="`is-${row.displayStatus.key}`">
-              {{ row.displayStatus.label }}
-            </span>
-          </div>
+          </p>
+        </div>
+
+        <!-- 状态单独占一行：不再和境界标签挤在同一行里抢宽度。
+             历练标记（在外 / 待领取）也在这里，玩家一眼能看出这名弟子不在宗门正常当值。 -->
+        <div class="disciple-card-status">
+          <span class="disciple-status" :class="`is-${row.displayStatus.key}`">
+            {{ row.displayStatus.label }}
+          </span>
         </div>
 
         <div class="disciple-card-meta">
@@ -435,13 +431,14 @@ watch(
           <span class="disciple-row-score">综合评分 {{ row.disciple.attributeScore.toFixed(1) }}</span>
         </div>
 
+        <!-- 备注为空也保留这一行：占位符顶住行高，卡片总高不随备注有无变化。 -->
         <p
           class="disciple-row-note"
           :class="{ 'is-empty': row.disciple.note === '' }"
           :title="row.disciple.note || undefined"
           :aria-hidden="row.disciple.note === ''"
         >
-          {{ row.disciple.note || '占位' }}
+          {{ row.disciple.note || '—' }}
         </p>
 
         <!-- 待领取时按钮上再挂一个「待领取」标记：玩家知道点这里去领历练收获。 -->
@@ -470,7 +467,7 @@ watch(
     <div v-else class="empty-state compact-empty disciple-empty-filter">
       <span aria-hidden="true">寻</span>
       <strong>没有符合条件的门人</strong>
-      <p>当前搜索与筛选下没有结果，可放宽条件或直接重置。</p>
+      <p>当前筛选条件下没有结果，可放宽条件或直接重置。</p>
       <button class="quiet-button" type="button" @click="resetFilter">重置筛选</button>
     </div>
   </div>

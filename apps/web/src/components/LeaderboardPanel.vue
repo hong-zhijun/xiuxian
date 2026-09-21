@@ -3,6 +3,7 @@ import { ref, watch } from 'vue';
 
 import type { LeaderboardEntryView, PublicSectView, SectStateView } from '../api/game';
 import { fetchLeaderboard } from '../api/game';
+import LoadingState from './LoadingState.vue';
 import PublicSectPanel from './PublicSectPanel.vue';
 
 /**
@@ -22,12 +23,14 @@ const emit = defineEmits<{
 
 const entries = ref<LeaderboardEntryView[]>([]);
 const loadError = ref<string | null>(null);
+const loading = ref(true);
 const selectedSectId = ref<string | null>(null);
 
 let loadSeq = 0;
 
 async function loadLeaderboard(): Promise<void> {
   const seq = (loadSeq += 1);
+  loading.value = true;
   try {
     const list = await fetchLeaderboard();
     if (seq !== loadSeq) return; // 已有更新的请求在途，丢弃这次过期响应
@@ -36,6 +39,8 @@ async function loadLeaderboard(): Promise<void> {
   } catch (caught) {
     if (seq !== loadSeq) return;
     loadError.value = caught instanceof Error ? caught.message : '榜单读取失败';
+  } finally {
+    if (seq === loadSeq) loading.value = false;
   }
 }
 
@@ -67,9 +72,10 @@ function openSect(entry: LeaderboardEntryView): void {
       <span class="count-badge">{{ entries.length }} 家</span>
     </header>
 
-    <p v-if="loadError" class="explore-hint">{{ loadError }}</p>
+    <LoadingState v-if="loading" label="正在读取江湖榜" detail="正在查阅各宗门最新名次。" />
+    <p v-else-if="loadError" class="explore-hint">{{ loadError }}</p>
 
-    <ul v-if="entries.length > 0" class="rank-list">
+    <ul v-else-if="entries.length > 0" class="rank-list">
       <li
         v-for="(entry, index) in entries"
         :key="entry.sectId"

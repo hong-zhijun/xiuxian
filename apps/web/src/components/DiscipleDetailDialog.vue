@@ -26,6 +26,7 @@ import {
 import AssignmentSelect from './AssignmentSelect.vue';
 import DiscipleAvatar from './DiscipleAvatar.vue';
 import DiscipleRadarChart from './DiscipleRadarChart.vue';
+import LoadingState from './LoadingState.vue';
 import ModalShell from './ModalShell.vue';
 
 /**
@@ -803,14 +804,21 @@ function confirmExpel(): void {
             </template>
 
             <button
-              v-if="journey.canStart && planner === null"
+              v-if="journey.canStart && planner === null && !journeyPreviewLoading"
               class="action-button primary-action disciple-journey-launch"
               type="button"
-              :disabled="busy || journeyPreviewLoading"
+              :disabled="busy"
               @click="requestPreview"
             >
-              <span>{{ journeyPreviewLoading ? '推演中…' : '查看历练预览' }}</span>
+              <span>查看历练预览</span>
             </button>
+
+            <LoadingState
+              v-if="journeyPreviewLoading"
+              compact
+              label="正在推演历练"
+              detail="正在计算各方向的奖励、修为与风险。"
+            />
 
             <div v-if="journey.canStart && planner !== null" class="disciple-journey-planner">
               <p class="disciple-detail-hint">

@@ -126,6 +126,11 @@ const recruitLoading = ref(false);
 const recruitRefreshing = ref(false);
 /** 招募提交在途（含批次过期后重新拉预览的那一段）：期间锁住候选卡与「换一批」。 */
 const recruitSubmitting = ref(false);
+const recruitLoadingText = computed(() => {
+  if (recruitSubmitting.value) return '正在接引弟子入门';
+  if (recruitRefreshing.value) return '正在推演新一批有缘人';
+  return '正在寻访有缘人';
+});
 
 /** 二级弹窗：当前正在点将出征的秘境（null = 未打开）。 */
 const exploreRealm = ref<SecretRealmView | null>(null);
@@ -307,11 +312,13 @@ function buildingDescription(defId: string): string {
 /** 张榜招贤：先取本次候选人（服务端按宗门+当日+次数+刷新次数做种子，同一批不变），再弹窗三选一。 */
 async function requestRecruit(): Promise<void> {
   if (props.busy || recruitLoading.value) return;
+  showRecruitDialog.value = true;
+  recruitPreview.value = null;
   recruitLoading.value = true;
   try {
     recruitPreview.value = await fetchRecruitPreview();
-    showRecruitDialog.value = true;
   } catch (caught) {
+    showRecruitDialog.value = false;
     emit('notify', 'error', '招贤台未应', caught instanceof Error ? caught.message : '候选人生成失败');
   } finally {
     recruitLoading.value = false;
@@ -769,10 +776,7 @@ function onDetailSetAvatarFrame(discipleId: string, frameId: AvatarFrameId): voi
 
     <section class="overview-panel" aria-labelledby="resource-title">
       <header class="section-heading overview-heading">
-        <div>
-          <p class="eyebrow">宗门库藏</p>
-          <h2 id="resource-title">山门百业，生生不息</h2>
-        </div>
+        <h2 id="resource-title" class="home-section-title">山门百业，生生不息</h2>
         <div class="settlement-badge">
           <span class="pulse-dot" aria-hidden="true" />
           <span>{{ settlementText }} · {{ formatTime(state.sect.lastSettledAt) }}</span>
@@ -784,7 +788,13 @@ function onDetailSetAvatarFrame(discipleId: string, frameId: AvatarFrameId): voi
           v-for="resource in state.resources"
           :key="resource.id"
           class="resource-card"
-          :class="resourceClass(resource.id)"
+          :class="[
+            resourceClass(resource.id),
+            {
+              'is-near-capacity': resourcePercent(resource.id, resource.capacity) >= 90,
+              'is-at-capacity': (liveResources[resource.id] ?? 0) >= Number(resource.capacity),
+            },
+          ]"
         >
           <div class="resource-glyph" aria-hidden="true">{{ resourceGlyph(resource.id) }}</div>
           <div class="resource-main">
@@ -793,8 +803,8 @@ function onDetailSetAvatarFrame(discipleId: string, frameId: AvatarFrameId): voi
             <span class="resource-capacity">库容 {{ formatAmount(resource.capacity) }}</span>
           </div>
           <div class="resource-rate">
-            <span>每时产出</span>
-            <strong>+{{ formatRate(resource.ratePerHour) }}</strong>
+            <span>产速</span>
+            <strong>+{{ formatRate(resource.ratePerHour) }}<small>/时</small></strong>
           </div>
           <div class="resource-track" aria-hidden="true">
             <span :style="{ width: `${resourcePercent(resource.id, resource.capacity)}%` }" />
@@ -803,65 +813,73 @@ function onDetailSetAvatarFrame(discipleId: string, frameId: AvatarFrameId): voi
       </ul>
     </section>
 
-    <div class="action-bar" role="toolbar" aria-label="宗门操作">
-      <button
-        class="action-chip"
-        type="button"
-        :disabled="busy || recruitLoading"
-        @click="requestRecruit"
-      >
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm-6.5 9.5a6.5 6.5 0 0 1 13 0M18 14.5v6m3-3h-6" />
-        </svg>
-        <span>招贤台</span>
-        <span v-if="recruitBadge > 0" class="chip-badge">{{ recruitBadge }}</span>
-      </button>
-      <button class="action-chip" type="button" @click="openPanel = 'events'">
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M7 4h9a2 2 0 0 1 2 2v12a2 2 0 0 0 2 2H7a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Zm2 4h5m-5 4h5" />
-        </svg>
-        <span>天机录</span>
-      </button>
-      <button class="action-chip" type="button" @click="openPanel = 'explore'">
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Zm3.4 5.6-2.1 5-5 2.1 2.1-5 5-2.1Z" />
-        </svg>
-        <span>历练探索</span>
-      </button>
-      <button class="action-chip" type="button" @click="openPanel = 'alchemy'">
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M9 3h6M10 3v4.2a6.5 6.5 0 1 0 4 0V3m-4.8 11h9.6" />
-        </svg>
-        <span>炼丹</span>
-      </button>
-      <button class="action-chip" type="button" @click="openPanel = 'leaderboard'">
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M12 3.5 14.6 9l6 .9-4.3 4.2 1 6-5.3-2.8-5.3 2.8 1-6L3.4 9.9l6-.9 2.6-5.5Z" />
-        </svg>
-        <span>江湖榜</span>
-      </button>
-      <button class="action-chip" type="button" @click="openPanel = 'defense-lineup'">
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M12 3.2 5 6.3v5.2c0 4.1 2.9 7.8 7 9.3 4.1-1.5 7-5.2 7-9.3V6.3L12 3.2Zm-3 8.6h6" />
-        </svg>
-        <span>守擂阵容</span>
-      </button>
-      <button class="action-chip" type="button" @click="openPanel = 'challenge-history'">
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M4 4h6v6H4zm10 0h6v6h-6zM4 14h6v6H4zm10 2a4 4 0 1 0 0-0" />
-        </svg>
-        <span>演武录</span>
-        <span v-if="state.challenge.remaining > 0" class="chip-badge">{{ state.challenge.remaining }}</span>
-      </button>
-    </div>
+    <nav class="action-groups" aria-label="宗门操作">
+      <section class="action-group action-group-internal" aria-labelledby="internal-action-title">
+        <h2 id="internal-action-title" class="action-group-title">宗内管理</h2>
+        <div class="action-group-buttons" role="toolbar" aria-label="宗内管理操作">
+          <button
+            class="action-chip"
+            type="button"
+            :disabled="busy || recruitLoading"
+            @click="requestRecruit"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm-6.5 9.5a6.5 6.5 0 0 1 13 0M18 14.5v6m3-3h-6" />
+            </svg>
+            <span>招贤台</span>
+            <span v-if="recruitBadge > 0" class="chip-badge">{{ recruitBadge }}</span>
+          </button>
+          <button class="action-chip" type="button" @click="openPanel = 'alchemy'">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M9 3h6M10 3v4.2a6.5 6.5 0 1 0 4 0V3m-4.8 11h9.6" />
+            </svg>
+            <span>炼丹</span>
+          </button>
+          <button class="action-chip" type="button" @click="openPanel = 'events'">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M7 4h9a2 2 0 0 1 2 2v12a2 2 0 0 0 2 2H7a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Zm2 4h5m-5 4h5" />
+            </svg>
+            <span>天机录</span>
+          </button>
+          <button class="action-chip" type="button" @click="openPanel = 'defense-lineup'">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 3.2 5 6.3v5.2c0 4.1 2.9 7.8 7 9.3 4.1-1.5 7-5.2 7-9.3V6.3L12 3.2Zm-3 8.6h6" />
+            </svg>
+            <span>守擂阵容</span>
+          </button>
+        </div>
+      </section>
+
+      <section class="action-group action-group-external" aria-labelledby="external-action-title">
+        <h2 id="external-action-title" class="action-group-title">对外事务</h2>
+        <div class="action-group-buttons" role="toolbar" aria-label="对外事务操作">
+          <button class="action-chip" type="button" @click="openPanel = 'explore'">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Zm3.4 5.6-2.1 5-5 2.1 2.1-5 5-2.1Z" />
+            </svg>
+            <span>历练探索</span>
+          </button>
+          <button class="action-chip" type="button" @click="openPanel = 'leaderboard'">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 3.5 14.6 9l6 .9-4.3 4.2 1 6-5.3-2.8-5.3 2.8 1-6L3.4 9.9l6-.9 2.6-5.5Z" />
+            </svg>
+            <span>江湖榜</span>
+          </button>
+          <button class="action-chip" type="button" @click="openPanel = 'challenge-history'">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M4 4h6v6H4zm10 0h6v6h-6zM4 14h6v6H4zm10 2a4 4 0 1 0 0-0" />
+            </svg>
+            <span>演武录</span>
+            <span v-if="state.challenge.remaining > 0" class="chip-badge">{{ state.challenge.remaining }}</span>
+          </button>
+        </div>
+      </section>
+    </nav>
 
     <div class="management-grid">
       <section class="game-panel disciple-panel" aria-labelledby="disciple-title">
         <header class="section-heading panel-heading">
-          <div>
-            <p class="eyebrow">门人名册</p>
-            <h2 id="disciple-title">弟子修行</h2>
-          </div>
+          <h2 id="disciple-title" class="home-section-title">弟子修行</h2>
           <span class="count-badge">{{ state.disciples.length }} 位门人</span>
         </header>
 
@@ -881,10 +899,7 @@ function onDetailSetAvatarFrame(discipleId: string, frameId: AvatarFrameId): voi
       <aside class="management-rail">
         <section v-if="state.sectUpgrade" class="game-panel sect-upgrade-panel" aria-labelledby="sect-upgrade-title">
           <header class="section-heading panel-heading compact-heading">
-            <div>
-              <p class="eyebrow">宗门晋升</p>
-              <h2 id="sect-upgrade-title">{{ state.sectUpgrade.nextLevelName }}</h2>
-            </div>
+            <h2 id="sect-upgrade-title" class="home-section-title">{{ state.sectUpgrade.nextLevelName }}</h2>
             <span class="count-badge">{{ state.sect.level }}/{{ MAX_SECT_LEVEL }}</span>
           </header>
 
@@ -917,10 +932,7 @@ function onDetailSetAvatarFrame(discipleId: string, frameId: AvatarFrameId): voi
         </section>
         <section class="game-panel building-panel" aria-labelledby="building-title">
           <header class="section-heading panel-heading compact-heading">
-            <div>
-              <p class="eyebrow">宗门营造</p>
-              <h2 id="building-title">山门建筑</h2>
-            </div>
+            <h2 id="building-title" class="home-section-title">山门建筑</h2>
             <span class="count-badge">{{ state.buildings.length }}/{{ state.sect.buildingCapacity }}</span>
           </header>
 
@@ -975,7 +987,13 @@ function onDetailSetAvatarFrame(discipleId: string, frameId: AvatarFrameId): voi
       <EventLogPanel :state="state" />
     </ModalShell>
 
-    <ModalShell v-if="openPanel === 'explore'" label="秘境探索" @close="openPanel = null">
+    <ModalShell
+      v-if="openPanel === 'explore'"
+      label="秘境探索"
+      :loading="exploreRealmLoading"
+      loading-text="正在确认秘境信息"
+      @close="openPanel = null"
+    >
       <ExplorePanel
         :state="state"
         :busy="busy"
@@ -986,7 +1004,13 @@ function onDetailSetAvatarFrame(discipleId: string, frameId: AvatarFrameId): voi
     </ModalShell>
 
     <!-- 炼丹：解锁/库存/canCraft 都由服务端算好，只保留炼制；弟子服药入口已移入弟子详情。 -->
-    <ModalShell v-if="openPanel === 'alchemy'" label="炼丹" @close="openPanel = null">
+    <ModalShell
+      v-if="openPanel === 'alchemy'"
+      label="炼丹"
+      :loading="busy"
+      loading-text="正在炼制丹药"
+      @close="openPanel = null"
+    >
       <AlchemyPanel
         :state="state"
         :busy="busy"
@@ -998,6 +1022,8 @@ function onDetailSetAvatarFrame(discipleId: string, frameId: AvatarFrameId): voi
     <ModalShell
       v-if="exploreRealm"
       narrow
+      :loading="busy"
+      loading-text="正在派遣弟子出发"
       :label="`选择弟子 · ${exploreRealm.name}`"
       @close="exploreRealm = null"
     >
@@ -1016,6 +1042,8 @@ function onDetailSetAvatarFrame(discipleId: string, frameId: AvatarFrameId): voi
     -->
     <ModalShell
       v-if="exploreDialogOpen && explorationShown"
+      :loading="busy"
+      loading-text="正在裁定秘境结果"
       :label="`秘境探索 · ${explorationShown.realmName}`"
       @close="onCloseExploreDialog"
     >
@@ -1035,7 +1063,13 @@ function onDetailSetAvatarFrame(discipleId: string, frameId: AvatarFrameId): voi
       <LeaderboardPanel :state="state" :busy="busy" @challenge="onChallengeRequest" />
     </ModalShell>
 
-    <ModalShell v-if="openPanel === 'defense-lineup'" label="守擂阵容" @close="openPanel = null">
+    <ModalShell
+      v-if="openPanel === 'defense-lineup'"
+      label="守擂阵容"
+      :loading="busy"
+      loading-text="正在保存守擂阵容"
+      @close="openPanel = null"
+    >
       <DefenseLineupPanel :state="state" :busy="busy" @set-lineup="onSetLineupChoice" />
     </ModalShell>
 
@@ -1047,6 +1081,8 @@ function onDetailSetAvatarFrame(discipleId: string, frameId: AvatarFrameId): voi
     <ModalShell
       v-if="challengeTarget"
       narrow
+      :loading="busy"
+      loading-text="正在等待挑战结果"
       :label="`挑战 · ${challengeTarget.name}`"
       @close="onCloseChallengeDialog"
     >
@@ -1066,11 +1102,14 @@ function onDetailSetAvatarFrame(discipleId: string, frameId: AvatarFrameId): voi
       App.vue 只收写库后的 state；提交在途时整张弹窗的候选卡与「换一批」一起锁住。
     -->
     <ModalShell
-      v-if="showRecruitDialog && recruitPreview"
+      v-if="showRecruitDialog"
       label="招贤台"
+      :loading="recruitLoading || recruitRefreshing || recruitSubmitting"
+      :loading-text="recruitLoadingText"
       @close="showRecruitDialog = false"
     >
       <RecruitDialog
+        v-if="recruitPreview"
         :preview="recruitPreview"
         :cost-text="costText(state.recruit.cost)"
         :busy="busy || recruitRefreshing || recruitSubmitting"
@@ -1089,6 +1128,8 @@ function onDetailSetAvatarFrame(discipleId: string, frameId: AvatarFrameId): voi
     <ModalShell
       v-if="detailDisciple"
       fixed-height
+      :loading="busy"
+      loading-text="正在处理弟子事务"
       :label="`弟子详情 · ${detailDisciple.name}`"
       @close="closeDetail"
     >
@@ -1122,6 +1163,8 @@ function onDetailSetAvatarFrame(discipleId: string, frameId: AvatarFrameId): voi
     <ModalShell
       v-if="breakthroughTarget"
       narrow
+      :loading="busy"
+      loading-text="正在等待破境结果"
       :label="`破境确认 · ${breakthroughTarget.name}`"
       @close="closeBreakthroughConfirm"
     >

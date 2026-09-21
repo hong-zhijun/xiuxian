@@ -4,6 +4,7 @@ import { computed, ref, watch } from 'vue';
 import type { SecretRealmView, SectStateView } from '../api/game';
 import { fetchSecretRealms } from '../api/game';
 import { formatAmount } from '../utils/format';
+import LoadingState from './LoadingState.vue';
 
 /**
  * 秘境列表（弹窗内容）。
@@ -26,11 +27,13 @@ const emit = defineEmits<{
 
 const realms = ref<SecretRealmView[]>([]);
 const loadError = ref<string | null>(null);
+const loading = ref(true);
 
 let loadSeq = 0;
 
 async function loadRealms(): Promise<void> {
   const seq = (loadSeq += 1);
+  loading.value = true;
   try {
     const list = await fetchSecretRealms();
     if (seq !== loadSeq) return; // 已有更新的请求在途，丢弃这次过期响应
@@ -39,6 +42,8 @@ async function loadRealms(): Promise<void> {
   } catch (caught) {
     if (seq !== loadSeq) return;
     loadError.value = caught instanceof Error ? caught.message : '秘境列表加载失败';
+  } finally {
+    if (seq === loadSeq) loading.value = false;
   }
 }
 
@@ -127,8 +132,10 @@ function realmGlyph(realmId: string): string {
       <span class="count-badge">{{ realms.length }} 处</span>
     </header>
 
+    <LoadingState v-if="loading" label="正在探查秘境" detail="正在读取秘境、次数与出发条件。" />
+
     <!-- 断点恢复入口：进行中的探索优先于出发（服务端每宗门同时只允许一场）。 -->
-    <button v-if="activeExploration" class="realm-resume" type="button" @click="emit('explore-resume')">
+    <button v-else-if="activeExploration" class="realm-resume" type="button" @click="emit('explore-resume')">
       <span class="realm-resume-glyph" aria-hidden="true">续</span>
       <span class="realm-resume-copy">
         <strong>继续探索 · {{ activeExploration.realmName }}</strong>
@@ -138,14 +145,14 @@ function realmGlyph(realmId: string): string {
       </span>
       <span class="realm-resume-arrow" aria-hidden="true">›</span>
     </button>
-    <p v-if="activeExploration" class="explore-hint">
+    <p v-if="!loading && activeExploration" class="explore-hint">
       已有探索进行中，须先完成或放弃才能再次出发（速通与探索共用每日次数）。
     </p>
 
-    <p v-if="loadError" class="explore-hint">{{ loadError }}</p>
-    <p v-else-if="realms.length > 0 && !hasArena" class="explore-hint">宗门尚无演武场（4 级解锁），暂时无法外派弟子探索秘境。</p>
+    <p v-if="!loading && loadError" class="explore-hint">{{ loadError }}</p>
+    <p v-else-if="!loading && realms.length > 0 && !hasArena" class="explore-hint">宗门尚无演武场（4 级解锁），暂时无法外派弟子探索秘境。</p>
 
-    <ul v-if="realms.length > 0" class="realm-list">
+    <ul v-if="!loading && realms.length > 0" class="realm-list">
       <li v-for="realm in realms" :key="realm.id" class="realm-row" :class="{ 'is-locked': realm.locked }">
         <div class="realm-glyph" aria-hidden="true">{{ realmGlyph(realm.id) }}</div>
 
@@ -203,7 +210,7 @@ function realmGlyph(realmId: string): string {
       </li>
     </ul>
 
-    <div v-else-if="loadError === null" class="empty-state compact-empty">
+    <div v-else-if="!loading && loadError === null" class="empty-state compact-empty">
       <span aria-hidden="true">境</span>
       <strong>暂无秘境</strong>
     </div>

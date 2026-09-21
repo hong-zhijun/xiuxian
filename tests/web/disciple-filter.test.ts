@@ -12,7 +12,6 @@ import {
   isFilterActive,
   isInjured,
   matchesProgressFilter,
-  matchesSearch,
   realmOptions,
   stageOptions,
   journeyBadge,
@@ -35,7 +34,6 @@ const ONE_HOUR_AGO = '2026-01-01T11:00:00.000Z';
 function makeDisciple(overrides: Partial<FilterableDisciple> & { id: string }): FilterableDisciple {
   return {
     name: '无名氏',
-    note: '',
     realmId: 'qiRefining',
     realmName: '炼气',
     realmOrder: 0,
@@ -62,29 +60,6 @@ function withFilter(overrides: Partial<DiscipleFilter>): DiscipleFilter {
 function ids(disciples: readonly FilterableDisciple[]): string[] {
   return disciples.map((disciple) => disciple.id);
 }
-
-describe('搜索（姓名 / 私有备注）', () => {
-  const scholar = makeDisciple({ id: 'a', name: 'Li Bai', note: '专修 剑道' });
-  const nameless = makeDisciple({ id: 'b', name: '张三', note: '' });
-
-  it('trim 后包含匹配姓名，不区分大小写', () => {
-    expect(matchesSearch(scholar, '  li bai  ')).toBe(true);
-    expect(matchesSearch(scholar, 'LI')).toBe(true);
-    expect(matchesSearch(scholar, 'bai')).toBe(true);
-  });
-
-  it('包含匹配备注', () => {
-    expect(matchesSearch(scholar, '剑')).toBe(true);
-    expect(matchesSearch(scholar, ' 剑道 ')).toBe(true);
-  });
-
-  it('空查询不过滤，空备注不匹配任何非空查询', () => {
-    expect(matchesSearch(nameless, '')).toBe(true);
-    expect(matchesSearch(nameless, '   ')).toBe(true);
-    expect(matchesSearch(nameless, '剑')).toBe(false);
-    expect(matchesSearch(nameless, 'zhang')).toBe(false);
-  });
-});
 
 describe('状态派生优先级', () => {
   it('疗伤中优先于可破境', () => {
@@ -153,12 +128,11 @@ describe('状态派生优先级', () => {
   });
 });
 
-describe('组合筛选（境界 / 岗位 / 状态 / 搜索）', () => {
+describe('组合筛选（境界 / 岗位 / 状态）', () => {
   const roster = [
     makeDisciple({
       id: 'a',
       name: '赵一',
-      note: '剑修',
       realmId: 'qiRefining',
       realmName: '炼气',
       realmOrder: 0,
@@ -211,11 +185,10 @@ describe('组合筛选（境界 / 岗位 / 状态 / 搜索）', () => {
     }),
   ];
 
-  it('境界 + 岗位 + 状态 + 搜索可以同时生效', () => {
+  it('境界 + 岗位 + 状态可以同时生效', () => {
     const result = filterDisciples(
       roster,
       withFilter({
-        search: '钱',
         realmId: 'qiRefining',
         assignment: 'herbGathering',
         status: 'cultivationFull',
@@ -224,10 +197,10 @@ describe('组合筛选（境界 / 岗位 / 状态 / 搜索）', () => {
     );
     expect(ids(result)).toEqual(['b']);
 
-    // 换成疗伤状态，同一条搜索就没有结果了（组合条件不是「或」）。
+    // 换成疗伤状态就没有结果了（组合条件不是「或」）。
     const injuredOnly = filterDisciples(
       roster,
-      withFilter({ search: '钱', realmId: 'qiRefining', assignment: 'herbGathering', status: 'injured' }),
+      withFilter({ realmId: 'qiRefining', assignment: 'herbGathering', status: 'injured' }),
       SERVER_NOW,
     );
     expect(injuredOnly).toEqual([]);
@@ -407,8 +380,6 @@ describe('境界筛选项与重置态', () => {
 
   it('默认筛选不算「已筛选」，任一项改动都算', () => {
     expect(isFilterActive(DEFAULT_DISCIPLE_FILTER)).toBe(false);
-    expect(isFilterActive(withFilter({ search: '  ' }))).toBe(false);
-    expect(isFilterActive(withFilter({ search: '剑' }))).toBe(true);
     expect(isFilterActive(withFilter({ realmId: 'qiRefining' }))).toBe(true);
     expect(isFilterActive(withFilter({ assignment: 'idle' }))).toBe(true);
     expect(isFilterActive(withFilter({ status: 'injured' }))).toBe(true);
@@ -654,20 +625,24 @@ describe('境界内阶段从属筛选', () => {
     ]);
   });
 
-  it('境界 + 阶段 + 搜索可以同时生效，互斥时返回空', () => {
-    const named = [{ ...roster[0], name: '赵一' }, { ...roster[1], name: '钱二' }, roster[2]];
+  it('境界 + 阶段 + 岗位可以同时生效，互斥时返回空', () => {
+    const assigned = [
+      roster[0],
+      { ...roster[1], assignment: 'herbGathering' },
+      { ...roster[2], assignment: 'idle' },
+    ];
     expect(
       ids(
         filterDisciples(
-          named,
-          withFilter({ realmId: 'qiRefining', stage: 1, search: '钱' }),
+          assigned,
+          withFilter({ realmId: 'qiRefining', stage: 1, assignment: 'herbGathering' }),
           SERVER_NOW,
         ),
       ),
     ).toEqual(['b']);
     expect(
       filterDisciples(
-        named,
+        assigned,
         withFilter({ realmId: 'foundationEstablishment', stage: 1 }),
         SERVER_NOW,
       ),

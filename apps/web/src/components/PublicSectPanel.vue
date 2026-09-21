@@ -4,6 +4,7 @@ import { computed, ref, watch } from 'vue';
 import type { PublicSectView, SectStateView } from '../api/game';
 import { fetchPublicSect } from '../api/game';
 import { formatAmount, formatTime } from '../utils/format';
+import LoadingState from './LoadingState.vue';
 
 /**
  * 别人宗门的公开档案（嵌在江湖榜弹窗里）。
@@ -24,6 +25,7 @@ const emit = defineEmits<{
 
 const sect = ref<PublicSectView | null>(null);
 const loadError = ref<string | null>(null);
+const loading = ref(true);
 let loadSeq = 0;
 
 watch(
@@ -32,6 +34,7 @@ watch(
     const seq = ++loadSeq;
     sect.value = null;
     loadError.value = null;
+    loading.value = true;
     try {
       const next = await fetchPublicSect(sectId);
       if (seq !== loadSeq) return;
@@ -39,6 +42,8 @@ watch(
     } catch (caught) {
       if (seq !== loadSeq) return;
       loadError.value = caught instanceof Error ? caught.message : '档案读取失败';
+    } finally {
+      if (seq === loadSeq) loading.value = false;
     }
   },
   { immediate: true },
@@ -90,7 +95,9 @@ function requestChallenge(): void {
   <section class="public-sect" aria-labelledby="public-sect-title">
     <button class="quiet-button back-button" type="button" @click="emit('back')">← 返回榜单</button>
 
-    <template v-if="sect">
+    <LoadingState v-if="loading" label="正在翻阅宗门档案" detail="正在读取对方门人与挑战情报。" />
+
+    <template v-else-if="sect">
       <header class="section-heading panel-heading compact-heading">
         <div>
           <p class="eyebrow">宗门档案</p>
@@ -166,6 +173,5 @@ function requestChallenge(): void {
     </template>
 
     <p v-else-if="loadError" class="explore-hint">{{ loadError }}</p>
-    <p v-else class="explore-hint">正在翻阅档案……</p>
   </section>
 </template>

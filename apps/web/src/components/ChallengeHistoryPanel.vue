@@ -4,6 +4,7 @@ import { ref, watch } from 'vue';
 import type { ChallengeHistoryEntryView, ChallengeHistoryView, ChallengeRoundView, SectStateView } from '../api/game';
 import { fetchChallengeHistory } from '../api/game';
 import { formatAmount, formatTime } from '../utils/format';
+import LoadingState from './LoadingState.vue';
 
 /**
  * 演武录：挑战记录（攻守双方视角都在这里，胜负按自己视角翻转）。
@@ -15,12 +16,14 @@ const props = defineProps<{
 
 const history = ref<ChallengeHistoryView | null>(null);
 const loadError = ref<string | null>(null);
+const loading = ref(true);
 const expandedId = ref<string | null>(null);
 
 let loadSeq = 0;
 
 async function load(): Promise<void> {
   const seq = (loadSeq += 1);
+  loading.value = true;
   try {
     const data = await fetchChallengeHistory();
     if (seq !== loadSeq) return; // 已有更新的请求在途，丢弃这次过期响应
@@ -29,6 +32,8 @@ async function load(): Promise<void> {
   } catch (caught) {
     if (seq !== loadSeq) return;
     loadError.value = caught instanceof Error ? caught.message : '读取失败';
+  } finally {
+    if (seq === loadSeq) loading.value = false;
   }
 }
 
@@ -127,14 +132,16 @@ function isZeroRewardWin(entry: ChallengeHistoryEntryView): boolean {
       <span v-if="history" class="count-badge">{{ history.stats.total }} 场</span>
     </header>
 
-    <div v-if="history && history.stats.total > 0" class="challenge-stats">
+    <LoadingState v-if="loading" label="正在翻阅演武录" detail="正在读取最近的攻守战报。" />
+
+    <div v-else-if="history && history.stats.total > 0" class="challenge-stats">
       <span class="stat-item is-win">{{ history.stats.wins }} 胜</span>
       <span class="stat-item is-lose">{{ history.stats.losses }} 负</span>
     </div>
 
-    <p v-if="loadError" class="explore-hint">{{ loadError }}</p>
+    <p v-if="!loading && loadError" class="explore-hint">{{ loadError }}</p>
 
-    <ul v-if="history && history.entries.length > 0" class="challenge-list">
+    <ul v-if="!loading && history && history.entries.length > 0" class="challenge-list">
       <li v-for="entry in history.entries" :key="entry.id" class="challenge-card">
         <button
           class="challenge-summary"
@@ -183,7 +190,7 @@ function isZeroRewardWin(entry: ChallengeHistoryEntryView): boolean {
       </li>
     </ul>
 
-    <div v-else-if="history && !loadError" class="empty-state compact-empty">
+    <div v-else-if="!loading && history && !loadError" class="empty-state compact-empty">
       <span aria-hidden="true">武</span>
       <strong>尚无挑战记录</strong>
       <p>在江湖榜中找对手，登门一战。</p>
