@@ -134,9 +134,9 @@ export const abandonExplorationSchema = z.strictObject({
 });
 
 /**
- * 0017 弟子头像框：frameId 只接受 11 个固定字符串（'classic' + 'frame01'…'frame10'），
+ * 0017 弟子头像框：frameId 只接受固定字符串白名单（当前 21 个：'classic' + 'frame01'…'frame20'），
  * 不接受任意 URL / 路径 / 上传；非法值走既有的 400 VALIDATION_ERROR（不新造错误码）。
- * 白名单与 0017 迁移的 CHECK 保持一致。
+ * 与数据库 CHECK 同一口径：0017 建列时是 11 个值，0018 重建表扩到 21 个（新增 frame11–frame20）。
  */
 export const AVATAR_FRAME_IDS = [
   'classic',
@@ -150,6 +150,16 @@ export const AVATAR_FRAME_IDS = [
   'frame08',
   'frame09',
   'frame10',
+  'frame11',
+  'frame12',
+  'frame13',
+  'frame14',
+  'frame15',
+  'frame16',
+  'frame17',
+  'frame18',
+  'frame19',
+  'frame20',
 ] as const;
 
 /** 0017 设置头像框：discipleId 只做长度防线，归属由 service 判定；frameId 必须命中白名单。 */

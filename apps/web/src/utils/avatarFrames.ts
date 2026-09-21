@@ -1,12 +1,12 @@
 /**
  * 弟子头像框：固定白名单 + 静态图片映射（纯函数，不碰 DOM、不依赖 Vue）。
  *
- * 为什么是白名单而不是自由输入：头像框只允许玩家提供的十张固定静态图，
- * 接口与数据库都按 id 校验，前端同样只认这 11 个 id（`classic` + `frame01`–`frame10`），
+ * 为什么是白名单而不是自由输入：头像框只允许玩家提供的 20 张固定静态图，
+ * 接口与数据库都按 id 校验，前端同样只认这 21 个 id（`classic` + `frame01`–`frame20`），
  * 不接受任意 URL、路径或上传内容。
  *
- * 素材约定：`frame01`–`frame10` 对应 `apps/web/public/avatar-frames/frame01.png` …
- * `frame10.png`（透明背景、中央留白）。`classic` 没有图片，用界面内置的旧外观。
+ * 素材约定：`frame01`–`frame20` 对应 `apps/web/public/avatar-frames/frame01.png` …
+ * `frame20.png`（透明背景、中央留白）。`classic` 没有图片，用界面内置的旧外观。
  * 图片缺失或加载失败时一律回退 `classic`，绝不把破图或占位图当成玩家选的样式。
  */
 
@@ -23,6 +23,16 @@ export const AVATAR_FRAME_IDS = [
   'frame08',
   'frame09',
   'frame10',
+  'frame11',
+  'frame12',
+  'frame13',
+  'frame14',
+  'frame15',
+  'frame16',
+  'frame17',
+  'frame18',
+  'frame19',
+  'frame20',
 ] as const;
 
 export type AvatarFrameId = (typeof AVATAR_FRAME_IDS)[number];

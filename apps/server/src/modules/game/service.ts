@@ -1784,7 +1784,7 @@ export async function setDiscipleNote(
  * 保存弟子头像框（0017：掌门私有外观，弟子交互优化计划第 3 节）。
  *
  * - 归属：discipleById 只在当前宗门的弟子里找，非本宗 / 不存在统一 NOT_FOUND（不泄露他人门人信息）；
- * - frameId 的 11 个合法值已由 setDiscipleAvatarFrameRequestSchema 白名单把关（不接受任意 URL / 路径 / 上传）；
+ * - frameId 的合法值（21 个，见 schema.ts 的 AVATAR_FRAME_IDS）已由 setDiscipleAvatarFrameRequestSchema 白名单把关（不接受任意 URL / 路径 / 上传）；
  * - 幂等：与当前值相同时**显式早退**——不提交结算、不写库，不产生资源 / 计数 / 事件副作用；
  * - 提交走 commitDisciple：批内重新核对宗门行、资源余额与目标弟子归属，并发时不产生半写。
  */

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
@@ -20,8 +21,8 @@ import {
  * 前端不能因为拿到未知值就渲染任意 URL，图片加载失败也不能把占位/破图当成果。
  */
 describe('头像框白名单', () => {
-  it('正好是 classic + frame01–frame10 共 11 个固定 id', () => {
-    expect(AVATAR_FRAME_IDS).toHaveLength(11);
+  it('正好是 classic + frame01–frame20 共 21 个固定 id', () => {
+    expect(AVATAR_FRAME_IDS).toHaveLength(21);
     expect(AVATAR_FRAME_IDS[0]).toBe('classic');
     expect(AVATAR_FRAME_IDS.slice(1)).toEqual([
       'frame01',
@@ -34,6 +35,16 @@ describe('头像框白名单', () => {
       'frame08',
       'frame09',
       'frame10',
+      'frame11',
+      'frame12',
+      'frame13',
+      'frame14',
+      'frame15',
+      'frame16',
+      'frame17',
+      'frame18',
+      'frame19',
+      'frame20',
     ]);
     expect(DEFAULT_AVATAR_FRAME_ID).toBe('classic');
     expect(AVATAR_FRAME_IDS).toContain(DEFAULT_AVATAR_FRAME_ID);
@@ -43,7 +54,7 @@ describe('头像框白名单', () => {
     expect(AVATAR_FRAME_OPTIONS.map((option) => option.id)).toEqual([...AVATAR_FRAME_IDS]);
   });
 
-  it('只有 classic 没有图片，其余九张…十张都落在静态资源目录下', () => {
+  it('只有 classic 没有图片，其余二十张都落在静态资源目录下', () => {
     for (const option of AVATAR_FRAME_OPTIONS) {
       if (option.id === 'classic') {
         expect(option.src).toBeNull();
@@ -70,11 +81,11 @@ describe('头像框静态素材', () => {
     (id) => `${id}.png`,
   );
 
-  it('目录中恰好包含 frame01.png–frame10.png', () => {
+  it('目录中恰好包含 frame01.png–frame20.png', () => {
     expect(readdirSync(assetDir).sort()).toEqual([...expectedFiles].sort());
   });
 
-  it('十张素材都是 256×256 的 8-bit RGBA PNG', () => {
+  it('二十张素材都是 256×256 的 8-bit RGBA PNG', () => {
     const pngSignature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
     for (const file of expectedFiles) {
       const bytes = readFileSync(resolve(assetDir, file));
@@ -85,10 +96,19 @@ describe('头像框静态素材', () => {
       expect(bytes[25], `${file} PNG color type`).toBe(6);
     }
   });
+
+  it('二十张素材互不相同（不存在复制同一张图充当多个样式）', () => {
+    const digests = new Set(
+      expectedFiles.map((file) =>
+        createHash('sha256').update(readFileSync(resolve(assetDir, file))).digest('hex'),
+      ),
+    );
+    expect(digests.size).toBe(expectedFiles.length);
+  });
 });
 
 describe('isAvatarFrameId（只认白名单，拒绝任意 URL / 路径）', () => {
-  it('接受白名单里的 11 个 id', () => {
+  it('接受白名单里的 21 个 id', () => {
     for (const id of AVATAR_FRAME_IDS) expect(isAvatarFrameId(id)).toBe(true);
   });
 
@@ -96,11 +116,11 @@ describe('isAvatarFrameId（只认白名单，拒绝任意 URL / 路径）', () 
     const rejected = [
       'https://evil.example/x.png',
       '//evil.example/x.png',
-      '/avatar-frames/frame11.png',
+      '/avatar-frames/frame20.png',
       '../public/avatar-frames/frame01.png',
       'javascript:alert(1)',
       'data:image/png;base64,AAAA',
-      'frame11',
+      'frame21',
       'frame00',
       'frame1',
       'FRAME01',

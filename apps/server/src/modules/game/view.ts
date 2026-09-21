@@ -147,7 +147,7 @@ export interface DiscipleView {
    */
   note: string;
   /**
-   * 0017 头像框 id（'classic' 或 'frame01'…'frame10'，固定 11 个值）。
+   * 0017 头像框 id（'classic' 或 'frame01'…'frame20'，固定 21 个值；0018 扩到 20 张素材）。
    * 只出现在登录玩家自己的 SectStateView；公开档案 / 排行榜 / 战报 / 招贤候选人不含此字段。
    */
   avatarFrameId: string;
@@ -880,7 +880,7 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
       bodyTemperingTarget: temperingTarget?.attribute ?? null,
       bodyTemperingGain: temperingTarget?.gain ?? 0,
       note: disciple.note,
-      /** 0017 头像框 id（'classic' 或 'frame01'…'frame10'）：掌门私有的固定外观选择。 */
+      /** 0017 头像框 id（'classic' 或 'frame01'…'frame20'）：掌门私有的固定外观选择。 */
       avatarFrameId: disciple.avatar_frame_id,
       journey: journeyView,
     };

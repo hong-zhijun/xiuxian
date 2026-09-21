@@ -1000,7 +1000,7 @@ function confirmExpel(): void {
       >
         <section class="disciple-detail-section" aria-labelledby="disciple-frame-title">
           <h3 id="disciple-frame-title" class="disciple-detail-title">头像框</h3>
-          <!-- 图像单选控件：固定十种样式 + 旧式，不接受任意上传或 URL。 -->
+          <!-- 图像单选控件：固定二十种样式 + 旧式，不接受任意上传或 URL。 -->
           <div class="disciple-frame-grid" role="radiogroup" aria-label="头像框样式">
             <label
               v-for="option in AVATAR_FRAME_OPTIONS"

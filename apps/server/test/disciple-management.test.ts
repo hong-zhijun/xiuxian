@@ -17,6 +17,7 @@ import {
   updateDiscipleProgressStatement,
   updateSectDefenseLineupStatement,
 } from '../src/modules/game/repository';
+import { AVATAR_FRAME_IDS } from '../src/modules/game/schema';
 
 import { dataOf, errorOf, TestClient, type ApiResult } from './support/authClient';
 import { CULTIVATION_PILL_GAIN } from '../src/modules/game/alchemy';
@@ -1008,23 +1009,163 @@ describe('0017 迁移：disciples.avatar_frame_id', () => {
     expect(await avatarFrameOf(legacyId)).toBe('classic');
   });
 
-  it('CHECK 只允许 11 个固定值（绕过服务端也写不进非法值）', async () => {
+  it('CHECK 允许白名单 21 个值、拒绝越界与路径（绕过服务端也写不进非法值）', async () => {
     const sect = await makeSect('daf-mig-check');
     const discipleId = sect.discipleIds[0] as string;
 
-    await env.DB.prepare('UPDATE disciples SET avatar_frame_id = ? WHERE id = ?')
-      .bind('frame10', discipleId)
-      .run();
-    expect(await avatarFrameOf(discipleId)).toBe('frame10');
+    // 0018 新增的 frame11–frame20 必须能落库（0018 重建表放宽了 0017 的 CHECK）。
+    for (const good of ['frame10', 'frame11', 'frame20']) {
+      await env.DB.prepare('UPDATE disciples SET avatar_frame_id = ? WHERE id = ?')
+        .bind(good, discipleId)
+        .run();
+      expect(await avatarFrameOf(discipleId)).toBe(good);
+    }
 
-    for (const bad of ['frame11', 'frame00', '', 'http://evil/frame.png', '/etc/passwd', 'classic ']) {
+    for (const bad of ['frame21', 'frame00', '', 'http://evil/frame.png', '/etc/passwd', 'classic ']) {
       await expect(
         env.DB.prepare('UPDATE disciples SET avatar_frame_id = ? WHERE id = ?')
           .bind(bad, discipleId)
           .run(),
       ).rejects.toThrow(/CHECK/i);
     }
-    expect(await avatarFrameOf(discipleId)).toBe('frame10');
+    expect(await avatarFrameOf(discipleId)).toBe('frame20');
+  });
+});
+
+/* ---------- 0018 头像框素材扩到 20 张（重建 disciples 表） ---------- */
+
+describe('0018 迁移：disciples 重建后结构与约束完好', () => {
+  it('服务端白名单正好是 classic + frame01–frame20 共 21 个（中间值一个不缺）', () => {
+    expect([...AVATAR_FRAME_IDS]).toEqual([
+      'classic',
+      'frame01', 'frame02', 'frame03', 'frame04', 'frame05',
+      'frame06', 'frame07', 'frame08', 'frame09', 'frame10',
+      'frame11', 'frame12', 'frame13', 'frame14', 'frame15',
+      'frame16', 'frame17', 'frame18', 'frame19', 'frame20',
+    ]);
+  });
+
+  it('重建后列集合与 0017 之后一致（没有丢列）', async () => {
+    const columns = await env.DB.prepare('PRAGMA table_info(disciples)').all<{ name: string }>();
+    expect((columns.results ?? []).map((item) => item.name)).toEqual([
+      'id',
+      'sect_id',
+      'name',
+      'gender',
+      'aptitude',
+      'realm_id',
+      'stage',
+      'cultivation',
+      'cultivation_remainder',
+      'assignment',
+      'injured_until',
+      'created_at',
+      'attack',
+      'defense',
+      'speed',
+      'talent',
+      'body_tempering_count',
+      'note',
+      'luck',
+      'physique',
+      'avatar_frame_id',
+    ]);
+  });
+
+  /**
+   * 期望值来自迁移原文（0004 建表 + 0008 / 0011 / 0013 / 0016 / 0017 加列，
+   * 顺序与列定义以 0018 重建表的 CREATE TABLE 为准），不是从当前库里抄的：
+   * 重建时把 DEFAULT 写错、类型写错或漏掉 NOT NULL，这里都会挂。
+   * 两处 SQLite 书写约定（实测 wrangler d1 --local 与 node:sqlite 结果一致）：
+   *   - dflt_value 是 SQL 字面量原文，字符串默认值带单引号（'male' / 'qiRefining' / 'idle' / 'none' / '' / 'classic'）；
+   *   - `id TEXT PRIMARY KEY` 在 rowid 表里不加 NOT NULL，notnull 实测为 0（迁移原文也没写 NOT NULL）；
+   *     injured_until 可空，notnull 0、无 DEFAULT。
+   */
+  it('重建后每列的类型 / NOT NULL / DEFAULT 与 0017 之后一致', async () => {
+    const columns = await env.DB.prepare('PRAGMA table_info(disciples)').all<{
+      name: string;
+      type: string;
+      notnull: number;
+      dflt_value: string | null;
+    }>();
+    const actual = (columns.results ?? []).map(
+      (item) => `${item.name}|${item.type}|${Number(item.notnull)}|${item.dflt_value ?? ''}`,
+    );
+    expect(actual).toEqual([
+      'id|TEXT|0|',
+      'sect_id|TEXT|1|',
+      'name|TEXT|1|',
+      "gender|TEXT|1|'male'",
+      'aptitude|INTEGER|1|',
+      "realm_id|TEXT|1|'qiRefining'",
+      'stage|INTEGER|1|1',
+      'cultivation|INTEGER|1|0',
+      'cultivation_remainder|INTEGER|1|0',
+      "assignment|TEXT|1|'idle'",
+      'injured_until|INTEGER|0|',
+      'created_at|INTEGER|1|',
+      'attack|INTEGER|1|50',
+      'defense|INTEGER|1|50',
+      'speed|INTEGER|1|50',
+      "talent|TEXT|1|'none'",
+      'body_tempering_count|INTEGER|1|0',
+      "note|TEXT|1|''",
+      'luck|INTEGER|1|50',
+      'physique|INTEGER|1|50',
+      "avatar_frame_id|TEXT|1|'classic'",
+    ]);
+  });
+
+  it('重建后索引与其它 CHECK 都还在（note 长度 / luck 范围 / 淬体次数）', async () => {
+    const indexes = await env.DB.prepare('PRAGMA index_list(disciples)').all<{ name: string }>();
+    expect((indexes.results ?? []).map((item) => item.name)).toContain('disciples_sect_id_idx');
+
+    const sect = await makeSect('daf-mig-0018');
+    const discipleId = sect.discipleIds[0] as string;
+
+    await expect(
+      env.DB.prepare('UPDATE disciples SET note = ? WHERE id = ?')
+        .bind('x'.repeat(61), discipleId)
+        .run(),
+    ).rejects.toThrow(/CHECK/i);
+    await expect(
+      env.DB.prepare('UPDATE disciples SET luck = ? WHERE id = ?').bind(0, discipleId).run(),
+    ).rejects.toThrow(/CHECK/i);
+    await expect(
+      env.DB.prepare('UPDATE disciples SET body_tempering_count = ? WHERE id = ?')
+        .bind(-1, discipleId)
+        .run(),
+    ).rejects.toThrow(/CHECK/i);
+
+    // 反证：合法值仍然写得进去（上面的拒绝不是因为语句本身有问题）。
+    await env.DB.prepare(
+      'UPDATE disciples SET note = ?, luck = ?, body_tempering_count = ? WHERE id = ?',
+    )
+      .bind('ok', 100, 10, discipleId)
+      .run();
+  });
+
+  it('frame01–frame20 都能通过接口保存并读回，直写库同样全部可写', async () => {
+    const sect = await makeSect('daf-mig-0018-api');
+    await freezeSettlement(sect.sectId);
+    const discipleId = sect.discipleIds[0] as string;
+
+    const allFrames = AVATAR_FRAME_IDS.filter((id) => id !== 'classic');
+    expect(allFrames).toHaveLength(20);
+
+    // 接口路径：白名单里每一个值都必须被接受。
+    for (const frameId of allFrames) {
+      expect((await framePost(sect.api, discipleId, frameId)).status).toBe(200);
+      expect(await avatarFrameOf(discipleId)).toBe(frameId);
+    }
+
+    // 直写路径：0018 重建后的 CHECK 必须逐个放行，中段漏写某个值会在这里挂掉。
+    for (const frameId of allFrames) {
+      await env.DB.prepare('UPDATE disciples SET avatar_frame_id = ? WHERE id = ?')
+        .bind(frameId, discipleId)
+        .run();
+      expect(await avatarFrameOf(discipleId)).toBe(frameId);
+    }
   });
 });
 
@@ -1093,7 +1234,7 @@ describe('头像框：保存、幂等与校验', () => {
     await freezeSettlement(sect.sectId);
     const discipleId = sect.discipleIds[0] as string;
 
-    for (const bad of ['frame11', 'frame00', '', 'http://evil/frame.png', '/etc/passwd', 'classic ']) {
+    for (const bad of ['frame21', 'frame00', '', 'http://evil/frame.png', '/etc/passwd', 'classic ']) {
       const result = await framePost(sect.api, discipleId, bad);
       expect(errorOf(result).code).toBe('VALIDATION_ERROR');
     }

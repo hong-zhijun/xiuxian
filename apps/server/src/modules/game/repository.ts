@@ -59,7 +59,7 @@ export interface DiscipleRow {
   body_tempering_count: number;
   /** 0013 掌门私有备注（单行纯文本，≤60 字；只进登录玩家自己的视图）。 */
   note: string;
-  /** 0017 头像框 id（'classic' 或 'frame01'…'frame10'；掌门私有外观，只进自己的视图）。 */
+  /** 0017 头像框 id（'classic' 或 'frame01'…'frame20'；掌门私有外观，只进自己的视图）。 */
   avatar_frame_id: string;
   created_at: number;
 }
@@ -826,7 +826,7 @@ export function updateDiscipleNoteStatement(
 }
 
 /**
- * 0017 头像框写回：只更新 avatar_frame_id 一列（frameId 已由 schema 的 11 值白名单把关）。
+ * 0017 头像框写回：只更新 avatar_frame_id 一列（frameId 已由 schema 的 21 值白名单把关）。
  * 与备注一致用 `id + sect_id` 双条件：身份写错行时影响 0 行（批内快照守卫再兜一层）。
  */
 export function updateDiscipleAvatarFrameStatement(

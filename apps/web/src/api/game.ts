@@ -665,7 +665,7 @@ export async function setDiscipleNote(discipleId: string, note: string): Promise
 
 /**
  * 0017 设置弟子头像框（POST /game/set-disciple-avatar-frame）：
- * frameId 只接受白名单里的固定 id（`classic` / `frame01`–`frame10`），不是自由上传；
+ * frameId 只接受白名单里的固定 id（`classic` / `frame01`–`frame20`），不是自由上传；
  * 跨宗或不存在按 `NOT_FOUND` 处理，重复保存同一个值不产生任何副作用。
  */
 export async function setDiscipleAvatarFrame(
