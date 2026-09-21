@@ -4,6 +4,9 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import type {
   ActiveExplorationView,
   BuildingView,
+  DaoAttribute,
+  DaoDebateInput,
+  DaoDebateResult,
   ChallengeResultView,
   DiscipleView,
   ExploreChoiceResult,
@@ -35,6 +38,7 @@ import DiscipleRoster from './DiscipleRoster.vue';
 import EventLogPanel from './EventLogPanel.vue';
 import ExplorePanel from './ExplorePanel.vue';
 import ExplorePartyDialog from './ExplorePartyDialog.vue';
+import GamblingHouseDialog from './GamblingHouseDialog.vue';
 import RealmExploreDialog from './RealmExploreDialog.vue';
 import LeaderboardPanel from './LeaderboardPanel.vue';
 import RecruitDialog from './RecruitDialog.vue';
@@ -53,6 +57,8 @@ const props = defineProps<{
   challengeResult: ChallengeResultView | null;
   /** V6 交互探索刚判定完的那一步；App.vue 负责拿结果，这里只负责展示（null = 还没判定）。 */
   exploreResult: ExploreChoiceResult | null;
+  /** 0019 论道赌局最近一次结果；App.vue 负责拿结果，这里只负责展示（null = 还没打过）。 */
+  daoDebateResult: DaoDebateResult | null;
 }>();
 
 const emit = defineEmits<{
@@ -95,6 +101,9 @@ const emit = defineEmits<{
   claimJourney: [journeyId: string];
   /** 0017 保存头像框样式（白名单 id，见 utils/avatarFrames.ts）。 */
   setAvatarFrame: [discipleId: string, frameId: AvatarFrameId];
+  /** 0019 赌坊：论道请求与悟道值加点都由 App.vue 绑定并调接口，这里只派发与展示。 */
+  daoDebate: [input: DaoDebateInput];
+  allocateDaoInsight: [discipleId: string, attribute: DaoAttribute, points: number];
 }>();
 
 /** 操作条里的弹窗开关：天机录 / 历练探索 / 江湖榜 / 守擂阵容 / 演武录 / 炼丹（宗门晋升与建筑仍在右栏常驻）。 */
@@ -105,6 +114,7 @@ const openPanel = ref<
   | 'defense-lineup'
   | 'challenge-history'
   | 'alchemy'
+  | 'gambling'
   | null
 >(null);
 
@@ -566,6 +576,27 @@ function onCloseChallengeDialog(): void {
   emit('dismissChallengeResult');
 }
 
+/** 0019 赌坊里点「开始论道」：请求由 App.vue 执行，这里只转发（弹窗留着等结果回填）。 */
+function onDaoDebate(input: DaoDebateInput): void {
+  if (props.busy) return;
+  emit('daoDebate', input);
+}
+
+/** 关掉赌坊弹窗：结果由 App.vue 保留，下次打开仍是干净的玩法列表。 */
+function onCloseGambling(): void {
+  openPanel.value = null;
+}
+
+/** 0019 详情里点「分配」悟道值：归属、余额与上限都由服务端裁决，这里只转发。 */
+function onDetailAllocateDaoInsight(
+  discipleId: string,
+  attribute: DaoAttribute,
+  points: number,
+): void {
+  if (props.busy) return;
+  emit('allocateDaoInsight', discipleId, attribute, points);
+}
+
 /** 守擂阵容弹窗里点「确认阵容」：关掉弹窗，把阵容交给上层调接口。 */
 function onSetLineupChoice(discipleIds: string[]): void {
   if (props.busy) return;
@@ -872,6 +903,12 @@ function onDetailSetAvatarFrame(discipleId: string, frameId: AvatarFrameId): voi
             <span>演武录</span>
             <span v-if="state.challenge.remaining > 0" class="chip-badge">{{ state.challenge.remaining }}</span>
           </button>
+          <button class="action-chip" type="button" @click="openPanel = 'gambling'">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M5 5h14v14H5zM8.5 9h.01M12 12h.01M15.5 15h.01" />
+            </svg>
+            <span>赌坊</span>
+          </button>
         </div>
       </section>
     </nav>
@@ -1077,6 +1114,23 @@ function onDetailSetAvatarFrame(discipleId: string, frameId: AvatarFrameId): voi
       <ChallengeHistoryPanel :state="state" />
     </ModalShell>
 
+    <!-- 赌坊：三个阶段在同一弹窗里切换；结果由 App.vue 回填 daoDebateResult。 -->
+    <ModalShell
+      v-if="openPanel === 'gambling'"
+      :loading="busy"
+      loading-text="正在论道"
+      label="赌坊"
+      @close="onCloseGambling"
+    >
+      <GamblingHouseDialog
+        :state="state"
+        :busy="busy"
+        :result="daoDebateResult"
+        @debate="onDaoDebate"
+        @close="onCloseGambling"
+      />
+    </ModalShell>
+
     <!-- 登门挑战：叠在江湖榜 / 公开档案之上，Esc 只关这一层；打完原地切成战报态。 -->
     <ModalShell
       v-if="challengeTarget"
@@ -1153,6 +1207,7 @@ function onDetailSetAvatarFrame(discipleId: string, frameId: AvatarFrameId): voi
         @claim-journey="onDetailClaimJourney"
         @notify="onDetailNotify"
         @set-avatar-frame="onDetailSetAvatarFrame"
+        @allocate-dao-insight="onDetailAllocateDaoInsight"
       />
     </ModalShell>
 

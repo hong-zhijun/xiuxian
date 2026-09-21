@@ -6,6 +6,7 @@ import { parseStrictJson } from '../../http/validation';
 import { getDb } from '../../infra/db/client';
 import {
   abandonExplorationSchema,
+  allocateDaoInsightRequestSchema,
   assignRequestSchema,
   breakthroughRequestSchema,
   challengeRequestSchema,
@@ -13,6 +14,7 @@ import {
   claimJourneyRequestSchema,
   craftPillRequestSchema,
   createSectRequestSchema,
+  daoDebateRequestSchema,
   expelDiscipleRequestSchema,
   exploreRequestSchema,
   journeyPreviewQuerySchema,
@@ -27,6 +29,7 @@ import {
 } from './schema';
 import {
   abandonRealmExplore,
+  allocateDaoInsight,
   assignDisciple,
   breakthrough,
   challengeSect,
@@ -34,6 +37,7 @@ import {
   claimJourney,
   craftPill,
   createSect,
+  daoDebate,
   expelDisciple,
   exploreSectRealm,
   getActiveExploration,
@@ -57,6 +61,7 @@ import {
   usePill,
 } from './service';
 import type { SectStateView } from './view';
+import type { Multiplier } from './gambling';
 
 /**
  * 游戏接口（一次性可玩版本，任务卡第二节）。
@@ -344,6 +349,45 @@ export function createGameRoutes(): Hono<AppEnv> {
     const body = await parseStrictJson(abandonExplorationSchema, c);
     const result = await abandonRealmExplore(getDb(c.env), userId, body.explorationId, Date.now());
     return respondOk(c, { state: result.state });
+  });
+
+  // 0019 赌坊：论道赌局（结算 → 解锁/次数/弟子/赌注校验 → jev 判定 → 发奖或扣赌注，
+  // 计数与记录同一个受保护 batch；胜负由服务端判定，前端只展示）。
+  routes.post('/game/dao-debate', async (c) => {
+    const userId = requireUserId(c);
+    const body = await parseStrictJson(daoDebateRequestSchema, c);
+    const result = await daoDebate(
+      getDb(c.env),
+      userId,
+      {
+        discipleId: body.discipleId,
+        betMode: body.betMode,
+        // schema 已把 multiplier 限制为 1~3，这里收窄到 Multiplier 常量类型。
+        multiplier: body.multiplier as Multiplier,
+        rewardType: body.rewardType,
+        resourceId: body.resourceId,
+        amount: body.amount,
+        attribute: body.attribute,
+      },
+      Date.now(),
+      c.env,
+    );
+    return respondOk(c, { state: result.state, result: result.result });
+  });
+
+  // 0019 赌坊：悟道值加点（结算 → 归属/余额/上限校验 → 属性 + 悟道值同批写回）。
+  routes.post('/game/allocate-dao-insight', async (c) => {
+    const userId = requireUserId(c);
+    const body = await parseStrictJson(allocateDaoInsightRequestSchema, c);
+    const result = await allocateDaoInsight(
+      getDb(c.env),
+      userId,
+      body.discipleId,
+      body.attribute,
+      body.points,
+      Date.now(),
+    );
+    return respondOk(c, { state: result.state, outcome: result.outcome });
   });
   return routes;
 }

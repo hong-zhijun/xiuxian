@@ -20,6 +20,31 @@ import {
   type PillRecipe,
 } from './alchemy';
 import {
+  ATTRIBUTE_INSIGHT_REWARDS,
+  ATTRIBUTE_LABELS,
+  ATTRIBUTE_MAX,
+  ATTRIBUTE_STAKES,
+  DAO_INSIGHT_CAP,
+  DEBATE_DAILY_LIMIT,
+  DEGRADED_WIN_RATES,
+  FREE_BET_MIN,
+  MULTIPLIER_HINTS,
+  PRESET_INSIGHT_REWARDS,
+  PRESET_RESOURCE_REWARDS,
+  PRESET_STAKES,
+  debateDayStateOf,
+  freeBetReward,
+  freeBetStake,
+  gamblingUnlockBlockedReason,
+  generateRevealHints,
+  isBettableResource,
+  type BetMode,
+  type BettableAttribute,
+  type BettableResource,
+  type DebateDayState,
+  type Multiplier,
+} from './gambling';
+import {
   CHALLENGE_DAILY_LIMIT,
   availableDefenders,
   asDefenseMode,
@@ -145,6 +170,15 @@ import {
   updateExplorationResultStatement,
   updateRealmExplorationStageStatement,
 } from './repository';
+import {
+  deleteGamblingSnapshotGuardStatement,
+  gamblingSnapshotGuardStatement,
+  insertDaoDebateLogStatement,
+  updateDiscipleAttributeStatement,
+  updateDiscipleDaoInsightStatement,
+  updateDiscipleInsightAllocateStatement,
+  updateSectDebateCounterStatement,
+} from './repository';
 import { settleEconomy, type SettleResult } from './settle';
 
 import {
@@ -200,6 +234,8 @@ import {
   type ActiveExplorationView,
   type EncounterView,
   type ExploreChoiceResultView,
+  type DaoDebateResultView,
+  type InsightAllocateOutcome,
 } from './view';
 
 /**
@@ -219,6 +255,8 @@ export interface SectSnapshot {
   pillInventories: PillInventoryRow[];
   /** 主动挑战的当日次数（0012；日期键过期时已做日志兼容核对）。 */
   challengeDay: ChallengeDayState;
+  /** 0019 赌坊：论道当日次数（dateKey + 已用 + 剩余；归一在 gambling.ts 完成）。 */
+  debateDay: DebateDayState;
   /** 读快照时库里的最近事件行；本次结算刚触发的在本层另行合并（见 view.ts）。 */
   recentEvents: EventLogRow[];
   /** 0014：本宗未领取的历练记录（在外中 + 待领取）。 */
@@ -284,6 +322,8 @@ async function loadSnapshot(
     // 0015：进行中的交互式秘境探索（每宗门同时最多一个）。
     new RealmExplorationRepository(db).findActiveBySectId(sect.id),
   ]);
+  // 0019 赌坊：论道当日次数（0019 是新表新列，没有需要按日志窗口兼容核对的旧记录）。
+  const debateDay = debateDayStateOf(sect, now);
   return {
     sect,
     disciples,
@@ -291,6 +331,7 @@ async function loadSnapshot(
     balances,
     pillInventories,
     challengeDay,
+    debateDay,
     recentEvents,
     journeys,
     recentJourneys,
@@ -322,6 +363,8 @@ class SectDraft {
   pillInventories: PillInventoryRow[];
   /** 主动挑战的当日次数（可变：挑战受理后在本层更新，随 view() 返回新口径）。 */
   challengeDay: ChallengeDayState;
+  /** 0019 赌坊：论道当日次数（可变：受理一次论道后在本层更新，随 view() 返回新口径）。 */
+  debateDay: DebateDayState;
   readonly recruitUsedToday: number;
 
   private readonly statements: ParameterizedQuery[] = [];
@@ -404,6 +447,7 @@ class SectDraft {
     this.buildings = base.buildings.map((row) => ({ ...row }));
     this.pillInventories = base.pillInventories.map((row) => ({ ...row }));
     this.challengeDay = base.challengeDay;
+    this.debateDay = base.debateDay;
 
     const dateKey = dateKeyUtc8(now);
     this.recruitUsedToday = base.sect.recruit_date_key === dateKey ? Number(base.sect.recruit_count) : 0;
@@ -468,8 +512,8 @@ class SectDraft {
     return this.config.resources.find((item) => item.id === resourceId)?.name ?? resourceId;
   }
 
-  /** 资源检查 + 扣减（负 delta），不足时抛 INSUFFICIENT_RESOURCE（带缺少数量）。 */
-  requireResource(resourceId: string, amount: number): void {
+  /** 资源检查（只读，不扣减）：不足时抛 INSUFFICIENT_RESOURCE（文案与载荷与旧实现一致）。 */
+  requireResourceAvailable(resourceId: string, amount: number): void {
     const balance = this.balanceOf(resourceId);
     if (balance < amount) {
       throw new AppError('INSUFFICIENT_RESOURCE', `${this.resourceName(resourceId)}不足`, {
@@ -479,6 +523,11 @@ class SectDraft {
         lacking: String(amount - balance),
       });
     }
+  }
+
+  /** 资源检查 + 扣减（负 delta），不足时抛 INSUFFICIENT_RESOURCE（带缺少数量）。 */
+  requireResource(resourceId: string, amount: number): void {
+    this.requireResourceAvailable(resourceId, amount);
     this.balances = this.balances.map((row) =>
       row.resource_id === resourceId
         ? { ...row, balance: Number(row.balance) - amount, updated_at: this.now }
@@ -583,6 +632,7 @@ class SectDraft {
       balances: this.balances,
       pillInventories: this.pillInventories,
       challengeDay: this.challengeDay,
+      debateDay: this.debateDay,
       settleResult: this.settleResult,
       now: this.now,
       recruitUsedToday: this.recruitUsedToday,
@@ -730,6 +780,64 @@ class SectDraft {
       }
       if (/UNIQUE constraint failed: challenge_log/i.test(message)) {
         throw new AppError('DAILY_LIMIT', '今日已挑战过该宗门（同一目标每日 1 次）');
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * 赌坊 batch（0019）：守卫 + 结算 + 计数 / 记录 / 发奖 / 扣赌注 + 清理守卫一次提交。
+   *
+   * 并发保护（计划 14.4）：首条 mutation_guards 快照语句在 batch 执行时重新校验宗门行
+   * （等级 / 结算时间 / 论道日期键 / 论道计数）、全部资源余额，以及（涉事弟子时）该弟子行、
+   * 被押属性与悟道值两列；任一并发改动都会让 CHECK 失败并回滚整批 —— 所以
+   * 「成功次数 <= 10」「记录、奖励、扣减同生共死」都由数据库保证。
+   */
+  async commitGambling(options: {
+    /** 赌注涉及的资源 id（灵石/药材/矿石）；属性赌注与纯加点时为 null。 */
+    resourceId: string | null;
+    /**
+     * 涉事弟子（论道必传；悟道值加点也传）。
+     * 只要传了就必须进守卫：论道赢了悟道值会写回弟子行，若不核对这一行，
+     * 并发加点改掉的 dao_insight / dao_insight_used 会被本批按快照绝对值覆盖。
+     */
+    discipleId?: string;
+    /** 本次写入涉及的那一列属性（属性赌注 / 被加点）；只发悟道值奖励时可省略。 */
+    attribute?: BettableAttribute;
+    /** 是否要求该弟子此刻没有「尚未到期的历练」（论道要求；加点不要求）。 */
+    rejectAway?: boolean;
+  }): Promise<void> {
+    const commandId = crypto.randomUUID();
+    // 守卫比较的是写入前的库状态 → 用读快照时的弟子行（this.base），不是内存里改过的行。
+    const baseDisciple =
+      options.discipleId === undefined
+        ? undefined
+        : this.base.disciples.find((row) => row.id === options.discipleId);
+    const disciple =
+      baseDisciple === undefined
+        ? undefined
+        : {
+            row: baseDisciple,
+            ...(options.attribute === undefined ? {} : { attribute: options.attribute }),
+          };
+    const guard = gamblingSnapshotGuardStatement(commandId, {
+      sect: this.base.sect,
+      balances: this.base.balances,
+      resourceId: options.resourceId,
+      now: this.now,
+      ...(disciple === undefined ? {} : { disciple }),
+      ...(options.rejectAway === true ? { rejectAway: true } : {}),
+    });
+    try {
+      await this.db.batch(prepareStatements(this.db, [
+        guard,
+        ...this.statements,
+        deleteGamblingSnapshotGuardStatement(commandId),
+      ]));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (/CHECK constraint failed: (?:valid = 1|mutation_guards)/i.test(message)) {
+        throw new AppError('INVALID_STATUS', '宗门状态已变化，请刷新后重试');
       }
       throw error;
     }
@@ -1130,6 +1238,9 @@ export async function createSect(
       injured_until: null,
       body_tempering_count: 0,
       note: '',
+      // 0019：初始弟子悟道值为 0（只能通过赌坊获得）。
+      dao_insight: 0,
+      dao_insight_used: 0,
       avatar_frame_id: 'classic',
       created_at: now,
     };
@@ -1212,6 +1323,8 @@ export async function createSect(
         defense_lineup: null,
         challenge_date_key: '',
         challenge_count: 0,
+        debate_date_key: '',
+        debate_count: 0,
         created_at: now,
       },
       disciples,
@@ -1222,6 +1335,8 @@ export async function createSect(
         { challenge_date_key: '', challenge_count: 0 },
         now,
       ),
+      // 0019：新宗门的论道计数从零开始（与挑战同口径：空日期键 + 0 次）。
+      debateDay: debateDayStateOf({ debate_date_key: '', debate_count: 0 }, now),
       recentEvents: [],
       // 0014：新宗门还没有任何历练记录。
       journeys: [],
@@ -1454,6 +1569,9 @@ export async function recruitDisciple(
     body_tempering_count: 0,
     note: '',
     avatar_frame_id: 'classic',
+    // 0019：新招募的弟子悟道值为 0（只能通过赌坊获得；列默认值也是 0，这里显式写出）。
+    dao_insight: 0,
+    dao_insight_used: 0,
     created_at: now,
   };
   draft.addDisciple(disciple);
@@ -4525,4 +4643,457 @@ export async function abandonRealmExplore(
 
   await draft.commitRealmExplore(guardRow);
   return { state: draft.view() };
+}
+
+/* ---------- 赌坊（0019 迁移 + gambling.ts：论道赌局与悟道值加点） ---------- */
+
+/** 赌坊解锁检查（只在服务端实现；未解锁时 daoDebate 一律 INVALID_STATUS）。 */
+function requireGamblingUnlocked(draft: SectDraft): void {
+  const reason = gamblingUnlockBlockedReason(Number(draft.sect.level));
+  if (reason !== null) {
+    throw new AppError('INVALID_STATUS', reason);
+  }
+}
+
+/** 最小单位 → 展示单位文案（1 展示单位 = 1000 最小单位）；只用于服务端拼好的中文文案。 */
+function displayAmount(minUnits: number): string {
+  const value = minUnits / 1000;
+  return Number.isInteger(value) ? String(value) : String(Number(value.toFixed(2)));
+}
+
+/**
+ * 属性扣减后的下限：luck / physique 在 0016 迁移（0018 重建时原样保留）里就带
+ * CHECK (1..100)，所以这两项最低保留 1 点 —— 文档 3.3 的「可以扣到 0」对它们不成立，
+ * 服务端在写库前挡住，而不是让 CHECK 失败变成一条 500。
+ * 其余四项（攻 / 防 / 速 / 资质）仍按文档允许扣到 0。
+ */
+function attributeFloorOf(attribute: BettableAttribute): number {
+  return attribute === 'luck' || attribute === 'physique' ? 1 : 0;
+}
+
+/** 弟子六项属性快照（jev 状态文本与侦查文案共用）。 */
+function debateAttributesOf(disciple: DiscipleRow): Record<BettableAttribute, number> {
+  return {
+    attack: Number(disciple.attack),
+    defense: Number(disciple.defense),
+    speed: Number(disciple.speed),
+    aptitude: Number(disciple.aptitude),
+    luck: Number(disciple.luck),
+    physique: Number(disciple.physique),
+  };
+}
+
+/**
+ * 论道的 jev 状态文本（计划 4.1）：弟子实力快照 + 倍率对应的对手强度。
+ * 纯文本、不含玩家标识；模型只用来估胜率，写库与发奖完全由服务端规则决定。
+ * 境界与阶段合并展示（constants.ts 的阶段名本身就是「炼气一层」这种完整写法）。
+ */
+function debateStateText(disciple: DiscipleRow, multiplier: Multiplier): string {
+  const stage = findStage(disciple.realm_id, Number(disciple.stage));
+  const attrs = debateAttributesOf(disciple);
+  const power = discipleCombatPower(
+    disciple.realm_id,
+    Number(disciple.stage),
+    attrs.attack,
+    attrs.defense,
+    attrs.speed,
+    disciple.talent,
+  );
+  const talentName = findTalent(disciple.talent)?.name ?? '无';
+  return [
+    `论道赌局：${disciple.name}（${stage.name}，攻击${String(attrs.attack)} 防御${String(attrs.defense)} ` +
+      `速度${String(attrs.speed)} 资质${String(attrs.aptitude)} 幸运${String(attrs.luck)} ` +
+      `体魄${String(attrs.physique)}，战力${String(power)}，天赋：${talentName}）`,
+    `赌注倍率：${String(multiplier)}x（${MULTIPLIER_HINTS[multiplier]}）`,
+  ].join('\n');
+}
+
+/** 胜率判定结果：probability 是实际掷骰用的胜率，raw 是 jev 原始胜率（降级为 null）。 */
+interface DebateJudgement {
+  probability: number;
+  raw: number | null;
+}
+
+/**
+ * 判定一次论道的胜率（计划 4.2~4.4）。
+ *
+ * 只发一个 noul 问题（取 win 的 0~1 概率）；没有 key、调用失败 / 超时 / 返回形状不符时
+ * **一律降级**为本地固定胜率 DEGRADED_WIN_RATES（倍率越高胜率越低），保证玩家永远能继续。
+ * 降级只记一条 warn，不向玩家泄露，也不把随机兜底藏进 infra 层。
+ */
+async function judgeDebateOutcome(input: {
+  env: Env;
+  disciple: DiscipleRow;
+  multiplier: Multiplier;
+}): Promise<DebateJudgement> {
+  const apiKey = readStringVar(input.env.OPENROUTER_API_KEY);
+  if (apiKey !== undefined && apiKey.length > 0) {
+    try {
+      const questions: Record<string, Question> = {
+        win: {
+          type: 'noul',
+          instructions: '根据弟子实力与对手强度，判断这名弟子在论道比试中取胜的概率。',
+          criteria: {
+            true: '弟子综合实力占优，能在论道中取胜',
+            false: '对手更强，弟子落败',
+          },
+        },
+      };
+      const answers = await decide(
+        apiKey,
+        debateStateText(input.disciple, input.multiplier),
+        questions,
+      );
+      const probability = normalizeProbability((answers.win as NoulAnswer | undefined)?.noul);
+      if (probability !== null) {
+        return { probability, raw: probability };
+      }
+      console.warn(`gambling_decisions_unexpected_shape disciple=${input.disciple.id}`);
+    } catch (error) {
+      // 只记原因类别，不打 API key、不打响应体。
+      console.warn(
+        `gambling_decisions_failed disciple=${input.disciple.id} reason=${
+          error instanceof Error ? error.name : 'unknown'
+        }`,
+      );
+    }
+  }
+  return { probability: DEGRADED_WIN_RATES[input.multiplier] / 10_000, raw: null };
+}
+
+/** 赌注方案：三种模式在校验后各自收窄，发奖/扣减时不必再判 betMode 字符串。 */
+type DebatePlan =
+  | {
+      mode: 'preset_spirit_stone';
+      /** 赢什么：灵石（resource）或悟道值（insight）。 */
+      rewardType: 'resource' | 'insight';
+      /** 赌注额（最小单位）。 */
+      stake: number;
+      stakeDescription: string;
+    }
+  | {
+      mode: 'free_resource';
+      resourceId: BettableResource;
+      /** 玩家输入的原始数量（赢奖按它 × 倍率 × 1.8 计算）。 */
+      amount: number;
+      /** 实际赌注 = 输入数量 × 倍率。 */
+      stake: number;
+      stakeDescription: string;
+    }
+  | {
+      mode: 'attribute';
+      attribute: BettableAttribute;
+      /** 赌注点数。 */
+      stake: number;
+      stakeDescription: string;
+    };
+
+/** 写入 dao_debate_log.reward_detail 的 JSON（'none' = 败北无奖励）。 */
+type DebateRewardDetail =
+  | { type: 'resource'; resourceId: string; amount: string }
+  | { type: 'insight'; insight: number }
+  | { type: 'none' };
+
+/**
+ * 论道赌局（POST /game/dao-debate）。
+ *
+ * 与其它写命令同一套路：结算 → 解锁 / 次数 / 弟子 / 赌注校验（全部只读，不产生写入）
+ * → jev 判定胜率（失败降级）→ 掷骰 → 发奖或扣赌注 → 计数 + 记录
+ * → **一次**受保护 batch 提交（守卫 + 结算写回 + 全部命令写入）。
+ */
+export async function daoDebate(
+  db: D1Database,
+  userId: string,
+  input: {
+    discipleId: string;
+    betMode: BetMode;
+    multiplier: Multiplier;
+    /** 模式 A：赢什么（'resource' = 灵石，'insight' = 悟道值）。 */
+    rewardType?: 'resource' | 'insight';
+    /** 模式 B：押哪种资源（白名单在 gambling.ts 的 BETTABLE_RESOURCES）。 */
+    resourceId?: string;
+    /** 模式 B：押多少（最小单位，>= FREE_BET_MIN）。 */
+    amount?: number;
+    /** 模式 C：押哪项属性。 */
+    attribute?: BettableAttribute;
+  },
+  now: number,
+  env: Env,
+): Promise<{ state: SectStateView; result: DaoDebateResultView }> {
+  const draft = await draftFor(db, userId, now);
+  requireGamblingUnlocked(draft);
+
+  // 每日次数（UTC+8 归一在 gambling.ts 的 debateDayStateOf 里完成）。
+  const day = draft.debateDay;
+  if (day.remaining <= 0) {
+    throw new AppError('DAILY_LIMIT', `今日论道次数已用完（${String(DEBATE_DAILY_LIMIT)} 次/天）`);
+  }
+
+  // 出战弟子：属于本宗、不在外历练、不在疗伤（与挑战同一口径）。
+  const disciple = draft.discipleById(input.discipleId);
+  requireNotAway(draft, disciple, '论道');
+  if (disciple.injured_until !== null && Number(disciple.injured_until) > now) {
+    throw new AppError('INVALID_STATUS', `${disciple.name}正在疗伤，无法参加论道`);
+  }
+
+  const multiplier = input.multiplier;
+  let plan: DebatePlan;
+  if (input.betMode === 'preset_spirit_stone') {
+    // 模式 A：固定档位灵石赌注，赢可以选灵石或悟道值。
+    const rewardType = input.rewardType;
+    if (rewardType !== 'resource' && rewardType !== 'insight') {
+      throw new AppError('VALIDATION_ERROR', '请选择论道胜出后的奖励类型');
+    }
+    const stake = PRESET_STAKES[multiplier];
+    draft.requireResourceAvailable('spiritStone', stake);
+    plan = {
+      mode: 'preset_spirit_stone',
+      rewardType,
+      stake,
+      stakeDescription: `灵石 ${displayAmount(stake)}`,
+    };
+  } else if (input.betMode === 'free_resource') {
+    // 模式 B：自由输入资源数量（只能赢资源），实际赌注 = 输入 × 倍率。
+    const resourceId = input.resourceId ?? '';
+    if (!isBettableResource(resourceId)) {
+      throw new AppError('VALIDATION_ERROR', '可押注的资源只有灵石、药材与矿石');
+    }
+    const amount = input.amount ?? 0;
+    if (!Number.isInteger(amount) || amount < FREE_BET_MIN) {
+      throw new AppError(
+        'VALIDATION_ERROR',
+        `自由押注至少 ${displayAmount(FREE_BET_MIN)} ${draft.resourceName(resourceId)}`,
+      );
+    }
+    const stake = freeBetStake(amount, multiplier);
+    draft.requireResourceAvailable(resourceId, stake);
+    plan = {
+      mode: 'free_resource',
+      resourceId,
+      amount,
+      stake,
+      stakeDescription: `${draft.resourceName(resourceId)} ${displayAmount(stake)}`,
+    };
+  } else {
+    // 模式 C：以弟子属性点为赌注（只能赢悟道值）。
+    const attribute = input.attribute;
+    if (attribute === undefined) {
+      throw new AppError('VALIDATION_ERROR', '请选择要押注的属性');
+    }
+    const stake = ATTRIBUTE_STAKES[multiplier];
+    const current = Number(disciple[attribute]);
+    if (current < stake) {
+      throw new AppError(
+        'INVALID_STATUS',
+        `${disciple.name}的${ATTRIBUTE_LABELS[attribute]}只有 ${String(current)} 点，不足以押 ${String(stake)} 点`,
+      );
+    }
+    const floor = attributeFloorOf(attribute);
+    if (current - stake < floor) {
+      throw new AppError(
+        'INVALID_STATUS',
+        `${disciple.name}的${ATTRIBUTE_LABELS[attribute]}押 ${String(stake)} 点会跌破下限 ${String(floor)} 点（该项最低保留 ${String(floor)} 点）`,
+      );
+    }
+    plan = {
+      mode: 'attribute',
+      attribute,
+      stake,
+      stakeDescription: `${ATTRIBUTE_LABELS[attribute]} ${String(stake)} 点`,
+    };
+  }
+
+  // 侦查文案按**下注前**的属性生成（纯展示，不影响胜负，也不调用 jev）。
+  const revealHints = generateRevealHints(
+    debateAttributesOf(disciple),
+    multiplier,
+    Number(disciple.luck),
+  );
+
+  // 胜率判定（jev 或降级）→ 掷骰。Math.random 只在服务端用一次。
+  const judgement = await judgeDebateOutcome({ env, disciple, multiplier });
+  const result: 'win' | 'lose' = Math.random() < judgement.probability ? 'win' : 'lose';
+
+  // 结算：赢 → 发奖（赌注原封不动）；输 → 扣赌注（资源或属性点）。
+  let rewardDetail: DebateRewardDetail;
+  let rewardDescription: string;
+  if (result === 'win') {
+    if (plan.mode === 'preset_spirit_stone' && plan.rewardType === 'insight') {
+      const gain = PRESET_INSIGHT_REWARDS[multiplier];
+      const nextInsight = Number(disciple.dao_insight) + gain;
+      disciple.dao_insight = nextInsight;
+      draft.addStatement(
+        updateDiscipleDaoInsightStatement(disciple.id, nextInsight, Number(disciple.dao_insight_used)),
+      );
+      rewardDetail = { type: 'insight', insight: gain };
+      rewardDescription = `悟道值 +${String(gain)}`;
+    } else if (plan.mode === 'free_resource') {
+      const gain = freeBetReward(plan.amount, multiplier);
+      draft.grantResource(plan.resourceId, gain);
+      rewardDetail = { type: 'resource', resourceId: plan.resourceId, amount: String(gain) };
+      rewardDescription = `${draft.resourceName(plan.resourceId)} +${displayAmount(gain)}`;
+    } else if (plan.mode === 'attribute') {
+      const gain = ATTRIBUTE_INSIGHT_REWARDS[multiplier];
+      const nextInsight = Number(disciple.dao_insight) + gain;
+      disciple.dao_insight = nextInsight;
+      draft.addStatement(
+        updateDiscipleDaoInsightStatement(disciple.id, nextInsight, Number(disciple.dao_insight_used)),
+      );
+      rewardDetail = { type: 'insight', insight: gain };
+      rewardDescription = `悟道值 +${String(gain)}`;
+    } else {
+      // 模式 A + 灵石奖励。
+      const gain = PRESET_RESOURCE_REWARDS[multiplier];
+      draft.grantResource('spiritStone', gain);
+      rewardDetail = { type: 'resource', resourceId: 'spiritStone', amount: String(gain) };
+      rewardDescription = `灵石 +${displayAmount(gain)}`;
+    }
+  } else if (plan.mode === 'attribute') {
+    const nextValue = Math.max(
+      attributeFloorOf(plan.attribute),
+      Number(disciple[plan.attribute]) - plan.stake,
+    );
+    disciple[plan.attribute] = nextValue;
+    draft.addStatement(
+      updateDiscipleAttributeStatement(disciple.id, plan.attribute, nextValue),
+    );
+    rewardDetail = { type: 'none' };
+    rewardDescription = '无';
+  } else {
+    draft.requireResource(plan.mode === 'free_resource' ? plan.resourceId : 'spiritStone', plan.stake);
+    rewardDetail = { type: 'none' };
+    rewardDescription = '无';
+  }
+
+  // 计数写回：日期键归一到今天、计数 = 已用 + 1（内存同步，返回的 state 就是新值）。
+  const usedAfter = day.usedToday + 1;
+  draft.addStatement(updateSectDebateCounterStatement(draft.sect.id, day.dateKey, usedAfter));
+  draft.sect.debate_date_key = day.dateKey;
+  draft.sect.debate_count = usedAfter;
+
+  // 论道记录（赌注与奖励详情是当场快照 JSON；胜率记 jev 原值，降级为 null）。
+  const stakeDetail =
+    plan.mode === 'attribute'
+      ? { attribute: plan.attribute, points: plan.stake }
+      : { resourceId: plan.mode === 'free_resource' ? plan.resourceId : 'spiritStone', amount: String(plan.stake) };
+  draft.addStatement(
+    insertDaoDebateLogStatement({
+      id: crypto.randomUUID(),
+      sectId: draft.sect.id,
+      discipleId: disciple.id,
+      discipleName: disciple.name,
+      betMode: plan.mode,
+      multiplier,
+      stakeDetail: JSON.stringify(stakeDetail),
+      result,
+      rewardDetail: JSON.stringify(rewardDetail),
+      winProbability: judgement.raw,
+      now,
+    }),
+  );
+
+  // 唯一的一次受保护提交：守卫 + 结算 + 资源/属性/悟道值 + 计数 + 记录同一个 batch。
+  await draft.commitGambling({
+    resourceId:
+      plan.mode === 'attribute' ? null : plan.mode === 'free_resource' ? plan.resourceId : 'spiritStone',
+    // 论道一定带上弟子：赢悟道值会写回弟子行，守卫必须核对该行（见 commitGambling 注释）。
+    discipleId: disciple.id,
+    ...(plan.mode === 'attribute' ? { attribute: plan.attribute } : {}),
+    rejectAway: true,
+  });
+  draft.debateDay = {
+    ...day,
+    usedToday: usedAfter,
+    remaining: Math.max(0, DEBATE_DAILY_LIMIT - usedAfter),
+  };
+
+  const message =
+    result === 'win'
+      ? `论道胜出：${disciple.name}击败了${MULTIPLIER_HINTS[multiplier]}，赢得${rewardDescription}（今日还剩 ${String(draft.debateDay.remaining)} 次）`
+      : `论道落败：${disciple.name}不敌${MULTIPLIER_HINTS[multiplier]}，损失${plan.stakeDescription}（今日还剩 ${String(draft.debateDay.remaining)} 次）`;
+
+  return {
+    state: draft.view(),
+    result: {
+      discipleId: disciple.id,
+      discipleName: disciple.name,
+      betMode: plan.mode,
+      multiplier,
+      result,
+      stakeDescription: plan.stakeDescription,
+      rewardDescription,
+      revealHints,
+      winProbability: judgement.raw,
+      message,
+    },
+  };
+}
+
+/**
+ * 悟道值加点（POST /game/allocate-dao-insight，计划 7.2）。
+ *
+ * 1 悟道值 = 1 属性点，属性上限 100，每个弟子累计分配上限 DAO_INSIGHT_CAP。
+ * 悟道值是已得资产，所以**不要求**赌坊解锁、也不限制在外历练的弟子；
+ * 属性 + 余额 + 累计三项一次写完（同一 batch，带快照守卫）。
+ */
+export async function allocateDaoInsight(
+  db: D1Database,
+  userId: string,
+  discipleId: string,
+  attribute: BettableAttribute,
+  points: number,
+  now: number,
+): Promise<{ state: SectStateView; outcome: InsightAllocateOutcome }> {
+  const draft = await draftFor(db, userId, now);
+  const disciple = draft.discipleById(discipleId);
+
+  if (!Number.isInteger(points) || points < 1) {
+    throw new AppError('VALIDATION_ERROR', '每次至少要分配 1 点悟道值');
+  }
+  const insight = Number(disciple.dao_insight);
+  if (insight < points) {
+    throw new AppError(
+      'INVALID_STATUS',
+      `${disciple.name}的悟道值不足（可用 ${String(insight)} 点）`,
+    );
+  }
+  const used = Number(disciple.dao_insight_used);
+  if (used + points > DAO_INSIGHT_CAP) {
+    throw new AppError(
+      'INVALID_STATUS',
+      `${disciple.name}已累计分配 ${String(used)}/${String(DAO_INSIGHT_CAP)} 点悟道值，本次最多再分配 ${String(Math.max(0, DAO_INSIGHT_CAP - used))} 点`,
+    );
+  }
+  const current = Number(disciple[attribute]);
+  if (current + points > ATTRIBUTE_MAX) {
+    throw new AppError(
+      'INVALID_STATUS',
+      `${disciple.name}的${ATTRIBUTE_LABELS[attribute]}已达 ${String(ATTRIBUTE_MAX)} 上限，本次最多再加 ${String(Math.max(0, ATTRIBUTE_MAX - current))} 点`,
+    );
+  }
+
+  const newValue = current + points;
+  const nextInsight = insight - points;
+  const nextUsed = used + points;
+  disciple[attribute] = newValue;
+  disciple.dao_insight = nextInsight;
+  disciple.dao_insight_used = nextUsed;
+  draft.addStatement(
+    updateDiscipleInsightAllocateStatement(disciple.id, attribute, newValue, nextInsight, nextUsed),
+  );
+
+  await draft.commitGambling({ resourceId: null, discipleId: disciple.id, attribute });
+
+  return {
+    state: draft.view(),
+    outcome: {
+      discipleId: disciple.id,
+      discipleName: disciple.name,
+      attribute,
+      points,
+      newValue,
+      remainingInsight: nextInsight,
+      totalUsed: nextUsed,
+    },
+  };
 }

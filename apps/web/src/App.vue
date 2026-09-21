@@ -4,12 +4,14 @@ import { onMounted, onUnmounted, ref } from 'vue';
 import { ApiError, setCsrfToken } from './api/client';
 import {
   abandonRealmExplore,
+  allocateDaoInsight,
   assign,
   breakthrough,
   challenge,
   chooseRealmExplore,
   claimJourney,
   craftPill,
+  daoDebate,
   expelDisciple,
   explore,
   fetchMe,
@@ -29,10 +31,14 @@ import {
 import type {
   ChallengeResultView,
   CraftPillOutcome,
+  DaoAttribute,
+  DaoDebateInput,
+  DaoDebateResult,
   EventLogView,
   ExpelDiscipleOutcome,
   ExploreChoiceResult,
   ExploreOutcome,
+  InsightAllocateOutcome,
   JourneyClaimOutcomeView,
   JourneyDirection,
   RecruitPreview,
@@ -71,6 +77,9 @@ const challengeResult = ref<ChallengeResultView | null>(null);
 
 /** V6 交互探索刚判定完的那一步（交给 SectScreen 的探索弹窗展示；收下即清空）。 */
 const exploreResult = ref<ExploreChoiceResult | null>(null);
+
+/** 0019 论道赌局最近一次结果（交给 SectScreen 的赌坊弹窗展示；null = 还没打过）。 */
+const daoDebateResult = ref<DaoDebateResult | null>(null);
 
 let syncTimer: number | undefined;
 let nextToastId = 1;
@@ -461,6 +470,62 @@ function onDismissChallengeResult(): void {
   challengeResult.value = null;
 }
 
+/* ---------- 0019 赌坊（论道赌局 / 悟道值加点） ---------- */
+
+/** 悟道值目标属性的展示名（前端沿用雷达图名词：speed 记为「身法」）。 */
+const DAO_ATTRIBUTE_NAMES: Record<string, string> = {
+  attack: '攻击',
+  defense: '防御',
+  speed: '身法',
+  aptitude: '资质',
+  luck: '幸运',
+  physique: '体魄',
+};
+
+/**
+ * 0019 论道赌局：赢 / 输、赌注与奖励数额都由服务端裁决，这里只回填 state、
+ * 把结果交给赌坊弹窗展示，并按服务端 message 提示。
+ * 先清空上一次结果，弹窗的 watch 才能把「新结果」当成一次新事件而不是旧值。
+ */
+async function onDaoDebate(input: DaoDebateInput): Promise<void> {
+  if (busy.value) return;
+  busy.value = true;
+  daoDebateResult.value = null;
+  try {
+    const { state: next, result } = await daoDebate(input);
+    state.value = next;
+    announceEvents(next);
+    daoDebateResult.value = result;
+    notify(
+      result.result === 'win' ? 'success' : 'warning',
+      `${result.result === 'win' ? '论道得胜' : '论道失利'} · ${result.discipleName}`,
+      result.message,
+    );
+  } catch (caught) {
+    handleError(caught);
+  } finally {
+    busy.value = false;
+  }
+}
+
+/** 0019 分配悟道值：归属、余额与上限都在服务端裁决，这里只按回执提示加完后的属性值。 */
+function onAllocateDaoInsight(discipleId: string, attribute: DaoAttribute, points: number): void {
+  void runAction(
+    () => allocateDaoInsight(discipleId, attribute, points),
+    (data) => {
+      const outcome = data.outcome as InsightAllocateOutcome | undefined;
+      if (outcome === undefined) {
+        return { title: '悟道值已分配', message: '属性点数已更新。' };
+      }
+      const label = DAO_ATTRIBUTE_NAMES[outcome.attribute] ?? outcome.attribute;
+      return {
+        title: '悟道值已分配',
+        message: `${outcome.discipleName} 分配 ${outcome.points} 点悟道值 → ${label} ${outcome.newValue}（累计 ${outcome.totalUsed}，剩余 ${outcome.remainingInsight}）`,
+      };
+    },
+  );
+}
+
 function onBreakthrough(discipleId: string): void {
   void runAction(
     () => breakthrough(discipleId),
@@ -711,6 +776,7 @@ onUnmounted(() => {
       :refresh-recruit-action="performRecruitRefresh"
       :challenge-result="challengeResult"
       :explore-result="exploreResult"
+      :dao-debate-result="daoDebateResult"
       @refresh="refresh(true)"
       @logout="onLogout"
       @recruited="onRecruitRefreshed"
@@ -726,6 +792,8 @@ onUnmounted(() => {
       @challenge="onChallenge"
       @set-defense-lineup="onSetDefenseLineup"
       @dismiss-challenge-result="onDismissChallengeResult"
+      @dao-debate="onDaoDebate"
+      @allocate-dao-insight="onAllocateDaoInsight"
       @breakthrough="onBreakthrough"
       @craft-pill="onCraftPill"
       @use-pill="onUsePill"

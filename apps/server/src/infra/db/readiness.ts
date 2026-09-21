@@ -7,7 +7,7 @@ import { MissingSchemaError } from './errors';
  * 0007 建切磋记录表（V3 多人互动），0008 加弟子战斗属性（V4），
  * 0009 加守擂阵容列与挑战记录表（V5 挑战系统），0010 加招贤刷新列（V5.2 招贤台刷新），
  * 0011 加弟子淬体次数列与丹药库存表（丹药系统），0015 建交互式秘境探索进行中状态表
- * （V6 秘境探索重构：realm_explorations）。
+ * （V6 秘境探索重构：realm_explorations），0019 建论道赌局记录表（赌坊：dao_debate_log）。
  */
 export const REQUIRED_TABLES = [
   'users',
@@ -27,6 +27,7 @@ export const REQUIRED_TABLES = [
   'challenge_log',
   'pill_inventories',
   'realm_explorations',
+  'dao_debate_log',
 ] as const;
 
 export interface DbReadiness {

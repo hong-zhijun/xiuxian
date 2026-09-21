@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { BETTABLE_ATTRIBUTES } from './gambling';
+
 /**
  * 游戏接口的请求 schema（严格：未声明字段一律拒绝）。
  * 账号/会话相关 schema 在 modules/auth/schema.ts。
@@ -166,4 +168,32 @@ export const AVATAR_FRAME_IDS = [
 export const setDiscipleAvatarFrameRequestSchema = z.strictObject({
   discipleId: z.string().min(1).max(64),
   frameId: z.enum(AVATAR_FRAME_IDS),
+});
+
+/**
+ * 0019 论道赌局（赌坊）：只做「类型 + 长度/范围」的第一道防线，
+ * 真正的规则（解锁、每日次数、弟子归属与状态、余额、赌注白名单）全部在 service 里判定。
+ * 三种赌注模式共用同一个请求体，按 betMode 取用各自字段；多余字段由 strictObject 拒绝。
+ */
+export const daoDebateRequestSchema = z.strictObject({
+  discipleId: z.string().min(1).max(64),
+  betMode: z.enum(['preset_spirit_stone', 'free_resource', 'attribute']),
+  multiplier: z.number().int().min(1).max(3),
+  // 模式 A 用
+  rewardType: z.enum(['resource', 'insight']).optional(),
+  // 模式 B 用（resourceId 的合法性由 gambling.ts 的 BETTABLE_RESOURCES 判定）
+  resourceId: z.string().min(1).max(32).optional(),
+  amount: z.number().int().positive().optional(),
+  // 模式 C 用
+  attribute: z.enum(BETTABLE_ATTRIBUTES).optional(),
+});
+
+/**
+ * 0019 悟道值加点：points 的范围与 DAO_INSIGHT_CAP 同口径（1~50）；
+ * 弟子归属、可用余额、累计上限与属性 100 上限都由 service 判定。
+ */
+export const allocateDaoInsightRequestSchema = z.strictObject({
+  discipleId: z.string().min(1).max(64),
+  attribute: z.enum(BETTABLE_ATTRIBUTES),
+  points: z.number().int().min(1).max(50),
 });

@@ -80,6 +80,13 @@ export interface DiscipleView {
   avatarFrameId: string;
   /** 0014 历练状态：none / active / ready + 名额与不可出发原因（全部服务端算好，前端只渲染）。 */
   journey: DiscipleJourneyView;
+
+  /** 0019 悟道值：当前可用余额（赌坊赢得，可在弟子详情里分配到属性）。 */
+  daoInsight: number;
+  /** 0019 已累计分配的悟道值（上限与后端 DAO_INSIGHT_CAP 同口径，服务端保证不超）。 */
+  daoInsightUsed: number;
+  /** 0019 剩余可分配额度 = max(0, 上限 - daoInsightUsed)，服务端算好。 */
+  daoInsightRemaining: number;
 }
 
 export interface BuildingView {
@@ -158,6 +165,14 @@ export interface SectStateView {
   alchemy: AlchemyView;
   /** 主动挑战的当日次数（每日 3 次；失败/零奖励同样消耗）。 */
   challenge: {
+    dailyLimit: number;
+    usedToday: number;
+    remaining: number;
+  };
+  /** 0019 赌坊面板：解锁（宗门 2 级，不依赖建筑）与当日论道次数（每日 10 次）。 */
+  gambling: {
+    unlocked: boolean;
+    blockedReason: string | null;
     dailyLimit: number;
     usedToday: number;
     remaining: number;
@@ -944,4 +959,80 @@ export async function abandonRealmExplore(
     method: 'POST',
     body: { explorationId },
   });
+}
+
+/* ---------- 0019 赌坊（论道赌局） ---------- */
+
+/** 六项可赌 / 可加点属性（与后端 gambling.ts 的 BETTABLE_ATTRIBUTES 同口径）。 */
+export type DaoAttribute = 'attack' | 'defense' | 'speed' | 'aptitude' | 'luck' | 'physique';
+
+/** 论道赌局入参（与后端 daoDebateRequestSchema 一一对应；多余字段会被服务端 400 拒绝）。 */
+export interface DaoDebateInput {
+  discipleId: string;
+  betMode: 'preset_spirit_stone' | 'free_resource' | 'attribute';
+  multiplier: 1 | 2 | 3;
+  /** 模式「系统预设灵石」必填：赢灵石还是赢悟道值。 */
+  rewardType?: 'resource' | 'insight';
+  /** 模式「自由输入资源」必填：可赌资源白名单。 */
+  resourceId?: 'spiritStone' | 'herb' | 'ore';
+  /** 模式「自由输入资源」必填：赌注的**最小单位整数**（>= 10000）；展示单位 ×1000 后传入。 */
+  amount?: number;
+  /** 模式「属性赌注」必填：押注的属性。 */
+  attribute?: DaoAttribute;
+}
+
+/** 论道赌局结果（与后端 view.ts 的 DaoDebateResultView 一一对应）。 */
+export interface DaoDebateResult {
+  discipleId: string;
+  discipleName: string;
+  betMode: string;
+  multiplier: number;
+  result: 'win' | 'lose';
+  /** 赌注 / 奖励描述与 message 都由服务端拼好，前端只展示，不自己算数值。 */
+  stakeDescription: string;
+  rewardDescription: string;
+  /** 幸运侦查提示（纯展示，不参与胜负）；幸运不足时为空数组。 */
+  revealHints: string[];
+  /** jev 原始胜率（0~1）；null = 本次判定走了本地降级、没用模型。 */
+  winProbability: number | null;
+  message: string;
+}
+
+/** 悟道值加点回执（与后端 view.ts 的 InsightAllocateOutcome 一一对应）。 */
+export interface InsightAllocateOutcome {
+  discipleId: string;
+  discipleName: string;
+  attribute: string;
+  points: number;
+  /** 加点后的该属性值。 */
+  newValue: number;
+  /** 加点后剩余的可用悟道值。 */
+  remainingInsight: number;
+  /** 加点后累计已分配点数（上限 DAO_INSIGHT_CAP）。 */
+  totalUsed: number;
+}
+
+/**
+ * 0019 论道赌局（POST /game/dao-debate）：解锁、每日次数、弟子归属、余额与胜负
+ * 全部由服务端裁决，返回写库后的完整状态与结果。
+ */
+export async function daoDebate(
+  input: DaoDebateInput,
+): Promise<{ state: SectStateView; result: DaoDebateResult }> {
+  return apiRequest<{ state: SectStateView; result: DaoDebateResult }>('/api/v1/game/dao-debate', {
+    method: 'POST',
+    body: input,
+  });
+}
+
+/** 0019 分配悟道值（POST /game/allocate-dao-insight）：points 1~50，服务端再做归属与上限校验。 */
+export async function allocateDaoInsight(
+  discipleId: string,
+  attribute: DaoAttribute,
+  points: number,
+): Promise<{ state: SectStateView; outcome: InsightAllocateOutcome }> {
+  return apiRequest<{ state: SectStateView; outcome: InsightAllocateOutcome }>(
+    '/api/v1/game/allocate-dao-insight',
+    { method: 'POST', body: { discipleId, attribute, points } },
+  );
 }

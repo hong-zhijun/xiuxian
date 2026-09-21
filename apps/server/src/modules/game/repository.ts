@@ -1,6 +1,7 @@
 import { ParamRepository, type ParameterizedQuery } from '../../infra/db/repository';
 
 import type { PillAttribute } from './alchemy';
+import type { BettableAttribute } from './gambling';
 
 /**
  * 游戏仓储（一次性可玩版本）。
@@ -31,6 +32,10 @@ export interface SectRow {
   challenge_date_key: string;
   /** 0012 挑战优化：challenge_date_key 对应日期内已受理的挑战场次。 */
   challenge_count: number;
+  /** 0019 赌坊：当日论道次数对应的 UTC+8 日期键；'' = 尚无本口径计数（迁移前宗门）。 */
+  debate_date_key: string;
+  /** 0019 赌坊：debate_date_key 对应日期内已受理的论道次数。 */
+  debate_count: number;
   created_at: number;
 }
 
@@ -62,6 +67,10 @@ export interface DiscipleRow {
   /** 0017 头像框 id（'classic' 或 'frame01'…'frame20'；掌门私有外观，只进自己的视图）。 */
   avatar_frame_id: string;
   created_at: number;
+  /** 0019 赌坊：当前可用悟道值余额（非负整数；本版本只能通过论道赌局获得）。 */
+  dao_insight: number;
+  /** 0019 赌坊：累计已分配的悟道值（上限 DAO_INSIGHT_CAP = 50）。 */
+  dao_insight_used: number;
 }
 
 export interface BuildingRow {
@@ -146,10 +155,36 @@ export interface ChallengeLogRow {
   created_at: number;
 }
 
+/**
+ * 论道赌局记录行（0019 迁移）。
+ *
+ * 第一版没有前端历史面板（计划 2.4），这张表只作为审计与回溯来源：每次论道写一行，
+ * stake_detail / reward_detail 是当场快照 JSON（弟子与资源后续会变化，记录要能独立读）。
+ * 写入语句构造器见文件末尾的「赌坊」一节。
+ */
+export interface DaoDebateLogRow {
+  id: string;
+  sect_id: string;
+  disciple_id: string;
+  disciple_name: string;
+  /** 'preset_spirit_stone' | 'free_resource' | 'attribute'。 */
+  bet_mode: string;
+  multiplier: number;
+  /** 赌注详情 JSON：{ resourceId, amount } 或 { attribute, points }。 */
+  stake_detail: string;
+  /** 'win' | 'lose'。 */
+  result: string;
+  /** 奖励详情 JSON：{ type: 'resource'|'insight', resourceId?, amount?, insight? }。 */
+  reward_detail: string;
+  /** jev 返回的原始胜率（0~1 小数）；本地降级判定时为 null。 */
+  win_probability: number | null;
+  created_at: number;
+}
+
 export class SectRepository extends ParamRepository {
   async findByUserId(userId: string): Promise<SectRow | null> {
     return this.one<SectRow>({
-      sql: `SELECT id, user_id, name, level, vein_level, reputation, last_settled_at, recruit_date_key, recruit_count, recruit_refresh_level, recruit_refresh_used, created_at, defense_lineup, challenge_date_key, challenge_count
+      sql: `SELECT id, user_id, name, level, vein_level, reputation, last_settled_at, recruit_date_key, recruit_count, recruit_refresh_level, recruit_refresh_used, created_at, defense_lineup, challenge_date_key, challenge_count, debate_date_key, debate_count
             FROM sects WHERE user_id = ?`,
       params: [userId],
     });
@@ -159,7 +194,7 @@ export class SectRepository extends ParamRepository {
   async findAll(): Promise<SectRow[]> {
     return this.all<SectRow>({
       sql: `SELECT id, user_id, name, level, vein_level, reputation, last_settled_at,
-                   recruit_date_key, recruit_count, recruit_refresh_level, recruit_refresh_used, created_at, defense_lineup, challenge_date_key, challenge_count
+                   recruit_date_key, recruit_count, recruit_refresh_level, recruit_refresh_used, created_at, defense_lineup, challenge_date_key, challenge_count, debate_date_key, debate_count
             FROM sects ORDER BY level DESC, reputation DESC, created_at ASC`,
       params: [],
     });
@@ -169,7 +204,7 @@ export class SectRepository extends ParamRepository {
   async findById(sectId: string): Promise<SectRow | null> {
     return this.one<SectRow>({
       sql: `SELECT id, user_id, name, level, vein_level, reputation, last_settled_at,
-                   recruit_date_key, recruit_count, recruit_refresh_level, recruit_refresh_used, created_at, defense_lineup, challenge_date_key, challenge_count
+                   recruit_date_key, recruit_count, recruit_refresh_level, recruit_refresh_used, created_at, defense_lineup, challenge_date_key, challenge_count, debate_date_key, debate_count
             FROM sects WHERE id = ?`,
       params: [sectId],
     });
@@ -181,7 +216,7 @@ export class DiscipleRepository extends ParamRepository {
     return this.all<DiscipleRow>({
       sql: `SELECT id, sect_id, name, gender, aptitude, attack, defense, speed, luck, physique, talent,
                    realm_id, stage, cultivation, cultivation_remainder,
-                   assignment, injured_until, body_tempering_count, note, avatar_frame_id, created_at
+                   assignment, injured_until, body_tempering_count, note, avatar_frame_id, dao_insight, dao_insight_used, created_at
             FROM disciples WHERE sect_id = ? ORDER BY created_at ASC, id ASC`,
       params: [sectId],
     });
@@ -191,7 +226,7 @@ export class DiscipleRepository extends ParamRepository {
     return this.one<DiscipleRow>({
       sql: `SELECT id, sect_id, name, gender, aptitude, attack, defense, speed, luck, physique, talent,
                    realm_id, stage, cultivation, cultivation_remainder,
-                   assignment, injured_until, body_tempering_count, note, avatar_frame_id, created_at
+                   assignment, injured_until, body_tempering_count, note, avatar_frame_id, dao_insight, dao_insight_used, created_at
             FROM disciples WHERE id = ?`,
       params: [discipleId],
     });
@@ -1735,5 +1770,225 @@ export function updateExplorationResultStatement(args: {
   return {
     sql: 'UPDATE explorations SET success = ?, rewards = ? WHERE id = ? AND sect_id = ?',
     params: [args.success ? 1 : 0, args.rewards, args.explorationId, args.sectId],
+  };
+}
+
+/* ---------- 赌坊（0019 迁移 + gambling.ts） ---------- */
+
+/**
+ * 论道计数写回（0019）：受理一次论道时把宗门行的日期键归一到今天、计数 +1。
+ * 条件判断在 mutation_guards 快照语句里完成（batch 首条），这里只负责写入。
+ */
+export function updateSectDebateCounterStatement(
+  sectId: string,
+  dateKey: string,
+  count: number,
+): ParameterizedQuery {
+  return {
+    sql: 'UPDATE sects SET debate_date_key = ?, debate_count = ? WHERE id = ?',
+    params: [dateKey, count, sectId],
+  };
+}
+
+/** 论道记录写入（0019）；赌注与奖励详情由调用方序列化成 JSON 字符串。 */
+export function insertDaoDebateLogStatement(row: {
+  id: string;
+  sectId: string;
+  discipleId: string;
+  discipleName: string;
+  betMode: string;
+  multiplier: number;
+  stakeDetail: string;
+  result: string;
+  rewardDetail: string;
+  winProbability: number | null;
+  now: number;
+}): ParameterizedQuery {
+  return {
+    sql: `INSERT INTO dao_debate_log (id, sect_id, disciple_id, disciple_name, bet_mode, multiplier,
+                 stake_detail, result, reward_detail, win_probability, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    params: [
+      row.id,
+      row.sectId,
+      row.discipleId,
+      row.discipleName,
+      row.betMode,
+      row.multiplier,
+      row.stakeDetail,
+      row.result,
+      row.rewardDetail,
+      row.winProbability,
+      row.now,
+    ],
+  };
+}
+
+/** 弟子悟道值余额 / 累计已分配写回（发奖与加点都只改这两列，属性另算）。 */
+export function updateDiscipleDaoInsightStatement(
+  discipleId: string,
+  daoInsight: number,
+  daoInsightUsed: number,
+): ParameterizedQuery {
+  return {
+    sql: 'UPDATE disciples SET dao_insight = ?, dao_insight_used = ? WHERE id = ?',
+    params: [daoInsight, daoInsightUsed, discipleId],
+  };
+}
+
+/**
+ * 属性赌注输了的属性扣减（0019）：只改被押的那一列。
+ * 列名来自 BETTABLE_ATTRIBUTES 的固定映射（绝不拼请求里的字符串）；下限 0（计划 3.3）。
+ */
+export function updateDiscipleAttributeStatement(
+  discipleId: string,
+  attribute: BettableAttribute,
+  value: number,
+): ParameterizedQuery {
+  return {
+    sql: `UPDATE disciples SET ${attributeColumnOf(attribute)} = ? WHERE id = ?`,
+    params: [Math.max(0, value), discipleId],
+  };
+}
+
+/**
+ * 悟道值加点写回（0019）：目标属性 + dao_insight + dao_insight_used 一次写完
+ * —— 三项必须同生共死，否则会留下「属性涨了但悟道值没扣」的脏状态。
+ */
+export function updateDiscipleInsightAllocateStatement(
+  discipleId: string,
+  attribute: BettableAttribute,
+  attributeValue: number,
+  daoInsight: number,
+  daoInsightUsed: number,
+): ParameterizedQuery {
+  return {
+    sql: `UPDATE disciples
+          SET ${attributeColumnOf(attribute)} = ?, dao_insight = ?, dao_insight_used = ?
+          WHERE id = ?`,
+    params: [attributeValue, daoInsight, daoInsightUsed, discipleId],
+  };
+}
+
+/** 可赌属性 → disciples 列名（白名单映射，SQL 里不出现请求传来的字符串）。 */
+function attributeColumnOf(attribute: BettableAttribute): string {
+  switch (attribute) {
+    case 'attack':
+      return 'attack';
+    case 'defense':
+      return 'defense';
+    case 'speed':
+      return 'speed';
+    case 'aptitude':
+      return 'aptitude';
+    case 'luck':
+      return 'luck';
+    case 'physique':
+      return 'physique';
+  }
+}
+
+/**
+ * 赌坊 batch 的首条语句（与炼丹/挑战守卫同一模式）：快照过期时插入 valid=0，
+ * 触发 mutation_guards 的 CHECK，让同批的结算写回、资源/属性/悟道值更新、论道计数与
+ * 记录一起回滚（计划 14.4）。
+ *
+ * 校验：
+ * - 宗门行（等级 / 结算时间 / 论道日期键 / 论道计数）：每日 10 次上限不会被并发请求越过，
+ *   也不会与任何并发命令双重结算；
+ * - `resourceId` 非空时核对**这一条**资源的余额（押注扣减的依据）；
+ * - `disciple` 非空时核对目标弟子仍属本宗、结算相关列未变、被押属性仍是读到的值、
+ *   悟道值两列未变，以及（本次涉及属性时）被写的那一列仍是读到的值、（rejectAway 时）
+ *   此刻没有「尚未到期的历练」。
+ */
+export function gamblingSnapshotGuardStatement(
+  commandId: string,
+  snapshot: {
+    sect: SectRow;
+    balances: readonly ResourceBalanceRow[];
+    /** 赌注涉及的资源 id（灵石/药材/矿石）；不押资源时为 null。 */
+    resourceId: string | null;
+    /**
+     * 涉事弟子（快照值来自读取时的行）；无弟子时为 undefined。
+     * `attribute` 是本次写入涉及的属性：属性赌注与被加点时必填，只发悟道值奖励时可省略。
+     */
+    disciple?: { row: DiscipleRow; attribute?: BettableAttribute };
+    /**
+     * 是否要求该弟子此刻没有「尚未到期的历练」
+     * （论道要求：在外弟子不能参赌；悟道值加点不要求，计划 7.2 并未限制在外）。
+     */
+    rejectAway?: boolean;
+    now: number;
+  },
+): ParameterizedQuery {
+  const { sect, balances, resourceId, disciple } = snapshot;
+  const checks = [
+    `EXISTS (SELECT 1 FROM sects WHERE id = ? AND level = ? AND last_settled_at = ?
+      AND debate_date_key = ? AND debate_count = ?)`,
+  ];
+  const params: (string | number | null)[] = [
+    commandId,
+    sect.id,
+    sect.level,
+    sect.last_settled_at,
+    sect.debate_date_key,
+    sect.debate_count,
+  ];
+
+  for (const row of balances) {
+    checks.push(
+      'EXISTS (SELECT 1 FROM resource_balances WHERE id = ? AND sect_id = ? AND balance = ? AND remainder = ?)',
+    );
+    params.push(row.id, sect.id, row.balance, row.remainder);
+  }
+  if (resourceId !== null) {
+    // 与上面逐行校验重复一次也无害：这里显式表达「押的那一条资源仍是读到的余额」。
+    const row = balances.find((item) => item.resource_id === resourceId);
+    checks.push('EXISTS (SELECT 1 FROM resource_balances WHERE sect_id = ? AND resource_id = ? AND balance = ?)');
+    params.push(sect.id, resourceId, row === undefined ? 0 : row.balance);
+  }
+  if (disciple !== undefined) {
+    // attribute 缺省时只校验弟子行本身（发悟道值奖励的路径也必须有这道守卫：
+    // 否则并发加点改掉的 dao_insight / dao_insight_used 会被本批的绝对值写回覆盖，
+    // 「累计 50」上限会被静默重置 —— 写谁就校验谁，与挑战 / 炼丹守卫同一口径）。
+    const attributeClause =
+      disciple.attribute === undefined ? '' : ` AND ${attributeColumnOf(disciple.attribute)} = ?`;
+    checks.push(`EXISTS (SELECT 1 FROM disciples WHERE id = ? AND sect_id = ?
+      AND realm_id = ? AND stage = ? AND cultivation = ? AND cultivation_remainder = ?
+      AND injured_until IS ? AND assignment = ? AND dao_insight = ? AND dao_insight_used = ?${attributeClause})`);
+    params.push(
+      disciple.row.id,
+      sect.id,
+      disciple.row.realm_id,
+      disciple.row.stage,
+      disciple.row.cultivation,
+      disciple.row.cultivation_remainder,
+      disciple.row.injured_until,
+      disciple.row.assignment,
+      disciple.row.dao_insight,
+      disciple.row.dao_insight_used,
+    );
+    if (disciple.attribute !== undefined) {
+      params.push(disciple.row[disciple.attribute]);
+    }
+    if (snapshot.rejectAway === true) {
+      checks.push(
+        'NOT EXISTS (SELECT 1 FROM disciple_journeys WHERE disciple_id = ? AND claimed_at IS NULL AND ends_at > ?)',
+      );
+      params.push(disciple.row.id, snapshot.now);
+    }
+  }
+
+  return {
+    sql: `INSERT INTO mutation_guards (command_id, valid)
+          SELECT ?, CASE WHEN ${checks.join(' AND ')} THEN 1 ELSE 0 END`,
+    params,
+  };
+}
+
+export function deleteGamblingSnapshotGuardStatement(commandId: string): ParameterizedQuery {
+  return {
+    sql: 'DELETE FROM mutation_guards WHERE command_id = ?',
+    params: [commandId],
   };
 }

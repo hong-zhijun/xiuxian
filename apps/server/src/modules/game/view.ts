@@ -16,6 +16,12 @@ import {
   type RewardTier,
 } from './challenge';
 import {
+  DAO_INSIGHT_CAP,
+  DEBATE_DAILY_LIMIT,
+  gamblingUnlockBlockedReason,
+  type DebateDayState,
+} from './gambling';
+import {
   DEFENSE_LINEUP_SIZE,
   BREAKTHROUGH_ARRAY_BONUS_BP_PER_LEVEL,
   IDLE_ASSIGNMENT,
@@ -141,6 +147,12 @@ export interface DiscipleView {
   bodyTemperingTarget: 'attack' | 'defense' | 'speed' | null;
   /** 本次服用淬体丹的提升量；无短板时为 0。 */
   bodyTemperingGain: number;
+  /** 0019 悟道值：当前可用余额（非负整数；本版本只能通过论道赌局获得）。 */
+  daoInsight: number;
+  /** 0019 悟道值：累计已分配点数（上限 DAO_INSIGHT_CAP = 50）。 */
+  daoInsightUsed: number;
+  /** 0019 悟道值：剩余可分配额度 = max(0, 上限 - daoInsightUsed)。 */
+  daoInsightRemaining: number;
   /**
    * 0013 掌门私有备注（单行纯文本，≤60 字，空串 = 未填写）。
    * 只出现在登录玩家自己的 SectStateView；公开档案 / 排行榜 / 战报不含此字段。
@@ -222,6 +234,45 @@ export interface AlchemyView {
    * 由服务端下发，前端只渲染，避免在 UI 里复制一份丹药常量（计划 2.3「不复制判定公式」）。
    */
   cultivationPillGain: number;
+}
+
+/**
+ * 0019 论道赌局结果视图（POST /game/dao-debate 的 result）。
+ *
+ * 文案（赌注/奖励描述与 message）在服务端拼好：单位换算与中文措辞只保留一份口径；
+ * revealHints 是幸运侦查提示（纯展示，不参与胜负）；winProbability 是 jev 原始胜率，
+ * 本地降级判定时为 null（前端据此判断「本次判定没有用模型」）。
+ */
+export interface DaoDebateResultView {
+  discipleId: string;
+  discipleName: string;
+  /** 'preset_spirit_stone' | 'free_resource' | 'attribute'。 */
+  betMode: string;
+  multiplier: number;
+  result: 'win' | 'lose';
+  /** 赌注描述（给前端展示用）。 */
+  stakeDescription: string;
+  /** 奖励描述（给前端展示用）。 */
+  rewardDescription: string;
+  /** 侦查提示（幸运高时有值）。 */
+  revealHints: string[];
+  /** jev 原始胜率（0~1 小数）；降级时为 null。 */
+  winProbability: number | null;
+  message: string;
+}
+
+/** 0019 悟道值加点回执（POST /game/allocate-dao-insight 的 outcome）。 */
+export interface InsightAllocateOutcome {
+  discipleId: string;
+  discipleName: string;
+  attribute: string;
+  points: number;
+  /** 加点后的该属性值。 */
+  newValue: number;
+  /** 加点后剩余的可用悟道值。 */
+  remainingInsight: number;
+  /** 加点后累计已分配点数（上限 DAO_INSIGHT_CAP）。 */
+  totalUsed: number;
 }
 
 /** 单条历练对弟子的归约状态（none = 没有未领取记录）。 */
@@ -437,6 +488,14 @@ export interface SectStateView {
   alchemy: AlchemyView;
   /** 主动挑战的当日次数（0012：每日 3 次；失败/零奖励同样消耗）。 */
   challenge: {
+    dailyLimit: number;
+    usedToday: number;
+    remaining: number;
+  };
+  /** 0019 赌坊面板：解锁（宗门 2 级，不依赖建筑）与当日论道次数（每日 10 次）。 */
+  gambling: {
+    unlocked: boolean;
+    blockedReason: string | null;
     dailyLimit: number;
     usedToday: number;
     remaining: number;
@@ -694,6 +753,8 @@ export interface SectStateInput {
   pillInventories: readonly PillInventoryRow[];
   /** 主动挑战的当日次数状态（0012；日期键过期由调用方做兼容核对）。 */
   challengeDay: ChallengeDayState;
+  /** 0019 赌坊：论道当日次数状态（日期键归一由调用方按 UTC+8 完成）。 */
+  debateDay: DebateDayState;
   settleResult: SettleResult;
   /** 库里的最近事件行；本次结算刚触发的事件在 buildSectStateView 里合并进来。 */
   recentEventRows: readonly EventLogRow[];
@@ -722,6 +783,7 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
     balances,
     pillInventories,
     challengeDay,
+    debateDay,
     settleResult,
     now,
     recruitUsedToday,
@@ -879,6 +941,10 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
       bodyTemperingRemaining: Math.max(0, BODY_TEMPERING_MAX_USES - temperingUses),
       bodyTemperingTarget: temperingTarget?.attribute ?? null,
       bodyTemperingGain: temperingTarget?.gain ?? 0,
+      /** 0019 悟道值：可用余额 / 累计已分配 / 剩余可分配额度（服务端算好，前端不复制规则）。 */
+      daoInsight: Number(disciple.dao_insight) || 0,
+      daoInsightUsed: Number(disciple.dao_insight_used) || 0,
+      daoInsightRemaining: Math.max(0, DAO_INSIGHT_CAP - (Number(disciple.dao_insight_used) || 0)),
       note: disciple.note,
       /** 0017 头像框 id（'classic' 或 'frame01'…'frame20'）：掌门私有的固定外观选择。 */
       avatarFrameId: disciple.avatar_frame_id,
@@ -982,6 +1048,16 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
   // 0014：宗门历练名额 + 最近 10 条摘要（仅本宗可见）。
   const journeySlot = journeySlotView({ rows: journeys, recent: recentJourneys, now });
 
+  // 0019 赌坊面板：解锁只看宗门等级（不依赖建筑），当日次数来自归一后的 debateDay。
+  const gamblingLockedReason = gamblingUnlockBlockedReason(Number(sect.level));
+  const gamblingView = {
+    unlocked: gamblingLockedReason === null,
+    blockedReason: gamblingLockedReason,
+    dailyLimit: DEBATE_DAILY_LIMIT,
+    usedToday: debateDay.usedToday,
+    remaining: debateDay.remaining,
+  };
+
   return {
     sect: {
       id: sect.id,
@@ -1042,6 +1118,8 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
       usedToday: challengeDay.usedToday,
       remaining: challengeDay.remaining,
     },
+    /** 0019 赌坊面板（解锁判断与当日次数全部服务端算好，前端只渲染）。 */
+    gambling: gamblingView,
   };
 }
 

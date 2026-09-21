@@ -3,6 +3,7 @@ import { computed, nextTick, ref, watch } from 'vue';
 
 import type {
   AlchemyRecipeView,
+  DaoAttribute,
   DiscipleJourneyView,
   DiscipleView,
   JourneyDirection,
@@ -69,6 +70,8 @@ const emit = defineEmits<{
   saveNote: [discipleId: string, note: string];
   /** 0017 保存头像框样式（frameId 只可能是白名单里的固定 id）。 */
   setAvatarFrame: [discipleId: string, frameId: AvatarFrameId];
+  /** 0019 分配悟道值（属性六选一 + 点数）：归属、余额与上限由服务端裁决，这里只 emit。 */
+  allocateDaoInsight: [discipleId: string, attribute: DaoAttribute, points: number];
   expel: [discipleId: string];
   /** 0014 历练：拉预览 / 出发 / 领取。组件只 emit，请求与 state 回填都在上层。 */
   requestJourneyPreview: [discipleId: string];
@@ -194,6 +197,68 @@ function saveAvatarFrame(): void {
 }
 
 const frameCurrentLabel = computed(() => avatarFrameOption(frameDraft.value).label);
+
+/* ---------- 0019 悟道值加点：目标属性六选一 + 点数 ---------- */
+
+/**
+ * 总分配上限：直接由服务端字段推导（daoInsightUsed + daoInsightRemaining），
+ * 不在前端另造 50 这个常量（与 apps/server/src/modules/game/gambling.ts 的 DAO_INSIGHT_CAP 同口径）。
+ */
+const daoInsightCap = computed(() => props.disciple.daoInsightUsed + props.disciple.daoInsightRemaining);
+
+/** 属性上限：与 apps/server/src/modules/game/gambling.ts 的 ATTRIBUTE_MAX 同口径。 */
+const ATTRIBUTE_MAX = 100;
+
+/** 可加点属性（展示沿用雷达图的名词：speed 记为「身法」）。 */
+const DAO_ATTRIBUTE_OPTIONS: readonly { value: DaoAttribute; label: string }[] = [
+  { value: 'attack', label: '攻击' },
+  { value: 'defense', label: '防御' },
+  { value: 'speed', label: '身法' },
+  { value: 'aptitude', label: '资质' },
+  { value: 'luck', label: '幸运' },
+  { value: 'physique', label: '体魄' },
+];
+
+const daoAttribute = ref<DaoAttribute>('attack');
+const daoPointsInput = ref('1');
+
+const daoAttributeValue = computed(() => props.disciple[daoAttribute.value]);
+
+/** 本次可分配上限：可用悟道值 / 剩余分配额度 / 属性 100 上限三者取最小；用 Math.max(1, …) 防出现 0 上限。 */
+const daoPointsMax = computed(() =>
+  Math.max(
+    1,
+    Math.min(
+      props.disciple.daoInsight,
+      props.disciple.daoInsightRemaining,
+      ATTRIBUTE_MAX - daoAttributeValue.value,
+    ),
+  ),
+);
+
+/** 是否还有可分配空间（可用悟道值、累计额度、属性未到 100 三者都要满足）。 */
+const daoAllocatable = computed(
+  () =>
+    props.disciple.daoInsight > 0 &&
+    props.disciple.daoInsightRemaining > 0 &&
+    ATTRIBUTE_MAX - daoAttributeValue.value > 0,
+);
+
+const daoPoints = computed(() => Math.floor(Number(daoPointsInput.value)));
+const daoPointsValid = computed(
+  () => Number.isInteger(daoPoints.value) && daoPoints.value >= 1 && daoPoints.value <= daoPointsMax.value,
+);
+
+// 上限变化（换属性 / 服务端回填新状态）后把超额的草稿收回到上限，避免按钮无缘无故变灰。
+watch(daoPointsMax, (max) => {
+  const current = Number(daoPointsInput.value);
+  if (!Number.isFinite(current) || current < 1 || current > max) daoPointsInput.value = String(max);
+});
+
+function allocateDaoInsight(): void {
+  if (props.busy || !daoAllocatable.value || !daoPointsValid.value) return;
+  emit('allocateDaoInsight', props.disciple.id, daoAttribute.value, daoPoints.value);
+}
 
 /* ---------- 破境：判定与胜算/消耗全部来自服务端 ---------- */
 
@@ -651,6 +716,68 @@ function confirmExpel(): void {
 
           <p class="disciple-detail-hint">
             资质影响修炼速度；攻 / 防 / 身法 决定战力。战力由服务端按攻防速与境界算出，与综合评分是两个独立数值。
+          </p>
+        </section>
+
+        <!--
+          0019 悟道值：赌坊赢来的点数在这里分配到六项属性之一。
+          上限（总分配上限 = daoInsightUsed + daoInsightRemaining，属性 100）与最终裁决都在服务端，
+          这里只是把「本次最多能分多少」算出来给玩家看，不复制服务端的加点公式。
+        -->
+        <section class="disciple-detail-section" aria-labelledby="disciple-dao-insight-title">
+          <h3 id="disciple-dao-insight-title" class="disciple-detail-title">悟道值</h3>
+          <p class="disciple-detail-hint">
+            可用 {{ disciple.daoInsight }} 点 · 已分配 {{ disciple.daoInsightUsed }}/{{ daoInsightCap }} ·
+            剩余可分配额度 {{ disciple.daoInsightRemaining }} 点
+          </p>
+
+          <ul class="journey-directions" role="radiogroup" aria-label="加点属性">
+            <li v-for="option in DAO_ATTRIBUTE_OPTIONS" :key="option.value" class="journey-direction">
+              <button
+                class="journey-direction-button"
+                :class="{ 'is-selected': daoAttribute === option.value }"
+                type="button"
+                role="radio"
+                :disabled="busy"
+                :aria-checked="daoAttribute === option.value"
+                @click="daoAttribute = option.value"
+              >
+                <strong>{{ option.label }}</strong>
+                <small>当前 {{ disciple[option.value] }}</small>
+              </button>
+            </li>
+          </ul>
+
+          <div class="disciple-note-row">
+            <input
+              class="disciple-input"
+              type="number"
+              inputmode="numeric"
+              min="1"
+              :max="daoPointsMax"
+              step="1"
+              aria-label="分配点数"
+              :value="daoPointsInput"
+              :disabled="busy || !daoAllocatable"
+              @input="daoPointsInput = ($event.target as HTMLInputElement).value"
+            />
+            <button
+              class="action-button primary-action"
+              type="button"
+              :disabled="busy || !daoAllocatable || !daoPointsValid"
+              @click="allocateDaoInsight"
+            >
+              <span>分配</span>
+            </button>
+          </div>
+          <p class="disciple-note-meta" role="status">
+            本次可分配 1 ~ {{ daoPointsMax }} 点（受可用悟道值、累计上限与属性 100 上限共同限制）
+          </p>
+          <p v-if="!daoAllocatable" class="blocked-hint">
+            暂无可分配额度：悟道值不足、累计已达上限，或该属性已到 100。
+          </p>
+          <p class="disciple-detail-hint">
+            1 点悟道值 = 1 点属性；每个弟子最多累计分配 {{ daoInsightCap }} 点。
           </p>
         </section>
 

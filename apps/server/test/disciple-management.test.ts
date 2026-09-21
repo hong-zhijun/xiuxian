@@ -1045,7 +1045,7 @@ describe('0018 迁移：disciples 重建后结构与约束完好', () => {
     ]);
   });
 
-  it('重建后列集合与 0017 之后一致（没有丢列）', async () => {
+  it('重建后列集合与 0017 之后一致（没有丢列；已含 0019 追加的悟道值两列）', async () => {
     const columns = await env.DB.prepare('PRAGMA table_info(disciples)').all<{ name: string }>();
     expect((columns.results ?? []).map((item) => item.name)).toEqual([
       'id',
@@ -1069,6 +1069,9 @@ describe('0018 迁移：disciples 重建后结构与约束完好', () => {
       'luck',
       'physique',
       'avatar_frame_id',
+      // 0019 赌坊：0019 在 0018 重建之后追加的悟道值两列。
+      'dao_insight',
+      'dao_insight_used',
     ]);
   });
 
@@ -1113,6 +1116,9 @@ describe('0018 迁移：disciples 重建后结构与约束完好', () => {
       'luck|INTEGER|1|50',
       'physique|INTEGER|1|50',
       "avatar_frame_id|TEXT|1|'classic'",
+      // 0019 赌坊：悟道值两列在 0018 重建之后由 0019 追加（列定义见 0019 迁移）。
+      'dao_insight|INTEGER|1|0',
+      'dao_insight_used|INTEGER|1|0',
     ]);
   });
 
