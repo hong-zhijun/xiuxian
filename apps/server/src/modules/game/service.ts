@@ -3774,14 +3774,25 @@ function normalizeProbability(value: unknown): number | null {
 }
 
 /** 交给模型的上下文：难度 + 队伍战力 + 遭遇 + 所选行动（纯文本，不含玩家标识）。 */
+function powerVsDifficultyHint(power: number, difficulty: number): string {
+  const ratio = difficulty > 0 ? power / difficulty : 100;
+  if (ratio >= 10) return '实力远超秘境难度，几乎不可能失败';
+  if (ratio >= 4) return '实力碾压秘境，成功概率极高';
+  if (ratio >= 2) return '实力优势明显，成功概率很高';
+  if (ratio >= 1) return '实力与秘境难度相当';
+  if (ratio >= 0.5) return '秘境难度高于实力，风险较大';
+  return '秘境难度远超实力，极为凶险';
+}
+
 function exploreStateText(input: {
   realm: { name: string; difficulty: number };
   encounter: EncounterView;
   choice: { label: string; riskHint: string };
   power: number;
 }): string {
+  const hint = powerVsDifficultyHint(input.power, input.realm.difficulty);
   return [
-    `秘境「${input.realm.name}」，难度 ${String(input.realm.difficulty)}，队伍战力 ${String(input.power)}。`,
+    `秘境「${input.realm.name}」，难度 ${String(input.realm.difficulty)}，队伍战力 ${String(input.power)}（${hint}）。`,
     `遭遇：${input.encounter.name}——${input.encounter.description}`,
     `所选行动：${input.choice.label}（${input.choice.riskHint}）`,
   ].join('\n');
