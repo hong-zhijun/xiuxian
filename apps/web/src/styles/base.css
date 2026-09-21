@@ -3563,30 +3563,6 @@ ul {
   color: var(--gold);
 }
 
-.explore-choice-reward {
-  display: inline-block;
-  margin-top: 2px;
-  padding: 1px 6px;
-  border-radius: 3px;
-  font-size: 11px;
-  line-height: 1.5;
-}
-
-.explore-choice-reward.is-risky {
-  color: var(--gold);
-  background-color: rgba(212, 175, 55, 0.12);
-}
-
-.explore-choice-reward.is-normal {
-  color: var(--jade);
-  background-color: rgba(119, 184, 154, 0.1);
-}
-
-.explore-choice-reward.is-safe {
-  color: var(--muted);
-  background-color: rgba(128, 128, 128, 0.08);
-}
-
 /* 结果态：按判定档位给左侧色条（大成功金 / 成功玉 / 失败红）。 */
 .explore-outcome {
   display: flex;

@@ -93,12 +93,6 @@ function choiceStyle(index: number): string {
   return `--choice-index: ${index}`;
 }
 
-const RISK_LABELS: Record<string, string> = {
-  risky: '高收益',
-  normal: '中收益',
-  safe: '低收益',
-};
-
 /** 读屏播报用的一句话：遭遇态报关卡与遭遇名，结果态报判定与结论（常驻 live region）。 */
 const statusText = computed(() => {
   const result = props.result;
@@ -156,7 +150,7 @@ function requestAbandon(): void {
         >
           <button
             class="explore-choice"
-            :class="['is-risk-' + choice.risk, { 'is-busy': busy }]"
+            :class="{ 'is-busy': busy }"
             type="button"
             :disabled="busy"
             :aria-disabled="busy"
@@ -164,7 +158,6 @@ function requestAbandon(): void {
           >
             <span class="explore-choice-label">{{ choice.label }}</span>
             <span class="explore-choice-risk">{{ busy ? '判定中…' : choice.riskHint }}</span>
-            <span v-if="!busy" class="explore-choice-reward" :class="'is-' + choice.risk">{{ RISK_LABELS[choice.risk] ?? '中收益' }}</span>
           </button>
         </li>
       </ul>
