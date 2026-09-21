@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onUnmounted, ref } from 'vue';
+import { computed, onUnmounted, ref, watch } from 'vue';
 
 import type { ChallengeResultView, DiscipleView, PublicSectView, SectStateView } from '../api/game';
 import { formatAmount } from '../utils/format';
@@ -36,6 +36,7 @@ const clock = window.setInterval(() => {
 
 onUnmounted(() => {
   window.clearInterval(clock);
+  clearRevealTimers();
 });
 
 /** 受伤弟子不能出战（与服务端 `injured_until > now` 同一判定）。 */
@@ -109,6 +110,39 @@ const scoreText = computed(() => {
   return `${wins}:${result.rounds.length - wins}`;
 });
 
+/** 逐轮揭示：result 到达后每 800ms 多显示一轮，全部揭示后再显示总结果。 */
+const revealedCount = ref(0);
+let revealTimers: number[] = [];
+
+function clearRevealTimers(): void {
+  for (const id of revealTimers) window.clearTimeout(id);
+  revealTimers = [];
+}
+
+watch(
+  () => props.result,
+  (result) => {
+    clearRevealTimers();
+    revealedCount.value = 0;
+    if (result === null) return;
+    for (let i = 0; i < result.rounds.length; i++) {
+      revealTimers.push(
+        window.setTimeout(() => { revealedCount.value = i + 1; }, (i + 1) * 800),
+      );
+    }
+  },
+);
+
+const visibleRounds = computed(() => {
+  if (props.result === null) return [];
+  return props.result.rounds.slice(0, revealedCount.value);
+});
+
+const allRevealed = computed(() => {
+  if (props.result === null) return false;
+  return revealedCount.value >= props.result.rounds.length;
+});
+
 /** 挑战情报（来自服务端预览；null = 观看者没有宗门，面板不会放行到这里）。 */
 const preview = computed(() => props.target.challenge);
 
@@ -133,16 +167,16 @@ const levelDiffText = computed(() => {
       <span class="count-badge">{{ target.levelName }}</span>
     </header>
 
-    <!-- 战报态：逐轮谁打谁、战力多少、谁赢，最后是总结果。 -->
+    <!-- 战报态：逐轮揭示谁打谁、战力多少、谁赢，全部揭示后显示总结果。 -->
     <template v-if="result">
       <p class="lineup-note">
         双方各出 3 人逐对交手，先赢 2 轮者胜；单轮平局算守擂方胜。
       </p>
 
       <div class="lineup-current">
-        <p class="eyebrow">逐轮战报</p>
+        <p class="eyebrow">{{ allRevealed ? '逐轮战报' : '对决中…' }}</p>
         <ol class="round-list is-flush">
-          <li v-for="round in result.rounds" :key="round.round" class="round-row">
+          <li v-for="round in visibleRounds" :key="round.round" class="round-row round-reveal">
             <span class="round-no">第 {{ round.round }} 轮</span>
             <span class="round-side" :class="round.winner === 'attacker' ? 'is-win' : 'is-lose'">
               {{ round.attackerName }} {{ round.attackerPower }}
@@ -155,28 +189,30 @@ const levelDiffText = computed(() => {
         </ol>
       </div>
 
-      <div class="challenge-outcome">
-        <span class="result-badge" :class="result.result === 'win' ? 'is-win' : 'is-lose'" aria-hidden="true">
-          {{ result.result === 'win' ? '胜' : '负' }}
-        </span>
-        <span class="challenge-outcome-text">
-          <strong>{{ scoreText }}</strong>
-          · {{ result.message }}
-        </span>
-      </div>
+      <template v-if="allRevealed">
+        <div class="challenge-outcome">
+          <span class="result-badge" :class="result.result === 'win' ? 'is-win' : 'is-lose'" aria-hidden="true">
+            {{ result.result === 'win' ? '胜' : '负' }}
+          </span>
+          <span class="challenge-outcome-text">
+            <strong>{{ scoreText }}</strong>
+            · {{ result.message }}
+          </span>
+        </div>
 
-      <p class="challenge-reward-line">
-        实际奖励：声望 +{{ result.reputationGained }}，灵石 +{{ formatAmount(result.spiritStoneGained) }}
-        <template v-if="result.result === 'win' && result.reputationGained === 0 && result.spiritStoneGained === 0">
-          （零奖励胜利）
-        </template>
-        <template v-else-if="result.result === 'lose'">（失败无奖励）</template>
-        · 守擂方式：{{ result.defenseMode === 'configured' ? '手动阵容' : '临时自动' }}
-      </p>
+        <p class="challenge-reward-line">
+          实际奖励：声望 +{{ result.reputationGained }}，灵石 +{{ formatAmount(result.spiritStoneGained) }}
+          <template v-if="result.result === 'win' && result.reputationGained === 0 && result.spiritStoneGained === 0">
+            （零奖励胜利）
+          </template>
+          <template v-else-if="result.result === 'lose'">（失败无奖励）</template>
+          · 守擂方式：{{ result.defenseMode === 'configured' ? '手动阵容' : '临时自动' }}
+        </p>
 
-      <button class="action-button primary-action realm-button" type="button" @click="emit('close')">
-        <span>知道了</span>
-      </button>
+        <button class="action-button primary-action realm-button" type="button" @click="emit('close')">
+          <span>知道了</span>
+        </button>
+      </template>
     </template>
 
     <template v-else>

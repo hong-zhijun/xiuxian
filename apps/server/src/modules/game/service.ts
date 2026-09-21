@@ -2585,6 +2585,19 @@ interface ChallengeMember {
   power: number;
 }
 
+/** 挑战成员的完整属性（仅用于 jev 判定的上下文文本，不序列化到日志）。 */
+interface ChallengeRichMember extends ChallengeMember {
+  realmName: string;
+  stage: number;
+  attack: number;
+  defense: number;
+  speed: number;
+  aptitude: number;
+  luck: number;
+  physique: number;
+  talent: string | null;
+}
+
 /**
  * 3v3 逐对决斗（V5 3.2）：每轮取双方同序号弟子，战力 ±15% 浮动后高者胜该轮；
  * 先赢满 2 轮者胜整场（第 3 轮只在 1:1 时打）。单轮平局算守方胜。
@@ -2610,6 +2623,118 @@ function resolveChallenge(
     } else {
       defenderWins++;
     }
+  }
+
+  return { rounds, result: attackerWins >= 2 ? 'win' : 'lose' };
+}
+
+function talentLabel(talent: string | null): string {
+  if (talent === null) return '无';
+  return findTalent(talent)?.name ?? '无';
+}
+
+function challengeMemberLine(tag: string, m: ChallengeRichMember): string {
+  return [
+    `${tag}：${m.name}，${m.realmName}${String(m.stage)}阶`,
+    `攻${String(m.attack)} 防${String(m.defense)} 速${String(m.speed)}`,
+    `资质${String(m.aptitude)} 气运${String(m.luck)} 体质${String(m.physique)}`,
+    `天赋=${talentLabel(m.talent)}，综合战力 ${String(m.power)}`,
+  ].join('，');
+}
+
+function challengeStateText(
+  attackers: readonly ChallengeRichMember[],
+  defenders: readonly ChallengeRichMember[],
+): string {
+  const lines: string[] = ['修仙宗门 3v3 逐对决斗，每轮按序号一一对决。'];
+  for (let i = 0; i < DEFENSE_LINEUP_SIZE; i++) {
+    const a = attackers[i];
+    const d = defenders[i];
+    if (a === undefined || d === undefined) break;
+    lines.push(`--- 第 ${String(i + 1)} 轮 ---`);
+    lines.push(challengeMemberLine('攻方', a));
+    lines.push(challengeMemberLine('守方', d));
+    const ratio = d.power > 0 ? a.power / d.power : 100;
+    if (ratio >= 2) lines.push('攻方实力远强于守方');
+    else if (ratio >= 1.3) lines.push('攻方实力强于守方');
+    else if (ratio >= 0.8) lines.push('双方实力接近');
+    else if (ratio >= 0.5) lines.push('守方实力强于攻方');
+    else lines.push('守方实力远强于攻方');
+  }
+  return lines.join('\n');
+}
+
+/**
+ * 用 Decisions API 判定挑战各轮胜负。
+ *
+ * 一次请求里放 3 个 choice 问题（round1 / round2 / round3），返回每轮的胜负概率分布。
+ * 调用方根据前两轮结果决定是否使用第三轮。失败时返回 null，触发本地降级。
+ */
+async function judgeChallengeRounds(
+  apiKey: string,
+  attackers: readonly ChallengeRichMember[],
+  defenders: readonly ChallengeRichMember[],
+): Promise<Record<string, number>[] | null> {
+  try {
+    const questions: Record<string, Question> = {};
+    for (let i = 0; i < DEFENSE_LINEUP_SIZE; i++) {
+      questions[`round${String(i + 1)}`] = {
+        type: 'choice',
+        instructions: `第 ${String(i + 1)} 轮对决：判断攻守双方谁会胜出。综合考虑双方境界、六维属性、天赋，尤其是速度差异带来的先手优势和气运带来的偶然性。`,
+        criteria: {
+          attacker: `攻方${attackers[i]!.name}胜出`,
+          defender: `守方${defenders[i]!.name}胜出`,
+        },
+      };
+    }
+    const answers = await decide(
+      apiKey,
+      challengeStateText(attackers, defenders),
+      questions,
+    );
+    const result: Record<string, number>[] = [];
+    for (let i = 0; i < DEFENSE_LINEUP_SIZE; i++) {
+      const answer = answers[`round${String(i + 1)}`] as ChoiceAnswer | undefined;
+      if (answer?.probabilities === undefined) return null;
+      const aProb = Number(answer.probabilities.attacker) || 0;
+      const dProb = Number(answer.probabilities.defender) || 0;
+      if (aProb + dProb <= 0) return null;
+      result.push(answer.probabilities);
+    }
+    return result;
+  } catch (error) {
+    console.warn(
+      `challenge_decisions_failed reason=${error instanceof Error ? error.name : 'unknown'}`,
+    );
+    return null;
+  }
+}
+
+/**
+ * 用 jev 概率分布解算挑战；降级时走原来的 fluctuatedPower 随机逻辑。
+ */
+function resolveChallengeWithProbabilities(
+  attackerMembers: readonly ChallengeMember[],
+  defenderMembers: readonly ChallengeMember[],
+  roundProbabilities: readonly Record<string, number>[],
+): { rounds: RoundResult[]; result: 'win' | 'lose' } {
+  const rounds: RoundResult[] = [];
+  let attackerWins = 0;
+  let defenderWins = 0;
+
+  for (let i = 0; i < DEFENSE_LINEUP_SIZE; i++) {
+    if (attackerWins >= 2 || defenderWins >= 2) break;
+    const probs = roundProbabilities[i]!;
+    const aProb = Number(probs.attacker) || 0;
+    const dProb = Number(probs.defender) || 0;
+    const total = aProb + dProb;
+    const roll = Math.random() * total;
+    const winner: RoundResult['winner'] = roll < aProb ? 'attacker' : 'defender';
+    const aPower = attackerMembers[i]!.power;
+    const dPower = defenderMembers[i]!.power;
+    rounds.push({ round: i + 1, attackerPower: aPower, defenderPower: dPower, winner });
+    if (winner === 'attacker') attackerWins++;
+    else defenderWins++;
   }
 
   return { rounds, result: attackerWins >= 2 ? 'win' : 'lose' };
@@ -2742,6 +2867,7 @@ export async function challengeSect(
   targetSectId: string,
   discipleIds: string[],
   now: number,
+  env: Env,
 ): Promise<{ state: SectStateView; result: ChallengeResultView }> {
   const draft = await draftFor(db, userId, now);
 
@@ -2780,7 +2906,7 @@ export async function challengeSect(
   if (new Set(discipleIds).size !== discipleIds.length) {
     throw new AppError('VALIDATION_ERROR', '不能派遣重复弟子');
   }
-  const attackerMembers: ChallengeMember[] = [];
+  const attackerRichMembers: ChallengeRichMember[] = [];
   for (const id of discipleIds) {
     const disciple = draft.discipleById(id);
     // 0014：在外弟子不能出战挑战。
@@ -2788,19 +2914,26 @@ export async function challengeSect(
     if (disciple.injured_until !== null && Number(disciple.injured_until) > now) {
       throw new AppError('INVALID_STATUS', `${disciple.name}正在疗伤，无法出战`);
     }
-    attackerMembers.push({
+    const stage = Number(disciple.stage);
+    const attack = Number(disciple.attack);
+    const defense = Number(disciple.defense);
+    const speed = Number(disciple.speed);
+    attackerRichMembers.push({
       discipleId: disciple.id,
       name: disciple.name,
-      power: discipleCombatPower(
-        disciple.realm_id,
-        Number(disciple.stage),
-        Number(disciple.attack),
-        Number(disciple.defense),
-        Number(disciple.speed),
-        disciple.talent,
-      ),
+      power: discipleCombatPower(disciple.realm_id, stage, attack, defense, speed, disciple.talent),
+      realmName: findStage(disciple.realm_id, stage).name,
+      stage,
+      attack,
+      defense,
+      speed,
+      aptitude: Number(disciple.aptitude),
+      luck: Number(disciple.luck),
+      physique: Number(disciple.physique),
+      talent: disciple.talent,
     });
   }
+  const attackerMembers: ChallengeMember[] = attackerRichMembers;
 
   // 6-7. 守方阵容：有效手动阵容按原顺序；否则临时自动守擂（弟子 < 3 拒绝，不消耗次数）
   const defenderDisciples = await new DiscipleRepository(db).findBySectId(targetSect.id);
@@ -2817,41 +2950,33 @@ export async function challengeSect(
     throw new AppError('INVALID_STATUS', '对方门下弟子不足 3 人，暂时无法应战');
   }
   const defenseMode: DefenseMode = plan.mode;
-  let defenderMembers: ChallengeMember[];
-  if (plan.mode === 'configured') {
-    // 手动阵容按玩家设置的顺序使用；成员此刻必然都在守方（planDefenseLineup 已校验）。
-    defenderMembers = plan.manualIds.map((id) => {
-      const disciple = defenders.find((row) => row.id === id)!;
-      return {
-        discipleId: disciple.id,
-        name: disciple.name,
-        power: discipleCombatPower(
-          disciple.realm_id,
-          Number(disciple.stage),
-          Number(disciple.attack),
-          Number(disciple.defense),
-          Number(disciple.speed),
-          disciple.talent,
-        ),
-      };
-    });
-  } else {
-    // 自动守擂：等概率不重复抽 3 名并随机排序，可含受伤弟子；
-    // 战斗、返回结果和历史记录使用同一份快照。在外弟子不参与抽取。
-    const candidates = defenders.map((disciple) => ({
+  const toRichMember = (disciple: (typeof defenders)[number]): ChallengeRichMember => {
+    const stage = Number(disciple.stage);
+    const attack = Number(disciple.attack);
+    const defense = Number(disciple.defense);
+    const speed = Number(disciple.speed);
+    return {
       discipleId: disciple.id,
       name: disciple.name,
-      power: discipleCombatPower(
-        disciple.realm_id,
-        Number(disciple.stage),
-        Number(disciple.attack),
-        Number(disciple.defense),
-        Number(disciple.speed),
-        disciple.talent,
-      ),
-    }));
-    defenderMembers = shufflePick(candidates, DEFENSE_LINEUP_SIZE);
+      power: discipleCombatPower(disciple.realm_id, stage, attack, defense, speed, disciple.talent),
+      realmName: findStage(disciple.realm_id, stage).name,
+      stage,
+      attack,
+      defense,
+      speed,
+      aptitude: Number(disciple.aptitude),
+      luck: Number(disciple.luck),
+      physique: Number(disciple.physique),
+      talent: disciple.talent,
+    };
+  };
+  let defenderRichMembers: ChallengeRichMember[];
+  if (plan.mode === 'configured') {
+    defenderRichMembers = plan.manualIds.map((id) => toRichMember(defenders.find((row) => row.id === id)!));
+  } else {
+    defenderRichMembers = shufflePick(defenders.map(toRichMember), DEFENSE_LINEUP_SIZE);
   }
+  const defenderMembers: ChallengeMember[] = defenderRichMembers;
 
   // 8. 开战快照：等级差与奖励档位（不从之后状态反推）
   const attackerLevel = Number(draft.sect.level);
@@ -2859,8 +2984,14 @@ export async function challengeSect(
   const levelDifference = defenderLevel - attackerLevel;
   const rewardTier = rewardTierForLevelDifference(levelDifference);
 
-  // 9. 解算战斗 + 按档位发奖（失败与 `<=-3` 的胜利都是 0）
-  const resolved = resolveChallenge(attackerMembers, defenderMembers);
+  // 9. 解算战斗：优先用 Decisions API 判定，失败时降级为本地随机浮动
+  const apiKey = readStringVar(env.OPENROUTER_API_KEY);
+  const roundProbs = apiKey !== undefined && apiKey.length > 0
+    ? await judgeChallengeRounds(apiKey, attackerRichMembers, defenderRichMembers)
+    : null;
+  const resolved = roundProbs !== null
+    ? resolveChallengeWithProbabilities(attackerMembers, defenderMembers, roundProbs)
+    : resolveChallenge(attackerMembers, defenderMembers);
   const roundViews = toChallengeRoundViews(resolved.rounds, attackerMembers, defenderMembers);
   const attackerWins = resolved.rounds.filter((round) => round.winner === 'attacker').length;
   const defenderWins = resolved.rounds.filter((round) => round.winner === 'defender').length;

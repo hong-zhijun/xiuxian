@@ -215,6 +215,7 @@ export function createGameRoutes(): Hono<AppEnv> {
       body.targetSectId,
       body.discipleIds,
       Date.now(),
+      c.env,
     );
     return respondOk(c, { state: result.state, result: result.result });
   });
