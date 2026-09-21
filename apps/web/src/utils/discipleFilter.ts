@@ -24,11 +24,15 @@ export interface FilterableDisciple {
   realmOrder: number;
   /** 境界内的阶段序号。 */
   stage: number;
+  /** 境界内的阶段名（如「炼气三层」）；阶段筛选用它做标签。 */
+  stageName: string;
   assignment: string;
   assignmentName: string;
   cultivation: number;
   /** null = 已达当前版本上限。 */
   requiredCultivation: number | null;
+  /** 静修每小时修为产出（修炼速度排序用）。 */
+  cultivationRatePerHour: number;
   combatPower: number;
   /**
    * 0016 综合评分：服务端按**当前**六项属性等权现算（一位小数，见 names.ts 的 attributeScore）。
@@ -64,24 +68,40 @@ export interface DiscipleStatus {
 
 export type DiscipleStatusFilter = 'all' | 'canBreakthrough' | 'injured' | 'cultivationFull' | 'idle';
 
-export type DiscipleSortKey = 'recruitOrder' | 'combatPower' | 'attributeScore' | 'realm';
+export type DiscipleSortKey =
+  | 'recruitOrder'
+  | 'combatPower'
+  | 'attributeScore'
+  | 'combatPowerAsc'
+  | 'realm'
+  | 'realmAsc'
+  | 'cultivationProgressDesc'
+  | 'cultivationProgressAsc'
+  | 'cultivationRateDesc'
+  | 'cultivationRateAsc';
 
 export interface DiscipleFilter {
   /** 姓名 / 备注搜索词（空串 = 不过滤）。 */
   search: string;
   /** 境界 id（空串 = 全部境界）。 */
   realmId: string;
+  /** 境界内的阶段序号（null = 不限）；只在选了境界时生效，换境界会清空。 */
+  stage: number | null;
   /** 岗位 id（空串 = 全部岗位）。 */
   assignment: string;
   status: DiscipleStatusFilter;
+  /** 修为进度分档（按服务端原始比例判定，见 cultivationTier）。 */
+  progress: CultivationProgressTier;
   sort: DiscipleSortKey;
 }
 
 export const DEFAULT_DISCIPLE_FILTER: DiscipleFilter = {
   search: '',
   realmId: '',
+  stage: null,
   assignment: '',
   status: 'all',
+  progress: 'all',
   sort: 'recruitOrder',
 };
 
@@ -94,14 +114,60 @@ export const DISCIPLE_STATUS_FILTERS: readonly { value: DiscipleStatusFilter; la
 ];
 
 /**
- * 排序项：默认（招募顺序）排在最前。
- * 「综合评分高低」排的是服务端现算的六项等权平均，与战力（含境界）不是同一件事。
+ * 修为进度分档（名册筛选用）。
+ *
+ * 分档一律按服务端 `cultivation / requiredCultivation` 的**原始比例**判定：
+ * 99.6% 仍属于「75–不足 100%」，不能用显示用的整数百分比或本地平滑值替代。
+ * `fullBlocked` / `breakthrough` / `capped` 三档互斥（版本上限不算「已满但不可破」）；
+ * 「75–不足 100%」按 `cultivation < requiredCultivation` 与原始比例排除满修为者，
+ * 所以同一名弟子不会同时落进两档。
+ */
+export type CultivationProgressTier =
+  | 'all'
+  | 'lt25'
+  | 'gte25lt50'
+  | 'gte50lt75'
+  | 'gte75lt100'
+  | 'fullBlocked'
+  | 'breakthrough'
+  | 'capped';
+
+/**
+ * 进度分档筛选项。文案故意与「状态」筛选里的「可破境」区分开（这里写「已满 · 可破境」），
+ * 两个筛选同时使用时玩家不会误以为是同一件事。
+ */
+export const CULTIVATION_PROGRESS_FILTERS: readonly {
+  value: CultivationProgressTier;
+  label: string;
+}[] = [
+  { value: 'all', label: '全部进度' },
+  { value: 'lt25', label: '0–不足 25%' },
+  { value: 'gte25lt50', label: '25–不足 50%' },
+  { value: 'gte50lt75', label: '50–不足 75%' },
+  { value: 'gte75lt100', label: '75–不足 100%' },
+  { value: 'fullBlocked', label: '已满 · 不可破境' },
+  { value: 'breakthrough', label: '已满 · 可破境' },
+  { value: 'capped', label: '已达版本上限' },
+];
+
+/**
+ * 排序选项：默认（招募顺序）排在最前。
+ *
+ * 前四项保持 0016 的键与文案（`combatPower` = 战力高低、`attributeScore` = 综合评分高低、
+ * `realm` = 境界高低）——`tests/web/disciple-filter.test.ts` 对它们的顺序与标签有断言；
+ * 本轮新增的排序项排在后面，并在标签里写清方向，避免「高低」与「低高」两种写法混用造成误读。
  */
 export const DISCIPLE_SORT_OPTIONS: readonly { value: DiscipleSortKey; label: string }[] = [
   { value: 'recruitOrder', label: '招募顺序' },
   { value: 'combatPower', label: '战力高低' },
   { value: 'attributeScore', label: '综合评分高低' },
   { value: 'realm', label: '境界高低' },
+  { value: 'realmAsc', label: '境界（低→高）' },
+  { value: 'combatPowerAsc', label: '战力（低→高）' },
+  { value: 'cultivationProgressDesc', label: '修为进度（高→低）' },
+  { value: 'cultivationProgressAsc', label: '修为进度（低→高）' },
+  { value: 'cultivationRateDesc', label: '修炼速度（高→低）' },
+  { value: 'cultivationRateAsc', label: '修炼速度（低→高）' },
 ];
 
 /** 疗伤中：`injuredUntil > serverNow`（时间戳非法或 serverNow 缺失时不算受伤）。 */
@@ -120,6 +186,57 @@ export function hasFullCultivation(disciple: FilterableDisciple): boolean {
   return (
     disciple.requiredCultivation === null || disciple.cultivation >= disciple.requiredCultivation
   );
+}
+
+/**
+ * 修为进度的原始比例（0~1，不取整）。
+ * - `requiredCultivation === null`（已达当前版本上限）视为 1；
+ * - 门槛非法（非有限数或 ≤ 0）时按「有修为即算满、否则为 0」兜底，绝不产生 NaN 排序。
+ */
+export function cultivationRatio(disciple: FilterableDisciple): number {
+  const required = disciple.requiredCultivation;
+  if (required === null) return 1;
+  if (!Number.isFinite(required) || required <= 0) {
+    return Number.isFinite(disciple.cultivation) && disciple.cultivation > 0 ? 1 : 0;
+  }
+  const ratio = disciple.cultivation / required;
+  if (!Number.isFinite(ratio)) return 0;
+  return Math.min(1, Math.max(0, ratio));
+}
+
+/**
+ * 当前所处的进度档。判定只看服务端字段（`cultivation` / `requiredCultivation` / `canBreakthrough`），
+ * 不看本地动画值，也不看四舍五入后的整数百分比。
+ */
+export function cultivationTier(disciple: FilterableDisciple): CultivationProgressTier {
+  if (disciple.canBreakthrough) return 'breakthrough';
+  const required = disciple.requiredCultivation;
+  if (required === null) return 'capped';
+  if (disciple.cultivation >= required) return 'fullBlocked';
+  const ratio = cultivationRatio(disciple);
+  if (ratio < 0.25) return 'lt25';
+  if (ratio < 0.5) return 'gte25lt50';
+  if (ratio < 0.75) return 'gte50lt75';
+  return 'gte75lt100';
+}
+
+/** 进度分档筛选（`all` 表示不限）。 */
+export function matchesProgressFilter(
+  disciple: FilterableDisciple,
+  tier: CultivationProgressTier,
+): boolean {
+  if (tier === 'all') return true;
+  return cultivationTier(disciple) === tier;
+}
+
+/**
+ * 名册头像能否作为「破境确认」入口：服务端修为已达到当前门槛，且不是版本上限。
+ *
+ * 刻意不看 `canBreakthrough`——满修为但暂时被挡住时，玩家仍要能点开看清楚原因；
+ * 也刻意不看本地动画值与取整百分比：能不能破只以服务端状态为准。
+ */
+export function breakthroughEligible(disciple: FilterableDisciple): boolean {
+  return disciple.requiredCultivation !== null && disciple.cultivation >= disciple.requiredCultivation;
 }
 
 function formatCultivation(value: number): string {
@@ -238,7 +355,7 @@ export function matchesStatusFilter(
   return disciple.assignment === IDLE_ASSIGNMENT_ID;
 }
 
-/** 境界 / 岗位 / 状态 / 搜索四项组合筛选（每项空值或 all 表示不限）。 */
+/** 搜索 / 境界 / 阶段 / 岗位 / 状态 / 进度六项组合筛选（每项空值或 all 表示不限）。 */
 export function matchesFilters(
   disciple: FilterableDisciple,
   filter: DiscipleFilter,
@@ -246,14 +363,20 @@ export function matchesFilters(
 ): boolean {
   if (!matchesSearch(disciple, filter.search)) return false;
   if (filter.realmId !== '' && disciple.realmId !== filter.realmId) return false;
+  // 阶段是从属筛选：没选境界时它不参与判定（UI 也会禁用并在换境界时清空，不留隐藏条件）。
+  if (filter.realmId !== '' && filter.stage !== null && disciple.stage !== filter.stage) return false;
   if (filter.assignment !== '' && disciple.assignment !== filter.assignment) return false;
-  return matchesStatusFilter(disciple, filter.status, serverNowMs);
+  if (!matchesStatusFilter(disciple, filter.status, serverNowMs)) return false;
+  return matchesProgressFilter(disciple, filter.progress);
 }
 
 /**
  * 排序：默认保持 `state.disciples` 的原顺序（招募顺序）。
- * 相同排序值保持原顺序——包括综合评分并列（Array.prototype.sort 在 ES2019 起保证稳定），
- * 所以这里不额外拼 id 之类的次级键，并列只有招募顺序一种结果。
+ * 相同排序值保持原顺序（Array.prototype.sort 在 ES2019 起保证稳定）。
+ *
+ * 修为进度用原始比例跨境界比较（版本上限视为 100%）；修炼速度用服务端给的每小时产出。
+ * 并列时不追加任何隐藏的比较键（综合评分并列也在内），靠稳定排序保留招募顺序，
+ * 所以并列只有「招募顺序」一种结果。
  */
 export function sortDisciples<T extends FilterableDisciple>(
   disciples: readonly T[],
@@ -264,8 +387,20 @@ export function sortDisciples<T extends FilterableDisciple>(
     list.sort((a, b) => b.combatPower - a.combatPower);
   } else if (sort === 'attributeScore') {
     list.sort((a, b) => b.attributeScore - a.attributeScore);
+  } else if (sort === 'combatPowerAsc') {
+    list.sort((a, b) => a.combatPower - b.combatPower);
   } else if (sort === 'realm') {
     list.sort((a, b) => b.realmOrder - a.realmOrder || b.stage - a.stage);
+  } else if (sort === 'realmAsc') {
+    list.sort((a, b) => a.realmOrder - b.realmOrder || a.stage - b.stage);
+  } else if (sort === 'cultivationProgressDesc') {
+    list.sort((a, b) => cultivationRatio(b) - cultivationRatio(a));
+  } else if (sort === 'cultivationProgressAsc') {
+    list.sort((a, b) => cultivationRatio(a) - cultivationRatio(b));
+  } else if (sort === 'cultivationRateDesc') {
+    list.sort((a, b) => b.cultivationRatePerHour - a.cultivationRatePerHour);
+  } else if (sort === 'cultivationRateAsc') {
+    list.sort((a, b) => a.cultivationRatePerHour - b.cultivationRatePerHour);
   }
   return list;
 }
@@ -302,13 +437,39 @@ export function realmOptions(disciples: readonly FilterableDisciple[]): RealmFil
   return [...byId.values()].sort((a, b) => a.realmOrder - b.realmOrder);
 }
 
+export interface StageFilterOption {
+  stage: number;
+  stageName: string;
+}
+
+/**
+ * 境界内阶段筛选项：从**完整弟子名单**（不是当前筛选结果）里取该境界出现过的阶段，
+ * 按 `stage` 数值升序，标签用对应的 `stageName`。
+ * 没选境界时返回空数组（阶段筛选此时不可用，换境界时调用方负责清空已选阶段）。
+ */
+export function stageOptions(
+  disciples: readonly FilterableDisciple[],
+  realmId: string,
+): StageFilterOption[] {
+  if (realmId === '') return [];
+  const byStage = new Map<number, StageFilterOption>();
+  for (const disciple of disciples) {
+    if (disciple.realmId !== realmId) continue;
+    if (byStage.has(disciple.stage)) continue;
+    byStage.set(disciple.stage, { stage: disciple.stage, stageName: disciple.stageName });
+  }
+  return [...byStage.values()].sort((a, b) => a.stage - b.stage);
+}
+
 /** 是否处于非默认筛选（决定「重置」按钮与无结果文案）。 */
 export function isFilterActive(filter: DiscipleFilter): boolean {
   return (
     filter.search.trim() !== '' ||
     filter.realmId !== '' ||
+    filter.stage !== null ||
     filter.assignment !== '' ||
     filter.status !== 'all' ||
+    filter.progress !== 'all' ||
     filter.sort !== 'recruitOrder'
   );
 }

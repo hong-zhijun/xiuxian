@@ -20,8 +20,17 @@ await applyD1Migrations(env.DB, env.TEST_MIGRATIONS);
 const quietLogger = { info: () => {}, warn: () => {}, error: () => {} };
 const app = createApp({ logger: quietLogger });
 
-const REGISTRATION_OPEN = { REGISTRATION_ENABLED: 'true', INVITE_CODES: 'invite-alpha' };
-const REGISTRATION_CLOSED = { REGISTRATION_ENABLED: 'false', INVITE_CODES: '' };
+const LOCAL_ENV = { ENVIRONMENT: 'local' } as const;
+const REGISTRATION_OPEN = {
+  ...LOCAL_ENV,
+  REGISTRATION_ENABLED: 'true',
+  INVITE_CODES: 'invite-alpha',
+};
+const REGISTRATION_CLOSED = {
+  ...LOCAL_ENV,
+  REGISTRATION_ENABLED: 'false',
+  INVITE_CODES: '',
+};
 
 /**
  * 每个客户端分配独立的来源 IP：

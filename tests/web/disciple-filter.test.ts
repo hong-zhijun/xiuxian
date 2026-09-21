@@ -3,15 +3,21 @@ import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_DISCIPLE_FILTER,
   DISCIPLE_SORT_OPTIONS,
+  breakthroughEligible,
   cultivationProgress,
+  cultivationRatio,
+  cultivationTier,
   discipleStatus,
   filterDisciples,
   isFilterActive,
   isInjured,
+  matchesProgressFilter,
   matchesSearch,
   realmOptions,
-  sortDisciples,
+  stageOptions,
   journeyBadge,
+  type CultivationProgressTier,
+  sortDisciples,
   type DiscipleFilter,
   type FilterableDisciple,
 } from '../../apps/web/src/utils/discipleFilter';
@@ -34,10 +40,12 @@ function makeDisciple(overrides: Partial<FilterableDisciple> & { id: string }): 
     realmName: '炼气',
     realmOrder: 0,
     stage: 1,
+    stageName: '炼气一层',
     assignment: 'idle',
     assignmentName: '闲置',
     cultivation: 0,
     requiredCultivation: 100,
+    cultivationRatePerHour: 12,
     combatPower: 10,
     // 0016 综合评分：服务端现算的六项等权平均（一位小数）；这里只锁排序行为，不重算公式。
     attributeScore: 50,
@@ -371,7 +379,8 @@ describe('排序', () => {
 
 describe('排序项列表', () => {
   it('包含「综合评分高低」，且默认（招募顺序）仍在第一位', () => {
-    expect(DISCIPLE_SORT_OPTIONS.map((option) => option.value)).toEqual([
+    // 0016 的四项键与文案保持原样；本轮新增的排序项排在它们后面。
+    expect(DISCIPLE_SORT_OPTIONS.map((option) => option.value).slice(0, 4)).toEqual([
       'recruitOrder',
       'combatPower',
       'attributeScore',
@@ -379,6 +388,7 @@ describe('排序项列表', () => {
     ]);
     const score = DISCIPLE_SORT_OPTIONS.find((option) => option.value === 'attributeScore');
     expect(score?.label).toBe('综合评分高低');
+    expect(DISCIPLE_SORT_OPTIONS[0]?.value).toBe('recruitOrder');
   });
 });
 
@@ -450,5 +460,311 @@ describe('名册行上的历练标记（journeyBadge）', () => {
     );
     // 方向名也缺失时给出中性兜底，不用空串占位。
     expect(journeyBadge({ status: 'active', directionName: null, endsAt: null }, SERVER_NOW)).toBe('历练中');
+  });
+});
+
+describe('修为进度分档（按服务端原始比例，不用取整百分比）', () => {
+  it('四档按 [0,0.25) / [0.25,0.5) / [0.5,0.75) / [0.75,1) 划分', () => {
+    const tierOf = (cultivation: number): CultivationProgressTier =>
+      cultivationTier(makeDisciple({ id: 'a', cultivation, requiredCultivation: 1000 }));
+
+    expect(tierOf(0)).toBe('lt25');
+    expect(tierOf(249.9)).toBe('lt25');
+    expect(tierOf(250)).toBe('gte25lt50');
+    expect(tierOf(499.9)).toBe('gte25lt50');
+    expect(tierOf(500)).toBe('gte50lt75');
+    expect(tierOf(749.9)).toBe('gte50lt75');
+    expect(tierOf(750)).toBe('gte75lt100');
+    expect(tierOf(999.9)).toBe('gte75lt100');
+  });
+
+  it('99.6% 仍未满：显示用的整数百分比会四舍五入到 100%，但分档与破境资格都不能跟着算满', () => {
+    const almost = makeDisciple({ id: 'a', cultivation: 996, requiredCultivation: 1000 });
+    // 展示口径：percent 取整后确实是 100%，full 仍是 false。
+    expect(cultivationProgress(996, 1000).percent).toBe(100);
+    expect(cultivationProgress(996, 1000).full).toBe(false);
+    // 判定口径：仍是「75–不足 100%」，且不能作为破境入口。
+    expect(cultivationTier(almost)).toBe('gte75lt100');
+    expect(breakthroughEligible(almost)).toBe(false);
+    expect(cultivationRatio(almost)).toBeCloseTo(0.996, 5);
+  });
+
+  it('已满但不可破 / 可破境 / 版本上限三档互斥', () => {
+    const fullBlocked = makeDisciple({ id: 'a', cultivation: 1000, requiredCultivation: 1000 });
+    expect(cultivationTier(fullBlocked)).toBe('fullBlocked');
+    expect(breakthroughEligible(fullBlocked)).toBe(true);
+
+    const ready = makeDisciple({
+      id: 'b',
+      cultivation: 1000,
+      requiredCultivation: 1000,
+      canBreakthrough: true,
+    });
+    expect(cultivationTier(ready)).toBe('breakthrough');
+
+    const capped = makeDisciple({ id: 'c', cultivation: 9999, requiredCultivation: null });
+    expect(cultivationTier(capped)).toBe('capped');
+    // 版本上限不显示破境入口：requiredCultivation === null 一律不算资格。
+    expect(breakthroughEligible(capped)).toBe(false);
+  });
+
+  it('每名弟子只落进一个非 all 档（分档互斥，组合筛选不会自相矛盾）', () => {
+    const roster = [
+      makeDisciple({ id: 'lt25', cultivation: 10, requiredCultivation: 100 }),
+      makeDisciple({ id: 'gte25lt50', cultivation: 30, requiredCultivation: 100 }),
+      makeDisciple({ id: 'gte50lt75', cultivation: 60, requiredCultivation: 100 }),
+      makeDisciple({ id: 'gte75lt100', cultivation: 90, requiredCultivation: 100 }),
+      makeDisciple({ id: 'fullBlocked', cultivation: 100, requiredCultivation: 100 }),
+      makeDisciple({
+        id: 'breakthrough',
+        cultivation: 100,
+        requiredCultivation: 100,
+        canBreakthrough: true,
+      }),
+      makeDisciple({ id: 'capped', cultivation: 500, requiredCultivation: null }),
+    ];
+    const tiers: CultivationProgressTier[] = [
+      'lt25',
+      'gte25lt50',
+      'gte50lt75',
+      'gte75lt100',
+      'fullBlocked',
+      'breakthrough',
+      'capped',
+    ];
+
+    let hits = 0;
+    for (const tier of tiers) {
+      const matched = roster.filter((disciple) => matchesProgressFilter(disciple, tier));
+      expect(matched.map((disciple) => disciple.id)).toEqual([tier]);
+      hits += matched.length;
+    }
+    expect(hits).toBe(roster.length);
+    // all 一律放行。
+    expect(roster.filter((disciple) => matchesProgressFilter(disciple, 'all'))).toHaveLength(
+      roster.length,
+    );
+  });
+
+  it('进度分档与状态筛选可以叠加：口径不同的两项同时用不会互相顶掉', () => {
+    const roster = [
+      makeDisciple({ id: 'full-idle', cultivation: 100, requiredCultivation: 100 }),
+      makeDisciple({
+        id: 'ready-away',
+        cultivation: 100,
+        requiredCultivation: 100,
+        canBreakthrough: true,
+        assignment: 'herbGathering',
+        assignmentName: '采药',
+      }),
+    ];
+    expect(
+      ids(
+        filterDisciples(
+          roster,
+          withFilter({ status: 'cultivationFull', progress: 'fullBlocked' }),
+          SERVER_NOW,
+        ),
+      ),
+    ).toEqual(['full-idle']);
+    // 状态「可破境」与进度「已满 · 可破境」命中同一条，但语义各自独立。
+    expect(
+      ids(filterDisciples(roster, withFilter({ status: 'canBreakthrough' }), SERVER_NOW)),
+    ).toEqual(['ready-away']);
+    expect(
+      ids(filterDisciples(roster, withFilter({ progress: 'breakthrough' }), SERVER_NOW)),
+    ).toEqual(['ready-away']);
+  });
+
+  it('门槛非法（0 或非有限数）时比例不产生 NaN，排序/筛选仍可稳定工作', () => {
+    const zeroGate = makeDisciple({ id: 'a', cultivation: 0, requiredCultivation: 0 });
+    expect(cultivationRatio(zeroGate)).toBe(0);
+    expect(Number.isFinite(cultivationTier(zeroGate) === 'lt25' ? 1 : 0)).toBe(true);
+    const badGate = makeDisciple({ id: 'b', cultivation: 5, requiredCultivation: Number.NaN });
+    expect(Number.isFinite(cultivationRatio(badGate))).toBe(true);
+    expect(breakthroughEligible(badGate)).toBe(false);
+  });
+});
+
+describe('境界内阶段从属筛选', () => {
+  const roster = [
+    makeDisciple({
+      id: 'a',
+      realmId: 'qiRefining',
+      realmName: '炼气',
+      realmOrder: 0,
+      stage: 3,
+      stageName: '炼气三层',
+    }),
+    makeDisciple({
+      id: 'b',
+      realmId: 'qiRefining',
+      realmName: '炼气',
+      realmOrder: 0,
+      stage: 1,
+      stageName: '炼气一层',
+    }),
+    makeDisciple({
+      id: 'c',
+      realmId: 'qiRefining',
+      realmName: '炼气',
+      realmOrder: 0,
+      stage: 1,
+      stageName: '炼气一层',
+    }),
+    makeDisciple({
+      id: 'd',
+      realmId: 'foundationEstablishment',
+      realmName: '筑基',
+      realmOrder: 1,
+      stage: 2,
+      stageName: '筑基二层',
+    }),
+  ];
+
+  it('选项从完整名单派生，按 stage 数值升序、同阶段去重、标签用 stageName', () => {
+    expect(stageOptions(roster, 'qiRefining')).toEqual([
+      { stage: 1, stageName: '炼气一层' },
+      { stage: 3, stageName: '炼气三层' },
+    ]);
+    expect(stageOptions(roster, 'foundationEstablishment')).toEqual([
+      { stage: 2, stageName: '筑基二层' },
+    ]);
+  });
+
+  it('没选境界时没有阶段选项（从属筛选不可用）', () => {
+    expect(stageOptions(roster, '')).toEqual([]);
+  });
+
+  it('阶段筛选按 stage 数值，不按阶段名字符串', () => {
+    expect(
+      ids(filterDisciples(roster, withFilter({ realmId: 'qiRefining', stage: 1 }), SERVER_NOW)),
+    ).toEqual(['b', 'c']);
+    expect(
+      ids(filterDisciples(roster, withFilter({ realmId: 'qiRefining', stage: 3 }), SERVER_NOW)),
+    ).toEqual(['a']);
+  });
+
+  it('没选境界时残留的 stage 不参与判定（不留隐藏条件）', () => {
+    expect(ids(filterDisciples(roster, withFilter({ stage: 1 }), SERVER_NOW))).toEqual([
+      'a',
+      'b',
+      'c',
+      'd',
+    ]);
+  });
+
+  it('境界 + 阶段 + 搜索可以同时生效，互斥时返回空', () => {
+    const named = [{ ...roster[0], name: '赵一' }, { ...roster[1], name: '钱二' }, roster[2]];
+    expect(
+      ids(
+        filterDisciples(
+          named,
+          withFilter({ realmId: 'qiRefining', stage: 1, search: '钱' }),
+          SERVER_NOW,
+        ),
+      ),
+    ).toEqual(['b']);
+    expect(
+      filterDisciples(
+        named,
+        withFilter({ realmId: 'foundationEstablishment', stage: 1 }),
+        SERVER_NOW,
+      ),
+    ).toEqual([]);
+  });
+});
+
+describe('排序（既有两项保留 + 新增高低向）', () => {
+  it('境界低到高：先比 realmOrder 再比 stage，都相同保持原顺序', () => {
+    const roster = [
+      makeDisciple({ id: 'a', realmOrder: 0, stage: 2 }),
+      makeDisciple({ id: 'b', realmOrder: 1, stage: 3 }),
+      makeDisciple({ id: 'c', realmOrder: 1, stage: 1 }),
+      makeDisciple({ id: 'd', realmOrder: 2, stage: 1 }),
+    ];
+    expect(
+      ids(filterDisciples(roster, withFilter({ sort: 'realmAsc' }), SERVER_NOW)),
+    ).toEqual(['a', 'c', 'b', 'd']);
+  });
+
+  it('战力低到高', () => {
+    const roster = [
+      makeDisciple({ id: 'a', combatPower: 30 }),
+      makeDisciple({ id: 'b', combatPower: 30 }),
+      makeDisciple({ id: 'c', combatPower: 90 }),
+      makeDisciple({ id: 'd', combatPower: 10 }),
+    ];
+    expect(
+      ids(filterDisciples(roster, withFilter({ sort: 'combatPowerAsc' }), SERVER_NOW)),
+    ).toEqual(['d', 'a', 'b', 'c']);
+  });
+
+  it('修为进度跨境界按原始比例比较，版本上限视为 100%', () => {
+    const roster = [
+      makeDisciple({ id: 'zero', realmOrder: 0, cultivation: 0, requiredCultivation: 100 }),
+      makeDisciple({ id: 'half', realmOrder: 0, cultivation: 50, requiredCultivation: 100 }),
+      makeDisciple({ id: 'almost', realmOrder: 1, cultivation: 999, requiredCultivation: 1000 }),
+      makeDisciple({ id: 'capped', realmOrder: 2, cultivation: 9, requiredCultivation: null }),
+      makeDisciple({ id: 'fifth', realmOrder: 0, cultivation: 20, requiredCultivation: 100 }),
+    ];
+    expect(
+      ids(filterDisciples(roster, withFilter({ sort: 'cultivationProgressDesc' }), SERVER_NOW)),
+    ).toEqual(['capped', 'almost', 'half', 'fifth', 'zero']);
+    expect(
+      ids(filterDisciples(roster, withFilter({ sort: 'cultivationProgressAsc' }), SERVER_NOW)),
+    ).toEqual(['zero', 'fifth', 'half', 'almost', 'capped']);
+  });
+
+  it('修为进度并列时保持招募顺序（稳定排序）', () => {
+    const roster = [
+      makeDisciple({ id: 'a', cultivation: 1, requiredCultivation: 4 }),
+      makeDisciple({ id: 'b', cultivation: 1, requiredCultivation: 4 }),
+      makeDisciple({ id: 'c', cultivation: 2, requiredCultivation: 4 }),
+      makeDisciple({ id: 'd', cultivation: 1, requiredCultivation: 4 }),
+    ];
+    expect(
+      ids(filterDisciples(roster, withFilter({ sort: 'cultivationProgressDesc' }), SERVER_NOW)),
+    ).toEqual(['c', 'a', 'b', 'd']);
+  });
+
+  it('修炼速度高低：按服务端每小时产出', () => {
+    const roster = [
+      makeDisciple({ id: 'a', cultivationRatePerHour: 12 }),
+      makeDisciple({ id: 'b', cultivationRatePerHour: 40 }),
+      makeDisciple({ id: 'c', cultivationRatePerHour: 12 }),
+      makeDisciple({ id: 'd', cultivationRatePerHour: 5 }),
+    ];
+    expect(
+      ids(filterDisciples(roster, withFilter({ sort: 'cultivationRateDesc' }), SERVER_NOW)),
+    ).toEqual(['b', 'a', 'c', 'd']);
+    expect(
+      ids(filterDisciples(roster, withFilter({ sort: 'cultivationRateAsc' }), SERVER_NOW)),
+    ).toEqual(['d', 'a', 'c', 'b']);
+  });
+
+  it('排序不改动入参，且新增项不改变原有两项的语义', () => {
+    const roster = [
+      makeDisciple({ id: 'a', combatPower: 30, realmOrder: 0, stage: 2 }),
+      makeDisciple({ id: 'b', combatPower: 10, realmOrder: 1, stage: 1 }),
+    ];
+    const before = ids(roster);
+    expect(ids(filterDisciples(roster, withFilter({ sort: 'combatPower' }), SERVER_NOW))).toEqual([
+      'a',
+      'b',
+    ]);
+    expect(ids(filterDisciples(roster, withFilter({ sort: 'realm' }), SERVER_NOW))).toEqual([
+      'b',
+      'a',
+    ]);
+    expect(ids(roster)).toEqual(before);
+  });
+});
+
+describe('阶段 / 进度筛选也纳入「已筛选」判定', () => {
+  it('只改阶段或进度也算处于筛选状态，可用于重置按钮', () => {
+    expect(isFilterActive(withFilter({}))).toBe(false);
+    expect(isFilterActive(withFilter({ stage: 1 }))).toBe(true);
+    expect(isFilterActive(withFilter({ progress: 'capped' }))).toBe(true);
   });
 });

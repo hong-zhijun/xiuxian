@@ -17,6 +17,7 @@ import {
   recruit,
   refreshRecruitPreview,
   setDiscipleNote,
+  setDiscipleAvatarFrame,
   setDefenseLineup,
   startJourney,
   startRealmExplore,
@@ -44,6 +45,8 @@ import LoginScreen from './components/LoginScreen.vue';
 import SectScreen from './components/SectScreen.vue';
 import ToastStack from './components/ToastStack.vue';
 import type { ToastItem, ToastTone } from './types/ui';
+import type { AvatarFrameId } from './utils/avatarFrames';
+import { avatarFrameOption } from './utils/avatarFrames';
 import { formatAmount, formatBp, formatTime } from './utils/format';
 
 /**
@@ -527,6 +530,26 @@ function onSaveNote(discipleId: string, note: string): void {
 }
 
 /**
+ * 0017 保存头像框：frameId 只可能是白名单里的固定 id（选择器给出，服务端再校验一次）。
+ * 归属与合法性都由服务端裁决，这里只按回执提示；失败由 handleError 统一提示。
+ */
+function onSetAvatarFrame(discipleId: string, frameId: AvatarFrameId): void {
+  void runAction(
+    () => setDiscipleAvatarFrame(discipleId, frameId),
+    (data) => {
+      const disciple = data.state.disciples.find((item) => item.id === discipleId);
+      if (disciple === undefined) {
+        return { title: '头像框已换', message: `样式已保存为${avatarFrameOption(frameId).label}。` };
+      }
+      return {
+        title: '头像框已换',
+        message: `「${disciple.name}」的头像框已换成${avatarFrameOption(disciple.avatarFrameId).label}。`,
+      };
+    },
+  );
+}
+
+/**
  * 0013 驱逐弟子：二次确认在详情弹窗里完成（此处只会收到已确认的请求）。
  * 阵容清理与人数不足 3 人的后果都以服务端回执为准，前端不自己推算。
  */
@@ -707,6 +730,7 @@ onUnmounted(() => {
       @craft-pill="onCraftPill"
       @use-pill="onUsePill"
       @save-note="onSaveNote"
+      @set-avatar-frame="onSetAvatarFrame"
       @expel="onExpelDisciple"
       @start-journey="onStartJourney"
       @claim-journey="onClaimJourney"

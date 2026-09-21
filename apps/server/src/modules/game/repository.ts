@@ -59,6 +59,8 @@ export interface DiscipleRow {
   body_tempering_count: number;
   /** 0013 掌门私有备注（单行纯文本，≤60 字；只进登录玩家自己的视图）。 */
   note: string;
+  /** 0017 头像框 id（'classic' 或 'frame01'…'frame10'；掌门私有外观，只进自己的视图）。 */
+  avatar_frame_id: string;
   created_at: number;
 }
 
@@ -179,7 +181,7 @@ export class DiscipleRepository extends ParamRepository {
     return this.all<DiscipleRow>({
       sql: `SELECT id, sect_id, name, gender, aptitude, attack, defense, speed, luck, physique, talent,
                    realm_id, stage, cultivation, cultivation_remainder,
-                   assignment, injured_until, body_tempering_count, note, created_at
+                   assignment, injured_until, body_tempering_count, note, avatar_frame_id, created_at
             FROM disciples WHERE sect_id = ? ORDER BY created_at ASC, id ASC`,
       params: [sectId],
     });
@@ -189,7 +191,7 @@ export class DiscipleRepository extends ParamRepository {
     return this.one<DiscipleRow>({
       sql: `SELECT id, sect_id, name, gender, aptitude, attack, defense, speed, luck, physique, talent,
                    realm_id, stage, cultivation, cultivation_remainder,
-                   assignment, injured_until, body_tempering_count, note, created_at
+                   assignment, injured_until, body_tempering_count, note, avatar_frame_id, created_at
             FROM disciples WHERE id = ?`,
       params: [discipleId],
     });
@@ -820,6 +822,21 @@ export function updateDiscipleNoteStatement(
   return {
     sql: 'UPDATE disciples SET note = ? WHERE id = ? AND sect_id = ?',
     params: [note, discipleId, sectId],
+  };
+}
+
+/**
+ * 0017 头像框写回：只更新 avatar_frame_id 一列（frameId 已由 schema 的 11 值白名单把关）。
+ * 与备注一致用 `id + sect_id` 双条件：身份写错行时影响 0 行（批内快照守卫再兜一层）。
+ */
+export function updateDiscipleAvatarFrameStatement(
+  discipleId: string,
+  sectId: string,
+  frameId: string,
+): ParameterizedQuery {
+  return {
+    sql: 'UPDATE disciples SET avatar_frame_id = ? WHERE id = ? AND sect_id = ?',
+    params: [frameId, discipleId, sectId],
   };
 }
 

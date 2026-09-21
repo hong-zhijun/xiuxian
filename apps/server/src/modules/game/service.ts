@@ -101,6 +101,7 @@ import {
   settlementSnapshotGuardStatements,
   updateBuildingLevelStatement,
   updateDiscipleAssignmentStatement,
+  updateDiscipleAvatarFrameStatement,
   updateDiscipleBodyTemperingStatement,
   updateDiscipleCultivationStatement,
   updateDiscipleInjuryStatement,
@@ -1129,6 +1130,7 @@ export async function createSect(
       injured_until: null,
       body_tempering_count: 0,
       note: '',
+      avatar_frame_id: 'classic',
       created_at: now,
     };
     statements.push(
@@ -1451,6 +1453,7 @@ export async function recruitDisciple(
     injured_until: null,
     body_tempering_count: 0,
     note: '',
+    avatar_frame_id: 'classic',
     created_at: now,
   };
   draft.addDisciple(disciple);
@@ -1773,6 +1776,37 @@ export async function setDiscipleNote(
   disciple.note = normalized;
 
   // 计划 2.3：在外期间**可以**继续保存私有备注，所以这条路径不要求成员「不在外」。
+  await draft.commitDisciple([{ id: disciple.id }], undefined, { allowActiveJourney: true });
+  return draft.view();
+}
+
+/**
+ * 保存弟子头像框（0017：掌门私有外观，弟子交互优化计划第 3 节）。
+ *
+ * - 归属：discipleById 只在当前宗门的弟子里找，非本宗 / 不存在统一 NOT_FOUND（不泄露他人门人信息）；
+ * - frameId 的 11 个合法值已由 setDiscipleAvatarFrameRequestSchema 白名单把关（不接受任意 URL / 路径 / 上传）；
+ * - 幂等：与当前值相同时**显式早退**——不提交结算、不写库，不产生资源 / 计数 / 事件副作用；
+ * - 提交走 commitDisciple：批内重新核对宗门行、资源余额与目标弟子归属，并发时不产生半写。
+ */
+export async function setDiscipleAvatarFrame(
+  db: D1Database,
+  userId: string,
+  discipleId: string,
+  frameId: string,
+  now: number,
+): Promise<SectStateView> {
+  const draft = await draftFor(db, userId, now);
+  const disciple = draft.discipleById(discipleId);
+
+  // 幂等：存相同值不改任何一行（早退在结算写回之前，连「本该由 sync 落地的结算」也不提交）。
+  if (disciple.avatar_frame_id === frameId) {
+    return draft.view();
+  }
+
+  draft.addStatement(updateDiscipleAvatarFrameStatement(disciple.id, draft.sect.id, frameId));
+  disciple.avatar_frame_id = frameId;
+
+  // 头像框是纯外观，与私有备注一样允许在外历练期间更改（不要求成员「不在外」）。
   await draft.commitDisciple([{ id: disciple.id }], undefined, { allowActiveJourney: true });
   return draft.view();
 }

@@ -132,3 +132,28 @@ export const chooseRealmExploreSchema = z.strictObject({
 export const abandonExplorationSchema = z.strictObject({
   explorationId: z.string().min(1).max(64),
 });
+
+/**
+ * 0017 弟子头像框：frameId 只接受 11 个固定字符串（'classic' + 'frame01'…'frame10'），
+ * 不接受任意 URL / 路径 / 上传；非法值走既有的 400 VALIDATION_ERROR（不新造错误码）。
+ * 白名单与 0017 迁移的 CHECK 保持一致。
+ */
+export const AVATAR_FRAME_IDS = [
+  'classic',
+  'frame01',
+  'frame02',
+  'frame03',
+  'frame04',
+  'frame05',
+  'frame06',
+  'frame07',
+  'frame08',
+  'frame09',
+  'frame10',
+] as const;
+
+/** 0017 设置头像框：discipleId 只做长度防线，归属由 service 判定；frameId 必须命中白名单。 */
+export const setDiscipleAvatarFrameRequestSchema = z.strictObject({
+  discipleId: z.string().min(1).max(64),
+  frameId: z.enum(AVATAR_FRAME_IDS),
+});

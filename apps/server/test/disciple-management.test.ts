@@ -86,6 +86,24 @@ async function freezeSettlement(sectId: string): Promise<void> {
     .run();
 }
 
+/**
+ * 把上一次结算时间拨到 `msAgo` 毫秒之前。
+ * 与 `freezeSettlement`（拨到未来 = 本次结算 elapsed 为 0）相反：这样「真走了提交路径」必然产生结算写回
+ * （资源入账 + last_settled_at 推进），用来证伪「显式早退」被删掉的情况。
+ */
+async function ageSettlement(sectId: string, msAgo: number): Promise<void> {
+  await env.DB.prepare('UPDATE sects SET last_settled_at = ? WHERE id = ?')
+    .bind(Date.now() - msAgo, sectId)
+    .run();
+}
+
+async function lastSettledAt(sectId: string): Promise<number> {
+  const row = await env.DB.prepare('SELECT last_settled_at FROM sects WHERE id = ?')
+    .bind(sectId)
+    .first<{ last_settled_at: number }>();
+  return Number(row?.last_settled_at ?? 0);
+}
+
 async function setBalance(sectId: string, resourceId: string, balance: number): Promise<void> {
   await env.DB.prepare('UPDATE resource_balances SET balance = ? WHERE sect_id = ? AND resource_id = ?')
     .bind(balance, sectId, resourceId)
@@ -124,6 +142,13 @@ async function noteOf(discipleId: string): Promise<string | null> {
     .bind(discipleId)
     .first<{ note: string }>();
   return row?.note ?? null;
+}
+
+async function avatarFrameOf(discipleId: string): Promise<string | null> {
+  const row = await env.DB.prepare('SELECT avatar_frame_id FROM disciples WHERE id = ?')
+    .bind(discipleId)
+    .first<{ avatar_frame_id: string }>();
+  return row?.avatar_frame_id ?? null;
 }
 
 async function dbBalance(sectId: string, resourceId: string): Promise<number> {
@@ -221,6 +246,10 @@ function notePost(api: TestClient, discipleId: string, note: string): Promise<Ap
 
 function expelPost(api: TestClient, discipleId: string): Promise<ApiResult> {
   return api.post('/api/v1/game/expel-disciple', { discipleId });
+}
+
+function framePost(api: TestClient, discipleId: string, frameId: string): Promise<ApiResult> {
+  return api.post('/api/v1/game/set-disciple-avatar-frame', { discipleId, frameId });
 }
 
 describe('0013 迁移：disciples.note', () => {
@@ -949,5 +978,227 @@ describe('弟子管理回归：既有命令仍然可用', () => {
 
     // view 层把聚气丹单次增益也下发了：前端不需要再复制 CULTIVATION_PILL_GAIN 常量。
     expect(state.alchemy.cultivationPillGain).toBe(CULTIVATION_PILL_GAIN);
+  });
+});
+
+/* ---------- 0017 弟子头像框（掌门私有外观） ---------- */
+
+describe('0017 迁移：disciples.avatar_frame_id', () => {
+  it('已有弟子与不带该列的 INSERT 默认落到 classic，列是 NOT NULL DEFAULT', async () => {
+    const sect = await makeSect('daf-mig-default');
+    expect(await avatarFrameOf(sect.discipleIds[0] as string)).toBe('classic');
+
+    const columns = await env.DB.prepare('PRAGMA table_info(disciples)').all<{
+      name: string;
+      notnull: number;
+      dflt_value: string | null;
+    }>();
+    const column = (columns.results ?? []).find((item) => item.name === 'avatar_frame_id');
+    expect(column, '0017 之后 disciples 必须有 avatar_frame_id 列').toBeTruthy();
+    expect(Number(column?.notnull)).toBe(1);
+    expect(String(column?.dflt_value)).toContain('classic');
+
+    // 旧式不带该列的 INSERT（等价于旧行）也必须自动落到 classic。
+    const legacyId = crypto.randomUUID();
+    await env.DB.prepare(
+      'INSERT INTO disciples (id, sect_id, name, aptitude, created_at) VALUES (?, ?, ?, ?, ?)',
+    )
+      .bind(legacyId, sect.sectId, '旧行', 50, Date.now())
+      .run();
+    expect(await avatarFrameOf(legacyId)).toBe('classic');
+  });
+
+  it('CHECK 只允许 11 个固定值（绕过服务端也写不进非法值）', async () => {
+    const sect = await makeSect('daf-mig-check');
+    const discipleId = sect.discipleIds[0] as string;
+
+    await env.DB.prepare('UPDATE disciples SET avatar_frame_id = ? WHERE id = ?')
+      .bind('frame10', discipleId)
+      .run();
+    expect(await avatarFrameOf(discipleId)).toBe('frame10');
+
+    for (const bad of ['frame11', 'frame00', '', 'http://evil/frame.png', '/etc/passwd', 'classic ']) {
+      await expect(
+        env.DB.prepare('UPDATE disciples SET avatar_frame_id = ? WHERE id = ?')
+          .bind(bad, discipleId)
+          .run(),
+      ).rejects.toThrow(/CHECK/i);
+    }
+    expect(await avatarFrameOf(discipleId)).toBe('frame10');
+  });
+});
+
+describe('头像框：保存、幂等与校验', () => {
+  it('保存后再次读取仍是新值（state.disciples 与单行查询一致）', async () => {
+    const sect = await makeSect('daf-save');
+    await freezeSettlement(sect.sectId);
+    const discipleId = sect.discipleIds[0] as string;
+    const other = sect.discipleIds[1] as string;
+
+    const saved = await framePost(sect.api, discipleId, 'frame03');
+    expect(saved.status).toBe(200);
+    const savedState = (dataOf(saved) as Record<string, any>).state as Record<string, any>;
+    const savedView = (savedState.disciples as Record<string, any>[]).find((item) => item.id === discipleId);
+    expect(savedView?.avatarFrameId).toBe('frame03');
+    expect(await avatarFrameOf(discipleId)).toBe('frame03');
+
+    const synced = await sect.state();
+    const syncedView = (synced.disciples as Record<string, any>[]).find((item) => item.id === discipleId);
+    expect(syncedView?.avatarFrameId).toBe('frame03');
+    // 没动的其它弟子仍是默认 classic（单列更新不误伤别人）。
+    const otherView = (synced.disciples as Record<string, any>[]).find((item) => item.id === other);
+    expect(otherView?.avatarFrameId).toBe('classic');
+  });
+
+  it('重复保存相同值无副作用（显式早退：连结算写回都不提交）', async () => {
+    const sect = await makeSect('daf-idempotent');
+    const discipleId = sect.discipleIds[0] as string;
+
+    // 把资源压到远低于库容，并让上一次结算发生在一小时前：
+    // 这样「如果这次真的走了提交路径」一定会结算这一小时的产出并推进 last_settled_at。
+    for (const resourceId of ['spiritStone', 'spiritualEnergy', 'herb', 'ore']) {
+      await setBalance(sect.sectId, resourceId, 1000);
+    }
+    await ageSettlement(sect.sectId, 3_600_000);
+
+    expect((await framePost(sect.api, discipleId, 'frame07')).status).toBe(200);
+
+    // 再拨回去一次（不改余额）：重复保存如果照常提交，就一定会写回资源与 last_settled_at。
+    await ageSettlement(sect.sectId, 3_600_000);
+
+    const balancesBefore = await balancesOf(sect.sectId);
+    const settledAtBefore = await lastSettledAt(sect.sectId);
+    const recruitBefore = await recruitCounter(sect.sectId);
+    const eventsBefore = await eventLogCount(sect.sectId);
+
+    const repeated = await framePost(sect.api, discipleId, 'frame07');
+    expect(repeated.status).toBe(200);
+    expect(await avatarFrameOf(discipleId)).toBe('frame07');
+
+    expect(await balancesOf(sect.sectId)).toEqual(balancesBefore);
+    expect(await lastSettledAt(sect.sectId)).toBe(settledAtBefore);
+    expect(await recruitCounter(sect.sectId)).toEqual(recruitBefore);
+    expect(await eventLogCount(sect.sectId)).toBe(eventsBefore);
+    expect(await mutationGuardCount()).toBe(0);
+
+    // 反证：同样的「一小时未结算」状态下改一个真的不同的值，写回立刻发生。
+    // 没有这一条，上面的断言无法区分「显式早退」和「照常提交但恰好没变化」。
+    expect((await framePost(sect.api, discipleId, 'frame08')).status).toBe(200);
+    expect(await avatarFrameOf(discipleId)).toBe('frame08');
+    expect(await lastSettledAt(sect.sectId)).not.toBe(settledAtBefore);
+  });
+
+  it('非法 frameId 与未声明字段被拒为 VALIDATION_ERROR，且不改库', async () => {
+    const sect = await makeSect('daf-invalid');
+    await freezeSettlement(sect.sectId);
+    const discipleId = sect.discipleIds[0] as string;
+
+    for (const bad of ['frame11', 'frame00', '', 'http://evil/frame.png', '/etc/passwd', 'classic ']) {
+      const result = await framePost(sect.api, discipleId, bad);
+      expect(errorOf(result).code).toBe('VALIDATION_ERROR');
+    }
+
+    // strict schema：带未声明字段（例如任意 URL）同样被拒。
+    const extra = await sect.api.post('/api/v1/game/set-disciple-avatar-frame', {
+      discipleId,
+      frameId: 'frame01',
+      url: 'http://evil/frame.png',
+    });
+    expect(errorOf(extra).code).toBe('VALIDATION_ERROR');
+
+    expect(await avatarFrameOf(discipleId)).toBe('classic');
+  });
+
+  it('跨宗与不存在的 discipleId 都返回 NOT_FOUND，且不动他人头像框', async () => {
+    const owner = await makeSect('daf-owner');
+    const stranger = await makeSect('daf-stranger');
+    await freezeSettlement(owner.sectId);
+    await freezeSettlement(stranger.sectId);
+
+    const victim = owner.discipleIds[0] as string;
+    expect((await framePost(owner.api, victim, 'frame02')).status).toBe(200);
+
+    const unknown = await framePost(owner.api, 'no-such-disciple-id', 'frame02');
+    expect(errorOf(unknown).code).toBe('NOT_FOUND');
+
+    // 跨宗：B 拿着 A 的弟子 id 保存，必须无法命中。
+    const cross = await framePost(stranger.api, victim, 'frame04');
+    expect(errorOf(cross).code).toBe('NOT_FOUND');
+    expect(await avatarFrameOf(victim)).toBe('frame02');
+  });
+
+  it('头像框只出现在自己的 sync 状态：公开档案 / 排行榜 / 战报 / 招贤都不泄漏', async () => {
+    const attacker = await makeSect('daf-privacy-a');
+    const defender = await makeSect('daf-privacy-b');
+    await freezeSettlement(attacker.sectId);
+    await freezeSettlement(defender.sectId);
+
+    await framePost(attacker.api, attacker.discipleIds[0] as string, 'frame01');
+    // 守方每个弟子都设成 frame09：这样任何一处泄露（不止第 0 个）都会让下面的哨兵断言失败。
+    for (const discipleId of defender.discipleIds) {
+      await framePost(defender.api, discipleId, 'frame09');
+    }
+
+    // 公开档案：连 avatarFrameId 字段都不该存在，响应里也不能出现守方的头像框值。
+    for (const viewer of [attacker.api, defender.api]) {
+      const publicResult = await viewer.get(`/api/v1/game/sect/${defender.sectId}`);
+      expect(publicResult.status).toBe(200);
+      const publicDisciples = (dataOf(publicResult) as Record<string, any>).sect.disciples as Record<string, any>[];
+      expect(publicDisciples.length).toBeGreaterThan(0);
+      for (const item of publicDisciples) {
+        expect(Object.keys(item)).not.toContain('avatarFrameId');
+      }
+      expect(JSON.stringify(publicResult.body)).not.toContain('frame09');
+    }
+
+    const leaderboard = await attacker.api.get('/api/v1/game/leaderboard');
+    expect(leaderboard.status).toBe(200);
+    expect(JSON.stringify(leaderboard.body)).not.toContain('frame09');
+    // 排行榜条目里的顶栏弟子只允许这三个字段：即使哨兵串被换掉，字段集合也能挡住整行透传。
+    const entries = (dataOf(leaderboard) as Record<string, any>).entries as Record<string, any>[];
+    expect(entries.length).toBeGreaterThan(0);
+    for (const entry of entries) {
+      if (entry.topDisciple === null) continue;
+      expect(Object.keys(entry.topDisciple).sort()).toEqual(['name', 'realmName', 'stageName']);
+    }
+
+    // 打一场：战报（含胜方自己返回的 state）里都不能混入守方头像框。
+    await makeStrong(attacker.sectId);
+    await makeWeak(defender.sectId);
+    const battle = await attacker.api.post('/api/v1/game/challenge', {
+      targetSectId: defender.sectId,
+      discipleIds: attacker.discipleIds.slice(0, 3),
+    });
+    expect(battle.status).toBe(200);
+    expect(JSON.stringify(battle.body)).not.toContain('frame09');
+
+    for (const client of [attacker.api, defender.api]) {
+      const history = await client.get('/api/v1/game/challenge-history');
+      expect(history.status).toBe(200);
+      expect(JSON.stringify(history.body)).not.toContain('frame09');
+    }
+
+    // 招贤候选人预览同样不含 avatarFrameId 字段。
+    const preview = await attacker.api.get('/api/v1/game/recruit-preview');
+    expect(preview.status).toBe(200);
+    expect(JSON.stringify(preview.body)).not.toContain('avatarFrameId');
+    // 候选人来自确定性生成而不是读库：这里断言字段集合，防止将来有人把整行弟子塞进候选人。
+    const candidates = (dataOf(preview) as Record<string, any>).candidates as Record<string, any>[];
+    expect(candidates.length).toBeGreaterThan(0);
+    for (const candidate of candidates) {
+      expect(Object.keys(candidate).sort()).toEqual([
+        'aptitude',
+        'attack',
+        'attributeScore',
+        'defense',
+        'gender',
+        'luck',
+        'name',
+        'physique',
+        'speed',
+        'talent',
+        'talentName',
+      ]);
+    }
   });
 });

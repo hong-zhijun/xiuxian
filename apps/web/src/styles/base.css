@@ -67,6 +67,7 @@ body {
 html::-webkit-scrollbar,
 .event-list::-webkit-scrollbar,
 .realm-list::-webkit-scrollbar,
+.disciple-tab-panels::-webkit-scrollbar,
 .modal-card::-webkit-scrollbar {
   width: 0;
   height: 0;
@@ -74,6 +75,7 @@ html::-webkit-scrollbar,
 
 .event-list,
 .realm-list,
+.disciple-tab-panels,
 .modal-card {
   scrollbar-width: none;
   -ms-overflow-style: none;
@@ -1676,8 +1678,11 @@ ul {
 .disciple-row-media {
   grid-row: 1;
   grid-column: 1;
-  width: 48px;
-  height: 48px;
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
   margin: 0 auto;
 }
 
@@ -3968,6 +3973,20 @@ ul {
   animation: modal-rise 180ms ease-out;
 }
 
+/*
+ * 弟子详情等带内部滚动区的弹窗使用稳定高度：切换内容量不同的 Tab 时外框不跳动。
+ * 只有显式传入 fixed-height 的 ModalShell 生效，不影响招贤、炼丹等普通弹窗。
+ */
+.modal-card.is-fixed-height {
+  height: min(760px, 86vh);
+  overflow: hidden;
+}
+
+.modal-card.is-fixed-height .disciple-detail {
+  height: 100%;
+  min-height: 0;
+}
+
 /* 标题行给右上角的关闭按钮让位 */
 .modal-card.is-narrow {
   width: min(440px, 100%);
@@ -5347,10 +5366,14 @@ ul {
     padding: 7px 7px 6px;
   }
 
-  .disciple-ring,
-  .disciple-row-media {
+  .disciple-ring {
     width: 46px;
     height: 46px;
+  }
+
+  .disciple-row-media {
+    width: 100%;
+    height: auto;
   }
 
   .disciple-ring .disciple-avatar {
@@ -5614,6 +5637,298 @@ ul {
   .disciple-attribute-effects > div {
     grid-template-columns: minmax(0, 1fr);
     gap: 2px;
+  }
+}
+
+/* ---------- 弟子头像框 / 头像破境入口 / 常显修为 ---------- */
+/*
+ * 层级固定为：最外修为环 → 框图 → 中央姓名首字。
+ * 框图（img）永远画在首字下面，即使素材中央不透明也遮不住姓名；
+ * 素材缺失或加载失败时组件回退旧式外观（classic），这里不画任何占位图。
+ */
+.disciple-avatar .disciple-frame {
+  position: absolute;
+  z-index: 0;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  pointer-events: none;
+}
+
+.disciple-avatar-char {
+  position: relative;
+  z-index: 1;
+}
+
+/* 详情头部与头像框预览用的大头像；名册里仍是 48px 的小头像。 */
+.disciple-avatar.is-large {
+  width: 64px;
+  height: 64px;
+  font-size: 26px;
+}
+
+.disciple-avatar.is-large i {
+  width: 18px;
+  height: 18px;
+  font-size: 10px;
+}
+
+/* 头像即按钮（满修为且非版本上限）：点击只开破境确认弹窗，不直接破境。 */
+.disciple-ring-button {
+  display: block;
+  margin: 0;
+  padding: 3px;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  text-align: center;
+  cursor: pointer;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.disciple-ring-button:disabled {
+  cursor: default;
+}
+
+/* 修为数字常显：触屏没有 hover，不能只靠进度环的提示气泡。 */
+.disciple-progress-text {
+  margin: 0;
+  color: #8ea79a;
+  font-size: 11px;
+  line-height: 1.25;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.disciple-progress-text.is-capped {
+  color: #b3a077;
+}
+
+.disciple-progress-text.is-ready {
+  color: var(--gold-bright);
+}
+
+/* ---------- 弟子详情：紧凑头部 + 四个 Tab ---------- */
+.disciple-detail-head {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 11px;
+  padding-bottom: 11px;
+}
+
+.disciple-detail-portrait {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.disciple-detail-headline {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.disciple-detail-headline .eyebrow {
+  margin: 0;
+}
+
+.disciple-detail-headline-meta {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  margin: 0;
+  color: #9db3a8;
+  font-size: 12px;
+}
+
+.disciple-detail-headline-frame {
+  align-self: start;
+  padding: 2px 7px;
+  border: 1px solid rgba(202, 169, 106, 0.24);
+  border-radius: 2px;
+  color: var(--gold);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.disciple-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding-bottom: 9px;
+  border-bottom: 1px solid var(--line);
+}
+
+.disciple-tab {
+  padding: 6px 13px;
+  border: 1px solid rgba(119, 184, 154, 0.16);
+  border-radius: 2px;
+  color: #9db3a8;
+  background: rgba(255, 255, 255, 0.02);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.disciple-tab:hover {
+  border-color: rgba(202, 169, 106, 0.3);
+  color: #e4ece6;
+}
+
+.disciple-tab[aria-selected='true'] {
+  border-color: rgba(202, 169, 106, 0.42);
+  color: var(--gold-bright);
+  background: rgba(202, 169, 106, 0.08);
+}
+
+.disciple-tab:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(202, 169, 106, 0.3);
+}
+
+/*
+ * 只滚当前 Tab 的内容：头部与 Tab 始终留在视野里。
+ * flex 分配剩余高度（而不是写死 vh），320×568 这类最矮视口下弹窗也不会整体滚动；
+ * min-height 只是在极矮视口里给内容一个下限。
+ */
+.disciple-tab-panels {
+  min-height: 0;
+  flex: 1 1 auto;
+  margin: 0 -4px;
+  padding: 0 4px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.disciple-tab-panel {
+  outline: none;
+}
+
+.disciple-tab-panel:focus-visible {
+  box-shadow: inset 0 0 0 1px rgba(119, 184, 154, 0.24);
+}
+
+/* 首个区块不再画顶部分隔线：Tab 下沿已经有一条。 */
+.disciple-tab-panel > .disciple-detail-section:first-child {
+  border-top: 0;
+}
+
+/* ---------- 头像框选择器（图像单选，固定白名单） ---------- */
+.disciple-frame-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(64px, 1fr));
+  gap: 7px;
+}
+
+.disciple-frame-option {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 4px;
+  border: 1px solid rgba(119, 184, 154, 0.14);
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.015);
+  cursor: pointer;
+}
+
+.disciple-frame-option.is-selected {
+  border-color: rgba(202, 169, 106, 0.44);
+  background: rgba(202, 169, 106, 0.07);
+}
+
+/* 单选控件视觉隐藏但保留可聚焦与键盘操作（焦点环画在整块选项上）。 */
+.disciple-frame-radio {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.disciple-frame-option:focus-within {
+  box-shadow: 0 0 0 2px rgba(202, 169, 106, 0.3);
+}
+
+.disciple-frame-preview {
+  pointer-events: none;
+}
+
+.disciple-frame-label {
+  color: #9db3a8;
+  font-size: 11px;
+}
+
+/* ---------- 名册头像的破境确认 ---------- */
+.disciple-break-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.disciple-break-confirm-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.disciple-break-confirm-actions .action-button {
+  flex: 1 1 0;
+}
+
+@media (max-width: 560px) {
+  /* 窄屏：头部收成两列、Tab 横向滚动（高度由上面的 flex 分配，弹窗本身不滚动）。 */
+  .disciple-detail-head {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .disciple-detail-headline-frame {
+    grid-column: 2;
+    justify-self: start;
+  }
+
+  .disciple-tabs {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+  }
+
+  .disciple-tab {
+    flex: 0 0 auto;
+  }
+
+  .disciple-frame-grid {
+    grid-template-columns: repeat(auto-fill, minmax(56px, 1fr));
+  }
+
+  .modal-card.is-fixed-height {
+    height: 88vh;
+    max-height: 760px;
+  }
+
+}
+@media (max-width: 420px) {
+  /*
+   * 筛选变多以后（境界 / 阶段 / 岗位 / 状态 / 修为进度 / 排序，外加搜索），
+   * 最窄屏也排成两列：7 个筛选各占一整行会把名册推到很下面。搜索仍独占一行。
+   */
+  .disciple-toolbar .disciple-field {
+    flex: 1 1 calc(50% - 5px);
+  }
+
+  .disciple-toolbar .disciple-field-search {
+    flex: 1 1 100%;
   }
 }
 

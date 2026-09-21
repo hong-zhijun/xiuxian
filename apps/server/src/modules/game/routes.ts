@@ -18,6 +18,7 @@ import {
   journeyPreviewQuerySchema,
   recruitRequestSchema,
   setDefenseLineupSchema,
+  setDiscipleAvatarFrameRequestSchema,
   setDiscipleNoteRequestSchema,
   startJourneyRequestSchema,
   startRealmExploreSchema,
@@ -47,6 +48,7 @@ import {
   recruitDisciple,
   refreshRecruit,
   setDefenseLineup,
+  setDiscipleAvatarFrame,
   setDiscipleNote,
   startJourney,
   startRealmExplore,
@@ -238,6 +240,20 @@ export function createGameRoutes(): Hono<AppEnv> {
     const userId = requireUserId(c);
     const body = await parseStrictJson(setDiscipleNoteRequestSchema, c);
     const state = await setDiscipleNote(getDb(c.env), userId, body.discipleId, body.note, Date.now());
+    return respondOk(c, { state });
+  });
+
+  // 0017：设置弟子头像框（结算 → 归属校验 → 单列写回，一次受保护 batch；相同值显式早退）。
+  routes.post('/game/set-disciple-avatar-frame', async (c) => {
+    const userId = requireUserId(c);
+    const body = await parseStrictJson(setDiscipleAvatarFrameRequestSchema, c);
+    const state = await setDiscipleAvatarFrame(
+      getDb(c.env),
+      userId,
+      body.discipleId,
+      body.frameId,
+      Date.now(),
+    );
     return respondOk(c, { state });
   });
 

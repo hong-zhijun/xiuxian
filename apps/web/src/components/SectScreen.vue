@@ -17,8 +17,9 @@ import type {
   SectStateView,
 } from '../api/game';
 import type { ToastTone } from '../types/ui';
+import type { AvatarFrameId } from '../utils/avatarFrames';
 import { ApiError } from '../api/client';
-import { formatAmount, formatRate, formatTime } from '../utils/format';
+import { formatAmount, formatBp, formatRate, formatTime } from '../utils/format';
 import {
   fetchJourneyPreview,
   fetchRecruitPreview,
@@ -92,6 +93,8 @@ const emit = defineEmits<{
   requestJourneyPreview: [discipleId: string];
   startJourney: [discipleId: string, direction: JourneyDirection, durationSeconds: number];
   claimJourney: [journeyId: string];
+  /** 0017 保存头像框样式（白名单 id，见 utils/avatarFrames.ts）。 */
+  setAvatarFrame: [discipleId: string, frameId: AvatarFrameId];
 }>();
 
 /** 操作条里的弹窗开关：天机录 / 历练探索 / 江湖榜 / 守擂阵容 / 演武录 / 炼丹（宗门晋升与建筑仍在右栏常驻）。 */
@@ -674,6 +677,53 @@ function onDetailClaimJourney(journeyId: string): void {
 function onDetailNotify(tone: ToastTone, title: string, message: string): void {
   emit('notify', tone, title, message);
 }
+
+/* ---------- 名册头像快捷破境：只开确认弹窗，确认后才发请求 ---------- */
+
+/** 破境确认弹窗对应的弟子 id（null = 未打开）；弟子对象每次渲染从最新 state.disciples 取。 */
+const breakthroughConfirmId = ref<string | null>(null);
+const breakthroughTarget = computed<DiscipleView | null>(() => {
+  if (breakthroughConfirmId.value === null) return null;
+  return (
+    props.state.disciples.find((disciple) => disciple.id === breakthroughConfirmId.value) ?? null
+  );
+});
+
+// 弟子从 state 里消失时自动收起弹窗，避免对着一份已经不存在的快照点确认。
+watch(breakthroughTarget, (disciple) => {
+  if (breakthroughConfirmId.value !== null && disciple === null) breakthroughConfirmId.value = null;
+});
+
+/** 灵气名来自服务端资源表，前端不硬编码。 */
+const breakthroughEnergyName = computed(
+  () => props.state.resources.find((resource) => resource.id === 'spiritualEnergy')?.name ?? '灵气',
+);
+
+/** 头像点击：只开确认弹窗，不发请求（胜算、消耗与阻止原因都用服务端字段）。 */
+function onRequestBreakthrough(discipleId: string): void {
+  if (props.busy) return;
+  breakthroughConfirmId.value = discipleId;
+}
+
+function closeBreakthroughConfirm(): void {
+  breakthroughConfirmId.value = null;
+}
+
+/**
+ * 确认破境：复用既有 `/game/breakthrough`（App.vue 负责调接口与回填 state）。
+ * busy 期间按钮禁用，避免重复提交；返回的 state 一到，资格与按钮状态立即跟着更新。
+ */
+function confirmBreakthrough(): void {
+  const disciple = breakthroughTarget.value;
+  if (props.busy || disciple === null || !disciple.canBreakthrough) return;
+  emit('breakthrough', disciple.id);
+}
+
+/** 0017 保存头像框：只转发白名单 id，归属与合法性都由服务端裁决。 */
+function onDetailSetAvatarFrame(discipleId: string, frameId: AvatarFrameId): void {
+  if (props.busy) return;
+  emit('setAvatarFrame', discipleId, frameId);
+}
 </script>
 
 <template>
@@ -822,7 +872,9 @@ function onDetailNotify(tone: ToastTone, title: string, message: string): void {
           :live-cultivation="liveCultivation"
           :busy="busy"
           :detail-id="detailId"
+          :breakthrough-confirm-id="breakthroughConfirmId"
           @open-detail="openDetail"
+          @request-breakthrough="onRequestBreakthrough"
         />
       </section>
 
@@ -1036,6 +1088,7 @@ function onDetailNotify(tone: ToastTone, title: string, message: string): void {
     -->
     <ModalShell
       v-if="detailDisciple"
+      fixed-height
       :label="`弟子详情 · ${detailDisciple.name}`"
       @close="closeDetail"
     >
@@ -1058,7 +1111,65 @@ function onDetailNotify(tone: ToastTone, title: string, message: string): void {
         @start-journey="onDetailStartJourney"
         @claim-journey="onDetailClaimJourney"
         @notify="onDetailNotify"
+        @set-avatar-frame="onDetailSetAvatarFrame"
       />
+    </ModalShell>
+
+    <!--
+      名册头像的破境确认：唯一会发 /game/breakthrough 的入口是「确认破境」。
+      取消 / Esc / 点遮罩只关这一层，不发请求；资格以服务端字段为准并随 state 即时更新。
+    -->
+    <ModalShell
+      v-if="breakthroughTarget"
+      narrow
+      :label="`破境确认 · ${breakthroughTarget.name}`"
+      @close="closeBreakthroughConfirm"
+    >
+      <section class="disciple-break-confirm" aria-labelledby="disciple-break-confirm-title">
+        <header class="section-heading panel-heading compact-heading">
+          <div>
+            <p class="eyebrow">破境确认</p>
+            <h2 id="disciple-break-confirm-title">{{ breakthroughTarget.name }}</h2>
+          </div>
+          <span class="count-badge">{{ breakthroughTarget.stageName }}</span>
+        </header>
+
+        <dl class="disciple-facts">
+          <div>
+            <dt>破境胜算</dt>
+            <dd>{{ formatBp(breakthroughTarget.breakthroughChanceBp) }}</dd>
+          </div>
+          <div>
+            <dt>灵气消耗</dt>
+            <dd>{{ formatAmount(breakthroughTarget.breakthroughCost) }} {{ breakthroughEnergyName }}</dd>
+          </div>
+        </dl>
+
+        <!-- 失败后果只做定性说明（消耗的灵气不退、修为跌落、进入调息），不复刻服务端公式。 -->
+        <p class="disciple-detail-hint">
+          失败后果：本次消耗的{{ breakthroughEnergyName }}不退，修为会跌落到本阶段的保底值，并进入调息；
+          调息结束前不能再次破境。
+        </p>
+
+        <p v-if="!breakthroughTarget.canBreakthrough" class="blocked-hint">
+          {{ breakthroughTarget.blockedReason ?? '当前条件尚未满足，暂时无法破境。' }}
+        </p>
+
+        <div class="disciple-break-confirm-actions">
+          <button class="action-button" type="button" :disabled="busy" @click="closeBreakthroughConfirm">
+            取消
+          </button>
+          <button
+            class="action-button primary-action"
+            type="button"
+            :disabled="busy || !breakthroughTarget.canBreakthrough"
+            :aria-disabled="!breakthroughTarget.canBreakthrough"
+            @click="confirmBreakthrough"
+          >
+            <span>{{ busy ? '破境中…' : '确认破境' }}</span>
+          </button>
+        </div>
+      </section>
     </ModalShell>
   </main>
 </template>

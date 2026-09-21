@@ -1,4 +1,5 @@
 import { apiRequest, setCsrfToken } from './client';
+import type { AvatarFrameId } from '../utils/avatarFrames';
 
 /**
  * 游戏与账号接口（类型与后端 modules/game/view.ts 一一对应）。
@@ -75,6 +76,8 @@ export interface DiscipleView {
   bodyTemperingGain: number;
   /** 0013 掌门私有备注（单行纯文本，≤60 字；空串 = 未填写）。只在自己的 sync 状态里有值。 */
   note: string;
+  /** 0017 头像框样式 id（白名单，见 utils/avatarFrames.ts）：旧、新弟子默认 `classic`。 */
+  avatarFrameId: string;
   /** 0014 历练状态：none / active / ready + 名额与不可出发原因（全部服务端算好，前端只渲染）。 */
   journey: DiscipleJourneyView;
 }
@@ -657,6 +660,22 @@ export async function setDiscipleNote(discipleId: string, note: string): Promise
     method: 'POST',
     body: { discipleId, note },
   });
+  return data.state;
+}
+
+/**
+ * 0017 设置弟子头像框（POST /game/set-disciple-avatar-frame）：
+ * frameId 只接受白名单里的固定 id（`classic` / `frame01`–`frame10`），不是自由上传；
+ * 跨宗或不存在按 `NOT_FOUND` 处理，重复保存同一个值不产生任何副作用。
+ */
+export async function setDiscipleAvatarFrame(
+  discipleId: string,
+  frameId: AvatarFrameId,
+): Promise<SectStateView> {
+  const data = await apiRequest<{ state: SectStateView }>(
+    '/api/v1/game/set-disciple-avatar-frame',
+    { method: 'POST', body: { discipleId, frameId } },
+  );
   return data.state;
 }
 
