@@ -1629,6 +1629,14 @@ ul {
   white-space: nowrap;
 }
 
+/* 0016 综合评分：与战力同一行（meta），只换颜色不换行高；窄屏折行时这一行整体变高。 */
+.disciple-row-score {
+  flex: 0 0 auto;
+  color: var(--gold);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
 .disciple-detail-button {
   display: inline-flex;
   min-height: 30px;
@@ -1946,6 +1954,74 @@ ul {
   color: #dce6e0;
   font-family: Georgia, 'Times New Roman', serif;
   font-size: 15px;
+}
+
+/* ---------- 0016 综合评分（详情「当前属性」） ---------- */
+/* 分数块：标签 + 一位小数的大数字 + 整行说明（说明永远独占一行，窄屏也不会把数字挤掉）。 */
+.disciple-score {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 10px;
+  padding: 10px 12px;
+  border: 1px solid rgba(202, 169, 106, 0.22);
+  border-radius: 3px;
+  background: rgba(202, 169, 106, 0.05);
+}
+
+.disciple-score-label {
+  color: #93a99e;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+}
+
+.disciple-score-value {
+  color: var(--gold-bright);
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size: 24px;
+  font-weight: 500;
+  line-height: 1.1;
+}
+
+.disciple-score-note {
+  flex: 1 1 100%;
+  color: #657970;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+/* 幸运 / 体魄：数值 + 实际作用成对出现，只作用于单人定时历练。 */
+.disciple-attribute-effects {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+}
+
+.disciple-attribute-effects > div {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 82px minmax(0, 1fr);
+  align-items: baseline;
+  gap: 8px;
+  padding: 8px 11px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.014);
+}
+
+.disciple-attribute-effects dt {
+  color: #93a99e;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.disciple-attribute-effects dd {
+  min-width: 0;
+  margin: 0;
+  color: #7d9186;
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .disciple-break-button {
@@ -2559,8 +2635,7 @@ ul {
   letter-spacing: 0.04em;
 }
 
-/* ---------- Disciple attribute radar (four axes) ---------- */
-/* ---------- Disciple attribute radar (four axes) ---------- */
+/* ---------- Disciple attribute radar (six axes) ---------- */
 .radar-figure {
   display: grid;
   min-width: 0;
@@ -4514,6 +4589,25 @@ ul {
   color: var(--jade-bright);
 }
 
+/* 0016 新属性：幸运（历练额外收获）/ 体魄（历练受伤）。两者都不进战力。 */
+.stat-tag.stat-luck {
+  border-color: rgba(160, 200, 230, 0.22);
+  color: #a9c8dc;
+}
+
+.stat-tag.stat-physique {
+  border-color: rgba(184, 156, 124, 0.24);
+  color: #c9ad8c;
+}
+
+/* 综合评分：卡上最需要一眼看到的那一个数（服务端现算，一位小数）。 */
+.stat-tag.stat-score {
+  border-color: rgba(202, 169, 106, 0.32);
+  color: var(--gold-bright);
+  background: rgba(202, 169, 106, 0.06);
+  font-family: Georgia, 'Times New Roman', serif;
+}
+
 
 /* 招贤台「换一批」：本境界剩余刷新次数 + 刷新按钮 */
 .recruit-refresh {
@@ -4880,8 +4974,9 @@ ul {
     flex: 1 1 140px;
   }
 
+  /* 六轴雷达在中屏仍与精确值并排，但图形列不再压到 190px：240px 的 viewBox 缩得太小会看不清标签。 */
   .radar-figure {
-    grid-template-columns: minmax(140px, 190px) minmax(0, 1fr);
+    grid-template-columns: minmax(140px, 210px) minmax(0, 1fr);
   }
 
 }
@@ -5484,6 +5579,41 @@ ul {
 
   .explore-abandon {
     min-height: 40px;
+  }
+}
+
+/* ---------- 0016 六属性 / 综合评分：窄屏布局 ---------- */
+
+/* 中窄屏（≈768px 上下）：候选卡的七个标签允许更紧地折行，卡片不会被标签撑高。 */
+@media (max-width: 680px) {
+  .candidate-card .disciple-stats {
+    gap: 3px 5px;
+  }
+
+  .candidate-card .stat-tag {
+    padding: 1px 6px;
+  }
+
+  /* 雷达图已在 680px 变单列，这里让六轴图形占满可用宽度，标签不被缩放得太小。 */
+  .radar-chart {
+    max-width: 100%;
+  }
+}
+
+/* 最窄屏（≈360px）：候选卡标签再紧一点；名册 meta 折成两行也只会变高，不压住状态与备注。 */
+@media (max-width: 420px) {
+  .candidate-card .stat-tag {
+    padding: 1px 5px;
+  }
+
+  .disciple-card-meta {
+    gap: 2px 6px;
+  }
+
+  /* 详情里的「幸运 / 体魄」说明在极窄屏改成上下两行，避免左侧标签列占掉一半宽度。 */
+  .disciple-attribute-effects > div {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px;
   }
 }
 

@@ -55,11 +55,13 @@ import {
 import { drawEncounters, type EncounterDef } from './encounters';
 import { EVENT_HISTORY_LIMIT, RECENT_EVENTS_IN_SYNC } from './events';
 import {
+  generateAttributes,
   generateCandidates,
   generateTalent,
-  randomAptitude,
   randomDiscipleName,
   randomGender,
+  recruitBatchId,
+  recruitBatchStatus,
   type RecruitCandidate,
 } from './names';
 import {
@@ -147,7 +149,6 @@ import { settleEconomy, type SettleResult } from './settle';
 import {
   JOURNEY_DIRECTIONS,
   JOURNEY_DURATIONS_SECONDS,
-  JOURNEY_EXTRA_HARVEST_BP,
   JOURNEY_HISTORY_LIMIT,
   JOURNEY_MAX_CONCURRENT,
   asJourneyDirection,
@@ -500,6 +501,8 @@ class SectDraft {
       attack: Number(row.attack),
       defense: Number(row.defense),
       speed: Number(row.speed),
+      luck: Number(row.luck),
+      physique: Number(row.physique),
       talent: row.talent,
       realmId: row.realm_id,
       stage: Number(row.stage),
@@ -590,7 +593,7 @@ class SectDraft {
     });
   }
 
-  async commit(): Promise<void> {
+  async commit(options: { checkRecruitState?: boolean; staleRecruitBatchOnConflict?: boolean } = {}): Promise<void> {
     if (this.statements.length === 0) {
       return;
     }
@@ -599,7 +602,7 @@ class SectDraft {
       sect: this.base.sect,
       balances: this.base.balances,
       disciples: this.base.disciples,
-    });
+    }, { checkRecruitState: options.checkRecruitState });
     try {
       await this.db.batch(prepareStatements(this.db, [
         ...guard.guards,
@@ -609,6 +612,11 @@ class SectDraft {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (/CHECK constraint failed: (?:valid = 1|mutation_guards)/i.test(message)) {
+        if (options.staleRecruitBatchOnConflict) {
+          throw new AppError('EXPIRED', '招贤名册已更新，请重新预览后再选择有缘人', {
+            reason: 'stale_batch',
+          });
+        }
         throw new AppError('INVALID_STATUS', '宗门状态已变化，请刷新后重试');
       }
       throw error;
@@ -1103,16 +1111,15 @@ export async function createSect(
   ];
 
   const disciples: DiscipleRow[] = config.sect.initialDisciples.map((template) => {
+    // 0016：初始弟子与招贤候选人共用同一套属性生成规则（含幸运/体魄），
+    // 只是随机源用 Math.random —— 初始弟子只生成一次，不需要可复现。
+    const attributes = generateAttributes(Math.random);
     const row: DiscipleRow = {
       id: crypto.randomUUID(),
       sect_id: sectId,
       name: randomDiscipleName(),
       gender: randomGender(),
-      aptitude: randomAptitude(),
-      // 初始弟子只生成一次，属性/天赋用 Math.random 版本即可（V4 第八节）。
-      attack: randomAptitude(),
-      defense: randomAptitude(),
-      speed: randomAptitude(),
+      ...attributes,
       talent: generateTalent(Math.random),
       realm_id: template.realm,
       stage: template.stage,
@@ -1134,6 +1141,8 @@ export async function createSect(
         attack: row.attack,
         defense: row.defense,
         speed: row.speed,
+        luck: row.luck,
+        physique: row.physique,
         talent: row.talent,
         realmId: row.realm_id,
         stage: row.stage,
@@ -1225,6 +1234,11 @@ export async function createSect(
 /** 招募候选人预览（GET /game/recruit-preview 的 data）。 */
 export interface RecruitPreview {
   candidates: RecruitCandidate[];
+  /**
+   * 0016 批次标识：这批候选人来自哪一次生成机会（生成规则版本 + 宗门 id + 日期键 +
+   * 今日招募次数 + 刷新序号）。招募请求必须原样回传，服务端核对当前批次后才允许写入。
+   */
+  batch: string;
   canRecruit: boolean;
   blockedReason: string | null;
   cost: Record<string, string>;
@@ -1323,6 +1337,12 @@ export async function previewRecruit(
 
   return {
     candidates: generateCandidates(sect.id, dateKey, recruitUsedToday, quota.used),
+    batch: recruitBatchId({
+      sectId: sect.id,
+      dateKey,
+      recruitCount: recruitUsedToday,
+      refreshSeq: quota.used,
+    }),
     canRecruit: blockedReason === null,
     blockedReason,
     cost: { ...config.recruitment.cost },
@@ -1340,21 +1360,48 @@ export async function recruitDisciple(
   db: D1Database,
   userId: string,
   choice: number,
+  batch: string | undefined,
   now: number,
 ): Promise<{
   state: SectStateView;
   outcome: {
     discipleName: string;
     aptitude: number;
+    luck: number;
+    physique: number;
     attack: number;
     defense: number;
     speed: number;
+    /** 六项属性等权现算的综合评分（一位小数）。 */
+    attributeScore: number;
     talent: string;
     talentName: string;
   };
 }> {
   const draft = await draftFor(db, userId, now);
   const { config } = draft;
+
+  // 0016 批次核对：必须在任何扣减之前完成。预览过期（跨天 / 换过一批 / 已经招过一次 /
+  // 生成规则版本变了 / 旧客户端根本没带标识）一律拒绝，且不扣资源、不扣招募次数。
+  const dateKey = dateKeyUtc8(now);
+  const refreshSeq = recruitRefreshQuota(draft.sect).used;
+  const batchStatus = recruitBatchStatus(batch, {
+    sectId: draft.sect.id,
+    dateKey,
+    recruitCount: draft.recruitUsedToday,
+    refreshSeq,
+  });
+  if (batchStatus === 'missing') {
+    // 旧客户端不带批次标识：明确拒绝并让它刷新页面重新预览，而不是猜一个候选人。
+    throw new AppError('EXPIRED', '招贤名册已更新，请刷新页面后重新打开招贤台', {
+      reason: 'missing_batch',
+    });
+  }
+  if (batchStatus === 'stale') {
+    throw new AppError('EXPIRED', '招贤名册已更新，请重新预览后再选择有缘人', {
+      reason: 'stale_batch',
+    });
+  }
 
   if (draft.disciples.length >= draft.discipleCapacity) {
     throw new AppError('CAPACITY_FULL', '弟子已满，先升级宗门或遣散弟子（本版本暂不支持遣散）');
@@ -1370,12 +1417,12 @@ export async function recruitDisciple(
   }
 
   // 与 previewRecruit 同 seed、同顺序生成：预览里第 N 张卡就是这里的 candidates[N]。
-  // 刷新序号取归一化后的「本境界已用刷新次数」，与预览（含刷新接口返回的那一批）保持同一组参数。
+  // 刷新序号取归一化后的「本境界已用刷新次数」，与预览（含刷新接口返回的那一批）保持同一组参数；
+  // 上面的批次核对也用同一组参数，因此这里选中的人一定就是玩家刚才看到的那张卡。
   // schema 已把 choice 限制在 0~2，这里再兜一层，越界直接报错而不是写入脏数据。
-  const refreshSeq = recruitRefreshQuota(draft.sect).used;
   const candidates = generateCandidates(
     draft.sect.id,
-    dateKeyUtc8(now),
+    dateKey,
     draft.recruitUsedToday,
     refreshSeq,
   );
@@ -1393,6 +1440,8 @@ export async function recruitDisciple(
     attack: candidate.attack,
     defense: candidate.defense,
     speed: candidate.speed,
+    luck: candidate.luck,
+    physique: candidate.physique,
     talent: candidate.talent,
     realm_id: 'qiRefining',
     stage: 1,
@@ -1411,15 +1460,19 @@ export async function recruitDisciple(
   draft.sect.recruit_date_key = dateKeyUtc8(now);
   draft.sect.recruit_count = draft.recruitUsedToday + 1;
 
-  await draft.commit();
+  await draft.commit({ checkRecruitState: true, staleRecruitBatchOnConflict: true });
   return {
     state: draft.view(),
     outcome: {
       discipleName: disciple.name,
       aptitude: Number(disciple.aptitude),
+      luck: Number(disciple.luck),
+      physique: Number(disciple.physique),
       attack: Number(disciple.attack),
       defense: Number(disciple.defense),
       speed: Number(disciple.speed),
+      // 六项等权现算：与名册 / 详情共用服务端同一个纯函数，不落库。
+      attributeScore: candidate.attributeScore,
       talent: disciple.talent,
       talentName: candidate.talentName,
     },
@@ -1455,7 +1508,7 @@ export async function refreshRecruit(
   draft.sect.recruit_refresh_level = quota.level;
   draft.sect.recruit_refresh_used = nextUsed;
 
-  await draft.commit();
+  await draft.commit({ checkRecruitState: true });
 
   // 与 recruitDisciple 共用同一判定：刷新只换人，不改变能否招募的规则。
   const blockedReason = recruitBlockedReason({
@@ -1475,6 +1528,12 @@ export async function refreshRecruit(
         draft.recruitUsedToday,
         nextUsed,
       ),
+      batch: recruitBatchId({
+        sectId: draft.sect.id,
+        dateKey: dateKeyUtc8(now),
+        recruitCount: draft.recruitUsedToday,
+        refreshSeq: nextUsed,
+      }),
       canRecruit: blockedReason === null,
       blockedReason,
       cost: { ...draft.config.recruitment.cost },
@@ -3223,7 +3282,10 @@ function journeyEligibilityOf(input: {
   });
 }
 
-/** 计算奖励快照所需的弟子属性子集（出发时一次性快照，之后不再重算）。 */
+/**
+ * 计算奖励快照所需的弟子属性子集（出发时一次性快照，之后不再重算）。
+ * luck / physique 是 0016 新增的两项：预览与出发读同一份值，出发之后改属性也不影响已锁定的结果。
+ */
 function journeyRewardInputOf(disciple: DiscipleRow): {
   realmId: string;
   stage: number;
@@ -3232,6 +3294,8 @@ function journeyRewardInputOf(disciple: DiscipleRow): {
   attack: number;
   defense: number;
   speed: number;
+  luck: number;
+  physique: number;
 } {
   return {
     realmId: disciple.realm_id,
@@ -3241,6 +3305,8 @@ function journeyRewardInputOf(disciple: DiscipleRow): {
     attack: Number(disciple.attack),
     defense: Number(disciple.defense),
     speed: Number(disciple.speed),
+    luck: Number(disciple.luck),
+    physique: Number(disciple.physique),
   };
 }
 
@@ -3282,7 +3348,7 @@ export async function previewJourney(
       (durationSeconds) => {
         const base = journeyBaseRewardForDisciple(rewardInput, definition.id, durationSeconds);
         // 方向 × 时长都在 JOURNEY_PLANS 白名单里；查不到只可能是常量表被改坏了。
-        const reward = base ?? { cultivation: 0, resources: {}, injuryChanceBp: 0 };
+        const reward = base ?? { cultivation: 0, resources: {}, extraChanceBp: 0, injuryChanceBp: 0 };
         // 修为按当前剩余门槛截断（「最多」语义）；实际入账以返程时的剩余门槛为准。
         const preview = previewJourneyCultivation(reward.cultivation, threshold, cultivation);
         const resources: Record<string, string> = {};
@@ -3295,7 +3361,8 @@ export async function previewJourney(
           cultivation: preview.cultivation,
           cultivationCapped: preview.capped,
           resources,
-          extraChanceBp: JOURNEY_EXTRA_HARVEST_BP,
+          // 实际概率由服务端按出发时的幸运 / 体魄算好，前端不复制公式、也不写死 15%。
+          extraChanceBp: reward.extraChanceBp,
           injuryChanceBp: reward.injuryChanceBp,
           endsAt: new Date(journeyEndsAt(now, durationSeconds)).toISOString(),
         };
@@ -3385,7 +3452,12 @@ export async function startJourney(
   if (base === null) {
     throw new AppError('VALIDATION_ERROR', '该方向没有这个时长', { direction, durationSeconds });
   }
-  const roll = rollJourneyOutcome(base.injuryChanceBp);
+  // 两项概率都来自出发时的属性快照：幸运 → 额外收获，体魄 → 受伤（与预览同一口径）；
+  // 结果随记录落库，到期 / 领取都不重抽。
+  const roll = rollJourneyOutcome({
+    extraChanceBp: base.extraChanceBp,
+    injuryChanceBp: base.injuryChanceBp,
+  });
   const reward = journeyFinalReward(base, roll.extraHarvest);
   const endsAt = journeyEndsAt(now, durationSeconds);
   const resources: Record<string, number> = {};
@@ -3730,11 +3802,6 @@ function addRewards(
     out[resourceId] = String(Number(out[resourceId] ?? 0) + Number(amount));
   }
   return out;
-}
-
-/** Decisions 的 outcome 取值收窄；不在白名单里返回 null（触发降级）。 */
-function normalizeExploreOutcome(value: unknown): ExploreOutcome | null {
-  return value === 'great_success' || value === 'success' || value === 'failure' ? value : null;
 }
 
 /**

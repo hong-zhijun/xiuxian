@@ -44,6 +44,10 @@ export interface DiscipleRow {
   attack: number;
   defense: number;
   speed: number;
+  /** 幸运（1~100，0016）：只影响单人定时历练的额外收获概率。 */
+  luck: number;
+  /** 体魄（1~100，0016）：只影响单人定时历练的受伤概率。 */
+  physique: number;
   talent: string;
   realm_id: string;
   stage: number;
@@ -173,7 +177,7 @@ export class SectRepository extends ParamRepository {
 export class DiscipleRepository extends ParamRepository {
   async findBySectId(sectId: string): Promise<DiscipleRow[]> {
     return this.all<DiscipleRow>({
-      sql: `SELECT id, sect_id, name, gender, aptitude, attack, defense, speed, talent,
+      sql: `SELECT id, sect_id, name, gender, aptitude, attack, defense, speed, luck, physique, talent,
                    realm_id, stage, cultivation, cultivation_remainder,
                    assignment, injured_until, body_tempering_count, note, created_at
             FROM disciples WHERE sect_id = ? ORDER BY created_at ASC, id ASC`,
@@ -183,7 +187,7 @@ export class DiscipleRepository extends ParamRepository {
 
   async findById(discipleId: string): Promise<DiscipleRow | null> {
     return this.one<DiscipleRow>({
-      sql: `SELECT id, sect_id, name, gender, aptitude, attack, defense, speed, talent,
+      sql: `SELECT id, sect_id, name, gender, aptitude, attack, defense, speed, luck, physique, talent,
                    realm_id, stage, cultivation, cultivation_remainder,
                    assignment, injured_until, body_tempering_count, note, created_at
             FROM disciples WHERE id = ?`,
@@ -411,6 +415,10 @@ export interface NewDisciple {
   attack: number;
   defense: number;
   speed: number;
+  /** 幸运（1~100）：新弟子由生成器显式给出，不依赖数据库默认值（0016）。 */
+  luck: number;
+  /** 体魄（1~100）：同上（0016）。 */
+  physique: number;
   talent: string;
   realmId: string;
   stage: number;
@@ -465,10 +473,10 @@ export function insertSectStatement(row: {
 export function insertDiscipleStatement(row: NewDisciple): ParameterizedQuery {
   return {
     sql: `INSERT INTO disciples
-            (id, sect_id, name, gender, aptitude, attack, defense, speed, talent,
+            (id, sect_id, name, gender, aptitude, attack, defense, speed, luck, physique, talent,
              realm_id, stage, cultivation, cultivation_remainder, assignment, injured_until,
              body_tempering_count, created_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, NULL, ?, ?)`,
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, NULL, ?, ?)`,
     params: [
       row.id,
       row.sectId,
@@ -478,6 +486,8 @@ export function insertDiscipleStatement(row: NewDisciple): ParameterizedQuery {
       row.attack,
       row.defense,
       row.speed,
+      row.luck,
+      row.physique,
       row.talent,
       row.realmId,
       row.stage,
@@ -592,6 +602,7 @@ export function settlementSnapshotGuardStatements(
     balances: readonly ResourceBalanceRow[];
     disciples: readonly DiscipleRow[];
   },
+  options: { checkRecruitState?: boolean } = {},
 ): { guards: ParameterizedQuery[]; cleanup: ParameterizedQuery[] } {
   const { sect, balances, disciples } = snapshot;
   const checks = [
@@ -601,6 +612,14 @@ export function settlementSnapshotGuardStatements(
   const params: (string | number | null)[] = [
     commandId, sect.id, sect.level, sect.last_settled_at, sect.id, disciples.length,
   ];
+  if (options.checkRecruitState) {
+    checks.push(`EXISTS (SELECT 1 FROM sects WHERE id = ? AND recruit_date_key = ?
+      AND recruit_count = ? AND recruit_refresh_level = ? AND recruit_refresh_used = ?)`);
+    params.push(
+      sect.id, sect.recruit_date_key, sect.recruit_count,
+      sect.recruit_refresh_level, sect.recruit_refresh_used,
+    );
+  }
   for (const row of balances) {
     checks.push('EXISTS (SELECT 1 FROM resource_balances WHERE id = ? AND sect_id = ? AND balance = ? AND remainder = ?)');
     params.push(row.id, sect.id, row.balance, row.remainder);

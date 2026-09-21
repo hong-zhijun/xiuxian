@@ -341,29 +341,40 @@ describe('V6 秘境探索：判定与推进', () => {
     expect(await dbBalance(fixture.sectId, 'spiritStone')).toBe(stoneAfterEntry);
     expect(await dbBalance(fixture.sectId, 'herb')).toBe(herbAfterEntry);
 
-    // 第 2 关：同上。
+    // 第 2 关：同上。后续随机遭遇的首选项风险等级未必仍是 risky，
+    // 所以最终奖励必须按每关实际返回的 stageRewards 累计，不能假定三关倍率相同。
     choiceId = firstData.result.nextEncounter.choices[0].id as string;
     const second = await chooseExplore(fixture.api, explorationId, choiceId);
     const secondData = dataOf(second) as Record<string, any>;
     expect(secondData.state.activeExploration.currentStage).toBe(2);
     expect(await dbBalance(fixture.sectId, 'spiritStone')).toBe(stoneAfterEntry);
 
-    // 第 3 关（最后一关）：通关 → 3 关大成功 + 一关通关奖励一次性入账。
+    // 第 3 关（最后一关）：通关 → 三关各自的实际奖励 + 一关基础通关奖励一次性入账。
     choiceId = secondData.result.nextEncounter.choices[0].id as string;
     const third = await chooseExplore(fixture.api, explorationId, choiceId);
     expect(third.status).toBe(200);
     const thirdData = dataOf(third) as Record<string, any>;
     expect(thirdData.result.outcome).toBe('great_success');
     expect(thirdData.result.nextEncounter).toBeNull();
+    const expectedStone =
+      Number(firstData.result.stageRewards.spiritStone ?? 0) +
+      Number(secondData.result.stageRewards.spiritStone ?? 0) +
+      Number(thirdData.result.stageRewards.spiritStone ?? 0) +
+      MISTY.baseStone;
+    const expectedHerb =
+      Number(firstData.result.stageRewards.herb ?? 0) +
+      Number(secondData.result.stageRewards.herb ?? 0) +
+      Number(thirdData.result.stageRewards.herb ?? 0) +
+      MISTY.baseHerb;
     expect(thirdData.result.finalRewards).toEqual({
-      spiritStone: String(MISTY.greatStone * 3 + MISTY.baseStone),
-      herb: String(MISTY.greatHerb * 3 + MISTY.baseHerb),
+      spiritStone: String(expectedStone),
+      herb: String(expectedHerb),
     });
     expect(await dbBalance(fixture.sectId, 'spiritStone')).toBe(
-      stoneAfterEntry + MISTY.greatStone * 3 + MISTY.baseStone,
+      stoneAfterEntry + expectedStone,
     );
     expect(await dbBalance(fixture.sectId, 'herb')).toBe(
-      herbAfterEntry + MISTY.greatHerb * 3 + MISTY.baseHerb,
+      herbAfterEntry + expectedHerb,
     );
 
     // 结束时不再是「进行中」：state 里 activeExploration 归 null。
@@ -373,8 +384,8 @@ describe('V6 秘境探索：判定与推进', () => {
     expect(row?.current_stage).toBe(MISTY.totalStages);
     expect(row?.current_encounter).toBeNull();
     expect(JSON.parse(row?.rewards_collected as string)).toEqual({
-      spiritStone: String(MISTY.greatStone * 3 + MISTY.baseStone),
-      herb: String(MISTY.greatHerb * 3 + MISTY.baseHerb),
+      spiritStone: String(expectedStone),
+      herb: String(expectedHerb),
     });
     // 速通表回填成功。
     expect(Number((await legacyExplorationRows(fixture.sectId))[0]?.success)).toBe(1);

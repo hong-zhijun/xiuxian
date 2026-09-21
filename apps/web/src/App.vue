@@ -15,6 +15,7 @@ import {
   fetchMe,
   logout as apiLogout,
   recruit,
+  refreshRecruitPreview,
   setDiscipleNote,
   setDefenseLineup,
   startJourney,
@@ -33,6 +34,7 @@ import type {
   ExploreOutcome,
   JourneyClaimOutcomeView,
   JourneyDirection,
+  RecruitPreview,
   ResourceView,
   SectStateView,
   UsePillOutcome,
@@ -242,29 +244,26 @@ async function runAction(
   }
 }
 
-/** 招贤：choice 是弹窗里选中的候选人序号（候选人由服务端确定性生成，见 /game/recruit-preview）。 */
-function onRecruit(choice: number): void {
-  void runAction(
-    () => recruit(choice),
-    (data) => {
-      const outcome = data.outcome as
-        | { discipleName?: string; aptitude?: number; talentName?: string }
-        | undefined;
-      return {
-        title: '招贤有得',
-        message:
-          outcome?.discipleName === undefined
-            ? '招募完成。'
-            : `新弟子 ${outcome.discipleName} 已入山门，资质 ${String(outcome.aptitude)}，天赋「${outcome.talentName ?? '无'}」。`,
-      };
-    },
-  );
+/** 招贤及换一批与同步/其他写操作共用全局门闩，防止迟到的 sync 覆盖招募回执。 */
+async function runRecruitRequest<T>(request: () => Promise<T>): Promise<T> {
+  if (busy.value) throw new Error('当前有操作正在进行，请稍后重试');
+  busy.value = true;
+  try {
+    return await request();
+  } finally {
+    busy.value = false;
+  }
 }
 
-/**
- * 招贤台「换一批」：SectScreen 已经拿到服务端返回的 state，这里只负责接管。
- * （刷新弹窗内容属于弹窗内部事务，但 `state` 始终只在 App 赋值。）
- */
+function performRecruit(choice: number, batch: string) {
+  return runRecruitRequest(() => recruit(choice, batch));
+}
+
+function performRecruitRefresh(): Promise<{ state: SectStateView; preview: RecruitPreview }> {
+  return runRecruitRequest(refreshRecruitPreview);
+}
+
+/** 招贤和换一批的回执交给 App 统一赋值。 */
 function onRecruitRefreshed(next: SectStateView): void {
   state.value = next;
   announceEvents(next);
@@ -685,11 +684,13 @@ onUnmounted(() => {
       v-else-if="state"
       :state="state"
       :busy="busy"
+      :recruit-action="performRecruit"
+      :refresh-recruit-action="performRecruitRefresh"
       :challenge-result="challengeResult"
       :explore-result="exploreResult"
       @refresh="refresh(true)"
       @logout="onLogout"
-      @recruit="onRecruit"
+      @recruited="onRecruitRefreshed"
       @assign="onAssign"
       @upgrade="onUpgrade"
       @upgrade-sect="onUpgradeSect"

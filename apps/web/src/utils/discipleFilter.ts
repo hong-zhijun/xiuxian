@@ -30,6 +30,11 @@ export interface FilterableDisciple {
   /** null = 已达当前版本上限。 */
   requiredCultivation: number | null;
   combatPower: number;
+  /**
+   * 0016 综合评分：服务端按**当前**六项属性等权现算（一位小数，见 names.ts 的 attributeScore）。
+   * 前端只显示与排序，不另算权威值；战力 / 境界 / 天赋都不参与这个分数。
+   */
+  attributeScore: number;
   /** null = 未受伤。 */
   injuredUntil: string | null;
   canBreakthrough: boolean;
@@ -59,7 +64,7 @@ export interface DiscipleStatus {
 
 export type DiscipleStatusFilter = 'all' | 'canBreakthrough' | 'injured' | 'cultivationFull' | 'idle';
 
-export type DiscipleSortKey = 'recruitOrder' | 'combatPower' | 'realm';
+export type DiscipleSortKey = 'recruitOrder' | 'combatPower' | 'attributeScore' | 'realm';
 
 export interface DiscipleFilter {
   /** 姓名 / 备注搜索词（空串 = 不过滤）。 */
@@ -88,10 +93,14 @@ export const DISCIPLE_STATUS_FILTERS: readonly { value: DiscipleStatusFilter; la
   { value: 'idle', label: '闲置' },
 ];
 
-/** 默认（招募顺序）排在最前。 */
+/**
+ * 排序项：默认（招募顺序）排在最前。
+ * 「综合评分高低」排的是服务端现算的六项等权平均，与战力（含境界）不是同一件事。
+ */
 export const DISCIPLE_SORT_OPTIONS: readonly { value: DiscipleSortKey; label: string }[] = [
   { value: 'recruitOrder', label: '招募顺序' },
   { value: 'combatPower', label: '战力高低' },
+  { value: 'attributeScore', label: '综合评分高低' },
   { value: 'realm', label: '境界高低' },
 ];
 
@@ -243,7 +252,8 @@ export function matchesFilters(
 
 /**
  * 排序：默认保持 `state.disciples` 的原顺序（招募顺序）。
- * 相同排序值保持原顺序（Array.prototype.sort 在 ES2019 起保证稳定）。
+ * 相同排序值保持原顺序——包括综合评分并列（Array.prototype.sort 在 ES2019 起保证稳定），
+ * 所以这里不额外拼 id 之类的次级键，并列只有招募顺序一种结果。
  */
 export function sortDisciples<T extends FilterableDisciple>(
   disciples: readonly T[],
@@ -252,6 +262,8 @@ export function sortDisciples<T extends FilterableDisciple>(
   const list = [...disciples];
   if (sort === 'combatPower') {
     list.sort((a, b) => b.combatPower - a.combatPower);
+  } else if (sort === 'attributeScore') {
+    list.sort((a, b) => b.attributeScore - a.attributeScore);
   } else if (sort === 'realm') {
     list.sort((a, b) => b.realmOrder - a.realmOrder || b.stage - a.stage);
   }

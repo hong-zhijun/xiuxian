@@ -2,10 +2,10 @@
 import { computed } from 'vue';
 
 /**
- * 弟子四轴雷达图（资质 / 攻击 / 防御 / 身法）：轻量 SVG，不引图表库。
+ * 弟子六轴雷达图（资质 / 攻击 / 防御 / 身法 / 幸运 / 体魄）：轻量 SVG，不引图表库。
  *
- * 规则：四轴都按服务端原值 `1..100` 等比绘制（服务端保证属性 ≤ 100），不做归一化，
- * 也不把天赋（类别）或战力（派生值）画成轴。图形只是补充，旁边必须列出精确数值，
+ * 规则：六轴都按服务端原值 `1..100` 等比绘制（服务端保证属性 ≤ 100），不做归一化，
+ * 也不把天赋（类别）、战力（含境界的派生值）画成轴。图形只是补充，旁边必须列出精确数值，
  * 并给 SVG 一段无障碍文本说明。
  */
 const props = defineProps<{
@@ -14,23 +14,34 @@ const props = defineProps<{
   attack: number;
   defense: number;
   speed: number;
+  luck: number;
+  physique: number;
 }>();
 
-/** viewBox 尺寸留出四角文字空间，宽度由 CSS 控制（响应式）。 */
+/** viewBox 尺寸：留出六个轴标签的空间，宽度由 CSS 控制（响应式）。 */
 const VIEW_WIDTH = 240;
 const VIEW_HEIGHT = 200;
 const CX = 120;
 const CY = 98;
+/** 六边形半径：缩短到 66 后，六个标签（半径 84）仍在 240×200 的框内。 */
 const RADIUS = 66;
 const LABEL_RADIUS = RADIUS + 18;
 
-/** 轴顺序：上（资质）、右（攻击）、下（防御）、左（身法）。 */
+/**
+ * 轴顺序（顺时针，顶部起）：资质 / 攻击 / 防御 / 身法 / 幸运 / 体魄，相邻两轴 60°。
+ * 角度按 SVG 坐标（y 轴向下）：-90 = 上，0 = 右，90 = 下，150 / -150 = 左下 / 左上。
+ * anchor 让标签朝图形外侧展开：上下居中，右侧左对齐，左侧右对齐。
+ */
 const AXES = [
   { key: 'aptitude', label: '资质', angle: -90, anchor: 'middle' },
-  { key: 'attack', label: '攻击', angle: 0, anchor: 'start' },
-  { key: 'defense', label: '防御', angle: 90, anchor: 'middle' },
-  { key: 'speed', label: '身法', angle: 180, anchor: 'end' },
+  { key: 'attack', label: '攻击', angle: -30, anchor: 'start' },
+  { key: 'defense', label: '防御', angle: 30, anchor: 'start' },
+  { key: 'speed', label: '身法', angle: 90, anchor: 'middle' },
+  { key: 'luck', label: '幸运', angle: 150, anchor: 'end' },
+  { key: 'physique', label: '体魄', angle: -150, anchor: 'end' },
 ] as const;
+
+type AxisKey = (typeof AXES)[number]['key'];
 
 function pointAt(angleDeg: number, radius: number): { x: number; y: number } {
   const rad = (angleDeg * Math.PI) / 180;
@@ -53,12 +64,18 @@ function clampValue(value: number): number {
   return Math.min(100, Math.max(0, value));
 }
 
+const values = computed<Record<AxisKey, number>>(() => ({
+  aptitude: props.aptitude,
+  attack: props.attack,
+  defense: props.defense,
+  speed: props.speed,
+  luck: props.luck,
+  physique: props.physique,
+}));
+
 const axisPoints = computed(() =>
   AXES.map((axis) => {
-    const raw = { aptitude: props.aptitude, attack: props.attack, defense: props.defense, speed: props.speed }[
-      axis.key
-    ];
-    const value = clampValue(raw);
+    const value = clampValue(values.value[axis.key]);
     const point = pointAt(axis.angle, (RADIUS * value) / 100);
     return {
       key: axis.key,
@@ -77,10 +94,10 @@ const axisPoints = computed(() =>
 
 const valuePoints = computed(() => axisPoints.value.map((point) => `${point.x},${point.y}`).join(' '));
 
-/** 图旁的无障碍文本：把四条轴的值直接念出来，不让图形成为唯一信息源。 */
+/** 图旁的无障碍文本：把六条轴的值直接念出来，不让图形成为唯一信息源。 */
 const ariaLabel = computed(
   () =>
-    `${props.name} 四轴属性雷达图（每轴 1~100）：` +
+    `${props.name} 六轴属性雷达图（资质 / 攻击 / 防御 / 身法 / 幸运 / 体魄，每轴 1~100）：` +
     axisPoints.value.map((point) => `${point.label} ${point.value}`).join('、'),
 );
 </script>

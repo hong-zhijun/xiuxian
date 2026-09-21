@@ -1,10 +1,19 @@
 import { findTalent } from './constants';
 
 /**
- * 弟子随机生成（任务卡「2.4 弟子随机生成」+ V4 第五节的种子化版本）。
+ * 弟子随机生成与属性规则（任务卡「2.4 弟子随机生成」+ V4 第五节的种子化版本 +
+ * docs/弟子属性与综合评分开发计划.md 第 2.1 / 2.3 节）。
  *
- * - 无参版本（randomXxx）直接用 `Math.random()`：创建宗门的初始弟子只生成一次，不需要可复现；
+ * - 无参版本（randomDiscipleName / randomGender）直接用 `Math.random()`：创建宗门的初始弟子只生成一次；
  * - 带随机源的版本（generateXxx）由调用方注入 `() => number`，招募预览与招募本身共用同一 seed。
+ *
+ * 属性生成规则（初始弟子与招贤候选人共用 `generateAttributes`）：
+ * - 资质 / 幸运 / 体魄：各独立取两次 `[0,1)` 随机数，`1 + floor(100 × (r1 + r2) / 2)`
+ *   —— 中间常见、极值罕见，三项彼此独立；
+ * - 攻 / 防 / 身法：**共用**同一个基础值 `15 + floor(random() × 71)`（15..85），
+ *   每项再加独立偏移 `floor(random() × 31) − 15`（−15..15）并夹取到 1..100。
+ *   于是出生时三项的最大差距不超过 30（也修掉了旧版三项各自独立 1..100 的极端割裂），
+ *   同时仍允许偏科与少量接近 100 的弟子；资质 / 幸运 / 体魄不受这个基础值约束。
  */
 
 const SURNAMES = [
@@ -78,11 +87,6 @@ export function randomGender(): 'male' | 'female' {
   return Math.random() < 0.5 ? 'male' : 'female';
 }
 
-/** 资质 1~100（任务卡）。 */
-export function randomAptitude(): number {
-  return 1 + Math.floor(Math.random() * 100);
-}
-
 /**
  * 基于种子的伪随机生成器（V4 第五节；用于招募预览的确定性）。
  * 同一个 seed 永远产生同一序列，刷新页面重新预览不会换人。
@@ -111,26 +115,147 @@ export function generateGender(random: () => number): 'male' | 'female' {
   return random() < 0.5 ? 'male' : 'female';
 }
 
-/** 属性/资质 1~100（V4 5.1）。 */
-export function generateStat(random: () => number): number {
-  return 1 + Math.floor(random() * 100);
-}
-
 export function generateTalent(random: () => number): string {
   const talents = ['herbGathering', 'mining', 'cultivation', 'combat'];
   return talents[Math.floor(random() * talents.length)] ?? 'combat';
 }
 
-/** 招募候选人（V4 5.2）：招募预览与实际招募共用同一批人。 */
-export interface RecruitCandidate {
-  name: string;
-  gender: string;
+/* ---------- 六项属性的生成与综合评分（计划 2.1 / 2.3） ---------- */
+
+/** 属性合法区间（与 0016 迁移的两份 CHECK 一致）。 */
+export const ATTRIBUTE_MIN = 1;
+export const ATTRIBUTE_MAX = 100;
+
+/** 幸运 / 体魄的「机制中性点」：旧弟子迁移后的默认值，也是旧历练概率不变的那个值。 */
+export const ATTRIBUTE_NEUTRAL = 50;
+
+/** 攻 / 防 / 身法共用的基础值区间：15..85。 */
+const COMBAT_BASE_MIN = 15;
+const COMBAT_BASE_SPAN = 71;
+
+/** 三项各自的独立偏移：−15..15（因此三项最大差距不超过 30）。 */
+const COMBAT_OFFSET_MIN = -15;
+const COMBAT_OFFSET_SPAN = 31;
+
+/** 六项属性（资质 / 攻 / 防 / 身法 / 幸运 / 体魄）。 */
+export interface DiscipleAttributes {
   aptitude: number;
   attack: number;
   defense: number;
   speed: number;
+  luck: number;
+  physique: number;
+}
+
+/** 1..100 夹取（数据库 CHECK 之外再兜一层，脏值不会把公式带出区间）。 */
+function clampAttribute(value: number): number {
+  return Math.min(ATTRIBUTE_MAX, Math.max(ATTRIBUTE_MIN, value));
+}
+
+/** 中间值常见的 1..100 整数：两次独立 `[0,1)` 随机数取平均后映射。 */
+function generateCenteredAttribute(random: () => number): number {
+  const first = random();
+  const second = random();
+  return ATTRIBUTE_MIN + Math.floor(ATTRIBUTE_MAX * ((first + second) / 2));
+}
+
+/**
+ * 一个弟子完整的一组六属性（初始弟子与招贤候选人共用同一函数）。
+ *
+ * 随机数消费顺序固定为：资质 → 幸运 → 体魄 → 攻/防/身法共用的基础值 → 攻偏移 → 防偏移 → 身法偏移，
+ * 因此同一个随机源序列必然得到同一组属性（测试按这个顺序钉死边界）。
+ */
+export function generateAttributes(random: () => number): DiscipleAttributes {
+  const aptitude = generateCenteredAttribute(random);
+  const luck = generateCenteredAttribute(random);
+  const physique = generateCenteredAttribute(random);
+  const base = COMBAT_BASE_MIN + Math.floor(random() * COMBAT_BASE_SPAN);
+  const offset = (): number =>
+    COMBAT_OFFSET_MIN + Math.floor(random() * COMBAT_OFFSET_SPAN);
+  return {
+    aptitude,
+    luck,
+    physique,
+    attack: clampAttribute(base + offset()),
+    defense: clampAttribute(base + offset()),
+    speed: clampAttribute(base + offset()),
+  };
+}
+
+/**
+ * 综合评分 = **当前**六项属性等权平均，固定一位小数（计划 2.1）。
+ *
+ * 公式：`Math.round(total × 10 / 6) / 10`。
+ * 六项全 1 → 1.0；六项全 100 → 100.0；任意一项 +1 至少 +0.1（六项全 +1 至少 +1.0）。
+ *
+ * 这不是战力、也不是岗位效率：境界、修为、天赋、战力都不参与；服务端现算、**不落库**，
+ * 所以淬体丹改完攻/防/速之后，服丹回执与下一次 sync 的评分自动一致。
+ */
+export function attributeScore(attributes: DiscipleAttributes): number {
+  const total =
+    attributes.aptitude +
+    attributes.attack +
+    attributes.defense +
+    attributes.speed +
+    attributes.luck +
+    attributes.physique;
+  return Math.round((total * 10) / 6) / 10;
+}
+
+/* ---------- 招贤批次标识（计划 2.3） ---------- */
+
+/**
+ * 弟子属性生成规则版本：招贤批次标识的一部分。
+ * 改动属性生成或评分规则时必须 +1 —— 版本变了，旧预览的批次就不再等于当前批次，
+ * 服务端会拒绝并让玩家重新预览（避免「预览按旧规则、招募按新规则」的错配）。
+ */
+export const DISCIPLE_RULE_VERSION = 2;
+
+export interface RecruitBatchInput {
+  sectId: string;
+  /** UTC+8 自然日键（跨天即失效）。 */
+  dateKey: string;
+  /** 今日已招募次数（招募成功后 +1，因此旧预览立即失效）。 */
+  recruitCount: number;
+  /** 本境界已用的刷新次数（「换一批」后 +1，旧预览立即失效）。 */
+  refreshSeq: number;
+}
+
+/**
+ * 招贤批次标识：生成规则版本 + 宗门 id + 日期键 + 今日招募次数 + 刷新序号。
+ *
+ * 预览下发、招募请求回传，服务端用本函数重算后比对。它**不是授权凭据**：
+ * 归属、资源、次数等校验照旧执行；它只保证「选中的第 N 张卡」确实来自当前这一次生成机会。
+ */
+export function recruitBatchId(input: RecruitBatchInput): string {
+  return [
+    String(DISCIPLE_RULE_VERSION),
+    input.sectId,
+    input.dateKey,
+    String(input.recruitCount),
+    String(input.refreshSeq),
+  ].join(':');
+}
+
+/** 批次比对结果：current = 可招募，stale = 旧批次，missing = 旧客户端没带标识。 */
+export type RecruitBatchStatus = 'current' | 'stale' | 'missing';
+
+export function recruitBatchStatus(
+  batch: string | undefined,
+  expected: RecruitBatchInput,
+): RecruitBatchStatus {
+  if (batch === undefined || batch === '') return 'missing';
+  return batch === recruitBatchId(expected) ? 'current' : 'stale';
+}
+
+/** 招募候选人（V4 5.2）：招募预览与实际招募共用同一批人，含六属性与综合评分。 */
+export interface RecruitCandidate extends DiscipleAttributes {
+  name: string;
+  gender: string;
   talent: string;
   talentName: string;
+  /** 六项属性等权现算的综合评分（一位小数）。 */
+  attributeScore: number;
 }
 
 /**
@@ -153,15 +278,14 @@ export function generateCandidates(
   const candidates: RecruitCandidate[] = [];
   for (let i = 0; i < 3; i++) {
     const talent = generateTalent(random);
+    const attributes = generateAttributes(random);
     candidates.push({
       name: generateDiscipleName(random),
       gender: generateGender(random),
-      aptitude: generateStat(random),
-      attack: generateStat(random),
-      defense: generateStat(random),
-      speed: generateStat(random),
+      ...attributes,
       talent,
       talentName: findTalent(talent)?.name ?? talent,
+      attributeScore: attributeScore(attributes),
     });
   }
   return candidates;

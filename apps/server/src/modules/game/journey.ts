@@ -1,4 +1,5 @@
 import { findStage, realmIndex } from './constants';
+import { ATTRIBUTE_MAX, ATTRIBUTE_MIN, ATTRIBUTE_NEUTRAL } from './names';
 import { discipleCombatPower } from './realms';
 
 /**
@@ -101,8 +102,14 @@ export const JOURNEY_MAX_CONCURRENT = 2;
 /** 出发后至少要留在宗门内（不在外）的弟子数：防「全员出门」免战。 */
 export const JOURNEY_MIN_DISCIPLES_AT_HOME = 3;
 
-/** 「额外收获」独立判定概率（基点，15%）。 */
+/** 「额外收获」在幸运 50（机制中性点）时的独立判定概率（基点，15%）。 */
 export const JOURNEY_EXTRA_HARVEST_BP = 1_500;
+
+/** 幸运每偏离中性点 1 点，额外收获概率增减 10 基点（0.1%）：1/50/100 → 10.1% / 15% / 20%。 */
+export const JOURNEY_LUCK_EXTRA_STEP_BP = 10;
+
+/** 体魄每偏离中性点 1 点，受伤概率系数增减 60 基点（0.6%）：1 最多 +29.4%，100 最多 −30%。 */
+export const JOURNEY_PHYSIQUE_INJURY_STEP_BP = 60;
 
 /** 额外收获在保底值之上再加的比例（50%，逐项向下取整）。 */
 export const JOURNEY_EXTRA_HARVEST_RATIO_BP = 5_000;
@@ -216,15 +223,21 @@ export interface JourneyRewardInput {
   talent: string;
   /** 出发时战力（discipleCombatPower），只用于下调受伤概率。 */
   combatPower: number;
+  /** 弟子幸运（出发时快照，1..100）：只决定额外收获概率。 */
+  luck: number;
+  /** 弟子体魄（出发时快照，1..100）：只决定受伤概率系数。 */
+  physique: number;
 }
 
-/** 保底奖励（含资质/天赋加成）+ 实际受伤概率；随机结果不在这里。 */
+/** 保底奖励（含资质/天赋加成）+ 两项实际概率；随机结果不在这里。 */
 export interface JourneyBaseReward {
   /** 保底修为（资质系数 + 修炼天赋后）。 */
   cultivation: number;
   /** 保底资源（最小单位，采集天赋后）。 */
   resources: Record<string, number>;
-  /** 实际受伤概率（基点，已按战力下调并 clamp 到该方向下限）。 */
+  /** 额外收获概率（基点，由幸运决定；预览与出发共用同一个值）。 */
+  extraChanceBp: number;
+  /** 实际受伤概率（基点，已按战力与体魄调整并 clamp 到该方向下限）。 */
   injuryChanceBp: number;
 }
 
@@ -238,20 +251,73 @@ export function journeyAptitudeCoefficientBp(aptitude: number): number {
 }
 
 /**
- * 受伤概率（基点）= 表格值 − floor(战力 / 50) × 100，再 clamp 到该方向的下限。
- * 只减不增：战力再低也不会比表格值更危险。
+ * 「基础受伤概率」（基点）= 表格值 − floor(战力 / 50) × 100，再 clamp 到该方向的下限。
+ * 只减不增：战力再低也不会比表格值更危险。体魄的修正见 journeyInjuryChanceBp。
  */
-export function journeyInjuryChanceBp(plan: JourneyPlanDef, combatPower: number): number {
+export function journeyBaseInjuryChanceBp(plan: JourneyPlanDef, combatPower: number): number {
   const direction = findJourneyDirection(plan.direction);
   const reduction = Math.floor(Math.max(0, combatPower) / 50) * 100;
   return Math.max(direction.injuryFloorBp, plan.injuryChanceBp - reduction);
 }
 
+/** 1..100 夹取（脏行也不会把概率带出 2.2 给出的区间；非数字退化为中性点）。 */
+function clampAttribute(value: number): number {
+  if (!Number.isFinite(value)) return ATTRIBUTE_NEUTRAL;
+  return Math.min(ATTRIBUTE_MAX, Math.max(ATTRIBUTE_MIN, Math.floor(value)));
+}
+
 /**
- * 出发时把资质/天赋加成算成保底奖励（每步向下取整）：
- *   1. 修为 = floor(表值 × 修炼系数 / 10000)；
- *   2. 修炼天赋再 floor(× 1.2)；
- *   3. 采集方向下对应天赋再 floor(资源 × 1.2)。
+ * 幸运 → 额外收获概率（基点）= 1500 + (幸运 − 50) × 10（计划 2.2）。
+ * 幸运 1/50/100 分别对应 1010 / 1500 / 2000 基点（10.1% / 15% / 20%）；
+ * 历练保底奖励与「触发后额外 +50%」的数量口径都不受影响。
+ */
+export function journeyExtraHarvestChanceBp(luck: number): number {
+  return (
+    JOURNEY_EXTRA_HARVEST_BP +
+    (clampAttribute(luck) - ATTRIBUTE_NEUTRAL) * JOURNEY_LUCK_EXTRA_STEP_BP
+  );
+}
+
+/**
+ * 体魄对受伤概率的修正（基点，向下取整一次）：
+ *   floor(基础概率 × (10000 − (体魄 − 50) × 60) / 10000)
+ * 体魄 50 逐位保持旧概率；1 最多约 +29.4%，100 最多约 −30%。
+ */
+export function journeyPhysiqueModifiedInjuryChanceBp(
+  baseInjuryChanceBp: number,
+  physique: number,
+): number {
+  const factorBp =
+    BP - (clampAttribute(physique) - ATTRIBUTE_NEUTRAL) * JOURNEY_PHYSIQUE_INJURY_STEP_BP;
+  return Math.floor((Math.max(0, baseInjuryChanceBp) * factorBp) / BP);
+}
+
+/**
+ * 最终受伤概率（基点）：先按战力与方向表算出基础概率（含旧的方向下限），
+ * 再按体魄调整，最后再与方向下限取大。
+ *
+ * 原方向下限仍然有效，所以高体魄在已经触底时可能无法继续降低概率。
+ * physique 默认 50：迁移后的旧弟子（50/50）得到的概率与加体魄之前完全一致。
+ */
+export function journeyInjuryChanceBp(
+  plan: JourneyPlanDef,
+  combatPower: number,
+  physique: number = ATTRIBUTE_NEUTRAL,
+): number {
+  const direction = findJourneyDirection(plan.direction);
+  const modified = journeyPhysiqueModifiedInjuryChanceBp(
+    journeyBaseInjuryChanceBp(plan, combatPower),
+    physique,
+  );
+  return Math.max(direction.injuryFloorBp, modified);
+}
+
+/**
+ * 出发时把资质/天赋加成算成保底奖励（每步向下取整），并给出两项**实际概率**：
+ *   1. 修为 = floor(表值 × 修炼系数 / 10000)，再按修炼天赋 floor(× 1.2)；
+ *   2. 采集方向下对应天赋再 floor(资源 × 1.2)；
+ *   3. extraChanceBp = 1500 + (幸运 − 50) × 10（幸运决定）；
+ *   4. injuryChanceBp = clamp(体魄修正(基础受伤概率), 方向下限)（体魄决定）。
  * 不叠加藏经阁的静修加成（那是原岗位产出，出发期间本来就不计）。
  */
 export function journeyBaseReward(input: JourneyRewardInput): JourneyBaseReward | null {
@@ -281,7 +347,8 @@ export function journeyBaseReward(input: JourneyRewardInput): JourneyBaseReward 
   return {
     cultivation,
     resources,
-    injuryChanceBp: journeyInjuryChanceBp(plan, input.combatPower),
+    extraChanceBp: journeyExtraHarvestChanceBp(input.luck),
+    injuryChanceBp: journeyInjuryChanceBp(plan, input.combatPower, input.physique),
   };
 }
 
@@ -294,6 +361,7 @@ export function journeyExtraHarvestReward(base: JourneyBaseReward): JourneyBaseR
   return {
     cultivation: Math.floor((base.cultivation * JOURNEY_EXTRA_HARVEST_RATIO_BP) / BP),
     resources,
+    extraChanceBp: base.extraChanceBp,
     injuryChanceBp: base.injuryChanceBp,
   };
 }
@@ -316,14 +384,17 @@ export function journeyFinalReward(
 
 /**
  * 出发时一次性抽取：额外收获与受伤各掷一次、互相独立（计划 2.2）。
- * 随机源可注入（默认 Math.random）；结果随记录落库，刷新 / 重复领取不会重抽。
+ *
+ * 两个概率都由调用方传入（额外收获来自幸运、受伤来自战力 + 体魄），本函数不再自带
+ * 任何固定概率；随机源可注入（默认 Math.random）。结果随记录落库，
+ * 刷新 / 到期 / 重复领取都不会重抽。
  */
 export function rollJourneyOutcome(
-  injuryChanceBp: number,
+  chances: { extraChanceBp: number; injuryChanceBp: number },
   random: () => number = Math.random,
 ): { extraHarvest: boolean; injured: boolean } {
-  const extraHarvest = Math.floor(random() * BP) < JOURNEY_EXTRA_HARVEST_BP;
-  const injured = Math.floor(random() * BP) < injuryChanceBp;
+  const extraHarvest = Math.floor(random() * BP) < chances.extraChanceBp;
+  const injured = Math.floor(random() * BP) < chances.injuryChanceBp;
   return { extraHarvest, injured };
 }
 
@@ -480,7 +551,10 @@ export function journeyDirectionBlockedReason(
   return null;
 }
 
-/** 便捷封装：弟子行 + 战力 → 保底奖励（调用方负责把 row 映射进来）。 */
+/**
+ * 便捷封装：弟子行 + 战力 → 保底奖励（调用方负责把 row 映射进来）。
+ * luck / physique 必须是**出发时快照**，预览与出发要传同一份值。
+ */
 export function journeyBaseRewardForDisciple(
   disciple: {
     realmId: string;
@@ -490,6 +564,8 @@ export function journeyBaseRewardForDisciple(
     attack: number;
     defense: number;
     speed: number;
+    luck: number;
+    physique: number;
   },
   direction: JourneyDirection,
   durationSeconds: number,
@@ -507,6 +583,8 @@ export function journeyBaseRewardForDisciple(
       disciple.speed,
       disciple.talent,
     ),
+    luck: disciple.luck,
+    physique: disciple.physique,
   });
 }
 

@@ -7,20 +7,22 @@ import type {
   ChallengeResultView,
   DiscipleView,
   ExploreChoiceResult,
+  GameActionData,
   JourneyDirection,
   JourneyPreviewView,
   PublicSectView,
+  RecruitOutcome,
   RecruitPreview,
   SecretRealmView,
   SectStateView,
 } from '../api/game';
 import type { ToastTone } from '../types/ui';
+import { ApiError } from '../api/client';
 import { formatAmount, formatRate, formatTime } from '../utils/format';
 import {
   fetchJourneyPreview,
   fetchRecruitPreview,
   fetchSecretRealms,
-  refreshRecruitPreview,
 } from '../api/game';
 import { resourceGlyph } from '../utils/glyph';
 import AlchemyPanel from './AlchemyPanel.vue';
@@ -43,6 +45,9 @@ import ModalShell from './ModalShell.vue';
 const props = defineProps<{
   state: SectStateView;
   busy: boolean;
+  /** 写请求由 App 的全局 busy 门闩执行；本组件只处理弹窗状态与过期预览。 */
+  recruitAction: (choice: number, batch: string) => Promise<GameActionData>;
+  refreshRecruitAction: () => Promise<{ state: SectStateView; preview: RecruitPreview }>;
   /** 最近一次挑战的战报；App.vue 负责拿结果，这里只负责展示（null = 还没打过）。 */
   challengeResult: ChallengeResultView | null;
   /** V6 交互探索刚判定完的那一步；App.vue 负责拿结果，这里只负责展示（null = 还没判定）。 */
@@ -52,7 +57,8 @@ const props = defineProps<{
 const emit = defineEmits<{
   refresh: [];
   logout: [];
-  recruit: [choice: number];
+  /** 0016：招募结果（App.vue 只负责赋值 state 与提示事件，见 onRecruitRefreshed）。 */
+  recruited: [state: SectStateView];
   'recruit-refreshed': [state: SectStateView];
   assign: [discipleId: string, assignment: string];
   upgrade: [defId: string];
@@ -115,6 +121,8 @@ const showRecruitDialog = ref(false);
 const recruitLoading = ref(false);
 /** 「换一批」在途（与 recruitLoading 分开：打开弹窗与刷新是两条路径）。 */
 const recruitRefreshing = ref(false);
+/** 招募提交在途（含批次过期后重新拉预览的那一段）：期间锁住候选卡与「换一批」。 */
+const recruitSubmitting = ref(false);
 
 /** 二级弹窗：当前正在点将出征的秘境（null = 未打开）。 */
 const exploreRealm = ref<SecretRealmView | null>(null);
@@ -312,10 +320,10 @@ async function requestRecruit(): Promise<void> {
  * 这里就地换掉弹窗里的候选人，并把 state 交给 App.vue（state 只在 App 赋值，这里只是转发服务端结果）。
  */
 async function requestRecruitRefresh(): Promise<void> {
-  if (props.busy || recruitRefreshing.value) return;
+  if (props.busy || recruitRefreshing.value || recruitSubmitting.value) return;
   recruitRefreshing.value = true;
   try {
-    const { state: next, preview } = await refreshRecruitPreview();
+    const { state: next, preview } = await props.refreshRecruitAction();
     recruitPreview.value = preview;
     emit('recruit-refreshed', next);
     emit(
@@ -331,11 +339,76 @@ async function requestRecruitRefresh(): Promise<void> {
   }
 }
 
-/** 选中一位候选人：关掉弹窗，把 choice 交给 App.vue 去调接口。 */
-function onRecruitChoose(choice: number): void {
-  showRecruitDialog.value = false;
-  recruitPreview.value = null;
-  emit('recruit', choice);
+/** 把招贤回执和「破境 / 炼丹 / 服药」的回执区分开（它们共用 outcome 字段）。 */
+function isRecruitOutcome(outcome: GameActionData['outcome']): outcome is RecruitOutcome {
+  return outcome !== undefined && 'attributeScore' in outcome;
+}
+
+/**
+ * 0016 批次过期：不重试同一个人、不扣费、不自动选人。
+ * 重新拉一次预览，用新候选人顶掉弹窗里那一份并（必要时）重新打开，让玩家重新确认；
+ * 重拉失败时直接把错误摆出来，而不是留一个无法提交的旧批次。
+ */
+async function recoverExpiredBatch(reason: string): Promise<void> {
+  try {
+    const fresh = await fetchRecruitPreview();
+    recruitPreview.value = fresh;
+    showRecruitDialog.value = true;
+    emit(
+      'notify',
+      'warning',
+      '这批有缘人已过时',
+      `${reason}。已重新推演一批候选人，请重新确认后再选择；本次没有扣除资源与招募次数。`,
+    );
+  } catch (caught) {
+    recruitPreview.value = null;
+    showRecruitDialog.value = false;
+    emit(
+      'notify',
+      'error',
+      '重新推演失败',
+      caught instanceof Error ? caught.message : '候选人生成失败，请稍后重试。',
+    );
+  }
+}
+
+/**
+ * 选中一位候选人：把预览下发的批次标识原样回传，由服务端做最后裁决
+ * （归属 / 次数 / 资源 / 批次都在服务端校验，前端不复制这些判定）。
+ *
+ * 成功：关掉弹窗、丢掉这一批候选人，把写库后的 state 交给 App.vue，并按回执提示新弟子的六属性摘要。
+ * 失败：批次过期走 recoverExpiredBatch；其余错误保留当前弹窗与候选人，玩家可以原地重试。
+ * 任何失败都不显示「已扣费」的状态——扣费与否只以服务端返回的 state 为准。
+ */
+async function onRecruitChoose(choice: number): Promise<void> {
+  const preview = recruitPreview.value;
+  if (props.busy || recruitSubmitting.value || recruitRefreshing.value || preview === null) return;
+  recruitSubmitting.value = true;
+  try {
+    const data = await props.recruitAction(choice, preview.batch);
+    showRecruitDialog.value = false;
+    recruitPreview.value = null;
+    emit('recruited', data.state);
+    if (isRecruitOutcome(data.outcome)) {
+      const outcome = data.outcome;
+      emit(
+        'notify',
+        'success',
+        '招贤有得',
+        `新弟子 ${outcome.discipleName} 已入山门：资质 ${outcome.aptitude}，综合评分 ${outcome.attributeScore.toFixed(1)}，天赋「${outcome.talentName}」。`,
+      );
+    } else {
+      emit('notify', 'success', '招贤有得', '招募完成，新弟子已入山门。');
+    }
+  } catch (caught) {
+    if (caught instanceof ApiError && caught.code === 'EXPIRED') {
+      await recoverExpiredBatch(caught.message);
+    } else {
+      emit('notify', 'error', '招募未成', caught instanceof Error ? caught.message : '请稍后重试。');
+    }
+  } finally {
+    recruitSubmitting.value = false;
+  }
 }
 
 function requestUpgrade(building: BuildingView): void {
@@ -935,7 +1008,11 @@ function onDetailNotify(tone: ToastTone, title: string, message: string): void {
       />
     </ModalShell>
 
-    <!-- 招贤台：点「张榜招贤」拉到候选人后才打开。 -->
+    <!--
+      招贤台：点「张榜招贤」拉到候选人后才打开。
+      提交与批次过期重拉都在本组件（见 onRecruitChoose / recoverExpiredBatch），
+      App.vue 只收写库后的 state；提交在途时整张弹窗的候选卡与「换一批」一起锁住。
+    -->
     <ModalShell
       v-if="showRecruitDialog && recruitPreview"
       label="招贤台"
@@ -944,8 +1021,9 @@ function onDetailNotify(tone: ToastTone, title: string, message: string): void {
       <RecruitDialog
         :preview="recruitPreview"
         :cost-text="costText(state.recruit.cost)"
-        :busy="busy || recruitRefreshing"
+        :busy="busy || recruitRefreshing || recruitSubmitting"
         :refreshing="recruitRefreshing"
+        :submitting="recruitSubmitting"
         @choose="onRecruitChoose"
         @refresh="requestRecruitRefresh"
       />

@@ -199,7 +199,14 @@ async function recruitFourth(sect: SectFixture): Promise<string> {
   await setBalance(sect.sectId, 'spiritStone', 500_000);
 
   const known = new Set(sect.discipleIds);
-  const result = await sect.api.post('/api/v1/game/recruit', { choice: 0 });
+  // 0016：招募必须回传预览下发的批次标识；先取当前预览再选第 0 张卡。
+  const previewResult = await sect.api.get('/api/v1/game/recruit-preview');
+  expect(previewResult.status).toBe(200);
+  const preview = dataOf(previewResult) as Record<string, any>;
+  const result = await sect.api.post('/api/v1/game/recruit', {
+    choice: 0,
+    batch: preview.batch as string,
+  });
   expect(result.status).toBe(200);
 
   const state = (dataOf(result) as Record<string, any>).state as Record<string, any>;

@@ -55,10 +55,19 @@ export interface DiscipleView {
   attack: number;
   defense: number;
   speed: number;
+  /** 0016 幸运 / 体魄（1~100）：只作用于单人定时历练的额外收获与受伤概率。 */
+  luck: number;
+  physique: number;
   talent: string;
   talentName: string;
   /** 当前战力（服务端按 realms.ts 公式算好）。 */
   combatPower: number;
+  /**
+   * 0016 综合评分：**当前**六项属性等权现算，固定一位小数（服务端 names.ts 的
+   * attributeScore）。不是战力：境界、修为、天赋都不参与；服务端不落库，
+   * 淬体丹改完攻/防/速之后随下一次 sync 自动更新。
+   */
+  attributeScore: number;
   /** 淬体丹：已服用次数 / 剩余次数与服务端算好的短板预览（null = 无短板或已用完）。 */
   bodyTemperingUses: number;
   bodyTemperingRemaining: number;
@@ -217,7 +226,7 @@ export interface GameActionData {
   state: SectStateView;
   outcome?:
     | BreakthroughOutcome
-    | { discipleName: string; aptitude: number }
+    | RecruitOutcome
     | CraftPillOutcome
     | UsePillOutcome;
 }
@@ -279,8 +288,12 @@ export async function createSect(name: string): Promise<SectStateView> {
   return data.state;
 }
 
-export async function recruit(choice: number): Promise<GameActionData> {
-  return apiRequest<GameActionData>('/api/v1/game/recruit', { method: 'POST', body: { choice } });
+/** 招贤：choice 是弹窗里选中的候选人序号；batch 是预览下发的批次标识（0016，过期会被拒）。 */
+export async function recruit(choice: number, batch: string): Promise<GameActionData> {
+  return apiRequest<GameActionData>('/api/v1/game/recruit', {
+    method: 'POST',
+    body: { choice, batch },
+  });
 }
 
 export async function assign(discipleId: string, assignment: string): Promise<SectStateView> {
@@ -547,7 +560,22 @@ export async function fetchChallengeHistory(): Promise<ChallengeHistoryView> {
   return apiRequest<ChallengeHistoryView>('/api/v1/game/challenge-history');
 }
 
-/** 招募候选人（与后端 names.ts 的 RecruitCandidate 一一对应）。 */
+/** 招贤结果（与后端 service.ts 的 recruitDisciple outcome 一一对应）。 */
+export interface RecruitOutcome {
+  discipleName: string;
+  aptitude: number;
+  luck: number;
+  physique: number;
+  attack: number;
+  defense: number;
+  speed: number;
+  /** 六项属性等权现算的综合评分（一位小数）。 */
+  attributeScore: number;
+  talent: string;
+  talentName: string;
+}
+
+/** 招募候选人（与后端 names.ts 的 RecruitCandidate 一一对应，含六属性与综合评分）。 */
 export interface RecruitCandidate {
   name: string;
   gender: string;
@@ -555,13 +583,23 @@ export interface RecruitCandidate {
   attack: number;
   defense: number;
   speed: number;
+  /** 0016 幸运 / 体魄（1~100）：只作用于单人定时历练。 */
+  luck: number;
+  physique: number;
   talent: string;
   talentName: string;
+  /** 0016 综合评分：当前六项属性等权现算，一位小数（服务端算好，前端不另算）。 */
+  attributeScore: number;
 }
 
 /** 招募预览（GET /game/recruit-preview）：同一批候选人刷新不变，「换一批」后换人。 */
 export interface RecruitPreview {
   candidates: RecruitCandidate[];
+  /**
+   * 0016 批次标识：这批候选人来自哪一次生成机会。招募时必须原样回传；
+   * 与当前批次不一致（跨天 / 换过一批 / 已招过一次 / 版本变化）时服务端拒绝且不扣费。
+   */
+  batch: string;
   canRecruit: boolean;
   blockedReason: string | null;
   cost: Record<string, string>;
@@ -723,9 +761,9 @@ export interface JourneyDurationPreviewView {
   cultivationCapped: boolean;
   /** 保底资源（最小单位）。 */
   resources: Record<string, string>;
-  /** 额外收获概率（基点）。 */
+  /** 额外收获概率（基点）：由**幸运**决定（1500 + (幸运 − 50) × 10；幸运 50 即 15%）。 */
   extraChanceBp: number;
-  /** 实际受伤概率（基点，已按出发时战力下调并 clamp 到方向下限）。 */
+  /** 实际受伤概率（基点，已按出发时战力与体魄调整并 clamp 到方向下限）。 */
   injuryChanceBp: number;
   /** 预计返程时间（服务器时间基准）。 */
   endsAt: string;

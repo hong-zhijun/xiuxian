@@ -103,11 +103,18 @@ export function createGameRoutes(): Hono<AppEnv> {
     return respondOk(c, preview);
   });
 
-  // V4：招募三选一（body 的 choice = 0~2，对应预览里的候选人序号）。
+  // V4：招募三选一（body 的 choice = 0~2，batch = 预览下发的批次标识）；
+  // 0016：批次不一致（跨天 / 刷新 / 已招过一次 / 版本变化 / 旧客户端）由 service 拒绝为 EXPIRED。
   routes.post('/game/recruit', async (c) => {
     const userId = requireUserId(c);
     const body = await parseStrictJson(recruitRequestSchema, c);
-    const result = await recruitDisciple(getDb(c.env), userId, body.choice, Date.now());
+    const result = await recruitDisciple(
+      getDb(c.env),
+      userId,
+      body.choice,
+      body.batch,
+      Date.now(),
+    );
     return respondOk(c, { state: result.state, outcome: result.outcome });
   });
  

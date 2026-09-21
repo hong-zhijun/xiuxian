@@ -36,7 +36,7 @@
     {
       "binding": "DB",
       "database_name": "xiuxian-game-db",
-      "database_id": "ecd948e1-401e-4285-bf6f-13653fec2647",
+      "database_id": "00000000-0000-0000-0000-000000000000",
       // 迁移文件放在仓库根 migrations/（见 02 第 2 节），按编号前进
       "migrations_dir": "../../migrations"
     }

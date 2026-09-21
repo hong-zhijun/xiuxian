@@ -9,9 +9,17 @@ export const createSectRequestSchema = z.strictObject({
   name: z.string().trim().min(2, '宗门名至少 2 个字符').max(12, '宗门名最多 12 个字符'),
 });
 
-/** V4 招募三选一：choice 是 0~2 的候选人序号（候选人由服务端确定性生成）。 */
+/**
+ * V4 招募三选一：choice 是 0~2 的候选人序号（候选人由服务端确定性生成）。
+ *
+ * 0016：batch 是预览下发的批次标识（见 names.ts 的 recruitBatchId），必须原样回传。
+ * 这里刻意**允许缺省**（空串/缺字段都放行到 service），让「旧客户端没带标识」能走到
+ * 批次判定并拿到明确的「请刷新页面重新预览」提示（EXPIRED），而不是一条泛化的参数错误；
+ * 取值是否等于当前批次由 service 的 recruitBatchStatus 判定，它不是授权凭据。
+ */
 export const recruitRequestSchema = z.strictObject({
   choice: z.number().int().min(0).max(2),
+  batch: z.string().min(1).max(160).optional(),
 });
 
 export const assignRequestSchema = z.strictObject({

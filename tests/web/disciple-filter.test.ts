@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   DEFAULT_DISCIPLE_FILTER,
+  DISCIPLE_SORT_OPTIONS,
   cultivationProgress,
   discipleStatus,
   filterDisciples,
@@ -9,6 +10,7 @@ import {
   isInjured,
   matchesSearch,
   realmOptions,
+  sortDisciples,
   journeyBadge,
   type DiscipleFilter,
   type FilterableDisciple,
@@ -37,6 +39,8 @@ function makeDisciple(overrides: Partial<FilterableDisciple> & { id: string }): 
     cultivation: 0,
     requiredCultivation: 100,
     combatPower: 10,
+    // 0016 综合评分：服务端现算的六项等权平均（一位小数）；这里只锁排序行为，不重算公式。
+    attributeScore: 50,
     injuredUntil: null,
     canBreakthrough: false,
     ...overrides,
@@ -308,6 +312,74 @@ describe('排序', () => {
       'qi',
     ]);
   });
+
+  it('综合评分高低：从高到低，按一位小数比较', () => {
+    const scored = [
+      makeDisciple({ id: 'a', attributeScore: 62.3 }),
+      makeDisciple({ id: 'b', attributeScore: 88.1 }),
+      makeDisciple({ id: 'c', attributeScore: 12.0 }),
+      // 只差 0.1：服务端下发的就是一位小数，这里按原值比较，不再二次取整。
+      makeDisciple({ id: 'd', attributeScore: 88.2 }),
+    ];
+    expect(ids(filterDisciples(scored, withFilter({ sort: 'attributeScore' }), SERVER_NOW))).toEqual([
+      'd',
+      'b',
+      'a',
+      'c',
+    ]);
+    expect(ids(sortDisciples(scored, 'attributeScore'))).toEqual(['d', 'b', 'a', 'c']);
+  });
+
+  it('综合评分并列时保持招募顺序（稳定排序，不另拼次级键）', () => {
+    const tied = [
+      makeDisciple({ id: 'first', attributeScore: 66.6, combatPower: 10 }),
+      makeDisciple({ id: 'second', attributeScore: 66.6, combatPower: 999 }),
+      makeDisciple({ id: 'third', attributeScore: 66.6, combatPower: 1 }),
+      makeDisciple({ id: 'fourth', attributeScore: 66.7, combatPower: 2 }),
+    ];
+    expect(ids(filterDisciples(tied, withFilter({ sort: 'attributeScore' }), SERVER_NOW))).toEqual([
+      'fourth',
+      'first',
+      'second',
+      'third',
+    ]);
+    // 换一个输入顺序：并列的三人保持「出现在入参里的先后」，也就是 state.disciples 的招募顺序。
+    const shuffled = [tied[2], tied[0], tied[3], tied[1]];
+    expect(ids(sortDisciples(shuffled, 'attributeScore'))).toEqual([
+      'fourth',
+      'third',
+      'first',
+      'second',
+    ]);
+  });
+
+  it('排序项里同时有战力与综合评分：两者互不代用', () => {
+    const mixed = [
+      makeDisciple({ id: 'a', combatPower: 10, attributeScore: 90 }),
+      makeDisciple({ id: 'b', combatPower: 90, attributeScore: 10 }),
+    ];
+    expect(ids(filterDisciples(mixed, withFilter({ sort: 'attributeScore' }), SERVER_NOW))).toEqual([
+      'a',
+      'b',
+    ]);
+    expect(ids(filterDisciples(mixed, withFilter({ sort: 'combatPower' }), SERVER_NOW))).toEqual([
+      'b',
+      'a',
+    ]);
+  });
+});
+
+describe('排序项列表', () => {
+  it('包含「综合评分高低」，且默认（招募顺序）仍在第一位', () => {
+    expect(DISCIPLE_SORT_OPTIONS.map((option) => option.value)).toEqual([
+      'recruitOrder',
+      'combatPower',
+      'attributeScore',
+      'realm',
+    ]);
+    const score = DISCIPLE_SORT_OPTIONS.find((option) => option.value === 'attributeScore');
+    expect(score?.label).toBe('综合评分高低');
+  });
 });
 
 describe('境界筛选项与重置态', () => {
@@ -331,6 +403,11 @@ describe('境界筛选项与重置态', () => {
     expect(isFilterActive(withFilter({ assignment: 'idle' }))).toBe(true);
     expect(isFilterActive(withFilter({ status: 'injured' }))).toBe(true);
     expect(isFilterActive(withFilter({ sort: 'realm' }))).toBe(true);
+    // 0016 新增排序键：必须被当成非默认态，否则「重置」按钮不会亮，无结果文案也会说错。
+    expect(isFilterActive(withFilter({ sort: 'attributeScore' }))).toBe(true);
+    expect(isFilterActive(withFilter({ sort: 'combatPower' }))).toBe(true);
+    // 新键不影响默认态判定：默认仍是招募顺序。
+    expect(isFilterActive({ ...DEFAULT_DISCIPLE_FILTER, sort: 'recruitOrder' })).toBe(false);
   });
 });
 

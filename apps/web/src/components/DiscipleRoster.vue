@@ -25,8 +25,9 @@ import {
  * 门人名册：搜索 / 境界 / 岗位 / 状态筛选 + 排序 + 精简列表行 + 「详情」入口。
  *
  * 所有筛选、排序、状态派生都在 `utils/discipleFilter.ts` 的纯函数里，本组件只持有筛选状态。
- * 列表只显示：头像外圈修为进度 + 修为数字、姓名、私有备注、境界阶段、战力、
+ * 列表只显示：头像外圈修为进度 + 修为数字、姓名、私有备注、境界阶段、战力与综合评分、
  * 当前状态、「详情」；备注为空时整行不渲染备注（不占位）。
+ * 战力与综合评分同处第 3 行（meta），窄屏折行时只会把这一行变高，不会遮住状态标签或备注行。
  * 本地每秒平滑的修为只用于显示，状态与筛选一律用最新服务端字段。
  */
 const props = defineProps<{
@@ -293,6 +294,7 @@ watch(
 
         <div class="disciple-card-meta">
           <span class="disciple-row-power">战力 {{ row.disciple.combatPower }}</span>
+          <span class="disciple-row-score">综合评分 {{ row.disciple.attributeScore.toFixed(1) }}</span>
         </div>
 
         <p

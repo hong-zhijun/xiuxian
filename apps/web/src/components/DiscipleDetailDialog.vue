@@ -21,7 +21,7 @@ import DiscipleRadarChart from './DiscipleRadarChart.vue';
 import ModalShell from './ModalShell.vue';
 
 /**
- * 弟子详情（弹窗内容）：姓名 / 备注 / 境界修为 / 岗位 / 四轴雷达图 / 属性 / 伤势 / 破境 /
+ * 弟子详情（弹窗内容）：姓名 / 备注 / 境界修为 / 岗位 / 六轴雷达图 / 当前属性与综合评分 / 伤势 / 破境 /
  * 丹药选择入口 / 驱逐；0014 起追加「历练」区域（在外倒计时、返程结果与最近记录）。
  * 丹药列表只在玩家点击入口后通过二级弹窗展示。
  *
@@ -522,19 +522,45 @@ function confirmExpel(): void {
     </section>
 
     <section class="disciple-detail-section" aria-labelledby="disciple-attr-title">
-      <h3 id="disciple-attr-title" class="disciple-detail-title">资质与战斗属性</h3>
+      <h3 id="disciple-attr-title" class="disciple-detail-title">当前属性</h3>
+
+      <!-- 综合评分是服务端按「当前」六项属性等权现算的展示值，前端不复制公式、不做二次取整。 -->
+      <div class="disciple-score">
+        <span class="disciple-score-label">综合评分</span>
+        <strong class="disciple-score-value">{{ disciple.attributeScore.toFixed(1) }}</strong>
+        <span class="disciple-score-note">当前六项属性的等权平均，随淬体等属性变化更新；不含境界、修为、天赋与战力。</span>
+      </div>
+
       <DiscipleRadarChart
         :name="disciple.name"
         :aptitude="disciple.aptitude"
         :attack="disciple.attack"
         :defense="disciple.defense"
         :speed="disciple.speed"
+        :luck="disciple.luck"
+        :physique="disciple.physique"
       />
+
       <div class="disciple-stats">
         <span class="stat-tag stat-talent">天赋 {{ disciple.talentName }}</span>
         <span class="stat-tag stat-power">战力 {{ disciple.combatPower }}</span>
       </div>
-      <p class="disciple-detail-hint">资质影响修炼速度，不直接计入战力；战力由服务端按攻防速与境界算出。</p>
+
+      <!-- 幸运 / 体魄只作用于单人定时历练，这里把「实际作用」写在数值旁边，避免被当成战力属性。 -->
+      <dl class="disciple-attribute-effects">
+        <div>
+          <dt>幸运 {{ disciple.luck }}</dt>
+          <dd>只作用于单人定时历练：影响该次历练的额外收获概率。</dd>
+        </div>
+        <div>
+          <dt>体魄 {{ disciple.physique }}</dt>
+          <dd>只作用于单人定时历练：影响该次历练的受伤概率。</dd>
+        </div>
+      </dl>
+
+      <p class="disciple-detail-hint">
+        资质影响修炼速度；攻 / 防 / 身法 决定战力。战力由服务端按攻防速与境界算出，与综合评分是两个独立数值。
+      </p>
     </section>
 
     <section class="disciple-detail-section" aria-labelledby="disciple-job-title">

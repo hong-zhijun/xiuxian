@@ -35,6 +35,7 @@ import {
   realmIndex,
 } from './constants';
 import { RECENT_EVENTS_IN_SYNC, eventNameOf, type TriggeredEvent } from './events';
+import { attributeScore } from './names';
 import { discipleCombatPower } from './realms';
 import type {
   BuildingRow,
@@ -99,11 +100,20 @@ export interface DiscipleView {
   attack: number;
   defense: number;
   speed: number;
+  /** 0016 幸运 / 体魄（1~100）：只作用于单人定时历练的额外收获与受伤概率。 */
+  luck: number;
+  physique: number;
   /** 天赋 id 与展示名（无/未知天赋时 talentName 为「无」）。 */
   talent: string;
   talentName: string;
   /** 当前战力（展示用，由 realms.ts 的 discipleCombatPower 现算）。 */
   combatPower: number;
+  /**
+   * 0016 综合评分：**当前**六项属性等权现算，固定一位小数（names.ts 的 attributeScore）。
+   * 不是战力、也不是岗位效率：境界、修为、天赋、战力都不参与；不落库，
+   * 所以淬体丹改完攻/防/速之后，服丹回执与下一次 sync 的评分自动一致。
+   */
+  attributeScore: number;
   realmId: string;
   realmName: string;
   stage: number;
@@ -220,7 +230,7 @@ export interface JourneyOutcomeView {
   cultivationPlanned: number;
   /** 资源奖励（最小单位；领取时一次性入账，不夹容量）。 */
   resources: Record<string, string>;
-  /** 是否触发 15% 的额外收获。 */
+  /** 是否触发了额外收获（概率由出发时的幸运决定，见 journey.ts；不是固定 15%）。 */
   extraHarvest: boolean;
   /** 是否受伤（与额外收获独立，可同时发生）。 */
   injured: boolean;
@@ -288,9 +298,9 @@ export interface JourneyDurationPreviewView {
   cultivationCapped: boolean;
   /** 保底资源（最小单位）。 */
   resources: Record<string, string>;
-  /** 额外收获概率（基点，固定 1500 = 15%）。 */
+  /** 额外收获概率（基点）：由幸运决定，1500 + (幸运 − 50) × 10；幸运 50 即 15%。 */
   extraChanceBp: number;
-  /** 实际受伤概率（基点，已按出发时战力下调并 clamp 到方向下限）。 */
+  /** 实际受伤概率（基点，已按出发时战力与体魄调整并 clamp 到方向下限）。 */
   injuryChanceBp: number;
   /** 预计返程时间（服务器时间基准）。 */
   endsAt: string;
@@ -823,6 +833,8 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
       attack: Number(disciple.attack),
       defense: Number(disciple.defense),
       speed: Number(disciple.speed),
+      luck: Number(disciple.luck),
+      physique: Number(disciple.physique),
       talent: disciple.talent,
       talentName: findTalent(disciple.talent)?.name ?? '无',
       combatPower: discipleCombatPower(
@@ -833,6 +845,15 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
         Number(disciple.speed),
         disciple.talent,
       ),
+      // 六项属性等权现算：与招贤卡共用 names.ts 的同一个纯函数（服务端唯一评分口径）。
+      attributeScore: attributeScore({
+        aptitude: Number(disciple.aptitude),
+        attack: Number(disciple.attack),
+        defense: Number(disciple.defense),
+        speed: Number(disciple.speed),
+        luck: Number(disciple.luck),
+        physique: Number(disciple.physique),
+      }),
       realmId: realm.id,
       realmName: realm.name,
       // 境界高低用服务端的 REALMS 下标（前端排序只认这个，不按境界名字符串比较）。

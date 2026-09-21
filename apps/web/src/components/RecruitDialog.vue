@@ -2,10 +2,12 @@
 import type { RecruitPreview } from '../api/game';
 
 /**
- * 招贤台（弹窗内容）：展示本次三位候选人，选一位迎入山门。
+ * 招贤台（弹窗内容）：展示本次三位候选人（六项精确数值 + 综合评分），选一位迎入山门。
  *
- * 候选人是服务端按「宗门 + 当日 + 已招募次数 + 本境界刷新次数」做种子生成的，
+ * 候选人是服务端按「宗门 + 当日 + 已招募次数 + 本境界刷新次数 + 生成版本」做种子生成的，
  * 同一批刷新不变；招募后次数 +1、点「换一批」换一组人，下次打开就是最新那批。
+ * 提交时带预览下发的批次标识（`preview.batch`）；批次过期由 SectScreen 负责重新拉预览并让玩家重新确认。
+ * 本组件不发请求、不自己判定过期，也不显示任何「已扣费」的状态。
  */
 defineProps<{
   preview: RecruitPreview;
@@ -15,12 +17,15 @@ defineProps<{
   busy: boolean;
   /** 正在向服务端要新一批候选人。 */
   refreshing: boolean;
+  /** 正在提交「迎入山门」（含批次过期后重新拉预览的那一段）。 */
+  submitting: boolean;
 }>();
 
 const emit = defineEmits<{
   choose: [choice: number];
   refresh: [];
 }>();
+
 </script>
 
 <template>
@@ -62,27 +67,34 @@ const emit = defineEmits<{
           </div>
         </div>
 
-        <div class="disciple-stats">
+        <!-- 六项精确数值 + 综合评分：卡片高度只多一个标签行，窄屏自动折行不裁切。 -->
+        <div class="disciple-stats candidate-stats">
+          <span class="stat-tag stat-score">综合评分 {{ candidate.attributeScore.toFixed(1) }}</span>
           <span class="stat-tag stat-aptitude">资质 {{ candidate.aptitude }}</span>
           <span class="stat-tag stat-attack">攻 {{ candidate.attack }}</span>
           <span class="stat-tag stat-defense">防 {{ candidate.defense }}</span>
           <span class="stat-tag stat-speed">速 {{ candidate.speed }}</span>
+          <span class="stat-tag stat-luck">幸运 {{ candidate.luck }}</span>
+          <span class="stat-tag stat-physique">体魄 {{ candidate.physique }}</span>
         </div>
 
         <button
           class="action-button primary-action candidate-button"
-          :class="{ 'is-disabled': !preview.canRecruit || busy }"
+          :class="{ 'is-disabled': !preview.canRecruit || busy || submitting }"
           type="button"
-          :disabled="busy"
-          :aria-disabled="!preview.canRecruit || busy"
+          :disabled="busy || submitting"
+          :aria-disabled="!preview.canRecruit || busy || submitting"
           :aria-label="`迎入山门：${candidate.name}`"
           @click="emit('choose', index)"
         >
-          <span>迎入山门</span>
+          <span>{{ submitting ? '接引中…' : '迎入山门' }}</span>
         </button>
       </li>
     </ul>
 
-    <p class="recruit-note">资质只影响修炼速度；攻 / 防 / 速 决定战力；天赋对应采药、采矿、修炼或战斗加成。</p>
+    <p class="recruit-note">
+      资质只影响修炼速度；攻 / 防 / 速 决定战力；幸运影响单人定时历练的额外收获概率；体魄影响该次历练的受伤概率；
+      天赋对应采药、采矿、修炼或战斗加成。综合评分为六项当前属性的等权平均。
+    </p>
   </section>
 </template>

@@ -128,7 +128,7 @@ npm run dev -- --var REGISTRATION_ENABLED:true --var INVITE_CODES:invite-alpha
 3. **vitest pool 的配置方式**：pool-workers 0.22 起改用插件 `cloudflareTest()`，不再提供 `defineWorkersConfig` 的 `/config` 子路径；`cloudflare:test` 的模块声明通过 tsconfig `types: ["@cloudflare/vitest-pool-workers/types"]` 引入。
 4. **`apps/server/worker-configuration.d.ts` 由 `wrangler types` 生成并纳入版本控制**；改动 `wrangler.jsonc`（尤其 compatibility_date）后必须重新生成，否则 `wrangler dev` 会提示类型过期。CI 中的新鲜度检查属于 P0-07。
 5. **本地 D1 状态目录隔离**：开发 / 迁移 / seed 统一使用 `apps/server/.wrangler/state/dev`；集成测试（vitest pool）使用 workerd 内存存储，不落盘、不碰开发目录，因此测试不会污染本地存档。注意 pool-workers 0.22 起**不再有逐用例回滚**：同一测试文件内数据会累积，测试要按「独立主键 / 相对计数」书写，不要依赖自动回滚。
-6. **D1 绑定守卫**：`scripts/db/check-local-binding.mjs` 断言 `DB` 绑定的 `database_id` 仍是全零哨兵 UUID、没有被标记 `remote`、且声明了 `migrations_dir`。它在 `apps/server` 的 `test:unit` 前自动执行，也可在 CI 中单独跑。接远程库必须先取得授权并同步更新守卫与 07 记录，这样「拿生产库跑测试」会立即失败。
+6. **D1 配置隔离**：默认 `apps/server/wrangler.jsonc` 的 `DB.database_id` 必须保持全零哨兵，只供本地开发、测试和 dry-run；`scripts/db/check-local-binding.mjs` 会在测试前强制检查。生产库绑定单独放在 `apps/server/wrangler.production.jsonc`，远程迁移与部署必须显式传 `--config wrangler.production.jsonc`。GitHub Actions 先应用远程迁移再部署 Worker，避免新代码先于数据库结构上线。
 7. **配置哈希的维护方式**：`packages/game-config` 的 `GAME_CONFIG_PAYLOAD_HASH` 必须与 `scripts/seed/seed.sql` 里 `config_versions` 行的哈希一致。改动配置内容后跑 `npm run test:unit`，`tests/game-config/config-integrity.test.ts` 会失败并打印实际哈希，按提示更新这两处即可（Worker 启动时也会用同一算法校验）。
 8. **Workspace 包与 Zod**：`packages/*` 通过 `exports` 直接暴露 TS 源码，没有独立构建步骤；`zod@4.6.5` 由 contracts 与 game-core 各自依赖（各自 node_modules 下一份，与 pool-workers 内部的 zod 4.4.3 互不影响）。
 9. **Worker 包体积**：`wrangler deploy --dry-run` 当前产出约 2.1 MiB（gzip 345 KiB，含 Zod、未 minify）。未超平台限制，但体积预算与 `minify` 开关属于 P0-07/P6 的部署加固范围，本阶段不做。

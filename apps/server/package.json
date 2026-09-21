@@ -11,7 +11,9 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "db:check:local-binding": "node ../../scripts/db/check-local-binding.mjs --config ./wrangler.jsonc",
     "db:migrate:local": "wrangler d1 migrations apply DB --local --persist-to .wrangler/state/dev",
+    "db:migrate:remote": "wrangler d1 migrations apply DB --remote --config wrangler.production.jsonc",
     "db:seed:local": "wrangler d1 execute DB --local --persist-to .wrangler/state/dev --file ../../scripts/seed/seed.sql",
+    "deploy:production": "wrangler deploy --config wrangler.production.jsonc",
     "test:unit": "npm run db:check:local-binding && vitest run"
   },
   "dependencies": {

@@ -18,15 +18,18 @@ import {
   isJourneyDirection,
   isJourneyDuration,
   journeyAwayIds,
+  journeyBaseInjuryChanceBp,
   journeyBaseReward,
   journeyDirectionBlockedReason,
   journeyEligibilityBlock,
   journeyEligibilityBlockedReason,
   journeyEndsAt,
+  journeyExtraHarvestChanceBp,
   journeyExtraHarvestReward,
   journeyFinalReward,
   journeyInjuryChanceBp,
   journeyInjuryUntil,
+  journeyPhysiqueModifiedInjuryChanceBp,
   journeyStatusOf,
   parseJourneyRewardResources,
   previewJourneyCultivation,
@@ -53,15 +56,29 @@ function sequence(values: number[]): () => number {
   };
 }
 
-/** 只给「保底」的那点输入，方便逐条断言取整。 */
+/**
+ * 只给「保底」的那点输入，方便逐条断言取整。
+ * luck / physique 默认 50（0016 的机制中性点）：旧的概率基线断言因此继续成立，
+ * 要验证幸运 / 体魄的作用时显式传入。
+ */
 function reward(
   direction: 'daoSeeking' | 'gathering',
   durationSeconds: number,
   aptitude: number,
   talent: string,
   combatPower: number,
+  luck = 50,
+  physique = 50,
 ) {
-  return journeyBaseReward({ direction, durationSeconds, aptitude, talent, combatPower });
+  return journeyBaseReward({
+    direction,
+    durationSeconds,
+    aptitude,
+    talent,
+    combatPower,
+    luck,
+    physique,
+  });
 }
 
 describe('历练方向、时长与数值基线', () => {
@@ -173,6 +190,8 @@ describe('奖励计算与取整口径', () => {
         aptitude: 50,
         talent: 'combat',
         combatPower: 0,
+        luck: 50,
+        physique: 50,
       }),
     ).toBeNull();
   });
@@ -229,33 +248,51 @@ describe('额外收获与受伤：独立判定', () => {
 
   it('两次掷点决定两个结果：可以同时发生，也各自可以单独发生', () => {
     // random() 依次消费两个值：第一个是额外收获，第二个是受伤。
-    expect(rollJourneyOutcome(5_000, sequence([0.05, 0.9]))).toEqual({
+    const chances = { extraChanceBp: 5_000, injuryChanceBp: 5_000 };
+    expect(rollJourneyOutcome(chances, sequence([0.05, 0.9]))).toEqual({
       extraHarvest: true,
       injured: false,
     });
-    expect(rollJourneyOutcome(5_000, sequence([0.9, 0.1]))).toEqual({
+    expect(rollJourneyOutcome(chances, sequence([0.9, 0.1]))).toEqual({
       extraHarvest: false,
       injured: true,
     });
-    expect(rollJourneyOutcome(5_000, sequence([0.1, 0.1]))).toEqual({
+    expect(rollJourneyOutcome(chances, sequence([0.1, 0.1]))).toEqual({
       extraHarvest: true,
       injured: true,
     });
-    expect(rollJourneyOutcome(5_000, sequence([0.9, 0.9]))).toEqual({
+    expect(rollJourneyOutcome(chances, sequence([0.9, 0.9]))).toEqual({
       extraHarvest: false,
       injured: false,
     });
   });
 
-  it('受伤掷点严格小于概率才受伤（边界值不受伤）', () => {
-    // 概率 1500（15%）：roll 1499 受伤，roll 1500 不受伤。
-    expect(rollJourneyOutcome(1_500, sequence([0.9, 0.1499])).injured).toBe(true);
-    expect(rollJourneyOutcome(1_500, sequence([0.9, 0.15])).injured).toBe(false);
+  it('两个概率各自独立生效：一个拉满也不会影响另一个', () => {
+    expect(
+      rollJourneyOutcome({ extraChanceBp: 10_000, injuryChanceBp: 0 }, sequence([0.999, 0])),
+    ).toEqual({ extraHarvest: true, injured: false });
+    expect(
+      rollJourneyOutcome({ extraChanceBp: 0, injuryChanceBp: 10_000 }, sequence([0, 0.999])),
+    ).toEqual({ extraHarvest: false, injured: true });
+  });
+
+  it('掷点严格小于概率才命中（边界值不命中）', () => {
+    // 受伤概率 1500（15%）：roll 1499 命中，roll 1500 不命中。
+    const injury = { extraChanceBp: 0, injuryChanceBp: 1_500 };
+    expect(rollJourneyOutcome(injury, sequence([0.9, 0.1499])).injured).toBe(true);
+    expect(rollJourneyOutcome(injury, sequence([0.9, 0.15])).injured).toBe(false);
+    // 额外收获概率 1010（幸运 1 → 10.1%）：边界同样按严格小于。
+    const extra = { extraChanceBp: 1_010, injuryChanceBp: 0 };
+    expect(rollJourneyOutcome(extra, sequence([0.1009, 0.9])).extraHarvest).toBe(true);
+    expect(rollJourneyOutcome(extra, sequence([0.101, 0.9])).extraHarvest).toBe(false);
   });
 
   it('没有「失败后奖励归零」的分支：概率为 0 也照样拿满保底', () => {
     const base = reward('daoSeeking', 7_200, 50, 'combat', 10_000)!;
-    const outcome = rollJourneyOutcome(200, sequence([0.9, 0.5]));
+    const outcome = rollJourneyOutcome(
+      { extraChanceBp: base.extraChanceBp, injuryChanceBp: base.injuryChanceBp },
+      sequence([0.9, 0.5]),
+    );
     const final = journeyFinalReward(base, outcome.extraHarvest);
     expect(final.cultivation).toBeGreaterThan(0);
     expect(final.resources).toEqual({ spiritStone: 15_000 });
@@ -660,5 +697,111 @@ describe('离线结算的在外屏蔽', () => {
     // 炼气一层门槛 30：封顶到 30 并清空余量（不会自动突破）。
     expect(cultivationOf(result, 'd2')).toBe(30);
     expect(result.disciples.find((row) => row.id === 'd2')?.cultivationRemainder).toBe(0);
+  });
+});
+
+/* ---------- 0016 幸运 / 体魄：只作用于单人定时历练 ---------- */
+
+describe('幸运：额外收获概率', () => {
+  it('1500 + (幸运 − 50) × 10 基点：1 / 50 / 100 → 1010 / 1500 / 2000', () => {
+    expect(journeyExtraHarvestChanceBp(1)).toBe(1_010);
+    expect(journeyExtraHarvestChanceBp(50)).toBe(1_500);
+    expect(journeyExtraHarvestChanceBp(100)).toBe(2_000);
+    expect(journeyExtraHarvestChanceBp(49)).toBe(1_490);
+    expect(journeyExtraHarvestChanceBp(51)).toBe(1_510);
+  });
+
+  it('中性点就是旧的固定 15%（JOURNEY_EXTRA_HARVEST_BP）', () => {
+    expect(JOURNEY_EXTRA_HARVEST_BP).toBe(1_500);
+    expect(journeyExtraHarvestChanceBp(50)).toBe(JOURNEY_EXTRA_HARVEST_BP);
+  });
+
+  it('脏输入夹取到 1..100、非整数向下取整、非数字退化为中性点', () => {
+    expect(journeyExtraHarvestChanceBp(0)).toBe(1_010);
+    expect(journeyExtraHarvestChanceBp(101)).toBe(2_000);
+    expect(journeyExtraHarvestChanceBp(50.7)).toBe(1_500);
+    expect(journeyExtraHarvestChanceBp(Number.NaN)).toBe(1_500);
+  });
+
+  it('保底奖励与「额外 +50%」的数量口径不受幸运影响', () => {
+    const unlucky = reward('daoSeeking', 7_200, 50, 'combat', 0, 1, 50)!;
+    const lucky = reward('daoSeeking', 7_200, 50, 'combat', 0, 100, 50)!;
+    expect(unlucky.cultivation).toBe(lucky.cultivation);
+    expect(unlucky.resources).toEqual(lucky.resources);
+    expect(journeyFinalReward(unlucky, true)).toEqual(journeyFinalReward(lucky, true));
+    expect(unlucky.extraChanceBp).toBe(1_010);
+    expect(lucky.extraChanceBp).toBe(2_000);
+  });
+});
+
+describe('体魄：受伤概率', () => {
+  /** 访道 2 小时：表值 500，方向下限 200。 */
+  const dao = findJourneyPlan('daoSeeking', 7_200)!;
+  /** 采集 6 小时：表值 1500，方向下限 500。 */
+  const gather = findJourneyPlan('gathering', 21_600)!;
+
+  it('体魄 50 逐位保持旧概率（与 journeyBaseInjuryChanceBp 完全一致）', () => {
+    for (const combatPower of [0, 49, 50, 100, 200, 10_000]) {
+      expect(journeyInjuryChanceBp(dao, combatPower, 50)).toBe(
+        journeyBaseInjuryChanceBp(dao, combatPower),
+      );
+      expect(journeyInjuryChanceBp(gather, combatPower, 50)).toBe(
+        journeyBaseInjuryChanceBp(gather, combatPower),
+      );
+    }
+  });
+
+  it('体魄 1 最多约 +29.4%：floor(基础 × (10000 + 49 × 60) / 10000)', () => {
+    // 基础 500（战力 0）→ floor(500 × 12940 / 10000) = floor(647) = 647
+    expect(journeyPhysiqueModifiedInjuryChanceBp(500, 1)).toBe(647);
+    expect(journeyInjuryChanceBp(dao, 0, 1)).toBe(647);
+  });
+
+  it('体魄 100 最多约 −30%：floor(基础 × 7000 / 10000)', () => {
+    // 基础 1500（采集 6 小时、战力 0）→ floor(1500 × 0.7) = 1050
+    expect(journeyPhysiqueModifiedInjuryChanceBp(1_500, 100)).toBe(1_050);
+    expect(journeyInjuryChanceBp(gather, 0, 100)).toBe(1_050);
+  });
+
+  it('先算基础概率（含旧的方向下限）再按体魄修正：低体魄可以高于战力触到的下限', () => {
+    // 战力 200 → 基础 = max(200, 500 − 400) = 200；体魄 1 → floor(200 × 1.294) = 258
+    expect(journeyBaseInjuryChanceBp(dao, 200)).toBe(200);
+    expect(journeyInjuryChanceBp(dao, 200, 1)).toBe(258);
+  });
+
+  it('方向下限仍然有效：已经触底时高体魄无法继续降低概率', () => {
+    // 战力 10_000 → 基础触底 200；体魄 100 → floor(140) = 140 → 被下限 clamp 回 200。
+    expect(journeyInjuryChanceBp(dao, 10_000, 100)).toBe(200);
+    expect(journeyInjuryChanceBp(gather, 10_000, 100)).toBe(500);
+  });
+
+  it('脏输入夹取到 1..100、非整数向下取整、非数字退化为中性点', () => {
+    expect(journeyInjuryChanceBp(dao, 0, 0)).toBe(journeyInjuryChanceBp(dao, 0, 1));
+    expect(journeyInjuryChanceBp(dao, 0, 101)).toBe(journeyInjuryChanceBp(dao, 0, 100));
+    expect(journeyInjuryChanceBp(dao, 0, 50.9)).toBe(journeyInjuryChanceBp(dao, 0, 50));
+    expect(journeyInjuryChanceBp(dao, 0, Number.NaN)).toBe(journeyInjuryChanceBp(dao, 0, 50));
+  });
+
+  it('体魄只影响受伤概率，不改奖励', () => {
+    const frail = reward('gathering', 21_600, 50, 'combat', 0, 50, 1)!;
+    const tough = reward('gathering', 21_600, 50, 'combat', 0, 50, 100)!;
+    expect(frail.cultivation).toBe(tough.cultivation);
+    expect(frail.resources).toEqual(tough.resources);
+    expect(frail.injuryChanceBp).toBeGreaterThan(tough.injuryChanceBp);
+  });
+});
+
+describe('预览与出发共用同一个口径', () => {
+  it('迁移后的旧弟子（50 / 50）拿到的预览概率就是原来的值', () => {
+    const base = reward('daoSeeking', 21_600, 50, 'combat', 0, 50, 50)!;
+    expect(base.extraChanceBp).toBe(1_500);
+    expect(base.injuryChanceBp).toBe(findJourneyPlan('daoSeeking', 21_600)!.injuryChanceBp);
+  });
+
+  it('journeyExtraHarvestReward 原样保留两项概率，不重掷也不改口径', () => {
+    const base = reward('gathering', 7_200, 50, 'combat', 100, 80, 20)!;
+    const extra = journeyExtraHarvestReward(base);
+    expect(extra.extraChanceBp).toBe(base.extraChanceBp);
+    expect(extra.injuryChanceBp).toBe(base.injuryChanceBp);
   });
 });

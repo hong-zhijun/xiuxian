@@ -91,8 +91,10 @@ async function makeSect(prefix: string, extra = 3): Promise<JourneyFixture> {
   const initialIds = (state.state.disciples as { id: string }[]).map((disciple) => disciple.id);
 
   for (const discipleId of initialIds) {
+    // 0016：初始弟子现在会随机生成幸运/体魄；本文件所有既有断言都以「旧弟子 50/50 基线」为前提，
+    // 这里显式钉成 50，保证 extraChanceBp=1500、injuryChanceBp=journeyInjuryChanceBp(plan, power)。
     await env.DB.prepare(
-      'UPDATE disciples SET realm_id = ?, stage = 1, cultivation = 0, aptitude = 50, attack = 50, defense = 50, speed = 50, talent = ? WHERE id = ?',
+      'UPDATE disciples SET realm_id = ?, stage = 1, cultivation = 0, aptitude = 50, attack = 50, defense = 50, speed = 50, luck = 50, physique = 50, talent = ? WHERE id = ?',
     )
       .bind(FOUNDATION, 'combat', discipleId)
       .run();
@@ -996,6 +998,11 @@ describe('领取：一次性入账、只发一次', () => {
     await freezeSettlement(fixture.sectId);
     expect((await fixture.claim(first)).status).toBe(200);
 
+    // 本用例只验证未领取唯一索引在领取后释放；第一次历练可能随机受伤，
+    // 伤势会独立阻止再次出发，因此清掉伤势，避免把两条规则混成概率性测试。
+    await env.DB.prepare('UPDATE disciples SET injured_until = NULL WHERE id = ?')
+      .bind(discipleId)
+      .run();
     const second = await startOk(fixture, discipleId, 'gathering', 7_200);
     expect(second).not.toBe(first);
     expect(await journeyCount(fixture.sectId)).toBe(2);
