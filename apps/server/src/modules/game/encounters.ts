@@ -14,10 +14,14 @@
  */
 export const MAX_DIFFICULTY = 99999;
 
+/** 选项风险等级：决定该选项成功时的奖励倍率。 */
+export type ChoiceRisk = 'safe' | 'normal' | 'risky';
+
 export interface EncounterChoice {
   id: string;
   label: string;
   riskHint: string;
+  risk: ChoiceRisk;
 }
 
 export interface EncounterDef {
@@ -32,19 +36,21 @@ export interface EncounterDef {
 }
 
 export const ENCOUNTERS: readonly EncounterDef[] = [
-  /* ---------- 妖兽遭遇 ---------- */
+  /* ================================================================
+   *  妖兽遭遇（beast）
+   * ================================================================ */
   {
     id: 'beast_wolf',
     category: 'beast',
     name: '雾中妖狼',
     description:
-      '浓雾深处传来低沉的喉音，一头灰白妖狼缓缓踱出，绿瞳死死锁住你的队伍。它的后腿绷紧，随时可能扑上来。',
+      '浓雾深处传来低沉的喉音，一头灰白妖狼缓缓踱出，绿瞳死死锁住你的队伍。它的后腿绑紧，随时可能扑上来。',
     minDifficulty: 0,
     maxDifficulty: 1500,
     choices: [
-      { id: 'fight', label: '正面迎战', riskHint: '风险较高，可能受伤' },
-      { id: 'ambush', label: '布阵围杀', riskHint: '需要配合，但较为稳妥' },
-      { id: 'sneak', label: '潜行绕过', riskHint: '安全但无额外收获' },
+      { id: 'fight', label: '正面迎战', riskHint: '风险较高，可能受伤', risk: 'risky' },
+      { id: 'ambush', label: '布阵围杀', riskHint: '需要配合，但较为稳妥', risk: 'normal' },
+      { id: 'sneak', label: '潜行绕过', riskHint: '安全但无额外收获', risk: 'safe' },
     ],
   },
   {
@@ -56,9 +62,9 @@ export const ENCOUNTERS: readonly EncounterDef[] = [
     minDifficulty: 0,
     maxDifficulty: 1500,
     choices: [
-      { id: 'force', label: '以力破之', riskHint: '风险偏高，或可斩获蛇材' },
-      { id: 'lure', label: '引蛇出洞', riskHint: '需要耐心，成功收获颇丰' },
-      { id: 'detour', label: '绕道而行', riskHint: '稳妥省力，但一无所获' },
+      { id: 'force', label: '以力破之', riskHint: '风险偏高，或可斩获蛇材', risk: 'risky' },
+      { id: 'lure', label: '引蛇出洞', riskHint: '需要耐心，成功收获颇丰', risk: 'normal' },
+      { id: 'detour', label: '绕道而行', riskHint: '稳妥省力，但一无所获', risk: 'safe' },
     ],
   },
   {
@@ -70,9 +76,9 @@ export const ENCOUNTERS: readonly EncounterDef[] = [
     minDifficulty: 100,
     maxDifficulty: 1500,
     choices: [
-      { id: 'fire', label: '以火驱散', riskHint: '消耗灵力，但能全身而退' },
-      { id: 'dash', label: '快速通过', riskHint: '冒险抢行，可能被蛰伤' },
-      { id: 'nest', label: '寻找巢穴', riskHint: '风险较高，或能寻得蝎宝' },
+      { id: 'fire', label: '以火驱散', riskHint: '消耗灵力，但能全身而退', risk: 'normal' },
+      { id: 'dash', label: '快速通过', riskHint: '冒险抢行，可能被蛰伤', risk: 'risky' },
+      { id: 'nest', label: '寻找巢穴', riskHint: '风险较高，或能寻得蝎宝', risk: 'risky' },
     ],
   },
   {
@@ -84,8 +90,8 @@ export const ENCOUNTERS: readonly EncounterDef[] = [
     minDifficulty: 0,
     maxDifficulty: MAX_DIFFICULTY,
     choices: [
-      { id: 'tame', label: '收服灵兽', riskHint: '需要安抚，成功可添助力' },
-      { id: 'leave', label: '悄然离开', riskHint: '安全无虞，却错失机缘' },
+      { id: 'tame', label: '收服灵兽', riskHint: '需要安抚，成功可添助力', risk: 'normal' },
+      { id: 'leave', label: '悄然离开', riskHint: '安全无虞，却错失机缘', risk: 'safe' },
     ],
   },
   {
@@ -97,9 +103,9 @@ export const ENCOUNTERS: readonly EncounterDef[] = [
     minDifficulty: 0,
     maxDifficulty: 1500,
     choices: [
-      { id: 'repel', label: '以灵气震散', riskHint: '消耗灵力，可保众人无伤' },
-      { id: 'burn', label: '放火清场', riskHint: '风险中等，或引来强敌' },
-      { id: 'crouch', label: '伏低潜行', riskHint: '安静稳妥，但路窄难行' },
+      { id: 'repel', label: '以灵气震散', riskHint: '消耗灵力，可保众人无伤', risk: 'normal' },
+      { id: 'burn', label: '放火清场', riskHint: '风险中等，或引来强敌', risk: 'risky' },
+      { id: 'crouch', label: '伏低潜行', riskHint: '安静稳妥，但路窄难行', risk: 'safe' },
     ],
   },
   {
@@ -111,13 +117,71 @@ export const ENCOUNTERS: readonly EncounterDef[] = [
     minDifficulty: 300,
     maxDifficulty: MAX_DIFFICULTY,
     choices: [
-      { id: 'fight', label: '全力一战', riskHint: '凶险异常，胜则收获丰厚' },
-      { id: 'lure', label: '以灵果诱走', riskHint: '需备灵果，或可化险为夷' },
-      { id: 'retreat', label: '退避三舍', riskHint: '安全撤走，但白跑一程' },
+      { id: 'fight', label: '全力一战', riskHint: '凶险异常，胜则收获丰厚', risk: 'risky' },
+      { id: 'lure', label: '以灵果诱走', riskHint: '需备灵果，或可化险为夷', risk: 'normal' },
+      { id: 'retreat', label: '退避三舍', riskHint: '安全撤走，但白跑一程', risk: 'safe' },
+    ],
+  },
+  {
+    id: 'beast_spider',
+    category: 'beast',
+    name: '地渊蛛母',
+    description:
+      '洞穴深处张满了粘稠的灵蛛丝网，一只体型如磨盘的蛛母倒挂在顶部，复眼之间闪着冷幽的光芒。丝网上还缀着几个包裹，不知是猎物还是蛛卵。',
+    minDifficulty: 300,
+    maxDifficulty: MAX_DIFFICULTY,
+    choices: [
+      { id: 'burn', label: '放火烧网', riskHint: '或能逼退蛛母，但动静极大', risk: 'risky' },
+      { id: 'lure', label: '以灵气诱蛛', riskHint: '引蛛母离开后搜索巢穴', risk: 'normal' },
+      { id: 'retreat', label: '退出洞穴', riskHint: '不打扰蛛母，绕道前行', risk: 'safe' },
+    ],
+  },
+  {
+    id: 'beast_crane',
+    category: 'beast',
+    name: '铁翎鹤',
+    description:
+      '一只周身覆着铁色羽翎的灵鹤盘踞在崖头，修长的喙如锋利的短剑。它警觉地注视着来者，翅膀微张，似在宣示领地。',
+    minDifficulty: 100,
+    maxDifficulty: 1500,
+    choices: [
+      { id: 'challenge', label: '上前挑战', riskHint: '正面对敌，或夺灵羽', risk: 'risky' },
+      { id: 'appease', label: '抛出灵果', riskHint: '示好安抚，或可和平通过', risk: 'normal' },
+      { id: 'wait', label: '等鹤离去', riskHint: '耐心等候，安全但耗时', risk: 'safe' },
+    ],
+  },
+  {
+    id: 'beast_serpent',
+    category: 'beast',
+    name: '双头蛟蛇',
+    description:
+      '溪流中一条双头蛟蛇昂首而出，鳞片如碧玉，两颗蛇头各吐一根信子。溪水被它的妖气搅得翻涌，岸边的灵草纷纷枯萎。',
+    minDifficulty: 300,
+    maxDifficulty: MAX_DIFFICULTY,
+    choices: [
+      { id: 'strike', label: '斩其一首', riskHint: '凶险至极，若成则可取蛟珠', risk: 'risky' },
+      { id: 'divert', label: '以术引水', riskHint: '改流断其水源，迫其退却', risk: 'normal' },
+      { id: 'ford', label: '涉水绕行', riskHint: '远远绕开，安全但费脚程', risk: 'safe' },
+    ],
+  },
+  {
+    id: 'beast_ape',
+    category: 'beast',
+    name: '啸天灵猿',
+    description:
+      '一只赤毛灵猿蹲踞在古树之巅，手中握着一块发光的灵石，见人来便怒吼示威。树下散落着几具被撕碎的储物袋。',
+    minDifficulty: 100,
+    maxDifficulty: 1500,
+    choices: [
+      { id: 'fight', label: '夺取灵石', riskHint: '与灵猿争斗，风险不小', risk: 'risky' },
+      { id: 'trade', label: '以物换物', riskHint: '用食物交换，看猿心情', risk: 'normal' },
+      { id: 'collect', label: '拾取残袋', riskHint: '只捡地上的，不惹灵猿', risk: 'safe' },
     ],
   },
 
-  /* ---------- 宝物发现 ---------- */
+  /* ================================================================
+   *  宝物发现（treasure）
+   * ================================================================ */
   {
     id: 'treasure_herb',
     category: 'treasure',
@@ -127,8 +191,8 @@ export const ENCOUNTERS: readonly EncounterDef[] = [
     minDifficulty: 0,
     maxDifficulty: MAX_DIFFICULTY,
     choices: [
-      { id: 'careful', label: '仔细采集', riskHint: '稳妥取苗，收获虽少却稳' },
-      { id: 'root', label: '连根拔起', riskHint: '收获更丰，但可能损了药性' },
+      { id: 'careful', label: '仔细采集', riskHint: '稳妥取苗，收获虽少却稳', risk: 'safe' },
+      { id: 'root', label: '连根拔起', riskHint: '收获更丰，但可能损了药性', risk: 'risky' },
     ],
   },
   {
@@ -140,9 +204,9 @@ export const ENCOUNTERS: readonly EncounterDef[] = [
     minDifficulty: 0,
     maxDifficulty: MAX_DIFFICULTY,
     choices: [
-      { id: 'probe', label: '谨慎探查', riskHint: '稳妥排查，或能避开陷阱' },
-      { id: 'open', label: '直接打开', riskHint: '可能中伏，也可能得宝' },
-      { id: 'leave', label: '留给后人', riskHint: '安全无害，却空手而过' },
+      { id: 'probe', label: '谨慎探查', riskHint: '稳妥排查，或能避开陷阱', risk: 'normal' },
+      { id: 'open', label: '直接打开', riskHint: '可能中伏，也可能得宝', risk: 'risky' },
+      { id: 'leave', label: '留给后人', riskHint: '安全无害，却空手而过', risk: 'safe' },
     ],
   },
   {
@@ -154,8 +218,8 @@ export const ENCOUNTERS: readonly EncounterDef[] = [
     minDifficulty: 0,
     maxDifficulty: MAX_DIFFICULTY,
     choices: [
-      { id: 'study', label: '尝试参悟', riskHint: '耗费心神，或能悟出残篇' },
-      { id: 'keep', label: '小心收起', riskHint: '稳妥收纳，日后再行研究' },
+      { id: 'study', label: '尝试参悟', riskHint: '耗费心神，或能悟出残篇', risk: 'risky' },
+      { id: 'keep', label: '小心收起', riskHint: '稳妥收纳，日后再行研究', risk: 'safe' },
     ],
   },
   {
@@ -167,8 +231,8 @@ export const ENCOUNTERS: readonly EncounterDef[] = [
     minDifficulty: 0,
     maxDifficulty: 1500,
     choices: [
-      { id: 'mine', label: '就地开采', riskHint: '耗时耗力，但收获实在' },
-      { id: 'mark', label: '标记位置', riskHint: '省下力气，留给宗门开采' },
+      { id: 'mine', label: '就地开采', riskHint: '耗时耗力，但收获实在', risk: 'normal' },
+      { id: 'mark', label: '标记位置', riskHint: '省下力气，留给宗门开采', risk: 'safe' },
     ],
   },
   {
@@ -180,12 +244,55 @@ export const ENCOUNTERS: readonly EncounterDef[] = [
     minDifficulty: 300,
     maxDifficulty: MAX_DIFFICULTY,
     choices: [
-      { id: 'loot', label: '搜寻遗物', riskHint: '或有重宝，也可能触发禁制' },
-      { id: 'salute', label: '行礼离去', riskHint: '不解怨气，稳妥却无所得' },
+      { id: 'loot', label: '搜寻遗物', riskHint: '或有重宝，也可能触发禁制', risk: 'risky' },
+      { id: 'salute', label: '行礼离去', riskHint: '不解怨气，稳妥却无所得', risk: 'safe' },
+    ],
+  },
+  {
+    id: 'treasure_pool',
+    category: 'treasure',
+    name: '灵液池',
+    description:
+      '一汪碧绿的灵液静卧在岩洞正中，池面微微泛光，液面下似有暗流。空气中弥漫着淡淡药香，令人精神一振。',
+    minDifficulty: 0,
+    maxDifficulty: MAX_DIFFICULTY,
+    choices: [
+      { id: 'dive', label: '潜入池底', riskHint: '冒险入水，或取精华结晶', risk: 'risky' },
+      { id: 'scoop', label: '取表面灵液', riskHint: '浅尝辄止，收获有限但安全', risk: 'safe' },
+      { id: 'bathe', label: '浸泡修炼', riskHint: '提升修为，但需消耗时间', risk: 'normal' },
+    ],
+  },
+  {
+    id: 'treasure_chest',
+    category: 'treasure',
+    name: '古朴石匣',
+    description:
+      '密室角落里放着一只石匣，上面刻满了细密的符纹。匣盖半掩，隐约透出微弱的灵光。符纹的排列有一种令人心悸的规律。',
+    minDifficulty: 100,
+    maxDifficulty: 1500,
+    choices: [
+      { id: 'force_open', label: '强行打开', riskHint: '或触发禁制，但里面或有重宝', risk: 'risky' },
+      { id: 'decode', label: '解读符纹', riskHint: '费些心思，稳妥开启', risk: 'normal' },
+      { id: 'leave', label: '放弃石匣', riskHint: '宁不取宝，不冒未知风险', risk: 'safe' },
+    ],
+  },
+  {
+    id: 'treasure_mushroom',
+    category: 'treasure',
+    name: '七彩灵菇',
+    description:
+      '阴暗的角落里长着一簇七彩灵菇，菌伞流转着梦幻般的光泽。据说此菇入药可治百伤，但也有传言它的孢子有致幻之效。',
+    minDifficulty: 0,
+    maxDifficulty: 1500,
+    choices: [
+      { id: 'harvest_all', label: '整簇采下', riskHint: '全取可能吸入孢子', risk: 'risky' },
+      { id: 'pick_one', label: '只取一株', riskHint: '少量无害，收获适中', risk: 'normal' },
     ],
   },
 
-  /* ---------- 陷阱机关 ---------- */
+  /* ================================================================
+   *  陷阱机关（trap）
+   * ================================================================ */
   {
     id: 'trap_array',
     category: 'trap',
@@ -195,9 +302,9 @@ export const ENCOUNTERS: readonly EncounterDef[] = [
     minDifficulty: 300,
     maxDifficulty: MAX_DIFFICULTY,
     choices: [
-      { id: 'break', label: '破阵而入', riskHint: '凶险极大，破开则直通深处' },
-      { id: 'eye', label: '寻找阵眼', riskHint: '需要眼力，稳妥破阵更省力' },
-      { id: 'detour', label: '绕道而行', riskHint: '安全避开，但多耗脚程' },
+      { id: 'break', label: '破阵而入', riskHint: '凶险极大，破开则直通深处', risk: 'risky' },
+      { id: 'eye', label: '寻找阵眼', riskHint: '需要眼力，稳妥破阵更省力', risk: 'normal' },
+      { id: 'detour', label: '绕道而行', riskHint: '安全避开，但多耗脚程', risk: 'safe' },
     ],
   },
   {
@@ -209,9 +316,9 @@ export const ENCOUNTERS: readonly EncounterDef[] = [
     minDifficulty: 0,
     maxDifficulty: 1500,
     choices: [
-      { id: 'force', label: '强行通过', riskHint: '冒险钻行，或会被困其中' },
-      { id: 'support', label: '以术支撑', riskHint: '消耗灵力，却可稳住通道' },
-      { id: 'seek', label: '另寻出路', riskHint: '安全绕行，但耽误行程' },
+      { id: 'force', label: '强行通过', riskHint: '冒险钻行，或会被困其中', risk: 'risky' },
+      { id: 'support', label: '以术支撑', riskHint: '消耗灵力，却可稳住通道', risk: 'normal' },
+      { id: 'seek', label: '另寻出路', riskHint: '安全绕行，但耽误行程', risk: 'safe' },
     ],
   },
   {
@@ -223,9 +330,9 @@ export const ENCOUNTERS: readonly EncounterDef[] = [
     minDifficulty: 0,
     maxDifficulty: 1500,
     choices: [
-      { id: 'rush', label: '以灵气护体冲过', riskHint: '耗损灵力，可强行闯过' },
-      { id: 'windward', label: '寻找上风口', riskHint: '需要绕行，但较为稳妥' },
-      { id: 'wait', label: '等雾散去', riskHint: '安全等待，却空耗时辰' },
+      { id: 'rush', label: '以灵气护体冲过', riskHint: '耗损灵力，可强行闯过', risk: 'risky' },
+      { id: 'windward', label: '寻找上风口', riskHint: '需要绕行，但较为稳妥', risk: 'normal' },
+      { id: 'wait', label: '等雾散去', riskHint: '安全等待，却空耗时辰', risk: 'safe' },
     ],
   },
   {
@@ -237,9 +344,9 @@ export const ENCOUNTERS: readonly EncounterDef[] = [
     minDifficulty: 100,
     maxDifficulty: 1500,
     choices: [
-      { id: 'heart', label: '以心魔入阵', riskHint: '凶险莫测，或能一举破幻' },
-      { id: 'blind', label: '闭目前行', riskHint: '听声辨位，较为稳妥' },
-      { id: 'back', label: '原路退回', riskHint: '安全退出，但前功尽弃' },
+      { id: 'heart', label: '以心魔入阵', riskHint: '凶险莫测，或能一举破幻', risk: 'risky' },
+      { id: 'blind', label: '闭目前行', riskHint: '听声辨位，较为稳妥', risk: 'normal' },
+      { id: 'back', label: '原路退回', riskHint: '安全退出，但前功尽弃', risk: 'safe' },
     ],
   },
   {
@@ -251,13 +358,57 @@ export const ENCOUNTERS: readonly EncounterDef[] = [
     minDifficulty: 0,
     maxDifficulty: 1500,
     choices: [
-      { id: 'dash', label: '极速冲刺', riskHint: '抢时机，但极易被砸中' },
-      { id: 'block', label: '以术挡石', riskHint: '耗费灵力，却稳妥可行' },
-      { id: 'observe', label: '等待观察', riskHint: '耐心试探，安全但耗时' },
+      { id: 'dash', label: '极速冲刺', riskHint: '抢时机，但极易被砸中', risk: 'risky' },
+      { id: 'block', label: '以术挡石', riskHint: '耗费灵力，却稳妥可行', risk: 'normal' },
+      { id: 'observe', label: '等待观察', riskHint: '耐心试探，安全但耗时', risk: 'safe' },
+    ],
+  },
+  {
+    id: 'trap_quicksand',
+    category: 'trap',
+    name: '灵沙陷阱',
+    description:
+      '脚下的沙地忽然软化，你一脚踩空便觉身体缓缓下陷。沙面下隐隐有灵光闪动，像是有什么东西在拖拽。',
+    minDifficulty: 0,
+    maxDifficulty: 1500,
+    choices: [
+      { id: 'dig', label: '顺势下探', riskHint: '危中寻宝，或被吞没', risk: 'risky' },
+      { id: 'fly', label: '御器飞出', riskHint: '消耗灵力，但可脱困', risk: 'normal' },
+      { id: 'crawl', label: '匍匐爬出', riskHint: '缓慢但安全地撤出', risk: 'safe' },
+    ],
+  },
+  {
+    id: 'trap_flame',
+    category: 'trap',
+    name: '地火喷口',
+    description:
+      '石板接缝处不断冒出火苗，温度极高，隐约能嗅到硫磺气味。每隔数息便有一股烈焰从地底喷薄而出。',
+    minDifficulty: 100,
+    maxDifficulty: 1500,
+    choices: [
+      { id: 'time', label: '卡间隙冲过', riskHint: '节奏稍差便被灼伤', risk: 'risky' },
+      { id: 'shield', label: '结水盾通过', riskHint: '耗灵力护体，稳妥通行', risk: 'normal' },
+      { id: 'back', label: '原路返回', riskHint: '不冒险，另寻通路', risk: 'safe' },
+    ],
+  },
+  {
+    id: 'trap_mirror',
+    category: 'trap',
+    name: '照影镜阵',
+    description:
+      '回廊四壁镶满铜镜，每一面都映出不同的你，或坐或立，神态各异。你走了十步，镜中人却只动了五步。一种异样的不安笼罩心头。',
+    minDifficulty: 100,
+    maxDifficulty: MAX_DIFFICULTY,
+    choices: [
+      { id: 'smash', label: '击碎镜面', riskHint: '或打破幻阵，或七年霉运', risk: 'risky' },
+      { id: 'follow', label: '跟镜中人走', riskHint: '以其人之道，稳中求胜', risk: 'normal' },
+      { id: 'close_eyes', label: '闭目穿行', riskHint: '不受干扰，稳妥通过', risk: 'safe' },
     ],
   },
 
-  /* ---------- 奇遇机缘 ---------- */
+  /* ================================================================
+   *  奇遇机缘（fortune）
+   * ================================================================ */
   {
     id: 'fortune_spring',
     category: 'fortune',
@@ -267,8 +418,8 @@ export const ENCOUNTERS: readonly EncounterDef[] = [
     minDifficulty: 0,
     maxDifficulty: MAX_DIFFICULTY,
     choices: [
-      { id: 'drink', label: '饮泉修炼', riskHint: '就地吐纳，收益最为直接' },
-      { id: 'collect', label: '收集泉水', riskHint: '稳妥存下，日后仍可受用' },
+      { id: 'drink', label: '饮泉修炼', riskHint: '就地吐纳，收益最为直接', risk: 'normal' },
+      { id: 'collect', label: '收集泉水', riskHint: '稳妥存下，日后仍可受用', risk: 'safe' },
     ],
   },
   {
@@ -280,8 +431,8 @@ export const ENCOUNTERS: readonly EncounterDef[] = [
     minDifficulty: 0,
     maxDifficulty: 1500,
     choices: [
-      { id: 'full', label: '全力采取', riskHint: '尽数取走，却可能伤了灵根' },
-      { id: 'partial', label: '只取少许', riskHint: '留有余地，收获亦算稳妥' },
+      { id: 'full', label: '全力采取', riskHint: '尽数取走，却可能伤了灵根', risk: 'risky' },
+      { id: 'partial', label: '只取少许', riskHint: '留有余地，收获亦算稳妥', risk: 'safe' },
     ],
   },
   {
@@ -293,8 +444,8 @@ export const ENCOUNTERS: readonly EncounterDef[] = [
     minDifficulty: 0,
     maxDifficulty: MAX_DIFFICULTY,
     choices: [
-      { id: 'now', label: '当场参悟', riskHint: '就地试炼，或有意外收获' },
-      { id: 'carry', label: '带回研究', riskHint: '稳妥保存，回宗门再细究' },
+      { id: 'now', label: '当场参悟', riskHint: '就地试炼，或有意外收获', risk: 'risky' },
+      { id: 'carry', label: '带回研究', riskHint: '稳妥保存，回宗门再细究', risk: 'safe' },
     ],
   },
   {
@@ -306,9 +457,9 @@ export const ENCOUNTERS: readonly EncounterDef[] = [
     minDifficulty: 0,
     maxDifficulty: MAX_DIFFICULTY,
     choices: [
-      { id: 'touch', label: '触碰石碑', riskHint: '风险不明，或得莫大机缘' },
-      { id: 'copy', label: '抄录碑文', riskHint: '稳妥记录，收益或许有限' },
-      { id: 'stay', label: '保持距离', riskHint: '不涉险境，但一无所获' },
+      { id: 'touch', label: '触碰石碑', riskHint: '风险不明，或得莫大机缘', risk: 'risky' },
+      { id: 'copy', label: '抄录碑文', riskHint: '稳妥记录，收益或许有限', risk: 'normal' },
+      { id: 'stay', label: '保持距离', riskHint: '不涉险境，但一无所获', risk: 'safe' },
     ],
   },
   {
@@ -320,12 +471,55 @@ export const ENCOUNTERS: readonly EncounterDef[] = [
     minDifficulty: 300,
     maxDifficulty: MAX_DIFFICULTY,
     choices: [
-      { id: 'absorb', label: '就地吸收', riskHint: '收益极快，可能反噬伤身' },
-      { id: 'guide', label: '布阵引导', riskHint: '布阵费时，却更为稳妥' },
+      { id: 'absorb', label: '就地吸收', riskHint: '收益极快，可能反噬伤身', risk: 'risky' },
+      { id: 'guide', label: '布阵引导', riskHint: '布阵费时，却更为稳妥', risk: 'normal' },
+    ],
+  },
+  {
+    id: 'fortune_altar',
+    category: 'fortune',
+    name: '断壁祭坛',
+    description:
+      '一座半毁的祭坛立在空地中央，坛上的火盆尚有余温。祭坛四角刻着奇特符文，隐约与天象呼应。',
+    minDifficulty: 100,
+    maxDifficulty: MAX_DIFFICULTY,
+    choices: [
+      { id: 'activate', label: '注灵激活', riskHint: '后果莫测，或得或失', risk: 'risky' },
+      { id: 'study', label: '研究符文', riskHint: '费些心神，稳妥有得', risk: 'normal' },
+      { id: 'leave', label: '敬而远之', riskHint: '不碰不扰，毫无风险', risk: 'safe' },
+    ],
+  },
+  {
+    id: 'fortune_butterfly',
+    category: 'fortune',
+    name: '引路灵蝶',
+    description:
+      '一只通体金色的蝴蝶在前方盘旋，每次你追近便飞远一些，似在引路。它翅膀扇动之处撒下细碎的灵光粉末。',
+    minDifficulty: 0,
+    maxDifficulty: 1500,
+    choices: [
+      { id: 'follow', label: '全速追随', riskHint: '不知去向何处，或有大机缘', risk: 'risky' },
+      { id: 'cautious', label: '保持距离跟行', riskHint: '小心观察，稳妥中寻机', risk: 'normal' },
+      { id: 'ignore', label: '不予理会', riskHint: '不上当，继续赶路', risk: 'safe' },
+    ],
+  },
+  {
+    id: 'fortune_rain',
+    category: 'fortune',
+    name: '灵雨甘露',
+    description:
+      '天穹忽然裂开一线，一阵温润的灵雨从裂隙中洒落。灵雨所及之处，枯草重生，碎石泛光。',
+    minDifficulty: 0,
+    maxDifficulty: MAX_DIFFICULTY,
+    choices: [
+      { id: 'meditate', label: '沐雨吐纳', riskHint: '就地修炼，直接吸收灵气', risk: 'normal' },
+      { id: 'bottle', label: '以瓶盛雨', riskHint: '储存灵液，稳妥带回', risk: 'safe' },
     ],
   },
 
-  /* ---------- 环境险境 ---------- */
+  /* ================================================================
+   *  环境险境（hazard）
+   * ================================================================ */
   {
     id: 'hazard_surge',
     category: 'hazard',
@@ -335,9 +529,9 @@ export const ENCOUNTERS: readonly EncounterDef[] = [
     minDifficulty: 300,
     maxDifficulty: MAX_DIFFICULTY,
     choices: [
-      { id: 'absorb', label: '顺势吸收', riskHint: '险中求利，可能撑爆经脉' },
-      { id: 'resist', label: '全力抵御', riskHint: '消耗灵力，可稳住身形' },
-      { id: 'hide', label: '找掩体躲避', riskHint: '安全避让，却错失良机' },
+      { id: 'absorb', label: '顺势吸收', riskHint: '险中求利，可能撑爆经脉', risk: 'risky' },
+      { id: 'resist', label: '全力抵御', riskHint: '消耗灵力，可稳住身形', risk: 'normal' },
+      { id: 'hide', label: '找掩体躲避', riskHint: '安全避让，却错失良机', risk: 'safe' },
     ],
   },
   {
@@ -349,9 +543,9 @@ export const ENCOUNTERS: readonly EncounterDef[] = [
     minDifficulty: 300,
     maxDifficulty: MAX_DIFFICULTY,
     choices: [
-      { id: 'leap', label: '飞跃而过', riskHint: '一鼓作气，失足则万劫不复' },
-      { id: 'edge', label: '沿边寻路', riskHint: '绕行较远，但相对安全' },
-      { id: 'bridge', label: '用法器架桥', riskHint: '耗损法器，换取稳妥通行' },
+      { id: 'leap', label: '飞跃而过', riskHint: '一鼓作气，失足则万劫不复', risk: 'risky' },
+      { id: 'edge', label: '沿边寻路', riskHint: '绕行较远，但相对安全', risk: 'normal' },
+      { id: 'bridge', label: '用法器架桥', riskHint: '耗损法器，换取稳妥通行', risk: 'safe' },
     ],
   },
   {
@@ -363,9 +557,9 @@ export const ENCOUNTERS: readonly EncounterDef[] = [
     minDifficulty: 100,
     maxDifficulty: 1500,
     choices: [
-      { id: 'fire', label: '以火属灵力开路', riskHint: '耗损灵力，可稳步破冰前行' },
-      { id: 'slow', label: '缓慢穿越', riskHint: '谨慎挪行，胜在稳妥省力' },
-      { id: 'detour', label: '绕远路', riskHint: '安全无忧，但耽误不少脚程' },
+      { id: 'fire', label: '以火属灵力开路', riskHint: '耗损灵力，可稳步破冰前行', risk: 'normal' },
+      { id: 'slow', label: '缓慢穿越', riskHint: '谨慎挪行，胜在稳妥省力', risk: 'safe' },
+      { id: 'dive', label: '潜入冰下暗河', riskHint: '极度冒险，或有冰灵精华', risk: 'risky' },
     ],
   },
   {
@@ -377,9 +571,9 @@ export const ENCOUNTERS: readonly EncounterDef[] = [
     minDifficulty: 300,
     maxDifficulty: MAX_DIFFICULTY,
     choices: [
-      { id: 'cool', label: '以水术降温', riskHint: '耗损灵力，硬铺一条通路' },
-      { id: 'bridge', label: '找石桥通过', riskHint: '需多加试探，稳妥但耗时' },
-      { id: 'back', label: '回头另找', riskHint: '安全放弃，另寻他路' },
+      { id: 'cool', label: '以水术降温', riskHint: '耗损灵力，硬铺一条通路', risk: 'normal' },
+      { id: 'bridge', label: '找石桥通过', riskHint: '需多加试探，稳妥但耗时', risk: 'safe' },
+      { id: 'leap', label: '踏浮石飞渡', riskHint: '一步踏错便坠熔岩', risk: 'risky' },
     ],
   },
   {
@@ -391,13 +585,57 @@ export const ENCOUNTERS: readonly EncounterDef[] = [
     minDifficulty: 300,
     maxDifficulty: MAX_DIFFICULTY,
     choices: [
-      { id: 'cross', label: '冒险穿越', riskHint: '九死一生，或直达秘境深处' },
-      { id: 'probe', label: '抛物试探', riskHint: '先探深浅，稳妥却费时' },
-      { id: 'wait', label: '等裂缝闭合', riskHint: '安全等待，但可能错过时机' },
+      { id: 'cross', label: '冒险穿越', riskHint: '九死一生，或直达秘境深处', risk: 'risky' },
+      { id: 'probe', label: '抛物试探', riskHint: '先探深浅，稳妥却费时', risk: 'normal' },
+      { id: 'wait', label: '等裂缝闭合', riskHint: '安全等待，但可能错过时机', risk: 'safe' },
+    ],
+  },
+  {
+    id: 'hazard_storm',
+    category: 'hazard',
+    name: '雷暴云层',
+    description:
+      '头顶的灵云忽然变成墨黑色，闪电在云层间跳跃。每一道电弧劈下时，附近的金属器物都嗡嗡作响。',
+    minDifficulty: 100,
+    maxDifficulty: MAX_DIFFICULTY,
+    choices: [
+      { id: 'attract', label: '引雷入体', riskHint: '以身试雷，或淬炼体魄', risk: 'risky' },
+      { id: 'shield', label: '结阵避雷', riskHint: '消耗灵力，安稳度过', risk: 'normal' },
+      { id: 'shelter', label: '寻洞避雨', riskHint: '安全等候，雷去再行', risk: 'safe' },
+    ],
+  },
+  {
+    id: 'hazard_sandstorm',
+    category: 'hazard',
+    name: '赤沙风暴',
+    description:
+      '漫天赤沙铺天盖地而来，能见度骤降至数尺之内。沙粒如刀，裸露的肌肤已隐隐作痛。远处传来轰隆隆的闷响，似有更猛烈的沙暴正在逼近。',
+    minDifficulty: 0,
+    maxDifficulty: 1500,
+    choices: [
+      { id: 'push', label: '硬闯风暴', riskHint: '可能被沙暴淹没', risk: 'risky' },
+      { id: 'barrier', label: '结灵气壁推进', riskHint: '消耗灵力，稳步前行', risk: 'normal' },
+      { id: 'dig', label: '挖坑避沙', riskHint: '原地等候，安全但耗时', risk: 'safe' },
+    ],
+  },
+  {
+    id: 'hazard_tide',
+    category: 'hazard',
+    name: '暗潮涌动',
+    description:
+      '地下水流忽然暴涨，浑浊的水带着灵气翻涌上来，很快便没过了脚踝。水势还在加速上涨，通道渐渐变窄。',
+    minDifficulty: 0,
+    maxDifficulty: 1500,
+    choices: [
+      { id: 'dive_deep', label: '潜水探底', riskHint: '或找到暗道出口，也可能溺困', risk: 'risky' },
+      { id: 'climb', label: '攀壁上行', riskHint: '体力消耗大，但能脱离水线', risk: 'normal' },
+      { id: 'float', label: '随水漂流', riskHint: '节省力气，看水往哪去', risk: 'safe' },
     ],
   },
 
-  /* ---------- 神秘人物 ---------- */
+  /* ================================================================
+   *  神秘人物（npc）
+   * ================================================================ */
   {
     id: 'npc_merchant',
     category: 'npc',
@@ -407,8 +645,8 @@ export const ENCOUNTERS: readonly EncounterDef[] = [
     minDifficulty: 0,
     maxDifficulty: MAX_DIFFICULTY,
     choices: [
-      { id: 'trade', label: '与之交易', riskHint: '各取所需，价格或有高低' },
-      { id: 'pass', label: '擦肩而过', riskHint: '毫无风险，却也无所得' },
+      { id: 'trade', label: '与之交易', riskHint: '各取所需，价格或有高低', risk: 'normal' },
+      { id: 'pass', label: '擦肩而过', riskHint: '毫无风险，却也无所得', risk: 'safe' },
     ],
   },
   {
@@ -420,8 +658,8 @@ export const ENCOUNTERS: readonly EncounterDef[] = [
     minDifficulty: 0,
     maxDifficulty: MAX_DIFFICULTY,
     choices: [
-      { id: 'help', label: '出手相助', riskHint: '耗费丹药，或换得知恩图报' },
-      { id: 'ignore', label: '视而不见', riskHint: '安全离去，却难免负疚' },
+      { id: 'help', label: '出手相助', riskHint: '耗费丹药，或换得知恩图报', risk: 'normal' },
+      { id: 'ignore', label: '视而不见', riskHint: '安全离去，却难免负疚', risk: 'safe' },
     ],
   },
   {
@@ -433,9 +671,9 @@ export const ENCOUNTERS: readonly EncounterDef[] = [
     minDifficulty: 300,
     maxDifficulty: MAX_DIFFICULTY,
     choices: [
-      { id: 'fight', label: '正面挑战', riskHint: '硬碰硬，胜则收获丰厚' },
-      { id: 'search', label: '寻找机关', riskHint: '需多费心思，破关更为稳妥' },
-      { id: 'bypass', label: '尝试绕过', riskHint: '险中求巧，或触发守卫' },
+      { id: 'fight', label: '正面挑战', riskHint: '硬碰硬，胜则收获丰厚', risk: 'risky' },
+      { id: 'search', label: '寻找机关', riskHint: '需多费心思，破关更为稳妥', risk: 'normal' },
+      { id: 'bypass', label: '尝试绕过', riskHint: '险中求巧，或触发守卫', risk: 'safe' },
     ],
   },
   {
@@ -447,9 +685,9 @@ export const ENCOUNTERS: readonly EncounterDef[] = [
     minDifficulty: 0,
     maxDifficulty: 1500,
     choices: [
-      { id: 'strike', label: '先下手为强', riskHint: '抢占先机，却可能冤枉好人' },
-      { id: 'talk', label: '试探交流', riskHint: '以话探底，胜负尚在两可' },
-      { id: 'alert', label: '保持警惕', riskHint: '静观其变，稳妥但无所获' },
+      { id: 'strike', label: '先下手为强', riskHint: '抢占先机，却可能冤枉好人', risk: 'risky' },
+      { id: 'talk', label: '试探交流', riskHint: '以话探底，胜负尚在两可', risk: 'normal' },
+      { id: 'alert', label: '保持警惕', riskHint: '静观其变，稳妥但无所获', risk: 'safe' },
     ],
   },
   {
@@ -461,9 +699,65 @@ export const ENCOUNTERS: readonly EncounterDef[] = [
     minDifficulty: 0,
     maxDifficulty: MAX_DIFFICULTY,
     choices: [
-      { id: 'salute', label: '恭敬行礼', riskHint: '以礼相待，或得指点一二' },
-      { id: 'ask', label: '请教道法', riskHint: '贸然求教，或有冒犯之嫌' },
-      { id: 'leave', label: '默默离开', riskHint: '不生事端，也无所获' },
+      { id: 'salute', label: '恭敬行礼', riskHint: '以礼相待，或得指点一二', risk: 'normal' },
+      { id: 'ask', label: '请教道法', riskHint: '贸然求教，或有冒犯之嫌', risk: 'risky' },
+      { id: 'leave', label: '默默离开', riskHint: '不生事端，也无所获', risk: 'safe' },
+    ],
+  },
+  {
+    id: 'npc_child',
+    category: 'npc',
+    name: '迷路灵童',
+    description:
+      '一个七八岁模样的孩童蹲在路边哭泣，衣衫虽破但料子考究。他见人来便抹着眼泪求助，说是与师父走散了。可这秘境深处，怎会有孩童独行？',
+    minDifficulty: 0,
+    maxDifficulty: 1500,
+    choices: [
+      { id: 'escort', label: '护送寻师', riskHint: '耗时费力，但或有善报', risk: 'normal' },
+      { id: 'gift', label: '赠物离开', riskHint: '略施善意，不做过多纠缠', risk: 'safe' },
+      { id: 'question', label: '详细盘问', riskHint: '刨根问底，万一是妖物变化…', risk: 'risky' },
+    ],
+  },
+  {
+    id: 'npc_rival',
+    category: 'npc',
+    name: '敌对宗门弟子',
+    description:
+      '数名身着玄衣的修士挡在路口，为首之人冷冷扫你一眼，手已按上腰间的法器。他们显然也在探索此处，对突然出现的竞争者并不友善。',
+    minDifficulty: 100,
+    maxDifficulty: MAX_DIFFICULTY,
+    choices: [
+      { id: 'confront', label: '针锋相对', riskHint: '打起来谁也没好果子吃', risk: 'risky' },
+      { id: 'negotiate', label: '协商分路', riskHint: '各退一步，和气生财', risk: 'normal' },
+      { id: 'avoid', label: '绕道避开', riskHint: '惹不起躲得起，安全第一', risk: 'safe' },
+    ],
+  },
+  {
+    id: 'npc_ghost',
+    category: 'npc',
+    name: '古修残魂',
+    description:
+      '一道半透明的虚影浮在废墟上方，隐约可辨是个身着古服的修士。它嘴唇翕动，似在说什么，却听不到声音。残魂的目光中满是不甘。',
+    minDifficulty: 300,
+    maxDifficulty: MAX_DIFFICULTY,
+    choices: [
+      { id: 'merge', label: '以神识沟通', riskHint: '可能被残念侵入，也可能得传承', risk: 'risky' },
+      { id: 'listen', label: '静观其意', riskHint: '耐心感应，或能理解其指引', risk: 'normal' },
+      { id: 'disperse', label: '以符驱散', riskHint: '干净利落，但什么也得不到', risk: 'safe' },
+    ],
+  },
+  {
+    id: 'npc_fox',
+    category: 'npc',
+    name: '化形狐妖',
+    description:
+      '一名容貌绝丽的女子倚在花树下微笑，可你注意到她影子里隐约多出了一条毛茸茸的尾巴。她开口时，声音如泉水叮咚。',
+    minDifficulty: 0,
+    maxDifficulty: MAX_DIFFICULTY,
+    choices: [
+      { id: 'flirt', label: '好言攀谈', riskHint: '若她心善或有意外收获', risk: 'normal' },
+      { id: 'attack', label: '直接出手', riskHint: '先下手为强，但若她无恶意…', risk: 'risky' },
+      { id: 'walk_away', label: '不予搭理', riskHint: '管她是谁，赶路要紧', risk: 'safe' },
     ],
   },
 ];

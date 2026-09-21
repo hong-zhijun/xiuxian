@@ -3544,8 +3544,15 @@ export const EXPLORE_STAGES_LOW = 3;
 /** 高级秘境（宗门 4 级以上可进）的关卡数。 */
 export const EXPLORE_STAGES_HIGH = 5;
 
-/** 大成功的本关奖励倍率（基点）：15000 = ×1.5。 */
-const GREAT_SUCCESS_REWARD_BP = 15_000;
+/**
+ * 奖励倍率矩阵（基点，10000 = ×1.0）。
+ * 行 = 选项风险等级，列 = 判定结果。failure 统一为 0。
+ */
+const REWARD_BP: Record<string, Record<ExploreOutcome, number>> = {
+  risky: { great_success: 20_000, success: 12_000, failure: 0 },
+  normal: { great_success: 15_000, success: 10_000, failure: 0 },
+  safe: { great_success: 8_000, success: 3_000, failure: 0 },
+};
 
 /** 弟子受伤时长：与速通一致的 10 分钟。 */
 const EXPLORE_INJURY_DURATION_MS = 10 * 60 * 1000;
@@ -3598,11 +3605,16 @@ function encounterViewOf(json: string | null): EncounterView | null {
       if (typeof choice.id !== 'string' || typeof choice.label !== 'string') {
         return [];
       }
+      const risk = choice.risk;
       return [
         {
           id: choice.id,
           label: choice.label,
           riskHint: typeof choice.riskHint === 'string' ? choice.riskHint : '',
+          risk:
+            risk === 'safe' || risk === 'normal' || risk === 'risky'
+              ? risk
+              : ('normal' as const),
         },
       ];
     }),
@@ -3619,6 +3631,7 @@ function encounterJsonOf(encounter: EncounterDef): string {
       id: choice.id,
       label: choice.label,
       riskHint: choice.riskHint,
+      risk: choice.risk,
     })),
   });
 }
@@ -4106,12 +4119,9 @@ export async function chooseRealmExplore(
 
   const totalStages = Number(current.total_stages);
   const stageBase = stageBaseRewards(realm.rewards, totalStages);
-  const stageRewards =
-    judgement.outcome === 'great_success'
-      ? scaleRewards(stageBase, GREAT_SUCCESS_REWARD_BP)
-      : judgement.outcome === 'success'
-        ? { ...stageBase }
-        : {};
+  const riskTier = REWARD_BP[choice.risk] ?? REWARD_BP.normal;
+  const rewardBp = riskTier[judgement.outcome];
+  const stageRewards = rewardBp > 0 ? scaleRewards(stageBase, rewardBp) : {};
   const collectedBefore = rewardsJsonOf(current.rewards_collected);
   const collectedAfter = addRewards(collectedBefore, stageRewards);
 

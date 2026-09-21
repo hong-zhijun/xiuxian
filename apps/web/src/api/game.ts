@@ -811,6 +811,7 @@ export interface EncounterChoiceView {
   id: string;
   label: string;
   riskHint: string;
+  risk: 'safe' | 'normal' | 'risky';
 }
 
 /** 一次遭遇的展示内容（与后端 view.ts 的 EncounterView 一一对应）。 */

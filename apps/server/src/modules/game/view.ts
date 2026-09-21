@@ -345,6 +345,8 @@ export interface EncounterChoiceView {
   label: string;
   /** 风险提示（例如「风险较高，可能受伤」）。 */
   riskHint: string;
+  /** 选项风险等级（决定奖励倍率）；缺失时降级为 'normal'。 */
+  risk: 'safe' | 'normal' | 'risky';
 }
 
 /** 当前等待玩家选择的遭遇场景。 */

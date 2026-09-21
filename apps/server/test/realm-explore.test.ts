@@ -37,13 +37,18 @@ const PASSWORD = 'password-123456';
 const ENV_ON = envWith(env, { REALM_EXPLORE_ENABLED: 'true', OPENROUTER_API_KEY: '' });
 const ENV_OFF = envWith(env, { REALM_EXPLORE_ENABLED: 'false', OPENROUTER_API_KEY: '' });
 
-/** 迷雾森林：难度 50、宗门 1 级可进 → 3 关；奖励 灵石30000/药材15000；入场费 灵石10000。 */
+/**
+ * 迷雾森林：难度 50、宗门 1 级可进 → 3 关；奖励 灵石30000/药材15000；入场费 灵石10000。
+ *
+ * 降级 + forceRandom(0.0001) → 必然大成功；抽到的第一个遭遇（beast_wolf）的 choices[0]
+ * 是 risk: 'risky'，risky + great_success 的倍率 = 20000 基点 = ×2.0。
+ */
 const MISTY = {
   realmId: 'mistyForest',
   totalStages: 3,
-  /** 单关基础奖励（大成功 ×1.5）。 */
-  greatStone: 11_250,
-  greatHerb: 5_625,
+  /** 单关 risky+大成功 奖励（base × 2.0）。 */
+  greatStone: 15_000,
+  greatHerb: 7_500,
   /** 每关基础（= 通关额外奖励）。 */
   baseStone: 7_500,
   baseHerb: 3_750,
@@ -729,7 +734,7 @@ describe('V6 秘境探索：与既有命令的交错', () => {
 
     // 另一个请求先把这一关推进了（current_stage 0 → 1）。
     await env.DB.prepare(
-      "UPDATE realm_explorations SET current_stage = 1, rewards_collected = '{\"spiritStone\":\"11250\"}', updated_at = ? WHERE id = ?",
+      `UPDATE realm_explorations SET current_stage = 1, rewards_collected = '{"spiritStone":"${MISTY.greatStone}"}', updated_at = ? WHERE id = ?`,
     )
       .bind(Date.now(), explorationId)
       .run();
@@ -744,7 +749,7 @@ describe('V6 秘境探索：与既有命令的交错', () => {
             status: 'in_progress',
             currentEncounter: firstRead!.current_encounter,
             usedEncounters: firstRead!.used_encounters,
-            rewardsCollected: '{"spiritStone":"22500"}',
+            rewardsCollected: `{"spiritStone":"${MISTY.greatStone * 2}"}`,
             now: Date.now(),
           }),
           deleteRealmExploreSnapshotGuardStatement(guardId),
@@ -755,7 +760,7 @@ describe('V6 秘境探索：与既有命令的交错', () => {
     // 整批回滚：并发请求写的账本没被覆盖。
     const row = await explorationRow(explorationId);
     expect(Number(row?.current_stage)).toBe(1);
-    expect(JSON.parse(row?.rewards_collected as string)).toEqual({ spiritStone: '11250' });
+    expect(JSON.parse(row?.rewards_collected as string)).toEqual({ spiritStone: String(MISTY.greatStone) });
     expect(await mutationGuardCount()).toBe(0);
   });
 
