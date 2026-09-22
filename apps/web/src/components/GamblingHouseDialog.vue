@@ -5,9 +5,11 @@ import type {
   DaoAttribute,
   DaoDebateInput,
   DaoDebateResult,
+  DebateHistoryEntry,
   DiscipleView,
   SectStateView,
 } from '../api/game';
+import { fetchDebateHistory } from '../api/game';
 import ModalShell from './ModalShell.vue';
 
 /**
@@ -47,6 +49,83 @@ type Stage = 'mode-select' | 'configure' | 'confrontation' | 'result';
 const stage = ref<Stage>('mode-select');
 const showRules = ref(false);
 const showRecord = ref(false);
+
+/* ---------- 赌坊记录：详细列表 + 分页 ---------- */
+
+const historyEntries = ref<DebateHistoryEntry[]>([]);
+const historyPage = ref(1);
+const historyTotalPages = ref(1);
+const historyLoading = ref(false);
+
+async function loadHistory(page: number): Promise<void> {
+  historyLoading.value = true;
+  try {
+    const data = await fetchDebateHistory(page);
+    historyEntries.value = data.entries;
+    historyPage.value = data.page;
+    historyTotalPages.value = data.totalPages;
+  } finally {
+    historyLoading.value = false;
+  }
+}
+
+function openRecord(): void {
+  showRecord.value = true;
+  loadHistory(1);
+}
+
+function historyPrev(): void {
+  if (historyPage.value > 1) loadHistory(historyPage.value - 1);
+}
+
+function historyNext(): void {
+  if (historyPage.value < historyTotalPages.value) loadHistory(historyPage.value + 1);
+}
+
+const BET_MODE_LABELS: Record<string, string> = {
+  preset_spirit_stone: '预设灵石',
+  free_resource: '自由资源',
+  attribute: '属性赌注',
+};
+
+function formatStake(entry: DebateHistoryEntry): string {
+  try {
+    const detail = JSON.parse(entry.stakeDetail) as Record<string, unknown>;
+    if (entry.betMode === 'attribute') {
+      const attrLabel = ATTRIBUTE_OPTIONS.find((o) => o.value === detail.attribute)?.label ?? String(detail.attribute);
+      return `${attrLabel} -${String(detail.points)}点`;
+    }
+    const amount = Number(detail.amount) / UNITS_PER_DISPLAY;
+    const resName = resourceLabel(String(detail.resourceId ?? 'spiritStone'));
+    return `${resName} ${String(amount)}`;
+  } catch {
+    return '—';
+  }
+}
+
+function formatReward(entry: DebateHistoryEntry): string {
+  if (entry.result === 'lose') return '—';
+  try {
+    const detail = JSON.parse(entry.rewardDetail) as Record<string, unknown>;
+    if (detail.type === 'resource') {
+      const amount = Number(detail.amount) / UNITS_PER_DISPLAY;
+      const resName = resourceLabel(String(detail.resourceId));
+      return `${resName} +${String(amount)}`;
+    }
+    if (detail.type === 'insight') {
+      return `悟道值 +${String(detail.insight)}`;
+    }
+    return '—';
+  } catch {
+    return '—';
+  }
+}
+
+function formatTime(iso: string): string {
+  const d = new Date(iso);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${String(d.getMonth() + 1)}/${String(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
 
 /* ---------- 疗伤 / 在外判定：与挑战选人同一口径 ---------- */
 
@@ -238,7 +317,7 @@ const RULES_TEXT = `论道赌局 · 玩法说明
     <template v-if="stage === 'mode-select'">
       <div class="gambling-toolbar">
         <p class="lineup-note">选择一种玩法，押上筹码与天机相搏。</p>
-        <button class="quiet-button" type="button" @click="showRecord = true">赌坊记录</button>
+        <button class="quiet-button" type="button" @click="openRecord()">赌坊记录</button>
       </div>
 
       <p v-if="!unlocked" class="blocked-hint">
@@ -543,7 +622,7 @@ const RULES_TEXT = `论道赌局 · 玩法说明
       </section>
     </ModalShell>
 
-    <!-- 赌坊记录：战绩汇总 -->
+    <!-- 赌坊记录：战绩汇总 + 详细列表 -->
     <ModalShell v-if="showRecord" narrow label="赌坊记录" @close="showRecord = false">
       <section class="gambling-record-card" aria-labelledby="gambling-record-title">
         <h2 id="gambling-record-title" class="disciple-detail-title">赌坊记录</h2>
@@ -576,6 +655,44 @@ const RULES_TEXT = `论道赌局 · 玩法说明
               <dd class="record-win">+{{ state.gambling.stats.totalInsight }}</dd>
             </div>
           </dl>
+
+          <p class="eyebrow" style="margin-top: 16px">详细记录</p>
+          <p v-if="historyLoading" class="blocked-hint">加载中…</p>
+          <template v-else-if="historyEntries.length > 0">
+            <ul class="history-list">
+              <li v-for="entry in historyEntries" :key="entry.id" class="history-item">
+                <div class="history-row-top">
+                  <span
+                    class="history-result-tag"
+                    :class="entry.result === 'win' ? 'record-win' : 'record-lose'"
+                  >{{ entry.result === 'win' ? '胜' : '负' }}</span>
+                  <span class="history-disciple">{{ entry.discipleName }}</span>
+                  <span class="history-mode">{{ BET_MODE_LABELS[entry.betMode] ?? entry.betMode }} {{ entry.multiplier }}x</span>
+                  <span class="history-time">{{ formatTime(entry.createdAt) }}</span>
+                </div>
+                <div class="history-row-bottom">
+                  <span>赌注：{{ formatStake(entry) }}</span>
+                  <span v-if="entry.result === 'win'">奖励：{{ formatReward(entry) }}</span>
+                </div>
+              </li>
+            </ul>
+            <div v-if="historyTotalPages > 1" class="history-pagination">
+              <button
+                class="quiet-button"
+                type="button"
+                :disabled="historyPage <= 1 || historyLoading"
+                @click="historyPrev"
+              >上一页</button>
+              <span class="history-page-info">{{ historyPage }} / {{ historyTotalPages }}</span>
+              <button
+                class="quiet-button"
+                type="button"
+                :disabled="historyPage >= historyTotalPages || historyLoading"
+                @click="historyNext"
+              >下一页</button>
+            </div>
+          </template>
+          <p v-else class="blocked-hint">暂无详细记录。</p>
         </template>
         <p v-else class="blocked-hint">暂无论道记录。</p>
         <button class="action-button primary-action realm-button" type="button" @click="showRecord = false">
@@ -882,5 +999,67 @@ const RULES_TEXT = `论道赌局 · 玩法说明
 
 .record-lose {
   color: #c47272;
+}
+
+.history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.history-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid rgba(202, 169, 106, 0.12);
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.history-row-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.history-result-tag {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.history-disciple {
+  color: #dce6e0;
+}
+
+.history-mode {
+  color: #93a99e;
+}
+
+.history-time {
+  margin-left: auto;
+  color: var(--faint, #7d9186);
+}
+
+.history-row-bottom {
+  display: flex;
+  gap: 16px;
+  color: #93a99e;
+}
+
+.history-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.history-page-info {
+  color: #93a99e;
+  font-size: 12px;
 }
 </style>

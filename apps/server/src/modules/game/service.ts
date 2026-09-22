@@ -238,6 +238,8 @@ import {
   type ExploreChoiceResultView,
   type DaoDebateResultView,
   type InsightAllocateOutcome,
+  type DebateHistoryEntryView,
+  type DebateHistoryView,
 } from './view';
 
 /**
@@ -346,6 +348,54 @@ async function loadDebateStats(db: D1Database, sectId: string): Promise<DebateSt
     netSpiritStone: Number(row?.net_spirit_stone) || 0,
     totalInsight: Number(row?.total_insight) || 0,
   };
+}
+
+const DEBATE_HISTORY_PAGE_SIZE = 10;
+
+export async function listDebateHistory(
+  db: D1Database,
+  userId: string,
+  page: number,
+): Promise<DebateHistoryView> {
+  const sect = await new SectRepository(db).findByUserId(userId);
+  if (sect === null) {
+    return { entries: [], total: 0, page: 1, pageSize: DEBATE_HISTORY_PAGE_SIZE, totalPages: 1 };
+  }
+
+  const countRow = await db
+    .prepare('SELECT COUNT(*) AS cnt FROM dao_debate_log WHERE sect_id = ?')
+    .bind(sect.id)
+    .first<{ cnt: number }>();
+  const total = Number(countRow?.cnt) || 0;
+  const totalPages = Math.max(1, Math.ceil(total / DEBATE_HISTORY_PAGE_SIZE));
+  const safePage = Math.max(1, Math.min(page, totalPages));
+  const offset = (safePage - 1) * DEBATE_HISTORY_PAGE_SIZE;
+
+  const { results } = await db
+    .prepare(
+      `SELECT id, disciple_name, bet_mode, multiplier, result,
+              stake_detail, reward_detail, win_probability, created_at
+       FROM dao_debate_log
+       WHERE sect_id = ?
+       ORDER BY created_at DESC
+       LIMIT ? OFFSET ?`,
+    )
+    .bind(sect.id, DEBATE_HISTORY_PAGE_SIZE, offset)
+    .all();
+
+  const entries: DebateHistoryEntryView[] = (results ?? []).map((row) => ({
+    id: String(row.id),
+    discipleName: String(row.disciple_name),
+    betMode: String(row.bet_mode),
+    multiplier: Number(row.multiplier),
+    result: row.result === 'win' ? ('win' as const) : ('lose' as const),
+    stakeDetail: String(row.stake_detail),
+    rewardDetail: String(row.reward_detail),
+    winProbability: row.win_probability != null ? Number(row.win_probability) : null,
+    createdAt: new Date(Number(row.created_at)).toISOString(),
+  }));
+
+  return { entries, total, page: safePage, pageSize: DEBATE_HISTORY_PAGE_SIZE, totalPages };
 }
 
 async function loadSnapshot(

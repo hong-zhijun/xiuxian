@@ -1040,6 +1040,33 @@ export async function daoDebate(
   });
 }
 
+/** 赌坊详细记录条目（与后端 view.ts 的 DebateHistoryEntryView 一一对应）。 */
+export interface DebateHistoryEntry {
+  id: string;
+  discipleName: string;
+  betMode: string;
+  multiplier: number;
+  result: 'win' | 'lose';
+  stakeDetail: string;
+  rewardDetail: string;
+  winProbability: number | null;
+  createdAt: string;
+}
+
+/** 赌坊详细记录分页（与后端 view.ts 的 DebateHistoryView 一一对应）。 */
+export interface DebateHistoryPage {
+  entries: DebateHistoryEntry[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+}
+
+/** 0019 赌坊详细记录（GET /game/debate-history?page=N）：只读、分页、不结算。 */
+export async function fetchDebateHistory(page = 1): Promise<DebateHistoryPage> {
+  return apiRequest<DebateHistoryPage>(`/api/v1/game/debate-history?page=${String(page)}`);
+}
+
 /** 0019 分配悟道值（POST /game/allocate-dao-insight）：points 1~50，服务端再做归属与上限校验。 */
 export async function allocateDaoInsight(
   discipleId: string,

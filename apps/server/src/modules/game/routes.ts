@@ -38,6 +38,7 @@ import {
   craftPill,
   createSect,
   daoDebate,
+  listDebateHistory,
   expelDisciple,
   exploreSectRealm,
   getActiveExploration,
@@ -373,6 +374,14 @@ export function createGameRoutes(): Hono<AppEnv> {
       c.env,
     );
     return respondOk(c, { state: result.state, result: result.result });
+  });
+
+  // 0019 赌坊：详细记录（只读：不结算、不写库；分页查询 dao_debate_log）。
+  routes.get('/game/debate-history', async (c) => {
+    const userId = requireUserId(c);
+    const page = Math.max(1, Number(c.req.query('page')) || 1);
+    const history = await listDebateHistory(getDb(c.env), userId, page);
+    return respondOk(c, history);
   });
 
   // 0019 赌坊：悟道值加点（结算 → 归属/余额/上限校验 → 属性 + 悟道值同批写回）。

@@ -283,6 +283,28 @@ export interface InsightAllocateOutcome {
   totalUsed: number;
 }
 
+/** 赌坊详细记录条目（GET /game/debate-history 的单条）。 */
+export interface DebateHistoryEntryView {
+  id: string;
+  discipleName: string;
+  betMode: string;
+  multiplier: number;
+  result: 'win' | 'lose';
+  stakeDetail: string;
+  rewardDetail: string;
+  winProbability: number | null;
+  createdAt: string;
+}
+
+/** 赌坊详细记录（GET /game/debate-history 的 data）：分页 + 条目列表。 */
+export interface DebateHistoryView {
+  entries: DebateHistoryEntryView[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+}
+
 /** 单条历练对弟子的归约状态（none = 没有未领取记录）。 */
 export type JourneyStatusView = JourneyStatus;
 
