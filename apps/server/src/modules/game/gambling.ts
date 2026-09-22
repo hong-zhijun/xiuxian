@@ -21,7 +21,7 @@ import { dateKeyUtc8 } from './constants';
 export const GAMBLING_UNLOCK_SECT_LEVEL = 2;
 
 /** 每日次数上限（UTC+8 自然日重置，全宗门共享计数）：论道赌局与天机轮**共享**这 20 次。 */
-export const DEBATE_DAILY_LIMIT = 20;
+export const DEBATE_DAILY_LIMIT = 50;
 
 /** 每个弟子悟道值的累计分配上限。 */
 export const DAO_INSIGHT_CAP = 50;

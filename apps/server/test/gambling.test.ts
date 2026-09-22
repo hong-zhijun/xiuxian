@@ -573,7 +573,7 @@ describe('模式 C：属性赌注', () => {
 /* ---------- 每日限次、弟子资格、归属 ---------- */
 
 describe('论道限次与资格', () => {
-  it('当日已满 DEBATE_DAILY_LIMIT（20）次 → DAILY_LIMIT；第 20 次仍可进行', async () => {
+  it('当日已满 DEBATE_DAILY_LIMIT（50）次 → DAILY_LIMIT；第 50 次仍可进行', async () => {
     const sect = await makeSect('gh-limit');
     await freezeSettlement(sect.sectId);
     await unlockGambling(sect.sectId);

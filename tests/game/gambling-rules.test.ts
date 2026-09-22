@@ -80,8 +80,8 @@ describe('赌坊解锁与常量', () => {
     expect(gamblingUnlockBlockedReason(2)).toBeNull();
   });
 
-  it('每日 20 次（DEBATE_DAILY_LIMIT）、悟道值累计上限 50、属性上限 100（计划 2.2 / 2.3）', () => {
-    expect(DEBATE_DAILY_LIMIT).toBe(20);
+  it('每日 50 次（DEBATE_DAILY_LIMIT）、悟道值累计上限 50、属性上限 100（计划 2.2 / 2.3）', () => {
+    expect(DEBATE_DAILY_LIMIT).toBe(50);
     expect(DAO_INSIGHT_CAP).toBe(50);
     expect(ATTRIBUTE_MAX).toBe(100);
   });
@@ -194,7 +194,7 @@ describe('论道每日次数归一（计划 2.2：UTC+8 自然日重置）', () 
     expect(state.remaining).toBe(DEBATE_DAILY_LIMIT);
   });
 
-  it('debate_count = DEBATE_DAILY_LIMIT（20）视为用尽', () => {
+  it('debate_count = DEBATE_DAILY_LIMIT（50）视为用尽', () => {
     const full = debateDayStateOf(
       { debate_date_key: '2026-01-05', debate_count: DEBATE_DAILY_LIMIT },
       NOON_UTC8,
