@@ -7,18 +7,22 @@ import type {
   DaoDebateResult,
   DebateHistoryEntry,
   SectStateView,
+  WheelSpinResult,
 } from '../api/game';
 import { fetchDebateHistory } from '../api/game';
 import ModalShell from './ModalShell.vue';
 import DisciplePicker from './DisciplePicker.vue';
+import WheelDialog from './WheelDialog.vue';
 
 /**
- * 赌坊主面板（弹窗内容）：三个阶段在同一组件里切换 ——
- * mode-select（玩法列表）/ configure（赌注配置）/ result（结果展示）。
+ * 赌坊主面板（弹窗内容）：每个玩法一个阶段，在同一组件里切换 ——
+ * mode-select（玩法列表）/ 论道的 configure（赌注配置）· confrontation（对峙）· result（结果）
+ * / wheel（天机轮，交给 WheelDialog 渲染）。
  *
  * 三种赌注模式的字段、解锁、每日次数、弟子归属与胜负都由服务端裁决：
  * 这里只按 betMode 收集各自的必填项，绝不自己算数额或改服务端文案
  * （stakeDescription / rewardDescription / message 原样展示）。
+ * 天机轮同理：盘面、费用与落格全在服务端，本组件只把它当第二个玩法接进同一套 props / emits。
  * 未解锁时只显示服务端的 blockedReason；受伤或在外历练的弟子不能出战（与挑战选人同一口径）。
  */
 const props = defineProps<{
@@ -26,6 +30,8 @@ const props = defineProps<{
   busy: boolean;
   /** 刚做完的一次论道结果；null = 还没出过结果。 */
   result: DaoDebateResult | null;
+  /** 刚转出的一次天机轮结果；null = 还没转过（上层每次转动前会清空）。 */
+  wheelResult: WheelSpinResult | null;
 }>();
 
 const emit = defineEmits<{
@@ -36,14 +42,22 @@ const emit = defineEmits<{
    * 提示文案与去重由 SectScreen 统一处理（关闭弹窗时也要补发同一条）。
    */
   reveal: [];
+  /** 天机轮的转动 / 重置请求与「停稳了」回执：接口调用与提示都在上层，这里只转发。 */
+  wheelSpin: [tier: number];
+  wheelReset: [];
+  wheelReveal: [];
+  /** 当前在玩哪个玩法：只为让赌坊弹窗的加载层文案对得上（论道 / 天机轮）。 */
+  game: [game: GamblingGame];
 }>();
+
+type GamblingGame = 'debate' | 'wheel';
 
 /** 所有资源数量都是最小单位整数，1 展示单位 = 1000 最小单位（与 utils/format.ts 同口径）。 */
 const UNITS_PER_DISPLAY = 1000;
 /** 自由输入的最小赌注：展示 10 = 后端 FREE_BET_MIN（10000 最小单位）。 */
 const FREE_BET_MIN_DISPLAY = 10;
 
-type Stage = 'mode-select' | 'configure' | 'confrontation' | 'result';
+type Stage = 'mode-select' | 'configure' | 'confrontation' | 'result' | 'wheel';
 
 /** 挂载时停在玩法列表；只有「新结果到达」才切进 confrontation（不因父组件残留旧 result 跳阶段）。 */
 const stage = ref<Stage>('mode-select');
@@ -86,6 +100,8 @@ const BET_MODE_LABELS: Record<string, string> = {
   preset_spirit_stone: '预设灵石',
   free_resource: '自由资源',
   attribute: '属性赌注',
+  // 0020 天机轮：记录列表里的倍率列对它是「投入档位」，所以文案要区分开。
+  wheel: '天机轮',
 };
 
 function formatStake(entry: DebateHistoryEntry): string {
@@ -115,10 +131,19 @@ function formatReward(entry: DebateHistoryEntry): string {
     if (detail.type === 'insight') {
       return `悟道值 +${String(detail.insight)}`;
     }
+    if (detail.type === 'pill') {
+      // 0020 天机轮的丹药格：数量随投入档位走，名字仍从服务端名词表查。
+      return `${pillLabel(String(detail.pillId))} ×${String(detail.quantity)}`;
+    }
     return '—';
   } catch {
     return '—';
   }
+}
+
+/** 丹药名取自服务端下发的炼丹面板（唯一一份名词表），查不到时退回 id。 */
+function pillLabel(pillId: string): string {
+  return props.state.alchemy.recipes.find((recipe) => recipe.id === pillId)?.name ?? pillId;
 }
 
 function formatTime(iso: string): string {
@@ -227,18 +252,59 @@ function submit(): void {
 
 function enterConfigure(): void {
   if (!unlocked.value) return;
+  reportGame('debate');
   stage.value = 'configure';
+}
+
+/**
+ * 玩法切换：只有赌坊弹窗的加载层文案要靠它（论道 / 天机轮），
+ * 业务状态仍各自留在自己的阶段里。
+ */
+function reportGame(game: GamblingGame): void {
+  emit('game', game);
+}
+
+/** 进入天机轮：格局与费用来自 state.gambling.wheel，未解锁或格面缺失时不放行。 */
+function enterWheel(): void {
+  if (!unlocked.value || props.state.gambling.wheel === null) return;
+  reportGame('wheel');
+  stage.value = 'wheel';
+}
+
+/** 天机轮里点「返回」：回到玩法列表（论道那套阶段与表单原样保留）。 */
+function leaveWheel(): void {
+  reportGame('debate');
+  stage.value = 'mode-select';
+}
+
+/** 天机轮的点按一律转发给上层：接口调用、state 覆盖与提示都在 App.vue / SectScreen。 */
+function onWheelSpin(tier: number): void {
+  if (props.busy) return;
+  emit('wheelSpin', tier);
+}
+
+function onWheelReset(): void {
+  if (props.busy) return;
+  emit('wheelReset');
+}
+
+/** 转盘停稳：交给 SectScreen 补一条结果提示（与 reveal 同一套去重）。 */
+function onWheelReveal(): void {
+  emit('wheelReveal');
 }
 
 /** 结果看完了回到配置（保留上一次的模式与选的弟子，方便连赌）。 */
 function continueDebate(): void {
+  reportGame('debate');
   stage.value = 'configure';
 }
 
 // 结果到达先进 confrontation（看对手属性），玩家点揭晓后再到 result。
+// 天机轮不参与这里：它的结果由 WheelDialog 自己消费（stage 是 'wheel' 时不动）。
 watch(
   () => props.result,
   (result) => {
+    if (stage.value === 'wheel') return;
     if (result !== null) {
       stage.value = 'confrontation';
     } else if (stage.value === 'result' || stage.value === 'confrontation') {
@@ -302,7 +368,17 @@ const RULES_TEXT = `论道赌局 · 玩法说明
             <small>押灵石、资源或弟子属性，与看不见的对手论道一场。</small>
           </button>
         </li>
-        <!-- 预留后续玩法位置：新增玩法时在这里追加同样结构的卡片，仍走同一套 props / emits。 -->
+        <li>
+          <button
+            class="gambling-game-button"
+            type="button"
+            :disabled="busy || !unlocked || state.gambling.wheel === null"
+            @click="enterWheel"
+          >
+            <strong>天机轮</strong>
+            <small>八格天机，落到哪格得哪格；花灵石可重排格局。</small>
+          </button>
+        </li>
       </ul>
     </template>
 
@@ -471,7 +547,7 @@ const RULES_TEXT = `论道赌局 · 玩法说明
         >
           <span>开始论道</span>
         </button>
-        <p v-if="remaining <= 0" class="blocked-hint">今日论道次数已用尽，明日再来。</p>
+        <p v-if="remaining <= 0" class="blocked-hint">今日赌坊次数已用尽（论道与天机轮共享），明日再来。</p>
         <p v-else-if="!modeConfigured" class="blocked-hint">请先填写合法的押注数量。</p>
       </template>
     </template>
@@ -515,6 +591,20 @@ const RULES_TEXT = `论道赌局 · 玩法说明
           <span>开始比试</span>
         </button>
       </template>
+    </template>
+
+    <!-- ---------- 天机轮：盘面/档位/结果全在子组件里，这里只接线。 ---------- -->
+    <template v-else-if="stage === 'wheel'">
+      <WheelDialog
+        :state="state"
+        :busy="busy"
+        :wheel="state.gambling.wheel"
+        :result="wheelResult"
+        @spin="onWheelSpin"
+        @reset="onWheelReset"
+        @reveal="onWheelReveal"
+        @back="leaveWheel"
+      />
     </template>
 
     <!-- ---------- 结果展示 ---------- -->

@@ -2,14 +2,27 @@ import { applyD1Migrations, env } from 'cloudflare:test';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createApp } from '../src/app';
-import { DAO_INSIGHT_CAP, DEBATE_DAILY_LIMIT } from '../src/modules/game/gambling';
+import {
+  DAO_INSIGHT_CAP,
+  DEBATE_DAILY_LIMIT,
+  WHEEL_BIG_MULTIPLIER,
+  WHEEL_RESET_COST,
+  WHEEL_SLOT_COUNT,
+  WHEEL_SPIN_COST,
+  generateWheelSlots,
+  wheelLayoutSeed,
+  type WheelSlot,
+} from '../src/modules/game/gambling';
 
 import {
   gamblingSnapshotGuardStatement,
+  upsertPillInventoryStatement,
   type DiscipleRow,
   type ResourceBalanceRow,
   type SectRow,
 } from '../src/modules/game/repository';
+
+import { PILL_IDS, findPillRecipe } from '../src/modules/game/alchemy';
 
 import { dataOf, errorOf, TestClient, type ApiResult } from './support/authClient';
 
@@ -25,6 +38,7 @@ import { dataOf, errorOf, TestClient, type ApiResult } from './support/authClien
  *   且 `win_probability` 落库为 NULL；
  * - Math.random 被 stub 成固定值（0.01 = 必胜，0.99 = 必败），胜负完全确定；
  *   stub 只在论道请求期间生效，建宗门/招募仍用真实随机。
+ * - 天机轮落格由服务端一次 Math.random 决定：用同一手法把它钉在目标格所属的 1/8 区间里。
  */
 
 await applyD1Migrations(env.DB, env.TEST_MIGRATIONS);
@@ -558,7 +572,7 @@ describe('模式 C：属性赌注', () => {
 /* ---------- 每日限次、弟子资格、归属 ---------- */
 
 describe('论道限次与资格', () => {
-  it('当日已满 10 次 → DAILY_LIMIT；第 10 次仍可进行', async () => {
+  it('当日已满 DEBATE_DAILY_LIMIT（20）次 → DAILY_LIMIT；第 20 次仍可进行', async () => {
     const sect = await makeSect('gh-limit');
     await freezeSettlement(sect.sectId);
     await unlockGambling(sect.sectId);
@@ -567,16 +581,16 @@ describe('论道限次与资格', () => {
 
     forceWin();
     await env.DB.prepare('UPDATE sects SET debate_date_key = ?, debate_count = ? WHERE id = ?')
-      .bind(TODAY, 9, sect.sectId)
+      .bind(TODAY, DEBATE_DAILY_LIMIT - 1, sect.sectId)
       .run();
-    const tenth = await debate(sect, {
+    const last = await debate(sect, {
       discipleId: sect.discipleIds[0],
       betMode: 'preset_spirit_stone',
       multiplier: 1,
       rewardType: 'insight',
     });
-    expect(tenth.status).toBe(200);
-    expect(await debateCounter(sect.sectId)).toEqual({ key: TODAY, count: 10 });
+    expect(last.status).toBe(200);
+    expect(await debateCounter(sect.sectId)).toEqual({ key: TODAY, count: DEBATE_DAILY_LIMIT });
 
     // 已用满：再来一次被拒，且不写记录、不发奖。
     const rejected = await debate(sect, {
@@ -753,7 +767,7 @@ describe('悟道值加点', () => {
 /* ---------- 迁移约束（0019） ---------- */
 
 describe('0019 迁移的数据库约束', () => {
-  it('dao_insight 不能为负、dao_insight_used 不能超过 50、倍率只能是 1~3', async () => {
+  it('dao_insight 不能为负、dao_insight_used 不能超过 50、倍率只能是 1~5（0020 放宽后）', async () => {
     const sect = await makeSect('gh-db');
     const discipleId = sect.discipleIds[0] as string;
 
@@ -767,15 +781,26 @@ describe('0019 迁移的数据库约束', () => {
         .run(),
     ).rejects.toThrow(/CHECK/i);
 
+    // 0020 把 multiplier 的 CHECK 从 1~3 放宽到 1~5（天机轮投入档位）；6 仍然越界。
     await expect(
       env.DB.prepare(
         `INSERT INTO dao_debate_log (id, sect_id, disciple_id, disciple_name, bet_mode, multiplier,
            stake_detail, result, reward_detail, win_probability, created_at)
-         VALUES (?, ?, ?, ?, 'attribute', 4, '{}', 'win', '{}', NULL, ?)`,
+         VALUES (?, ?, ?, ?, 'attribute', 6, '{}', 'win', '{}', NULL, ?)`,
       )
         .bind(crypto.randomUUID(), sect.sectId, discipleId, '甲', Date.now())
         .run(),
     ).rejects.toThrow(/CHECK/i);
+
+    // 上界这一侧：5 档（天机轮最大投入）必须被接受。
+    await env.DB.prepare(
+      `INSERT INTO dao_debate_log (id, sect_id, disciple_id, disciple_name, bet_mode, multiplier,
+         stake_detail, result, reward_detail, win_probability, created_at)
+       VALUES (?, ?, ?, ?, 'wheel', 5, '{}', 'win', '{}', NULL, ?)`,
+    )
+      .bind(crypto.randomUUID(), sect.sectId, discipleId, '天机轮', Date.now())
+      .run();
+    expect(await debateLogs(sect.sectId)).toHaveLength(1);
   });
 
   it('新宗门与旧弟子的默认值：debate 计数为 0/空、悟道值为 0', async () => {
@@ -955,5 +980,590 @@ describe('赌坊快照守卫（0019）', () => {
       .bind('cmd-stale')
       .first<{ total: number }>();
     expect(Number(guards!.total)).toBe(0);
+  });
+});
+
+/* ---------- 天机轮（0020 迁移 + 计划 4.2 / 4.3） ---------- */
+
+/** sync 面板里的天机轮（调用方保证赌坊已解锁）。 */
+function wheelPanel(state: Record<string, any>): Record<string, any> {
+  const panel = state.gambling.wheel as Record<string, any> | null;
+  expect(panel, 'sync 面板里必须有天机轮（赌坊已解锁）').toBeTruthy();
+  return panel!;
+}
+
+function spin(sect: SectFixture, tier: number): Promise<ApiResult> {
+  return sect.api.post('/api/v1/game/wheel-spin', { tier });
+}
+
+/** 重置请求体为空：路由不解析 JSON，所以这里不传 body。 */
+function resetWheel(sect: SectFixture): Promise<ApiResult> {
+  return sect.api.post('/api/v1/game/wheel-reset');
+}
+
+async function wheelSeedOf(sectId: string): Promise<number> {
+  const row = await env.DB.prepare('SELECT wheel_seed FROM sects WHERE id = ?')
+    .bind(sectId)
+    .first<{ wheel_seed: number }>();
+  expect(row, '必须有宗门行').not.toBeNull();
+  return Number(row!.wheel_seed);
+}
+
+async function setWheelSeed(sectId: string, seed: number): Promise<void> {
+  await env.DB.prepare('UPDATE sects SET wheel_seed = ? WHERE id = ?').bind(seed, sectId).run();
+}
+
+async function pillQuantityOf(sectId: string, pillId: string): Promise<number> {
+  const row = await env.DB.prepare(
+    'SELECT quantity FROM pill_inventories WHERE sect_id = ? AND pill_id = ?',
+  )
+    .bind(sectId, pillId)
+    .first<{ quantity: number }>();
+  return row === null ? 0 : Number(row.quantity);
+}
+
+/** 直接造一条丹药库存：天机轮丹药格发奖是「快照 + 数量」的绝对值 upsert。 */
+async function setPillQuantity(sectId: string, pillId: string, quantity: number): Promise<void> {
+  await env.DB.prepare(
+    `INSERT INTO pill_inventories (id, sect_id, pill_id, quantity, updated_at)
+     VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT (sect_id, pill_id)
+     DO UPDATE SET quantity = excluded.quantity, updated_at = excluded.updated_at`,
+  )
+    .bind(crypto.randomUUID(), sectId, pillId, quantity, Date.now())
+    .run();
+}
+
+/**
+ * 落格由服务端的一次 Math.random 决定：把它钉在目标格所属的 1/8 区间里
+ * （沿用本文件 forceWin / forceLose 的同一手法；格局本身仍由 seed 确定性生成）。
+ */
+function landOnSlot(slotIndex: number): void {
+  vi.spyOn(Math, 'random').mockReturnValue((slotIndex + 0.5) / WHEEL_SLOT_COUNT);
+}
+
+/**
+ * 把宗门转盘换成「格局里含指定类型格」的那一版，并返回该格的确定性下标。
+ * 格局是 (sect_id, wheel_seed) 的纯函数，所以测试能用与服务端同一个生成器预先算好落点，
+ * 不必去撞随机 seed。
+ */
+async function aimAtSlot(
+  sect: SectFixture,
+  type: WheelSlot['type'],
+): Promise<{ seed: number; slotIndex: number; slot: WheelSlot }> {
+  for (let seed = 0; seed < 200; seed += 1) {
+    const slots = generateWheelSlots(wheelLayoutSeed(sect.sectId, seed));
+    const slotIndex = slots.findIndex((slot) => slot.type === type);
+    if (slotIndex >= 0) {
+      await setWheelSeed(sect.sectId, seed);
+      return { seed, slotIndex, slot: slots[slotIndex]! };
+    }
+  }
+  throw new Error(`转盘格局里找不到 ${type} 格（试了 200 个 seed）`);
+}
+
+describe('天机轮：面板与转动（计划 4.1 / 4.2）', () => {
+  it('转动成功：扣档位费、奖励入账、写 wheel 记录、次数 +1、slotIndex 与面板一致', async () => {
+    const sect = await makeSect('wh-spin');
+    await freezeSettlement(sect.sectId);
+    await unlockGambling(sect.sectId);
+    await setBalance(sect.sectId, 'spiritStone', 2_000_000);
+
+    const panel = wheelPanel(await sect.state());
+    expect(panel.seed).toBe(0);
+    expect(panel.resetCost).toBe(WHEEL_RESET_COST);
+    expect(panel.costs).toEqual([
+      { tier: 1, cost: 50_000 },
+      { tier: 2, cost: 100_000 },
+      { tier: 3, cost: 150_000 },
+      { tier: 4, cost: 200_000 },
+      { tier: 5, cost: 250_000 },
+    ]);
+    const panelSlots = panel.slots as Record<string, any>[];
+    expect(panelSlots).toHaveLength(WHEEL_SLOT_COUNT);
+    // 面板格局必须与转动用的是同一个 (sect_id, wheel_seed) 派生结果。
+    expect(panelSlots.map((slot) => slot.type)).toEqual(
+      generateWheelSlots(wheelLayoutSeed(sect.sectId, 0)).map((slot) => slot.type),
+    );
+
+    const slotIndex = panelSlots.findIndex((slot) => slot.type === 'spirit_stone');
+    expect(slotIndex).toBeGreaterThanOrEqual(0);
+    const slot = panelSlots[slotIndex]!;
+    const tier = 1;
+    const cost = WHEEL_SPIN_COST * tier;
+    const expectedAmount = String(Math.floor(cost * slot.multiplier + 1e-6));
+
+    landOnSlot(slotIndex);
+    const spun = await spin(sect, tier);
+    expect(spun.status).toBe(200);
+    const payload = dataOf(spun) as Record<string, any>;
+    const outcome = payload.result as Record<string, any>;
+
+    expect(outcome.slotIndex).toBe(slotIndex);
+    expect(outcome.tier).toBe(tier);
+    expect(outcome.cost).toBe(String(cost));
+    expect(outcome.slotLabel).toBe(slot.label);
+    expect(outcome.message).toContain(slot.label);
+    // 奖励口径：资源类 = floor(投入 × 格子倍率)。
+    expect(outcome.reward).toEqual({
+      type: 'resource',
+      resourceId: 'spiritStone',
+      amount: expectedAmount,
+    });
+
+    // 状态回执：命中格子的文案、次数与剩余都与响应一致。
+    expect(payload.state.gambling.wheel.slots[slotIndex].label).toBe(outcome.slotLabel);
+    expect(payload.state.gambling.usedToday).toBe(1);
+    expect(payload.state.gambling.remaining).toBe(DEBATE_DAILY_LIMIT - 1);
+
+    // 扣费与发奖：余额 = 初始 - 投入 + 奖励。
+    expect(await balanceOf(sect.sectId, 'spiritStone')).toBe(
+      2_000_000 - cost + Number(expectedAmount),
+    );
+
+    const logs = await debateLogs(sect.sectId);
+    expect(logs).toHaveLength(1);
+    expect(logs[0].bet_mode).toBe('wheel');
+    expect(logs[0].disciple_id).toBe('');
+    expect(logs[0].disciple_name).toBe('天机轮');
+    expect(logs[0].multiplier).toBe(tier);
+    expect(logs[0].result).toBe('win');
+    expect(logs[0].win_probability).toBeNull();
+    expect(JSON.parse(logs[0].stake_detail)).toEqual({ amount: String(cost) });
+    expect(JSON.parse(logs[0].reward_detail)).toEqual({
+      type: 'resource',
+      resourceId: 'spiritStone',
+      amount: expectedAmount,
+    });
+    expect(await debateCounter(sect.sectId)).toEqual({ key: TODAY, count: 1 });
+  });
+
+  it('大额灵石格：金额 = 投入 × 格子倍率 × 3，投入仍只扣一次', async () => {
+    const sect = await makeSect('wh-big');
+    await freezeSettlement(sect.sectId);
+    await unlockGambling(sect.sectId);
+    await setBalance(sect.sectId, 'spiritStone', 2_000_000);
+
+    const { slotIndex, slot } = await aimAtSlot(sect, 'big_spirit_stone');
+    const tier = 2;
+    const cost = WHEEL_SPIN_COST * tier;
+    const expectedAmount = String(Math.floor(cost * slot.multiplier * WHEEL_BIG_MULTIPLIER + 1e-6));
+
+    landOnSlot(slotIndex);
+    const spun = await spin(sect, tier);
+    expect(spun.status).toBe(200);
+    const outcome = (dataOf(spun) as Record<string, any>).result as Record<string, any>;
+    expect(outcome.slotIndex).toBe(slotIndex);
+    expect(outcome.reward).toEqual({
+      type: 'resource',
+      resourceId: 'spiritStone',
+      amount: expectedAmount,
+    });
+
+    // 大额格也是灵石（与格面文案「灵石 ×…」同一口径）：余额 = 投入前 - 投入 + 奖励，
+    // 而且不能凭空多出一条配置里不存在的资源余额。
+    expect(await balanceOf(sect.sectId, 'spiritStone')).toBe(
+      2_000_000 - cost + Number(outcome.reward.amount),
+    );
+    const balanceRows = await env.DB.prepare(
+      'SELECT resource_id FROM resource_balances WHERE sect_id = ?',
+    )
+      .bind(sect.sectId)
+      .all<{ resource_id: string }>();
+    expect((balanceRows.results ?? []).map((row) => row.resource_id)).not.toContain(
+      'big_spirit_stone',
+    );
+
+    expect(JSON.parse((await debateLogs(sect.sectId))[0]!.reward_detail)).toEqual({
+      type: 'resource',
+      resourceId: 'spiritStone',
+      amount: expectedAmount,
+    });
+  });
+
+  it('丹药格中奖：库存按档位颗数累加（在已有库存上叠加），响应与记录口径一致', async () => {
+    const sect = await makeSect('wh-pill');
+    await freezeSettlement(sect.sectId);
+    await unlockGambling(sect.sectId);
+    await setBalance(sect.sectId, 'spiritStone', 2_000_000);
+
+    const { slotIndex, slot } = await aimAtSlot(sect, 'pill');
+    expect(slot.pillId).not.toBeNull();
+    expect(PILL_IDS).toContain(slot.pillId);
+    const pillId = slot.pillId as string;
+
+    const panelSlots = wheelPanel(await sect.state()).slots as Record<string, any>[];
+    expect(panelSlots[slotIndex]!.type).toBe('pill');
+    expect(panelSlots[slotIndex]!.label).toBe(`${findPillRecipe(pillId)!.name} ×1~5`);
+
+    // 先有 2 颗，中奖是「快照 + 档位颗数」的绝对值写回，不是覆盖成 3。
+    await setPillQuantity(sect.sectId, pillId, 2);
+
+    const tier = 3;
+    landOnSlot(slotIndex);
+    const spun = await spin(sect, tier);
+    expect(spun.status).toBe(200);
+    const outcome = (dataOf(spun) as Record<string, any>).result as Record<string, any>;
+    expect(outcome.slotIndex).toBe(slotIndex);
+    // 丹药奖励 = 档位颗数，与格子倍率无关。
+    expect(outcome.reward).toEqual({
+      type: 'pill',
+      pillId,
+      pillName: findPillRecipe(pillId)!.name,
+      quantity: tier,
+    });
+    expect(await pillQuantityOf(sect.sectId, pillId)).toBe(2 + tier);
+    expect(await balanceOf(sect.sectId, 'spiritStone')).toBe(2_000_000 - WHEEL_SPIN_COST * tier);
+
+    const logs = await debateLogs(sect.sectId);
+    expect(logs).toHaveLength(1);
+    expect(logs[0].result).toBe('win');
+    expect(JSON.parse(logs[0].reward_detail)).toEqual({ type: 'pill', pillId, quantity: tier });
+    expect(JSON.parse(logs[0].stake_detail)).toEqual({ amount: String(WHEEL_SPIN_COST * tier) });
+  });
+
+  it('谢谢惠顾：无奖励、投入照扣、记录为 lose + reward none', async () => {
+    const sect = await makeSect('wh-nothing');
+    await freezeSettlement(sect.sectId);
+    await unlockGambling(sect.sectId);
+    await setBalance(sect.sectId, 'spiritStone', 1_000_000);
+
+    const { slotIndex } = await aimAtSlot(sect, 'nothing');
+    landOnSlot(slotIndex);
+    const spun = await spin(sect, 1);
+    expect(spun.status).toBe(200);
+    const outcome = (dataOf(spun) as Record<string, any>).result as Record<string, any>;
+    expect(outcome.slotIndex).toBe(slotIndex);
+    expect(outcome.slotLabel).toBe('谢谢惠顾');
+    expect(outcome.reward).toEqual({ type: 'none' });
+    expect(outcome.message).toContain('谢谢惠顾');
+
+    expect(await balanceOf(sect.sectId, 'spiritStone')).toBe(1_000_000 - WHEEL_SPIN_COST);
+    const logs = await debateLogs(sect.sectId);
+    expect(logs).toHaveLength(1);
+    expect(logs[0].result).toBe('lose');
+    expect(JSON.parse(logs[0].reward_detail)).toEqual({ type: 'none' });
+    expect(await debateCounter(sect.sectId)).toEqual({ key: TODAY, count: 1 });
+  });
+});
+
+describe('天机轮：次数与余额的拒绝路径（计划 2.5 / 4.2）', () => {
+  it('余额不足：INSUFFICIENT_RESOURCE，不扣费、不写记录、计数不增', async () => {
+    const sect = await makeSect('wh-poor');
+    await freezeSettlement(sect.sectId);
+    await unlockGambling(sect.sectId);
+    const balance = WHEEL_SPIN_COST * 5 - 1;
+    await setBalance(sect.sectId, 'spiritStone', balance);
+
+    landOnSlot(0);
+    const rejected = await spin(sect, 5);
+    expect(errorOf(rejected).code).toBe('INSUFFICIENT_RESOURCE');
+    expect(await balanceOf(sect.sectId, 'spiritStone')).toBe(balance);
+    expect(await debateLogs(sect.sectId)).toHaveLength(0);
+    expect(await debateCounter(sect.sectId)).toEqual({ key: '', count: 0 });
+    expect(await wheelSeedOf(sect.sectId)).toBe(0);
+  });
+
+  it('每日次数用尽（20/20）：DAILY_LIMIT，不扣费、不写记录', async () => {
+    const sect = await makeSect('wh-limit');
+    await freezeSettlement(sect.sectId);
+    await unlockGambling(sect.sectId);
+    await setBalance(sect.sectId, 'spiritStone', 1_000_000);
+    await env.DB.prepare('UPDATE sects SET debate_date_key = ?, debate_count = ? WHERE id = ?')
+      .bind(TODAY, DEBATE_DAILY_LIMIT, sect.sectId)
+      .run();
+    expect((await sect.state()).gambling.remaining).toBe(0);
+
+    landOnSlot(0);
+    const rejected = await spin(sect, 1);
+    expect(errorOf(rejected).code).toBe('DAILY_LIMIT');
+    expect(await balanceOf(sect.sectId, 'spiritStone')).toBe(1_000_000);
+    expect(await debateLogs(sect.sectId)).toHaveLength(0);
+    expect(await debateCounter(sect.sectId)).toEqual({ key: TODAY, count: DEBATE_DAILY_LIMIT });
+  });
+
+  it('与论道共享同一列次数：转一次后 remaining 减 1，接着论道在同一列上继续累加', async () => {
+    const sect = await makeSect('wh-share');
+    await freezeSettlement(sect.sectId);
+    await unlockGambling(sect.sectId);
+    await setBalance(sect.sectId, 'spiritStone', 2_000_000);
+
+    const { slotIndex } = await aimAtSlot(sect, 'spirit_stone');
+    landOnSlot(slotIndex);
+    const spun = await spin(sect, 1);
+    expect(spun.status).toBe(200);
+    expect((dataOf(spun) as Record<string, any>).state.gambling.remaining).toBe(
+      DEBATE_DAILY_LIMIT - 1,
+    );
+
+    const state = await sect.state();
+    expect(state.gambling.usedToday).toBe(1);
+    expect(state.gambling.remaining).toBe(DEBATE_DAILY_LIMIT - 1);
+    expect(await debateCounter(sect.sectId)).toEqual({ key: TODAY, count: 1 });
+
+    // 论道读的是同一列：计数到 2、剩余再减 1。
+    forceWin();
+    const debated = await debate(sect, {
+      discipleId: sect.discipleIds[0],
+      betMode: 'preset_spirit_stone',
+      multiplier: 1,
+      rewardType: 'insight',
+    });
+    expect(debated.status).toBe(200);
+    expect(await debateCounter(sect.sectId)).toEqual({ key: TODAY, count: 2 });
+    expect((dataOf(debated) as Record<string, any>).state.gambling.remaining).toBe(
+      DEBATE_DAILY_LIMIT - 2,
+    );
+  });
+});
+
+describe('天机轮：重置（计划 4.3）', () => {
+  it('重置成功：扣重置费、wheel_seed +1、格局重排、不消耗每日次数', async () => {
+    const sect = await makeSect('wh-reset');
+    await freezeSettlement(sect.sectId);
+    await unlockGambling(sect.sectId);
+    await setBalance(sect.sectId, 'spiritStone', 1_000_000);
+    await env.DB.prepare('UPDATE sects SET debate_date_key = ?, debate_count = ? WHERE id = ?')
+      .bind(TODAY, 5, sect.sectId)
+      .run();
+
+    // 挑一个「重置后格局一定不同」的起始 seed：格局是 (sect_id, wheel_seed) 的纯函数，可以预算。
+    let startSeed = 0;
+    for (let seed = 0; seed < 200; seed += 1) {
+      const current = JSON.stringify(generateWheelSlots(wheelLayoutSeed(sect.sectId, seed)));
+      const next = JSON.stringify(generateWheelSlots(wheelLayoutSeed(sect.sectId, seed + 1)));
+      if (current !== next) {
+        startSeed = seed;
+        break;
+      }
+    }
+    await setWheelSeed(sect.sectId, startSeed);
+
+    const panelBefore = wheelPanel(await sect.state());
+    expect(panelBefore.seed).toBe(startSeed);
+    const slotsBefore = panelBefore.slots as Record<string, any>[];
+
+    const resetResult = await resetWheel(sect);
+    expect(resetResult.status).toBe(200);
+    const payload = dataOf(resetResult) as Record<string, any>;
+    expect(payload.state.gambling.wheel.seed).toBe(startSeed + 1);
+    expect(await wheelSeedOf(sect.sectId)).toBe(startSeed + 1);
+    expect(await balanceOf(sect.sectId, 'spiritStone')).toBe(1_000_000 - WHEEL_RESET_COST);
+    // 重置不消耗每日次数、不写赌坊记录。
+    expect(await debateCounter(sect.sectId)).toEqual({ key: TODAY, count: 5 });
+    expect(await debateLogs(sect.sectId)).toHaveLength(0);
+
+    // seed 一变整盘就变：格序与倍率都重排。
+    const slotsAfter = (await sect.state()).gambling.wheel.slots as Record<string, any>[];
+    expect(slotsAfter).not.toEqual(slotsBefore);
+    expect(slotsAfter.map((slot) => slot.type)).toEqual(
+      generateWheelSlots(wheelLayoutSeed(sect.sectId, startSeed + 1)).map((slot) => slot.type),
+    );
+  });
+
+  it('重置余额不足：INSUFFICIENT_RESOURCE，wheel_seed 与余额都不变', async () => {
+    const sect = await makeSect('wh-reset-poor');
+    await freezeSettlement(sect.sectId);
+    await unlockGambling(sect.sectId);
+    await setBalance(sect.sectId, 'spiritStone', WHEEL_RESET_COST - 1);
+    await setWheelSeed(sect.sectId, 3);
+
+    const rejected = await resetWheel(sect);
+    expect(errorOf(rejected).code).toBe('INSUFFICIENT_RESOURCE');
+    expect(await wheelSeedOf(sect.sectId)).toBe(3);
+    expect(await balanceOf(sect.sectId, 'spiritStone')).toBe(WHEEL_RESET_COST - 1);
+    expect(await debateCounter(sect.sectId)).toEqual({ key: '', count: 0 });
+    expect(await debateLogs(sect.sectId)).toHaveLength(0);
+  });
+
+  it('宗门 1 级（未解锁）：两个接口都拒且不写库，面板 wheel 为 null', async () => {
+    const sect = await makeSect('wh-locked');
+    await freezeSettlement(sect.sectId);
+    await setBalance(sect.sectId, 'spiritStone', 1_000_000);
+
+    const state = await sect.state();
+    expect(state.gambling.unlocked).toBe(false);
+    expect(state.gambling.wheel).toBeNull();
+
+    const spun = await spin(sect, 1);
+    expect(errorOf(spun).code).toBe('INVALID_STATUS');
+    const resetResult = await resetWheel(sect);
+    expect(errorOf(resetResult).code).toBe('INVALID_STATUS');
+
+    expect(await debateLogs(sect.sectId)).toHaveLength(0);
+    expect(await debateCounter(sect.sectId)).toEqual({ key: '', count: 0 });
+    expect(await balanceOf(sect.sectId, 'spiritStone')).toBe(1_000_000);
+    expect(await wheelSeedOf(sect.sectId)).toBe(0);
+  });
+});
+
+describe('天机轮快照守卫（0020）', () => {
+  it('丹药库存快照过期 → 整批发奖回滚，守卫行也不留下', async () => {
+    const sect = await makeSect('wh-guard-pill');
+    const pillId = PILL_IDS[0] as string;
+    await setPillQuantity(sect.sectId, pillId, 5);
+
+    const sectRow = await env.DB.prepare('SELECT * FROM sects WHERE id = ?')
+      .bind(sect.sectId)
+      .first<SectRow>();
+    const balances = (
+      await env.DB.prepare('SELECT * FROM resource_balances WHERE sect_id = ?')
+        .bind(sect.sectId)
+        .all<ResourceBalanceRow>()
+    ).results;
+    expect(sectRow, '必须有宗门行').not.toBeNull();
+
+    // 快照读到 3 颗，但库里已经是 5 颗（模拟并发的炼制 / 服用）。
+    const guard = gamblingSnapshotGuardStatement('cmd-wheel-pill', {
+      sect: sectRow!,
+      balances: balances ?? [],
+      resourceId: null,
+      pill: { pillId, quantity: 3 },
+      checkWheelSeed: true,
+      now: Date.now(),
+    });
+    expect(guard.sql).toContain('pill_inventories');
+    // 天机轮转动 / 重置都要求格局没被并发重置过。
+    expect(guard.sql).toContain('wheel_seed = ?');
+    expect((guard.sql.match(/\?/g) ?? []).length).toBe((guard.params ?? []).length);
+
+    const upsert = upsertPillInventoryStatement(sect.sectId, pillId, 8, Date.now());
+    await expect(
+      env.DB.batch([
+        env.DB.prepare(guard.sql).bind(...(guard.params ?? [])),
+        env.DB.prepare(upsert.sql).bind(...(upsert.params ?? [])),
+      ]),
+    ).rejects.toThrow(/CHECK/i);
+
+    // 整批回滚：并发写入保留、发奖没生效、守卫行也被回滚掉。
+    expect(await pillQuantityOf(sect.sectId, pillId)).toBe(5);
+    const guards = await env.DB.prepare(
+      'SELECT COUNT(*) AS total FROM mutation_guards WHERE command_id = ?',
+    )
+      .bind('cmd-wheel-pill')
+      .first<{ total: number }>();
+    expect(Number(guards!.total)).toBe(0);
+  });
+});
+
+/* ---------- 0020 天机轮：战绩口径、快照守卫与迁移约束 ---------- */
+
+describe('天机轮的战绩口径与 0020 迁移约束', () => {
+  it('中奖也扣投入：净收益 = 奖励 - 投入（不会把投入当成净赚）', async () => {
+    const sect = await makeSect('wh-stats-big');
+    await freezeSettlement(sect.sectId);
+    await unlockGambling(sect.sectId);
+    await setBalance(sect.sectId, 'spiritStone', 2_000_000);
+
+    const { slotIndex, slot } = await aimAtSlot(sect, 'big_spirit_stone');
+    const tier = 2;
+    const cost = WHEEL_SPIN_COST * tier;
+    const reward = Math.floor(cost * slot.multiplier * WHEEL_BIG_MULTIPLIER + 1e-6);
+
+    landOnSlot(slotIndex);
+    expect((await spin(sect, tier)).status).toBe(200);
+
+    // 天机轮无论输赢都先扣投入，赢的奖励只是「投入 × 倍率」——
+    // 净收益必须按 奖励 - 投入 计（只减败北赌注的老口径会在这里虚增一个投入额）。
+    const stats = (await sect.state()).gambling.stats as Record<string, number>;
+    expect(stats).toMatchObject({ total: 1, wins: 1, losses: 0, totalInsight: 0 });
+    expect(stats.netSpiritStone).toBe(reward - cost);
+  });
+
+  it('丹药格中奖：净收益是 -投入（奖励不是灵石，投入不能凭空消失）', async () => {
+    const sect = await makeSect('wh-stats-pill');
+    await freezeSettlement(sect.sectId);
+    await unlockGambling(sect.sectId);
+    await setBalance(sect.sectId, 'spiritStone', 2_000_000);
+
+    const { slotIndex } = await aimAtSlot(sect, 'pill');
+    const tier = 1;
+    landOnSlot(slotIndex);
+    expect((await spin(sect, tier)).status).toBe(200);
+
+    const stats = (await sect.state()).gambling.stats as Record<string, number>;
+    expect(stats.wins).toBe(1);
+    expect(stats.netSpiritStone).toBe(-WHEEL_SPIN_COST * tier);
+  });
+
+  it('守卫：丹药库存一致、只有 wheel_seed 过期 → 整批回滚（转动中途被重置）', async () => {
+    const sect = await makeSect('wh-guard-seed');
+    await freezeSettlement(sect.sectId);
+    const sectRow = await env.DB.prepare('SELECT * FROM sects WHERE id = ?')
+      .bind(sect.sectId)
+      .first<SectRow>();
+    expect(sectRow, '必须有宗门行').not.toBeNull();
+    const balances =
+      (
+        await env.DB.prepare('SELECT * FROM resource_balances WHERE sect_id = ?')
+          .bind(sect.sectId)
+          .all<ResourceBalanceRow>()
+      ).results ?? [];
+
+    const guard = gamblingSnapshotGuardStatement('cmd-wheel-seed', {
+      sect: sectRow!,
+      balances,
+      resourceId: 'spiritStone',
+      checkWheelSeed: true,
+      now: Date.now(),
+    });
+    // 同一个快照不要求核对 wheel_seed 时不该多绑参数：把该子句钉在 checkWheelSeed 上。
+    const withoutSeed = gamblingSnapshotGuardStatement('cmd-wheel-noseed', {
+      sect: sectRow!,
+      balances,
+      resourceId: 'spiritStone',
+      now: Date.now(),
+    });
+    expect(guard.sql).toContain('wheel_seed = ?');
+    expect(withoutSeed.sql).not.toContain('wheel_seed');
+    expect((guard.params ?? []).length).toBe((withoutSeed.params ?? []).length + 1);
+
+    // 模拟并发重置：读快照之后 wheel_seed 变了。
+    await setWheelSeed(sect.sectId, Number(sectRow!.wheel_seed) + 1);
+
+    await expect(
+      env.DB.batch([
+        env.DB.prepare(guard.sql).bind(...(guard.params ?? [])),
+        env.DB.prepare('UPDATE sects SET debate_count = 9 WHERE id = ?').bind(sect.sectId),
+      ]),
+    ).rejects.toThrow(/CHECK/i);
+
+    // 整批回滚：同批的计数写回没有生效，守卫行也没留下。
+    expect(await debateCounter(sect.sectId)).toEqual({ key: '', count: 0 });
+    const guards = await env.DB.prepare(
+      'SELECT COUNT(*) AS total FROM mutation_guards WHERE command_id = ?',
+    )
+      .bind('cmd-wheel-seed')
+      .first<{ total: number }>();
+    expect(Number(guards!.total)).toBe(0);
+  });
+
+  it('0020 迁移：重建后索引仍在、wheel_seed 非负、旧的 1~3 倍率记录照旧可读', async () => {
+    const indexes = await env.DB.prepare(
+      "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'dao_debate_log'",
+    ).all<{ name: string }>();
+    expect((indexes.results ?? []).map((row) => row.name)).toContain('dao_debate_log_sect_idx');
+
+    const sect = await makeSect('wh-migration');
+    const discipleId = sect.discipleIds[0] as string;
+    await expect(
+      env.DB.prepare('UPDATE sects SET wheel_seed = -1 WHERE id = ?').bind(sect.sectId).run(),
+    ).rejects.toThrow(/CHECK/i);
+
+    // 0019 写下的旧记录（倍率 1~3、带弟子、有 jev 胜率）在重建后的表里必须原样读得出来。
+    await env.DB.prepare(
+      `INSERT INTO dao_debate_log (id, sect_id, disciple_id, disciple_name, bet_mode, multiplier,
+         stake_detail, result, reward_detail, win_probability, created_at)
+       VALUES (?, ?, ?, '甲', 'preset_spirit_stone', 3,
+               '{"resourceId":"spiritStone","amount":"300000"}', 'lose', '{"type":"none"}', 0.42, ?)`,
+    )
+      .bind(crypto.randomUUID(), sect.sectId, discipleId, Date.now())
+      .run();
+
+    const logs = await debateLogs(sect.sectId);
+    expect(logs).toHaveLength(1);
+    expect(logs[0]!.multiplier).toBe(3);
+    expect(logs[0]!.disciple_name).toBe('甲');
+    expect(Number(logs[0]!.win_probability)).toBeCloseTo(0.42);
   });
 });

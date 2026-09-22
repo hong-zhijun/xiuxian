@@ -27,6 +27,8 @@ import {
   upgradeBuilding,
   upgradeSect,
   usePill,
+  wheelReset,
+  wheelSpin,
 } from './api/game';
 import type {
   ChallengeResultView,
@@ -45,6 +47,7 @@ import type {
   ResourceView,
   SectStateView,
   UsePillOutcome,
+  WheelSpinResult,
 } from './api/game';
 import CreateSectScreen from './components/CreateSectScreen.vue';
 import LoginScreen from './components/LoginScreen.vue';
@@ -80,6 +83,9 @@ const exploreResult = ref<ExploreChoiceResult | null>(null);
 
 /** 0019 论道赌局最近一次结果（交给 SectScreen 的赌坊弹窗展示；null = 还没打过）。 */
 const daoDebateResult = ref<DaoDebateResult | null>(null);
+
+/** 0020 天机轮最近一次结果（交给 SectScreen 的赌坊弹窗展示；null = 还没转过）。 */
+const wheelResult = ref<WheelSpinResult | null>(null);
 
 let syncTimer: number | undefined;
 let nextToastId = 1;
@@ -503,6 +509,45 @@ async function onDaoDebate(input: DaoDebateInput): Promise<void> {
   }
 }
 
+/**
+ * 0020 天机轮转动：扣费、落格与发奖全在服务端，这里只回填 state 并把结果交给赌坊弹窗。
+ * 先清空上一次结果，WheelDialog 的 watch 才能把新结果当成一次新事件（并据此开转）。
+ */
+async function onWheelSpin(tier: number): Promise<void> {
+  if (busy.value) return;
+  busy.value = true;
+  wheelResult.value = null;
+  try {
+    const { state: next, result } = await wheelSpin({ tier });
+    state.value = next;
+    announceEvents(next);
+    wheelResult.value = result;
+  } catch (caught) {
+    handleError(caught);
+  } finally {
+    busy.value = false;
+  }
+}
+
+/**
+ * 0020 天机轮重置：扣重置费、格局整盘重排，不消耗每日次数。
+ * 同时清空上一次结果——旧落格对应的是旧格局，留着会指向另一格，属于误导。
+ */
+async function onWheelReset(): Promise<void> {
+  if (busy.value) return;
+  busy.value = true;
+  wheelResult.value = null;
+  try {
+    const { state: next } = await wheelReset();
+    state.value = next;
+    announceEvents(next);
+  } catch (caught) {
+    handleError(caught);
+  } finally {
+    busy.value = false;
+  }
+}
+
 /** 0019 分配悟道值：归属、余额与上限都在服务端裁决，这里只按回执提示加完后的属性值。 */
 function onAllocateDaoInsight(discipleId: string, attribute: DaoAttribute, points: number): void {
   void runAction(
@@ -772,6 +817,7 @@ onUnmounted(() => {
       :challenge-result="challengeResult"
       :explore-result="exploreResult"
       :dao-debate-result="daoDebateResult"
+      :wheel-result="wheelResult"
       @refresh="refresh(true)"
       @logout="onLogout"
       @recruited="onRecruitRefreshed"
@@ -787,6 +833,8 @@ onUnmounted(() => {
       @challenge="onChallenge"
       @set-defense-lineup="onSetDefenseLineup"
       @dismiss-challenge-result="onDismissChallengeResult"
+      @wheel-spin="onWheelSpin"
+      @wheel-reset="onWheelReset"
       @dao-debate="onDaoDebate"
       @allocate-dao-insight="onAllocateDaoInsight"
       @breakthrough="onBreakthrough"

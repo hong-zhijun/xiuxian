@@ -23,6 +23,17 @@ import {
   PRESET_RESOURCE_REWARDS,
   PRESET_STAKES,
   REVEAL_OPPONENT_FACTOR,
+  WHEEL_BIG_MULTIPLIER,
+  WHEEL_BIG_SLOTS,
+  WHEEL_MULTIPLIER_MAX,
+  WHEEL_MULTIPLIER_MIN,
+  WHEEL_NOTHING_SLOTS,
+  WHEEL_RESET_COST,
+  WHEEL_SLOT_COUNT,
+  WHEEL_SMALL_SLOTS_MAX,
+  WHEEL_SMALL_SLOTS_MIN,
+  WHEEL_SPIN_COST,
+  WHEEL_TIERS,
   debateDayStateOf,
   debateTierProbability,
   freeBetReward,
@@ -33,7 +44,15 @@ import {
   isBettableResource,
   isGamblingUnlocked,
   revealCount,
+  generateWheelSlots,
+  wheelLayoutSeed,
+  wheelReward,
+  wheelSlotLabel,
+  wheelSpinCost,
+  type WheelSlot,
 } from '../../apps/server/src/modules/game/gambling';
+
+import { PILL_IDS } from '../../apps/server/src/modules/game/alchemy';
 import { describe, expect, it } from 'vitest';
 
 /**
@@ -61,8 +80,8 @@ describe('赌坊解锁与常量', () => {
     expect(gamblingUnlockBlockedReason(2)).toBeNull();
   });
 
-  it('每日 10 次、悟道值累计上限 50、属性上限 100（计划 2.2 / 2.3）', () => {
-    expect(DEBATE_DAILY_LIMIT).toBe(10);
+  it('每日 20 次（DEBATE_DAILY_LIMIT）、悟道值累计上限 50、属性上限 100（计划 2.2 / 2.3）', () => {
+    expect(DEBATE_DAILY_LIMIT).toBe(20);
     expect(DAO_INSIGHT_CAP).toBe(50);
     expect(ATTRIBUTE_MAX).toBe(100);
   });
@@ -154,7 +173,7 @@ describe('论道每日次数归一（计划 2.2：UTC+8 自然日重置）', () 
   /** 2026-01-05 09:00 UTC+8（= 01:00 UTC）。 */
   const NOON_UTC8 = Date.UTC(2026, 0, 5, 1, 0, 0);
 
-  it('日期键是今天 → 用 debate_count，剩余 = 10 - 已用', () => {
+  it('日期键是今天 → 用 debate_count，剩余 = DEBATE_DAILY_LIMIT - 已用', () => {
     const state = debateDayStateOf(
       { debate_date_key: '2026-01-05', debate_count: 3 },
       NOON_UTC8,
@@ -162,17 +181,27 @@ describe('论道每日次数归一（计划 2.2：UTC+8 自然日重置）', () 
     expect(state.dateKey).toBe('2026-01-05');
     expect(state.keyMatches).toBe(true);
     expect(state.usedToday).toBe(3);
-    expect(state.remaining).toBe(7);
+    expect(state.remaining).toBe(DEBATE_DAILY_LIMIT - 3);
   });
 
   it('日期键不是今天 → 视为 0（跨天重置）', () => {
     const state = debateDayStateOf(
-      { debate_date_key: '2026-01-04', debate_count: 10 },
+      { debate_date_key: '2026-01-04', debate_count: DEBATE_DAILY_LIMIT },
       NOON_UTC8,
     );
     expect(state.keyMatches).toBe(false);
     expect(state.usedToday).toBe(0);
     expect(state.remaining).toBe(DEBATE_DAILY_LIMIT);
+  });
+
+  it('debate_count = DEBATE_DAILY_LIMIT（20）视为用尽', () => {
+    const full = debateDayStateOf(
+      { debate_date_key: '2026-01-05', debate_count: DEBATE_DAILY_LIMIT },
+      NOON_UTC8,
+    );
+    expect(full.keyMatches).toBe(true);
+    expect(full.usedToday).toBe(DEBATE_DAILY_LIMIT);
+    expect(full.remaining).toBe(0);
   });
 
   it('空日期键（迁移前的宗门）与异常计数都被 clamp 到合法区间', () => {
@@ -280,6 +309,245 @@ describe('五档胜率（choice → 概率映射）', () => {
   it('降级胜率与锚表对齐', () => {
     for (const mult of [1, 2, 3] as const) {
       expect(DEGRADED_WIN_RATES[mult] / 10_000).toBeCloseTo(DEBATE_TIER_ANCHOR[mult]);
+    }
+  });
+});
+
+/* ---------- 天机轮（0020 迁移 + 计划第 2 节） ---------- */
+
+/** 固定构造的格子：奖励公式用固定 slot 断言，不靠随机 seed 去碰大额 / 丹药格。 */
+function wheelSlot(overrides: Partial<WheelSlot> & { type: WheelSlot['type'] }): WheelSlot {
+  const base: WheelSlot = { type: overrides.type, multiplier: 1, pillId: null };
+  return { ...base, ...overrides };
+}
+
+const WHEEL_RESOURCE_NAMES: Record<string, string> = {
+  spiritStone: '灵石',
+  herb: '药材',
+  ore: '矿石',
+};
+
+const WHEEL_NAMES = {
+  resource: (resourceId: string): string => WHEEL_RESOURCE_NAMES[resourceId] ?? resourceId,
+  pill: (pillId: string): string => (pillId === 'healingPill' ? '回春丹' : pillId),
+};
+
+describe('天机轮常量与费用（计划 2.3 / 2.4）', () => {
+  it('8 格转盘、5 个投入档位，费用 = 50000 × 档位', () => {
+    expect(WHEEL_SLOT_COUNT).toBe(8);
+    expect([...WHEEL_TIERS]).toEqual([1, 2, 3, 4, 5]);
+    expect(WHEEL_SPIN_COST).toBe(50_000);
+    expect(WHEEL_RESET_COST).toBe(100_000);
+    expect(WHEEL_TIERS.map((tier) => wheelSpinCost(tier))).toEqual([
+      50_000, 100_000, 150_000, 200_000, 250_000,
+    ]);
+  });
+
+  it('格局配额与倍率区间常量', () => {
+    expect(WHEEL_BIG_SLOTS).toBe(1);
+    expect(WHEEL_NOTHING_SLOTS).toBe(2);
+    expect(WHEEL_SMALL_SLOTS_MIN).toBe(2);
+    expect(WHEEL_SMALL_SLOTS_MAX).toBe(4);
+    expect(WHEEL_BIG_MULTIPLIER).toBe(3);
+    expect(WHEEL_MULTIPLIER_MIN).toBe(0.8);
+    expect(WHEEL_MULTIPLIER_MAX).toBe(1.5);
+  });
+});
+
+describe('wheelLayoutSeed：宗门 id 与 wheel_seed 的混合（计划 3.1）', () => {
+  it('确定性：同一 (sect_id, wheel_seed) 永远同种子', () => {
+    expect(wheelLayoutSeed('sect-a', 0)).toBe(wheelLayoutSeed('sect-a', 0));
+    expect(wheelLayoutSeed('sect-a', 7)).toBe(wheelLayoutSeed('sect-a', 7));
+  });
+
+  it('不同 sect_id / 不同 wheel_seed 得到不同种子', () => {
+    expect(wheelLayoutSeed('sect-a', 0)).not.toBe(wheelLayoutSeed('sect-b', 0));
+    expect(wheelLayoutSeed('sect-a', 0)).not.toBe(wheelLayoutSeed('sect-a', 1));
+    expect(wheelLayoutSeed('', 0)).not.toBe(wheelLayoutSeed('sect-a', 0));
+  });
+
+  it('种子是 32 位无符号整数', () => {
+    for (const sectId of ['sect-a', 'sect-b', '']) {
+      for (const seed of [0, 1, 2, 99]) {
+        const layoutSeed = wheelLayoutSeed(sectId, seed);
+        expect(Number.isInteger(layoutSeed)).toBe(true);
+        expect(layoutSeed).toBeGreaterThanOrEqual(0);
+        expect(layoutSeed).toBeLessThanOrEqual(0xff_ff_ff_ff);
+      }
+    }
+  });
+});
+
+describe('generateWheelSlots：确定性 8 格格局（计划 2.1）', () => {
+  it('同 seed 深比较完全相同（重启 / 换设备格局不变）', () => {
+    for (const seed of [0, 1, 12_345, 0xff_ff_ff_ff]) {
+      expect(generateWheelSlots(seed)).toEqual(generateWheelSlots(seed));
+    }
+  });
+
+  it('不同 seed 得到不同格局', () => {
+    const layouts = new Set(
+      Array.from({ length: 50 }, (_, seed) => JSON.stringify(generateWheelSlots(seed))),
+    );
+    expect(layouts.size).toBe(50);
+    expect(generateWheelSlots(1)).not.toEqual(generateWheelSlots(2));
+  });
+
+  it('配额：8 格 = 大额灵石 1 + 谢谢惠顾 2 + 小额灵石 2~4 + 草药/矿石/丹药 1~3', () => {
+    const smallCounts = new Set<number>();
+    for (let seed = 0; seed < 2_000; seed += 1) {
+      const slots = generateWheelSlots(seed);
+      expect(slots).toHaveLength(WHEEL_SLOT_COUNT);
+      const countOf = (type: WheelSlot['type']): number =>
+        slots.filter((slot) => slot.type === type).length;
+
+      expect(countOf('big_spirit_stone')).toBe(WHEEL_BIG_SLOTS);
+      expect(countOf('nothing')).toBe(WHEEL_NOTHING_SLOTS);
+
+      const small = countOf('spirit_stone');
+      expect(small).toBeGreaterThanOrEqual(WHEEL_SMALL_SLOTS_MIN);
+      expect(small).toBeLessThanOrEqual(WHEEL_SMALL_SLOTS_MAX);
+
+      for (const special of ['herb', 'ore', 'pill'] as const) {
+        expect(countOf(special)).toBeLessThanOrEqual(1);
+      }
+      const specials = countOf('herb') + countOf('ore') + countOf('pill');
+      expect(specials).toBe(WHEEL_SLOT_COUNT - WHEEL_BIG_SLOTS - WHEEL_NOTHING_SLOTS - small);
+      expect(specials).toBeGreaterThanOrEqual(1);
+      expect(specials).toBeLessThanOrEqual(3);
+
+      smallCounts.add(small);
+    }
+    // seed 从前到后是线性同余的一整串，取 2000 个才覆盖到小额 2 / 3 / 4 三档，
+    // 否则上面的区间断言可能没被真正走到。
+    expect([...smallCounts].sort((a, b) => a - b)).toEqual([2, 3, 4]);
+  });
+
+  it('倍率：资源 / 丹药格都在 0.8~1.5 且一位小数，nothing 为 0；丹药 id 来自 alchemy', () => {
+    const multipliers = new Set<number>();
+    const pillIds = new Set<string>();
+    for (let seed = 0; seed < 2_000; seed += 1) {
+      for (const slot of generateWheelSlots(seed)) {
+        if (slot.type === 'nothing') {
+          expect(slot.multiplier).toBe(0);
+          expect(slot.pillId).toBeNull();
+          continue;
+        }
+        multipliers.add(slot.multiplier);
+        expect(slot.multiplier).toBeGreaterThanOrEqual(WHEEL_MULTIPLIER_MIN);
+        expect(slot.multiplier).toBeLessThanOrEqual(WHEEL_MULTIPLIER_MAX);
+        // 一位小数：×10 后是整数（round 消掉二进制噪声再比回原值）。
+        expect(Math.round(slot.multiplier * 10) / 10).toBeCloseTo(slot.multiplier, 10);
+        if (slot.type === 'pill') {
+          expect(slot.pillId).not.toBeNull();
+          expect(PILL_IDS).toContain(slot.pillId);
+          pillIds.add(slot.pillId as string);
+        } else {
+          expect(slot.pillId).toBeNull();
+        }
+      }
+    }
+    expect([...multipliers].sort((a, b) => a - b)).toEqual([
+      0.8, 0.9, 1, 1.1, 1.2, 1.3, 1.4, 1.5,
+    ]);
+    // 样本里真的出现过丹药格（且三种丹药都出现过），上面的白名单断言才不是空转。
+    expect([...pillIds].sort()).toEqual([...PILL_IDS].sort());
+  });
+});
+
+describe('wheelSlotLabel：格面文案（计划 4.1）', () => {
+  it('六种类型的文案都由服务端拼好', () => {
+    expect(wheelSlotLabel(wheelSlot({ type: 'nothing', multiplier: 0 }), WHEEL_NAMES)).toBe(
+      '谢谢惠顾',
+    );
+    expect(wheelSlotLabel(wheelSlot({ type: 'spirit_stone', multiplier: 1.3 }), WHEEL_NAMES)).toBe(
+      '灵石 ×1.3',
+    );
+    expect(wheelSlotLabel(wheelSlot({ type: 'herb', multiplier: 0.9 }), WHEEL_NAMES)).toBe(
+      '药材 ×0.9',
+    );
+    expect(wheelSlotLabel(wheelSlot({ type: 'ore', multiplier: 1.5 }), WHEEL_NAMES)).toBe(
+      '矿石 ×1.5',
+    );
+    // 大额格显示的是实际结算倍率（格子倍率 × 3）。
+    expect(
+      wheelSlotLabel(wheelSlot({ type: 'big_spirit_stone', multiplier: 1.1 }), WHEEL_NAMES),
+    ).toBe('灵石 ×3.3');
+    // 丹药格显示数量随档位走（×1~5），与格子倍率无关。
+    expect(
+      wheelSlotLabel(wheelSlot({ type: 'pill', multiplier: 1.4, pillId: 'healingPill' }), WHEEL_NAMES),
+    ).toBe('回春丹 ×1~5');
+    // 理论上不会出现的空 pillId 也要有兜底文案。
+    expect(
+      wheelSlotLabel(wheelSlot({ type: 'pill', multiplier: 1.4, pillId: null }), WHEEL_NAMES),
+    ).toBe('丹药');
+  });
+});
+
+describe('wheelReward：奖励结算（计划 2.6）', () => {
+  it('资源类 = floor(投入 × 倍率)；大额灵石再 ×3', () => {
+    expect(wheelReward(wheelSlot({ type: 'spirit_stone', multiplier: 1.3 }), 2, 100_000)).toEqual({
+      type: 'resource',
+      resourceId: 'spiritStone',
+      amount: '130000',
+    });
+    expect(wheelReward(wheelSlot({ type: 'herb', multiplier: 0.9 }), 3, 150_000)).toEqual({
+      type: 'resource',
+      resourceId: 'herb',
+      amount: '135000',
+    });
+    expect(wheelReward(wheelSlot({ type: 'ore', multiplier: 1.5 }), 1, 50_000)).toEqual({
+      type: 'resource',
+      resourceId: 'ore',
+      amount: '75000',
+    });
+    // 大额灵石格：金额 = floor(投入 × 格子倍率 × 3)，资源必须归到灵石 ——
+    // 与格面文案（「灵石 ×3.3」）同一口径；若返回 'big_spirit_stone' 之类的 id，
+    // 发奖就会在 resource_balances 里凭空插一条配置里不存在的资源。
+    expect(wheelReward(wheelSlot({ type: 'big_spirit_stone', multiplier: 1.1 }), 2, 100_000)).toEqual({
+      type: 'resource',
+      resourceId: 'spiritStone',
+      amount: '330000',
+    });
+    // 0.8 的二进制噪声会被 1e-6 消掉：floor(50000 × 0.8) 必须是 40000 而不是 39999。
+    expect(wheelReward(wheelSlot({ type: 'spirit_stone', multiplier: 0.8 }), 1, 50_000)).toEqual({
+      type: 'resource',
+      resourceId: 'spiritStone',
+      amount: '40000',
+    });
+  });
+
+  it('丹药 = 投入档位颗数，不受格子倍率影响；谢谢惠顾 = 无奖励', () => {
+    expect(
+      wheelReward(wheelSlot({ type: 'pill', multiplier: 0.8, pillId: 'healingPill' }), 5, 250_000),
+    ).toEqual({ type: 'pill', pillId: 'healingPill', quantity: 5 });
+    expect(
+      wheelReward(
+        wheelSlot({ type: 'pill', multiplier: 1.5, pillId: 'cultivationPill' }),
+        1,
+        50_000,
+      ),
+    ).toEqual({ type: 'pill', pillId: 'cultivationPill', quantity: 1 });
+    expect(wheelReward(wheelSlot({ type: 'nothing', multiplier: 0 }), 3, 150_000)).toEqual({
+      type: 'none',
+    });
+    // 空 pillId 的兜底：不给奖励（宁可无奖也不写一条没有丹药的记录）。
+    expect(
+      wheelReward(wheelSlot({ type: 'pill', multiplier: 1.2, pillId: null }), 3, 150_000),
+    ).toEqual({ type: 'none' });
+  });
+
+  it('按真实费用（wheelSpinCost）结算时金额是最小单位整数', () => {
+    for (const tier of WHEEL_TIERS) {
+      const cost = wheelSpinCost(tier);
+      expect(wheelReward(wheelSlot({ type: 'spirit_stone', multiplier: 1.5 }), tier, cost)).toEqual({
+        type: 'resource',
+        resourceId: 'spiritStone',
+        amount: String(cost * 1.5),
+      });
+      expect(
+        wheelReward(wheelSlot({ type: 'pill', multiplier: 1.4, pillId: 'healingPill' }), tier, cost),
+      ).toEqual({ type: 'pill', pillId: 'healingPill', quantity: tier });
     }
   });
 });

@@ -26,6 +26,7 @@ import {
   startRealmExploreSchema,
   upgradeBuildingRequestSchema,
   usePillRequestSchema,
+  wheelSpinRequestSchema,
 } from './schema';
 import {
   abandonRealmExplore,
@@ -60,9 +61,11 @@ import {
   upgradeBuilding,
   upgradeSect,
   usePill,
+  wheelReset,
+  wheelSpin,
 } from './service';
 import type { SectStateView } from './view';
-import type { Multiplier } from './gambling';
+import type { Multiplier, WheelTier } from './gambling';
 
 /**
  * 游戏接口（一次性可玩版本，任务卡第二节）。
@@ -397,6 +400,22 @@ export function createGameRoutes(): Hono<AppEnv> {
       Date.now(),
     );
     return respondOk(c, { state: result.state, outcome: result.outcome });
+  });
+
+  // 0020 天机轮：转动（结算 → 解锁/次数/余额校验 → 服务端选格结算 → 扣费、发奖、记录同批提交）。
+  routes.post('/game/wheel-spin', async (c) => {
+    const userId = requireUserId(c);
+    const body = await parseStrictJson(wheelSpinRequestSchema, c);
+    // schema 已把 tier 收窄到 1~5，这里再收窄到 WheelTier 常量类型。
+    const result = await wheelSpin(getDb(c.env), userId, body.tier as WheelTier, Date.now());
+    return respondOk(c, { state: result.state, result: result.result });
+  });
+
+  // 0020 天机轮：重置格局（扣重置费、wheel_seed + 1、不消耗每日次数）。请求体为空，不解析 JSON。
+  routes.post('/game/wheel-reset', async (c) => {
+    const userId = requireUserId(c);
+    const result = await wheelReset(getDb(c.env), userId, Date.now());
+    return respondOk(c, { state: result.state });
   });
   return routes;
 }

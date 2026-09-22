@@ -18,7 +18,13 @@ import {
 import {
   DAO_INSIGHT_CAP,
   DEBATE_DAILY_LIMIT,
+  WHEEL_RESET_COST,
+  WHEEL_TIERS,
   gamblingUnlockBlockedReason,
+  generateWheelSlots,
+  wheelLayoutSeed,
+  wheelSlotLabel,
+  wheelSpinCost,
   type DebateDayState,
 } from './gambling';
 import {
@@ -283,6 +289,66 @@ export interface InsightAllocateOutcome {
   totalUsed: number;
 }
 
+/**
+ * 0020 天机轮的单个格子（SectStateView.gambling.wheel.slots 的元素）。
+ *
+ * 只给「这格是什么、多少倍、叫什么」：转盘怎么画由前端决定，
+ * 但类型、倍率与格面文案一律是服务端的口径（计划 4.1），前端不复制奖励公式与中文名词。
+ */
+export interface WheelSlotView {
+  /** 'spirit_stone' | 'big_spirit_stone' | 'herb' | 'ore' | 'pill' | 'nothing'。 */
+  type: string;
+  /** 格子倍率（0.8~1.5）；谢谢惠顾为 0，丹药格带值但不参与奖励计算。 */
+  multiplier: number;
+  /** 格面文案（如「灵石 ×1.3」「谢谢惠顾」）。 */
+  label: string;
+}
+
+/**
+ * 0020 天机轮面板（SectStateView.gambling.wheel）。
+ *
+ * seed 是格局种子（= sects.wheel_seed，重置 +1）；slots 由它确定性生成，
+ * 所以每次 sync 看到的转盘都一样。costs / resetCost 也由服务端下发（计划 2.3 / 2.4）。
+ */
+export interface WheelView {
+  seed: number;
+  slots: WheelSlotView[];
+  /** 各档位的转动费用（最小单位；1 展示单位 = 1000 最小单位）。 */
+  costs: { tier: number; cost: number }[];
+  /** 重置费用（最小单位）。 */
+  resetCost: number;
+}
+
+/**
+ * 0020 天机轮转动结果（POST /game/wheel-spin 的 result，计划 4.2）。
+ *
+ * 文案在服务端拼好；slotIndex 是命中的格子下标（对应 wheel.slots 的顺序），
+ * 前端只用它决定转盘停在哪个角度，奖励一律照 reward 渲染。
+ */
+export interface WheelSpinResultView {
+  /** 命中的格子下标（0 ~ slots.length-1）。 */
+  slotIndex: number;
+  /** 投入档位（1~5）。 */
+  tier: number;
+  /** 本次实际扣掉的灵石（最小单位，字符串）。 */
+  cost: string;
+  /** 命中格子的格面文案（与 wheel.slots[slotIndex].label 一致，结果面板直接渲染）。 */
+  slotLabel: string;
+  reward: {
+    type: 'resource' | 'pill' | 'none';
+    /** type = 'resource' 时有值。 */
+    resourceId?: string;
+    /** type = 'resource' 时有值（最小单位）。 */
+    amount?: string;
+    /** type = 'pill' 时有值。 */
+    pillId?: string;
+    pillName?: string;
+    quantity?: number;
+  };
+  /** 服务端拼好的结果文案。 */
+  message: string;
+}
+
 /** 赌坊详细记录条目（GET /game/debate-history 的单条）。 */
 export interface DebateHistoryEntryView {
   id: string;
@@ -522,13 +588,15 @@ export interface SectStateView {
     usedToday: number;
     remaining: number;
   };
-  /** 0019 赌坊面板：解锁（宗门 2 级，不依赖建筑）与当日论道次数（每日 10 次）。 */
+  /** 0019 赌坊面板：解锁（宗门 2 级，不依赖建筑）与当日次数（20 次/天，论道 + 天机轮共享）。 */
   gambling: {
     unlocked: boolean;
     blockedReason: string | null;
     dailyLimit: number;
     usedToday: number;
     remaining: number;
+    /** 0020 天机轮：赌坊未解锁时为 null；解锁后带当前格局与档位费用。 */
+    wheel: WheelView | null;
   };
   /** 0014 历练面板：名额 + 最近 10 条摘要（仅本宗可见）。 */
   journey: JourneyView;
@@ -1089,7 +1157,9 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
   const journeySlot = journeySlotView({ rows: journeys, recent: recentJourneys, now });
 
   // 0019 赌坊面板：解锁只看宗门等级（不依赖建筑），当日次数来自归一后的 debateDay。
+  // 0020 天机轮：解锁后每次都带当前格局；格局由 sect_id + wheel_seed 派生，只有重置才会变。
   const gamblingLockedReason = gamblingUnlockBlockedReason(Number(sect.level));
+  const wheelView = gamblingLockedReason === null ? buildWheelView(sect, config) : null;
   const stats = input.debateStats;
   const gamblingView = {
     unlocked: gamblingLockedReason === null,
@@ -1107,6 +1177,8 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
           totalInsight: stats.totalInsight,
         }
       : null,
+    // 0020 天机轮：格局 + 档位费用 + 重置费用（都是服务端口径，前端只渲染）。
+    wheel: wheelView,
   };
 
   return {
@@ -1171,6 +1243,30 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
     },
     /** 0019 赌坊面板（解锁判断与当日次数全部服务端算好，前端只渲染）。 */
     gambling: gamblingView,
+  };
+}
+
+/**
+ * 0020 天机轮面板：格局由 sect_id + wheel_seed 确定性生成（同 seed 同格局），
+ * 格面文案在这里拼好，资源名 / 丹药名都取自配置与 alchemy.ts（不复制第二份中文名词表）。
+ * 档位费用与重置费用同样由服务端下发 —— 前端只渲染，不自己按档位算钱（计划 2.3 / 2.4）。
+ */
+function buildWheelView(sect: SectRow, config: GameConfigContent): WheelView {
+  const names = {
+    resource: (resourceId: string): string =>
+      config.resources.find((item) => item.id === resourceId)?.name ?? resourceId,
+    pill: (pillId: string): string =>
+      PILL_RECIPES.find((recipe) => recipe.id === pillId)?.name ?? pillId,
+  };
+  return {
+    seed: Number(sect.wheel_seed) || 0,
+    slots: generateWheelSlots(wheelLayoutSeed(sect.id, Number(sect.wheel_seed))).map((slot) => ({
+      type: slot.type,
+      multiplier: slot.multiplier,
+      label: wheelSlotLabel(slot, names),
+    })),
+    costs: WHEEL_TIERS.map((tier) => ({ tier, cost: wheelSpinCost(tier) })),
+    resetCost: WHEEL_RESET_COST,
   };
 }
 

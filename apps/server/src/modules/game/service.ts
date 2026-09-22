@@ -32,6 +32,7 @@ import {
   PRESET_INSIGHT_REWARDS,
   PRESET_RESOURCE_REWARDS,
   PRESET_STAKES,
+  WHEEL_RESET_COST,
   debateDayStateOf,
   debateTierProbability,
   freeBetReward,
@@ -39,12 +40,19 @@ import {
   gamblingUnlockBlockedReason,
   generateOpponentAttrs,
   generateRevealHints,
+  generateWheelSlots,
   isBettableResource,
+  wheelLayoutSeed,
+  wheelReward,
+  wheelSlotLabel,
+  wheelSpinCost,
   type BetMode,
   type BettableAttribute,
   type BettableResource,
   type DebateDayState,
   type Multiplier,
+  type WheelSlot,
+  type WheelTier,
 } from './gambling';
 import {
   CHALLENGE_DAILY_LIMIT,
@@ -180,6 +188,7 @@ import {
   updateDiscipleDaoInsightStatement,
   updateDiscipleInsightAllocateStatement,
   updateSectDebateCounterStatement,
+  updateSectWheelSeedStatement,
 } from './repository';
 import { settleEconomy, type SettleResult } from './settle';
 
@@ -240,6 +249,7 @@ import {
   type InsightAllocateOutcome,
   type DebateHistoryEntryView,
   type DebateHistoryView,
+  type WheelSpinResultView,
 } from './view';
 
 /**
@@ -296,12 +306,15 @@ async function loadChallengeDayState(
   return challengeDayStateOf(sect, now, legacyUsedToday);
 }
 
-/** 赌坊战绩汇总（从 dao_debate_log 聚合）。 */
+/** 赌坊战绩汇总（从 dao_debate_log 聚合；0020 起天机轮的转动也计入胜负与灵石净收益）。 */
 export interface DebateStats {
   total: number;
   wins: number;
   losses: number;
-  /** 灵石净收益（最小单位；赢的奖励 - 输的赌注，可为负）。 */
+  /**
+   * 灵石净收益（最小单位，可为负）：论道只减败北的赌注（赢的奖励里已含退还的赌注），
+   * 天机轮则每一次转动都减投入（无论输赢都先扣费）。
+   */
   netSpiritStone: number;
   /** 累计获得的悟道值（只赢才有，不扣回）。 */
   totalInsight: number;
@@ -314,18 +327,25 @@ async function loadDebateStats(db: D1Database, sectId: string): Promise<DebateSt
          COUNT(*) AS total,
          SUM(CASE WHEN result = 'win' THEN 1 ELSE 0 END) AS wins,
          SUM(CASE WHEN result = 'lose' THEN 1 ELSE 0 END) AS losses,
-         COALESCE(SUM(CASE
-           WHEN result = 'win' AND json_extract(reward_detail, '$.type') = 'resource'
-                AND json_extract(reward_detail, '$.resourceId') = 'spiritStone'
-           THEN CAST(json_extract(reward_detail, '$.amount') AS INTEGER)
-           ELSE 0
-         END), 0)
-         - COALESCE(SUM(CASE
-           WHEN result = 'lose' AND bet_mode IN ('preset_spirit_stone', 'free_resource')
-                AND COALESCE(json_extract(stake_detail, '$.resourceId'), 'spiritStone') = 'spiritStone'
-           THEN CAST(json_extract(stake_detail, '$.amount') AS INTEGER)
-           ELSE 0
-         END), 0) AS net_spirit_stone,
+        COALESCE(SUM(CASE
+          WHEN result = 'win' AND json_extract(reward_detail, '$.type') = 'resource'
+               AND json_extract(reward_detail, '$.resourceId') = 'spiritStone'
+          THEN CAST(json_extract(reward_detail, '$.amount') AS INTEGER)
+          ELSE 0
+        END), 0)
+        - COALESCE(SUM(CASE
+          -- 论道：只有败北才真扣赌注（赢的奖励里已含退还的赌注 + 净赢），所以只减 lose 那一条；
+          -- 天机轮（0020）：无论输赢都先扣投入，赢的奖励只是「投入 × 倍率」，
+          -- 所以每一次转动都要按注额全额减，否则每次中奖都会把投入当成净赚。
+          WHEN (result = 'lose' AND bet_mode IN ('preset_spirit_stone', 'free_resource'))
+               OR bet_mode = 'wheel'
+          THEN CASE
+            WHEN COALESCE(json_extract(stake_detail, '$.resourceId'), 'spiritStone') = 'spiritStone'
+            THEN CAST(json_extract(stake_detail, '$.amount') AS INTEGER)
+            ELSE 0
+          END
+          ELSE 0
+        END), 0) AS net_spirit_stone,
          COALESCE(SUM(CASE
            WHEN result = 'win' AND json_extract(reward_detail, '$.type') = 'insight'
            THEN json_extract(reward_detail, '$.insight')
@@ -900,9 +920,10 @@ class SectDraft {
    * 赌坊 batch（0019）：守卫 + 结算 + 计数 / 记录 / 发奖 / 扣赌注 + 清理守卫一次提交。
    *
    * 并发保护（计划 14.4）：首条 mutation_guards 快照语句在 batch 执行时重新校验宗门行
-   * （等级 / 结算时间 / 论道日期键 / 论道计数）、全部资源余额，以及（涉事弟子时）该弟子行、
-   * 被押属性与悟道值两列；任一并发改动都会让 CHECK 失败并回滚整批 —— 所以
-   * 「成功次数 <= 10」「记录、奖励、扣减同生共死」都由数据库保证。
+   * （等级 / 结算时间 / 论道日期键 / 论道计数 / wheel_seed 视命令而定）、全部资源余额、
+   * （中奖丹药时的）该丹药库存，以及（涉事弟子时）该弟子行、被押属性与悟道值两列；
+   * 任一并发改动都会让 CHECK 失败并回滚整批 —— 所以
+   * 「成功次数 <= 20」（论道与天机轮共享）「记录、奖励、扣减同生共死」都由数据库保证。
    */
   async commitGambling(options: {
     /** 赌注涉及的资源 id（灵石/药材/矿石）；属性赌注与纯加点时为 null。 */
@@ -916,7 +937,12 @@ class SectDraft {
     /** 本次写入涉及的那一列属性（属性赌注 / 被加点）；只发悟道值奖励时可省略。 */
     attribute?: BettableAttribute;
     /** 是否要求该弟子此刻没有「尚未到期的历练」（论道要求；加点不要求）。 */
+    /** 是否要求该弟子此刻没有「尚未到期的历练」（论道要求；加点不要求）。 */
     rejectAway?: boolean;
+    /** 0020 天机轮：中奖丹药的库存快照（守卫核对它没被并发改动；非丹药奖励时省略）。 */
+    pill?: { pillId: string; quantity: number };
+    /** 0020 天机轮：是否核对宗门行的 wheel_seed（转动与重置都要求格局仍是读到的那一版）。 */
+    checkWheelSeed?: boolean;
   }): Promise<void> {
     const commandId = crypto.randomUUID();
     // 守卫比较的是写入前的库状态 → 用读快照时的弟子行（this.base），不是内存里改过的行。
@@ -937,7 +963,9 @@ class SectDraft {
       resourceId: options.resourceId,
       now: this.now,
       ...(disciple === undefined ? {} : { disciple }),
+      ...(options.pill === undefined ? {} : { pill: options.pill }),
       ...(options.rejectAway === true ? { rejectAway: true } : {}),
+      ...(options.checkWheelSeed === true ? { checkWheelSeed: true } : {}),
     });
     try {
       await this.db.batch(prepareStatements(this.db, [
@@ -1436,6 +1464,8 @@ export async function createSect(
         challenge_count: 0,
         debate_date_key: '',
         debate_count: 0,
+        // 0020 天机轮：格局种子从 0 开始（迁移的列默认值也是 0，内存口径与库一致）。
+        wheel_seed: 0,
         created_at: now,
       },
       disciples,
@@ -4949,7 +4979,10 @@ export async function daoDebate(
   // 每日次数（UTC+8 归一在 gambling.ts 的 debateDayStateOf 里完成）。
   const day = draft.debateDay;
   if (day.remaining <= 0) {
-    throw new AppError('DAILY_LIMIT', `今日论道次数已用完（${String(DEBATE_DAILY_LIMIT)} 次/天）`);
+    throw new AppError(
+      'DAILY_LIMIT',
+      `今日赌坊次数已用完（论道与天机轮共 ${String(DEBATE_DAILY_LIMIT)} 次/天）`,
+    );
   }
 
   // 出战弟子：属于本宗、不在外历练、不在疗伤（与挑战同一口径）。
@@ -5218,4 +5251,183 @@ export async function allocateDaoInsight(
       totalUsed: nextUsed,
     },
   };
+}
+
+/* ---------- 天机轮（0020 迁移 + gambling.ts 的转盘规则） ---------- */
+
+/**
+ * 天机轮记录写进 dao_debate_log.disciple_name 的展示名（0020 迁移的约定）：
+ * 转盘没有出战弟子，但两列仍是 0019 的 NOT NULL —— 所以 disciple_id 记空串、
+ * disciple_name 记「天机轮」，赌坊记录列表照旧直接渲染这一列，不必为转盘单开分支。
+ */
+const WHEEL_LOG_NAME = '天机轮';
+
+/**
+ * 本宗当前的转盘格局（0020）：由 sect_id + wheel_seed 确定性生成。
+ * 与 view.ts 的 buildWheelView 是同一个 seed 口径 —— 玩家界面上看到的转盘，
+ * 就是这里转动用的那张转盘（服务端不存格位，也不需要存）。
+ */
+function draftWheelSlots(draft: SectDraft): WheelSlot[] {
+  return generateWheelSlots(wheelLayoutSeed(draft.sect.id, Number(draft.sect.wheel_seed) || 0));
+}
+
+/** 格面与奖励文案要用的名字表：资源名取自配置、丹药名取自 alchemy.ts（各只有一份）。 */
+function wheelNamesOf(draft: SectDraft): {
+  resource: (resourceId: string) => string;
+  pill: (pillId: string) => string;
+} {
+  return {
+    resource: (resourceId: string) => draft.resourceName(resourceId),
+    pill: (pillId: string) => findPillRecipe(pillId)?.name ?? pillId,
+  };
+}
+
+/**
+ * 天机轮转动（POST /game/wheel-spin，计划 4.2 / 6.2）。
+ *
+ * 与其它写命令同一套路：结算 → 解锁 / 次数 / 余额校验（全部只读）→ 服务端按格局选格并结算奖励
+ * → 扣费、发奖、计数、记录 → **一次**受保护 batch 提交。
+ *
+ * 落格用一次 Math.random（随机在服务端）；格局本身完全由 seed 决定 ——
+ * 前端不参与任何判定，只拿 slotIndex 把转盘转到对应角度。
+ */
+export async function wheelSpin(
+  db: D1Database,
+  userId: string,
+  tier: WheelTier,
+  now: number,
+): Promise<{ state: SectStateView; result: WheelSpinResultView }> {
+  const draft = await draftFor(db, userId, now);
+  requireGamblingUnlocked(draft);
+
+  // 每日次数：与论道共享同一个计数列（计划 2.5），用满 20 次后两个玩法一起关闭。
+  const day = draft.debateDay;
+  if (day.remaining <= 0) {
+    throw new AppError(
+      'DAILY_LIMIT',
+      `今日赌坊次数已用完（论道与天机轮共 ${String(DEBATE_DAILY_LIMIT)} 次/天）`,
+    );
+  }
+
+  // 费用 = 1x 档费用 × 档位（1x→展示 50 … 5x→展示 250）。
+  const cost = wheelSpinCost(tier);
+  draft.requireResourceAvailable('spiritStone', cost);
+
+  const slots = draftWheelSlots(draft);
+  const slotIndex = Math.min(slots.length - 1, Math.floor(Math.random() * slots.length));
+  const slot = slots[slotIndex]!;
+  const reward = wheelReward(slot, tier, cost);
+  const names = wheelNamesOf(draft);
+  const slotLabel = wheelSlotLabel(slot, names);
+
+  // 校验全部通过后才真正扣费（与论道同一顺序：先只读检查、后写），语句与内存一起改。
+  draft.requireResource('spiritStone', cost);
+  // 丹药发奖是「快照 + 数量」的绝对值 upsert，先记下这条库存的当前数量交给守卫核对，
+  // 否则并发的炼制 / 服用会被这一批静默覆盖。
+  let pillSnapshot: { pillId: string; quantity: number } | null = null;
+  if (reward.type === 'resource') {
+    draft.grantResource(reward.resourceId, Number(reward.amount));
+  } else if (reward.type === 'pill') {
+    pillSnapshot = { pillId: reward.pillId, quantity: draft.pillQuantity(reward.pillId) };
+    draft.addPill(reward.pillId, reward.quantity);
+  }
+
+  // 计数写回：日期键归一到今天、计数 = 已用 + 1（内存同步，返回的 state 就是新值）。
+  const usedAfter = day.usedToday + 1;
+  draft.addStatement(updateSectDebateCounterStatement(draft.sect.id, day.dateKey, usedAfter));
+  draft.sect.debate_date_key = day.dateKey;
+  draft.sect.debate_count = usedAfter;
+
+  // 天机轮记录：multiplier 存投入档位（0020 迁移已把 CHECK 放宽到 1~5）；
+  // 转盘不用 jev，所以 win_probability 恒为 null；谢谢惠顾算 lose（计划 3.2）。
+  draft.addStatement(
+    insertDaoDebateLogStatement({
+      id: crypto.randomUUID(),
+      sectId: draft.sect.id,
+      discipleId: '',
+      discipleName: WHEEL_LOG_NAME,
+      betMode: 'wheel',
+      multiplier: tier,
+      stakeDetail: JSON.stringify({ amount: String(cost) }),
+      result: reward.type === 'none' ? 'lose' : 'win',
+      rewardDetail: JSON.stringify(reward),
+      winProbability: null,
+      now,
+    }),
+  );
+
+  // 唯一的一次受保护提交：守卫（含 wheel_seed）+ 结算 + 扣费 / 发奖 + 计数 + 记录同一个 batch。
+  // checkWheelSeed：格局被重置过就说明这一转的依据已经不存在，乐观锁拒绝并整批回滚。
+  await draft.commitGambling({
+    resourceId: 'spiritStone',
+    ...(pillSnapshot === null ? {} : { pill: pillSnapshot }),
+    checkWheelSeed: true,
+  });
+
+  draft.debateDay = {
+    ...day,
+    usedToday: usedAfter,
+    remaining: Math.max(0, DEBATE_DAILY_LIMIT - usedAfter),
+  };
+
+  const rewardDescription =
+    reward.type === 'resource'
+      ? `${names.resource(reward.resourceId)} +${displayAmount(Number(reward.amount))}`
+      : reward.type === 'pill'
+        ? `${names.pill(reward.pillId)} ×${String(reward.quantity)}`
+        : '无奖励';
+  const message =
+    reward.type === 'none'
+      ? `天机轮停在了「${slotLabel}」：投入 ${displayAmount(cost)} 灵石，这次没有收获（今日还剩 ${String(draft.debateDay.remaining)} 次）`
+      : `天机轮停在了「${slotLabel}」：投入 ${displayAmount(cost)} 灵石，赢得${rewardDescription}（今日还剩 ${String(draft.debateDay.remaining)} 次）`;
+
+  return {
+    state: draft.view(),
+    result: {
+      slotIndex,
+      tier,
+      cost: String(cost),
+      slotLabel,
+      reward:
+        reward.type === 'resource'
+          ? { type: 'resource', resourceId: reward.resourceId, amount: reward.amount }
+          : reward.type === 'pill'
+            ? {
+                type: 'pill',
+                pillId: reward.pillId,
+                pillName: names.pill(reward.pillId),
+                quantity: reward.quantity,
+              }
+            : { type: 'none' },
+      message,
+    },
+  };
+}
+
+/**
+ * 天机轮重置（POST /game/wheel-reset，计划 4.3 / 6.2）。
+ *
+ * 花 WHEEL_RESET_COST（展示 100）灵石换一次整盘重排：wheel_seed + 1 → 格局的类型与倍率
+ * 全部重新随机（格局是 seed 的函数，seed 一变整盘就变）。
+ * 不消耗每日次数、不限次数：有灵石就能重置（计划 2.4）。
+ */
+export async function wheelReset(
+  db: D1Database,
+  userId: string,
+  now: number,
+): Promise<{ state: SectStateView }> {
+  const draft = await draftFor(db, userId, now);
+  requireGamblingUnlocked(draft);
+
+  // requireResource 同时完成检查与扣减（不足时抛 INSUFFICIENT_RESOURCE，带缺少数量）。
+  draft.requireResource('spiritStone', WHEEL_RESET_COST);
+
+  const nextSeed = (Number(draft.sect.wheel_seed) || 0) + 1;
+  draft.addStatement(updateSectWheelSeedStatement(draft.sect.id, nextSeed));
+  draft.sect.wheel_seed = nextSeed;
+
+  // checkWheelSeed：并发的两次重置只能成功一次，不会出现「扣两次费、种子只 +1」。
+  await draft.commitGambling({ resourceId: 'spiritStone', checkWheelSeed: true });
+
+  return { state: draft.view() };
 }
