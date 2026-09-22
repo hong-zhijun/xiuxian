@@ -72,6 +72,8 @@ const emit = defineEmits<{
   setAvatarFrame: [discipleId: string, frameId: AvatarFrameId];
   /** 0019 分配悟道值（属性六选一 + 点数）：归属、余额与上限由服务端裁决，这里只 emit。 */
   allocateDaoInsight: [discipleId: string, attribute: DaoAttribute, points: number];
+  /** 0021 弟子改名（2-6 个码点、一次 50 灵石）：规则与价格都由服务端裁决，这里只 emit。 */
+  renameDisciple: [discipleId: string, name: string];
   expel: [discipleId: string];
   /** 0014 历练：拉预览 / 出发 / 领取。组件只 emit，请求与 state 回填都在上层。 */
   requestJourneyPreview: [discipleId: string];
@@ -171,6 +173,55 @@ function saveNote(): void {
   const note = noteDraft.value.trim();
   noteDraft.value = note;
   emit('saveNote', props.disciple.id, note);
+}
+
+/* ---------- 0021 改名：2-6 个码点、一次 50 灵石（长度规则与价格都来自 state.rename） ---------- */
+
+const renameDraft = ref(props.disciple.name);
+const serverName = computed(() => props.disciple.name);
+// 与服务端同一口径：先 trim 再按码点计数（否则「 甲 」在前端算 3 字、服务端按 1 字拒绝）。
+const renameLength = computed(() => Array.from(renameDraft.value.trim()).length);
+const renameRangeLabel = computed(
+  () =>
+    `${String(props.state.rename.discipleNameMinChars)}~${String(
+      props.state.rename.discipleNameMaxChars,
+    )} 个字`,
+);
+/** 少于下限即非法（空串也要拦：不能把「清空输入框」当成合法提交）。 */
+const renameTooShort = computed(
+  () => renameLength.value < props.state.rename.discipleNameMinChars,
+);
+const renameTooLong = computed(() => renameLength.value > props.state.rename.discipleNameMaxChars);
+const renameInvalid = computed(() => renameTooShort.value || renameTooLong.value);
+/** trim 后与当前姓名不同才允许提交（同名请求服务端会早退，不扣费也不写库）。 */
+const renameDirty = computed(() => renameDraft.value.trim() !== serverName.value);
+/** 灵石够不够：只决定按钮可用性，余额校验与扣费都由服务端裁决。 */
+const renameAffordable = computed(() => {
+  // 资源 id 与 SectScreen 的配色判断用同一个字面量（服务端 resourceId 契约）。
+  const balance = Number(
+    props.state.resources.find((item) => item.id === 'spiritStone')?.balance ?? 0,
+  );
+  return balance >= Number(props.state.rename.discipleCost);
+});
+const renameCostLabel = computed(() => formatAmount(props.state.rename.discipleCost));
+const renameHint = computed(() => {
+  if (renameInvalid.value) return `姓名需 ${renameRangeLabel.value}`;
+  if (!renameAffordable.value) return '灵石不足';
+  return '旧记录仍保留改名前的姓名';
+});
+
+// 服务端回填了新姓名（改名成功）而本地没有未保存改动时跟随服务端。
+watch(serverName, (next) => {
+  if (!renameDirty.value) renameDraft.value = next;
+});
+
+function onRenameInput(event: Event): void {
+  renameDraft.value = (event.target as HTMLInputElement).value;
+}
+
+function submitRename(): void {
+  if (props.busy || !renameDirty.value || renameInvalid.value || !renameAffordable.value) return;
+  emit('renameDisciple', props.disciple.id, renameDraft.value.trim());
 }
 
 /* ---------- 0017 头像框：固定白名单单选，保存后由服务端回填 ---------- */
@@ -1180,6 +1231,37 @@ function confirmExpel(): void {
           </div>
           <p class="disciple-note-meta" role="status">
             当前：{{ frameCurrentLabel }} · {{ frameDirty ? '有未保存的改动' : '已保存' }}
+          </p>
+        </section>
+
+        <section class="disciple-detail-section" aria-labelledby="disciple-rename-title">
+          <h3 id="disciple-rename-title" class="disciple-detail-title">改名</h3>
+          <div class="disciple-note-row">
+            <input
+              class="disciple-input"
+              type="text"
+              aria-label="弟子姓名"
+              :placeholder="renameRangeLabel"
+              :value="renameDraft"
+              @input="onRenameInput"
+            />
+            <button
+              class="action-button disciple-note-save"
+              :class="{ 'is-dirty': renameDirty }"
+              type="button"
+              :disabled="busy || !renameDirty || renameInvalid || !renameAffordable"
+              @click="submitRename"
+            >
+              改名
+            </button>
+          </div>
+          <p
+            class="disciple-note-meta"
+            :class="{ 'is-error': renameInvalid || !renameAffordable }"
+            role="status"
+          >
+            {{ renameLength }}/{{ state.rename.discipleNameMaxChars }} 字 · 一次
+            {{ renameCostLabel }} 灵石 · {{ renameHint }}
           </p>
         </section>
 

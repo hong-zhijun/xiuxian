@@ -2,6 +2,7 @@ import type { GameConfigContent } from '@xiuxian/game-core';
 
 import { validatedGameConfig } from '../../config/loadGameConfig';
 import { AppError } from '../../http/appError';
+import { classifyDbError } from '../../infra/db/errors';
 import { prepareStatements, type ParameterizedQuery } from '../../infra/db/repository';
 import {
   decide,
@@ -102,6 +103,12 @@ import {
 import { drawEncounters, type EncounterDef } from './encounters';
 import { EVENT_HISTORY_LIMIT, RECENT_EVENTS_IN_SYNC } from './events';
 import {
+  DISCIPLE_NAME_MAX_CHARS,
+  DISCIPLE_NAME_MIN_CHARS,
+  DISCIPLE_RENAME_COST,
+  SECT_NAME_MAX_CHARS,
+  SECT_NAME_MIN_CHARS,
+  SECT_RENAME_COST,
   generateAttributes,
   generateCandidates,
   generateTalent,
@@ -152,6 +159,7 @@ import {
   updateDiscipleBodyTemperingStatement,
   updateDiscipleCultivationStatement,
   updateDiscipleInjuryStatement,
+  updateDiscipleNameStatement,
   updateDiscipleNoteStatement,
   updateDiscipleProgressStatement,
   updatePillInventoryQuantityStatement,
@@ -159,6 +167,7 @@ import {
   updateSectChallengeCounterStatement,
   updateSectDefenseLineupStatement,
   updateSectLevelStatement,
+  updateSectNameStatement,
   updateSectRecruitCounterStatement,
   updateSectRecruitRefreshStatement,
   updateSectReputationStatement,
@@ -813,7 +822,6 @@ class SectDraft {
       debateStats: this.base.debateStats,
       settleResult: this.settleResult,
       now: this.now,
-      recruitUsedToday: this.recruitUsedToday,
       recentEventRows: this.base.recentEvents,
       capacityMultiplier: levelDef.capacityMultiplier,
       journeys: this.journeys,
@@ -1393,7 +1401,7 @@ export async function getSectState(
   throw new AppError('INVALID_STATUS', '宗门状态已变化，请刷新后重试');
 }
 
-/** 创建宗门：初始弟子/建筑/资源按配置一次写入。 */
+/** 创建宗门：初始弟子 / 建筑 / 资源按配置一次写入；宗门名全局唯一（0021）。 */
 export async function createSect(
   db: D1Database,
   userId: string,
@@ -1406,12 +1414,24 @@ export async function createSect(
     throw new AppError('STATE_CONFLICT', '你已经创建过宗门');
   }
 
+  // 0021：宗门名规则统一走 normalizeEntityName（与改名同一套口径：trim / 单行 / 2-12 个码点）。
+  // 否则 7 个星平面字符的名字会「改名能过、建宗过不了」——zod 的 .length 数的是 UTF-16 单元。
+  const normalizedName = normalizeEntityName(
+    name,
+    '宗门名',
+    SECT_NAME_MIN_CHARS,
+    SECT_NAME_MAX_CHARS,
+  );
+
+  // 0021：宗门名全局唯一——先查一次给友好文案，并发抢名交给 sects_name_uniq 唯一索引兜底。
+  await requireSectNameAvailable(db, normalizedName);
+
   const sectId = crypto.randomUUID();
   const statements: ParameterizedQuery[] = [
     insertSectStatement({
       id: sectId,
       userId,
-      name,
+      name: normalizedName,
       level: config.sect.initialLevel,
       veinLevel: config.sect.initialVeinLevel,
       now,
@@ -1502,7 +1522,15 @@ export async function createSect(
     return row;
   });
 
-  await db.batch(prepareStatements(db, statements));
+  try {
+    await db.batch(prepareStatements(db, statements));
+  } catch (error) {
+    // 并发抢名：唯一索引拦下后到的那个提交（预检在它之前已经放行过）。
+    if (classifyDbError(error) === 'unique') {
+      throw sectNameTakenError(normalizedName);
+    }
+    throw error;
+  }
 
   const draft = new SectDraft(
     db,
@@ -1510,7 +1538,7 @@ export async function createSect(
       sect: {
         id: sectId,
         user_id: userId,
-        name,
+        name: normalizedName,
         level: config.sect.initialLevel,
         vein_level: config.sect.initialVeinLevel,
         reputation: 0,
@@ -1569,20 +1597,20 @@ export interface RecruitPreview {
   refreshRemaining: number;
 }
 
-/** 招募判定文案（预览与招募共用）：null = 可以招募。 */
+/**
+ * 招募判定文案（预览与招募共用）：null = 可以招募。
+ * 0021 起「每日 3 次」上限已去掉：宗门等级决定的弟子上限是唯一门槛
+ * （config.recruitment.dailyLimit 保留在配置里但不再参与判定，只作为历史字段）。
+ */
 function recruitBlockedReason(input: {
   config: GameConfigContent;
   discipleCount: number;
   discipleCapacity: number;
-  recruitUsedToday: number;
   balanceOf: (resourceId: string) => number;
 }): string | null {
-  const { config, discipleCount, discipleCapacity, recruitUsedToday, balanceOf } = input;
+  const { config, discipleCount, discipleCapacity, balanceOf } = input;
   if (discipleCount >= discipleCapacity) {
     return '弟子上限已满';
-  }
-  if (recruitUsedToday >= config.recruitment.dailyLimit) {
-    return '今日招募次数已用完';
   }
   const lacking = Object.entries(config.recruitment.cost).find(
     ([resourceId, amount]) => balanceOf(resourceId) < Number(amount),
@@ -1649,7 +1677,6 @@ export async function previewRecruit(
     config,
     discipleCount: disciples.length,
     discipleCapacity,
-    recruitUsedToday,
     balanceOf: (resourceId) =>
       Number(balances.find((row) => row.resource_id === resourceId)?.balance ?? 0),
   });
@@ -1724,11 +1751,6 @@ export async function recruitDisciple(
 
   if (draft.disciples.length >= draft.discipleCapacity) {
     throw new AppError('CAPACITY_FULL', '弟子已满，先升级宗门或遣散弟子（本版本暂不支持遣散）');
-  }
-  if (draft.recruitUsedToday >= config.recruitment.dailyLimit) {
-    throw new AppError('DAILY_LIMIT', '今日招募次数已用完', {
-      dailyLimit: config.recruitment.dailyLimit,
-    });
   }
 
   for (const [resourceId, amount] of Object.entries(config.recruitment.cost)) {
@@ -1838,7 +1860,6 @@ export async function refreshRecruit(
     config: draft.config,
     discipleCount: draft.disciples.length,
     discipleCapacity: draft.discipleCapacity,
-    recruitUsedToday: draft.recruitUsedToday,
     balanceOf: (resourceId) => draft.balanceOf(resourceId),
   });
 
@@ -2127,6 +2148,141 @@ export async function setDiscipleAvatarFrame(
   disciple.avatar_frame_id = frameId;
 
   // 头像框是纯外观，与私有备注一样允许在外历练期间更改（不要求成员「不在外」）。
+  await draft.commitDisciple([{ id: disciple.id }], undefined, { allowActiveJourney: true });
+  return draft.view();
+}
+
+/* ---------- 改名（宗门 / 弟子）：扣灵石的名称写回 ---------- */
+
+/**
+ * 名称归一化：trim → 校验「单行纯文本、无控制字符、长度在 [minChars, maxChars] 个码点之间」。
+ *
+ * - 与 normalizeDiscipleNote 同一口径：不静默截断，越界一律 VALIDATION_ERROR；
+ * - 按码点计数：SQLite 的 length() 对 TEXT 也按字符（码点）计数，两侧口径一致；
+ * - label 只用于错误文案（宗门名 / 弟子名）；长度规则来自 names.ts 的契约常量。
+ */
+export function normalizeEntityName(
+  raw: string,
+  label: string,
+  minChars: number,
+  maxChars: number,
+): string {
+  const name = raw.trim();
+  // 与备注同一套字符黑名单：C0 / DEL / C1 控制区与 U+2028、U+2029 行分隔符，
+  // 这些都是「能造出折行或不可见控制」的字符，接口层必须自己挡住，不能只靠 UI 单行输入。
+  if (/[\u0000-\u001F\u007F-\u009F\u2028\u2029]/.test(name)) {
+    throw new AppError('VALIDATION_ERROR', `${label}只能是一行纯文本，不能包含换行或控制字符`);
+  }
+  const length = [...name].length;
+  if (length < minChars) {
+    throw new AppError('VALIDATION_ERROR', `${label}至少 ${String(minChars)} 个字符`, {
+      minChars,
+      maxChars,
+    });
+  }
+  if (length > maxChars) {
+    throw new AppError('VALIDATION_ERROR', `${label}最多 ${String(maxChars)} 个字符`, {
+      minChars,
+      maxChars,
+    });
+  }
+  return name;
+}
+
+/**
+ * 宗门名占用检查（0021）：建宗与改名共用的预检，只为给出友好文案。
+ *
+ * 真正的裁决是 0021 迁移建的 sects_name_uniq 唯一索引：并发下两个请求可能同时通过预检，
+ * 由索引让后到的那批拿到 UNIQUE 失败并整体回滚（见两处 classifyDbError 的映射）。
+ * `exceptSectId` 给改名用：自己保持原名不算冲突（同名幂等早退在调用方更早处理）。
+ */
+async function requireSectNameAvailable(
+  db: D1Database,
+  name: string,
+  exceptSectId?: string,
+): Promise<void> {
+  const holder = await new SectRepository(db).findIdByName(name);
+  if (holder !== null && holder !== exceptSectId) {
+    throw sectNameTakenError(name);
+  }
+}
+
+/** 0021 重名的统一回执：预检与唯一索引的并发失败路径共用同一句话、同一个错误码。 */
+function sectNameTakenError(name: string): AppError {
+  return new AppError('STATE_CONFLICT', `宗门名「${name}」已被占用，换一个吧`, { name });
+}
+
+/**
+ * 宗门改名（一次 500 灵石）：结算 → 归一化 → 查重 → 余额校验并扣减 → 单列写回，一次受保护 batch。
+ *
+ * - 幂等：提交的名字与当前名字相同时**显式早退**——不扣灵石、不写库，也不做查重（免得和自己冲突）；
+ * - 唯一：与已有宗门重名一律 STATE_CONFLICT（预检 + sects_name_uniq 双重保险），名字被占用时不扣费；
+ * - 提交走 commit()：批内重新核对宗门行（level / last_settled_at）与资源余额，并发时不产生半写。
+ */
+export async function renameSect(
+  db: D1Database,
+  userId: string,
+  name: string,
+  now: number,
+): Promise<SectStateView> {
+  const draft = await draftFor(db, userId, now);
+  const normalized = normalizeEntityName(name, '宗门名', SECT_NAME_MIN_CHARS, SECT_NAME_MAX_CHARS);
+
+  if (draft.sect.name === normalized) {
+    return draft.view();
+  }
+
+  // 顺序要紧：查重在扣费之前——名字被占用时连余额都不动。
+  await requireSectNameAvailable(db, normalized, draft.sect.id);
+
+  draft.requireResource('spiritStone', SECT_RENAME_COST);
+  draft.addStatement(updateSectNameStatement(draft.sect.id, normalized));
+  draft.sect.name = normalized;
+
+  try {
+    await draft.commit();
+  } catch (error) {
+    // 并发抢名：唯一索引拦下后到的那批（预检已经放行过），整批回滚后翻译成同一句话。
+    if (classifyDbError(error) === 'unique') {
+      throw sectNameTakenError(normalized);
+    }
+    throw error;
+  }
+  return draft.view();
+}
+
+/**
+ * 弟子改名（一次 50 灵石）：结算 → 归属校验 → 归一化 → 余额校验并扣减 → 单列写回。
+ *
+ * - 归属：discipleById 只在当前宗门的弟子里找，非本宗 / 不存在统一 NOT_FOUND；
+ * - 幂等：与当前姓名相同时早退，不扣灵石、不写库；
+ * - 在外可改：与私有备注 / 头像框一致，允许在尚未到期的历练期间改名（allowActiveJourney）；
+ * - 历史不回填：历练与赌坊记录里的 disciple_name 是当时的姓名快照，改名只影响此后的展示。
+ */
+export async function renameDisciple(
+  db: D1Database,
+  userId: string,
+  discipleId: string,
+  name: string,
+  now: number,
+): Promise<SectStateView> {
+  const draft = await draftFor(db, userId, now);
+  const disciple = draft.discipleById(discipleId);
+  const normalized = normalizeEntityName(
+    name,
+    '弟子名',
+    DISCIPLE_NAME_MIN_CHARS,
+    DISCIPLE_NAME_MAX_CHARS,
+  );
+
+  if (disciple.name === normalized) {
+    return draft.view();
+  }
+
+  draft.requireResource('spiritStone', DISCIPLE_RENAME_COST);
+  draft.addStatement(updateDiscipleNameStatement(disciple.id, draft.sect.id, normalized));
+  disciple.name = normalized;
+
   await draft.commitDisciple([{ id: disciple.id }], undefined, { allowActiveJourney: true });
   return draft.view();
 }

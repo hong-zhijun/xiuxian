@@ -290,3 +290,20 @@ export function generateCandidates(
   }
   return candidates;
 }
+
+/* ---------- 改名规则（宗门名 / 弟子名）：长度上限与消耗 ---------- */
+
+/**
+/**
+ * 名字长度规则（Unicode 码点；服务层校验与前端字数提示共用同一口径）。
+ * 重名规则（0021）：**宗门名全局唯一**（建宗与改名都查重，另有 sects_name_uniq 唯一索引兜底）；
+ * 弟子名允许重名（门内可以有同名弟子，招募与改名都不查重）。
+ */
+export const SECT_NAME_MIN_CHARS = 2;
+export const SECT_NAME_MAX_CHARS = 12;
+export const DISCIPLE_NAME_MIN_CHARS = 2;
+export const DISCIPLE_NAME_MAX_CHARS = 6;
+
+/** 改名消耗（灵石，最小单位；1 展示单位 = 1000 最小单位）：宗门一次 500、弟子一次 50。 */
+export const SECT_RENAME_COST = 500 * 1000;
+export const DISCIPLE_RENAME_COST = 50 * 1000;

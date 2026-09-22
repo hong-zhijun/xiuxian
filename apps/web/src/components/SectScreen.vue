@@ -112,6 +112,9 @@ const emit = defineEmits<{
   /** 0019 赌坊：论道请求与悟道值加点都由 App.vue 绑定并调接口，这里只派发与展示。 */
   daoDebate: [input: DaoDebateInput];
   allocateDaoInsight: [discipleId: string, attribute: DaoAttribute, points: number];
+  /** 0021 改名（宗门 500 灵石 / 弟子 50 灵石）：请求与提示都在 App.vue，这里只派发与展示。 */
+  renameSect: [name: string];
+  renameDisciple: [discipleId: string, name: string];
   /** 0020 天机轮：转动（带投入档位）与重置都由 App.vue 绑定并调接口，这里只派发与展示。 */
   wheelSpin: [tier: number];
   wheelReset: [];
@@ -144,14 +147,69 @@ function onGamblingGame(game: 'debate' | 'wheel'): void {
 }
 
 /**
- * 操作条角标：本次还能招几个人（今日剩余招募次数）。
- * 招不了（次数用尽 / 门人已满 / 灵石不够）时返回 0，按钮上就不显示角标。
+ * 操作条角标：还能招几个人（宗门等级决定的弟子上限 − 现有门人）。
+ * 招不了（门人已满 / 灵石不够）时返回 0，按钮上就不显示角标。
+ * 0021 起已无「每日 3 次」上限，剩余数不再受次数限制。
  */
 const recruitBadge = computed(() => {
   const recruit = props.state.recruit;
   if (!recruit.canRecruit) return 0;
   return Math.max(0, recruit.remaining);
 });
+
+/**
+ * 0021 宗门改名弹窗：价格与长度规则都来自 state.rename（前端不另造常量）。
+ * 成功后服务端回填新名字，watch 到「state.sect.name === 草稿」就自动关掉弹窗；
+ * 失败（例如灵石不足）时弹窗保持打开，由 App.vue 的统一错误提示说明原因。
+ */
+const showRenameDialog = ref(false);
+const renameDraft = ref('');
+// 与服务端同一口径：先 trim 再按码点计数（` 苍梧宗 ` 提交过去就是 3 个字）。
+const renameLength = computed(() => Array.from(renameDraft.value.trim()).length);
+const renameRangeLabel = computed(
+  () =>
+    `${String(props.state.rename.sectNameMinChars)}~${String(
+      props.state.rename.sectNameMaxChars,
+    )} 个字`,
+);
+const renameInvalid = computed(
+  () =>
+    renameLength.value < props.state.rename.sectNameMinChars ||
+    renameLength.value > props.state.rename.sectNameMaxChars,
+);
+/** trim 后与当前宗门名不同才允许提交（同名请求服务端会早退，不扣费也不写库）。 */
+const renameDirty = computed(() => renameDraft.value.trim() !== props.state.sect.name);
+/** 灵石够不够：只决定按钮可用性，余额校验与扣费都由服务端裁决。 */
+const renameAffordable = computed(
+  () => (liveResources.value['spiritStone'] ?? 0) >= Number(props.state.rename.sectCost),
+);
+const renameCostLabel = computed(() => formatAmount(props.state.rename.sectCost));
+const renameHint = computed(() => {
+  if (renameInvalid.value) return `宗门名需 ${renameRangeLabel.value}`;
+  if (!renameAffordable.value) return '灵石不足';
+  return '宗门名不可与别家重名；重挂门匾后，江湖榜与战报都会显示新名字';
+});
+
+function openRenameDialog(): void {
+  renameDraft.value = props.state.sect.name;
+  showRenameDialog.value = true;
+}
+
+function closeRenameDialog(): void {
+  showRenameDialog.value = false;
+}
+
+function onRenameInput(event: Event): void {
+  renameDraft.value = (event.target as HTMLInputElement).value;
+}
+
+// 服务端回填了新名字（= 改名成功）就自动关弹窗，不需要额外的成功回调。
+watch(
+  () => props.state.sect.name,
+  (next) => {
+    if (showRenameDialog.value && next === renameDraft.value.trim()) showRenameDialog.value = false;
+  },
+);
 
 /** 招贤弹窗：候选人 + 开关（点「张榜招贤」时才拉预览；「换一批」直接换本地这份）。 */
 const recruitPreview = ref<RecruitPreview | null>(null);
@@ -905,6 +963,18 @@ function onDetailSetAvatarFrame(discipleId: string, frameId: AvatarFrameId): voi
   if (props.busy) return;
   emit('setAvatarFrame', discipleId, frameId);
 }
+
+/** 0021 宗门改名：只把新名字交给 App.vue，请求与提示都在上层。 */
+function submitRenameSect(): void {
+  if (props.busy || !renameDirty.value || renameInvalid.value || !renameAffordable.value) return;
+  emit('renameSect', renameDraft.value.trim());
+}
+
+/** 0021 转发弟子改名：归属、余额与字数都由服务端裁决，这里只做一次 busy 门闩。 */
+function onDetailRenameDisciple(discipleId: string, name: string): void {
+  if (props.busy) return;
+  emit('renameDisciple', discipleId, name);
+}
 </script>
 
 <template>
@@ -914,7 +984,22 @@ function onDetailSetAvatarFrame(discipleId: string, frameId: AvatarFrameId): voi
         <img class="sect-logo" src="/brand-logo.png" alt="" aria-hidden="true" />
         <div>
           <p class="eyebrow">太初界 · 掌门府</p>
-          <h1>{{ state.sect.name }}</h1>
+          <div class="sect-name-row">
+            <h1>{{ state.sect.name }}</h1>
+            <button
+              class="sect-rename"
+              type="button"
+              :disabled="busy"
+              aria-label="宗门改名"
+              @click="openRenameDialog"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M4 20h4L20 8l-4-4L4 16v4Z" />
+                <path d="M14 6l4 4" />
+              </svg>
+              <span>改名</span>
+            </button>
+          </div>
           <p class="sect-level">{{ state.sect.levelName }}（{{ state.sect.level }}/{{ MAX_SECT_LEVEL }}）· 声望 {{ state.sect.reputation }}</p>
         </div>
       </div>
@@ -995,6 +1080,8 @@ function onDetailSetAvatarFrame(discipleId: string, frameId: AvatarFrameId): voi
             class="action-chip"
             type="button"
             :disabled="busy || recruitLoading"
+            :aria-label="recruitBadge > 0 ? `招贤台（还可招募 ${recruitBadge} 人）` : '招贤台'"
+            :title="recruitBadge > 0 ? `还可招募 ${recruitBadge} 人（弟子上限 − 现有门人）` : '张榜招贤'"
             @click="requestRecruit"
           >
             <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -1383,6 +1470,7 @@ function onDetailSetAvatarFrame(discipleId: string, frameId: AvatarFrameId): voi
         @notify="onDetailNotify"
         @set-avatar-frame="onDetailSetAvatarFrame"
         @allocate-dao-insight="onDetailAllocateDaoInsight"
+        @rename-disciple="onDetailRenameDisciple"
       />
     </ModalShell>
 
@@ -1440,6 +1528,63 @@ function onDetailSetAvatarFrame(discipleId: string, frameId: AvatarFrameId): voi
             @click="confirmBreakthrough"
           >
             <span>{{ busy ? '破境中…' : '确认破境' }}</span>
+          </button>
+        </div>
+      </section>
+    </ModalShell>
+
+    <!--
+      0021 宗门改名：二级弹窗（不做底栏）。价格与长度规则来自 state.rename；
+      成功后服务端回填新名字，watch 会自动关掉这一层（失败时保持打开，错误由 App.vue 提示）。
+    -->
+    <ModalShell
+      v-if="showRenameDialog"
+      narrow
+      :loading="busy"
+      loading-text="正在更换山门牌匾"
+      label="宗门改名"
+      @close="closeRenameDialog"
+    >
+      <section class="disciple-break-confirm" aria-labelledby="sect-rename-title">
+        <header class="section-heading panel-heading compact-heading">
+          <div>
+            <p class="eyebrow">宗门改名</p>
+            <h2 id="sect-rename-title">{{ state.sect.name }}</h2>
+          </div>
+          <span class="count-badge">{{ renameLength }}/{{ state.rename.sectNameMaxChars }}</span>
+        </header>
+
+        <div class="disciple-note-row">
+          <input
+            class="disciple-input"
+            type="text"
+            aria-label="宗门名称"
+            :placeholder="renameRangeLabel"
+            :value="renameDraft"
+            @input="onRenameInput"
+          />
+        </div>
+
+        <p
+          class="disciple-note-meta"
+          :class="{ 'is-error': renameInvalid || !renameAffordable }"
+          role="status"
+        >
+          {{ renameLength }}/{{ state.rename.sectNameMaxChars }} 字 · 一次 {{ renameCostLabel }} 灵石 ·
+          {{ renameHint }}
+        </p>
+
+        <div class="disciple-break-confirm-actions">
+          <button class="action-button" type="button" :disabled="busy" @click="closeRenameDialog">
+            取消
+          </button>
+          <button
+            class="action-button primary-action"
+            type="button"
+            :disabled="busy || !renameDirty || renameInvalid || !renameAffordable"
+            @click="submitRenameSect"
+          >
+            <span>{{ busy ? '改名中…' : '确认改名' }}</span>
           </button>
         </div>
       </section>
