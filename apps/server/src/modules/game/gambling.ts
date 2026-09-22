@@ -357,6 +357,29 @@ export const WHEEL_MULTIPLIER_MAX = 1.5;
 /** 大额灵石格的额外倍率：奖励 = 投入 × 格子倍率 × 3。 */
 export const WHEEL_BIG_MULTIPLIER = 3;
 
+/** 各格子类型的落格权重：大奖概率低、谢谢惠顾概率偏高、普通格居中。 */
+export const WHEEL_SLOT_WEIGHTS: Record<WheelSlotType, number> = {
+  big_spirit_stone: 1,
+  spirit_stone: 2,
+  herb: 2,
+  ore: 2,
+  pill: 2,
+  nothing: 3,
+};
+
+/** 根据格子列表的类型权重做加权随机选格，返回命中的下标。 */
+export function wheelWeightedPick(slots: readonly WheelSlot[], roll: number): number {
+  let total = 0;
+  for (const slot of slots) total += WHEEL_SLOT_WEIGHTS[slot.type];
+  const target = roll * total;
+  let acc = 0;
+  for (let i = 0; i < slots.length; i++) {
+    acc += WHEEL_SLOT_WEIGHTS[slots[i]!.type];
+    if (target < acc) return i;
+  }
+  return slots.length - 1;
+}
+
 /** 大额灵石固定 1 格。 */
 export const WHEEL_BIG_SLOTS = 1;
 /** 谢谢惠顾固定 2 格。 */

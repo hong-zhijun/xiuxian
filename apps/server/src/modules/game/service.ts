@@ -46,6 +46,7 @@ import {
   wheelReward,
   wheelSlotLabel,
   wheelSpinCost,
+  wheelWeightedPick,
   type BetMode,
   type BettableAttribute,
   type BettableResource,
@@ -5314,7 +5315,7 @@ export async function wheelSpin(
   draft.requireResourceAvailable('spiritStone', cost);
 
   const slots = draftWheelSlots(draft);
-  const slotIndex = Math.min(slots.length - 1, Math.floor(Math.random() * slots.length));
+  const slotIndex = wheelWeightedPick(slots, Math.random());
   const slot = slots[slotIndex]!;
   const reward = wheelReward(slot, tier, cost);
   const names = wheelNamesOf(draft);

@@ -502,13 +502,13 @@ const wheelAriaLabel = computed(() => {
 .wheel-label {
   fill: #dce6e0;
   font-family: 'STKaiti', 'KaiTi', serif;
-  font-size: 8px;
+  font-size: 10px;
   font-weight: 500;
 }
 
 /* 长格面缩一档字号，避免文字挤进邻格（页面缩放时字号跟着盘一起缩）。 */
 .wheel-label.is-long {
-  font-size: 6.6px;
+  font-size: 8.5px;
 }
 
 .wheel-label.is-big {

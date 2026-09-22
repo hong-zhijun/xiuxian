@@ -9,6 +9,7 @@ import {
   WHEEL_RESET_COST,
   WHEEL_SLOT_COUNT,
   WHEEL_SPIN_COST,
+  WHEEL_SLOT_WEIGHTS,
   generateWheelSlots,
   wheelLayoutSeed,
   type WheelSlot,
@@ -1038,8 +1039,17 @@ async function setPillQuantity(sectId: string, pillId: string, quantity: number)
  * 落格由服务端的一次 Math.random 决定：把它钉在目标格所属的 1/8 区间里
  * （沿用本文件 forceWin / forceLose 的同一手法；格局本身仍由 seed 确定性生成）。
  */
-function landOnSlot(slotIndex: number): void {
-  vi.spyOn(Math, 'random').mockReturnValue((slotIndex + 0.5) / WHEEL_SLOT_COUNT);
+function landOnSlot(slotIndex: number, slots?: readonly WheelSlot[]): void {
+  if (!slots) {
+    vi.spyOn(Math, 'random').mockReturnValue((slotIndex + 0.5) / WHEEL_SLOT_COUNT);
+    return;
+  }
+  let total = 0;
+  for (const s of slots) total += WHEEL_SLOT_WEIGHTS[s.type];
+  let acc = 0;
+  for (let i = 0; i < slotIndex; i++) acc += WHEEL_SLOT_WEIGHTS[slots[i]!.type];
+  const mid = acc + WHEEL_SLOT_WEIGHTS[slots[slotIndex]!.type] / 2;
+  vi.spyOn(Math, 'random').mockReturnValue(mid / total);
 }
 
 /**
@@ -1050,13 +1060,13 @@ function landOnSlot(slotIndex: number): void {
 async function aimAtSlot(
   sect: SectFixture,
   type: WheelSlot['type'],
-): Promise<{ seed: number; slotIndex: number; slot: WheelSlot }> {
+): Promise<{ seed: number; slotIndex: number; slot: WheelSlot; slots: WheelSlot[] }> {
   for (let seed = 0; seed < 200; seed += 1) {
     const slots = generateWheelSlots(wheelLayoutSeed(sect.sectId, seed));
     const slotIndex = slots.findIndex((slot) => slot.type === type);
     if (slotIndex >= 0) {
       await setWheelSeed(sect.sectId, seed);
-      return { seed, slotIndex, slot: slots[slotIndex]! };
+      return { seed, slotIndex, slot: slots[slotIndex]!, slots };
     }
   }
   throw new Error(`转盘格局里找不到 ${type} 格（试了 200 个 seed）`);
@@ -1086,6 +1096,7 @@ describe('天机轮：面板与转动（计划 4.1 / 4.2）', () => {
       generateWheelSlots(wheelLayoutSeed(sect.sectId, 0)).map((slot) => slot.type),
     );
 
+    const realSlots = generateWheelSlots(wheelLayoutSeed(sect.sectId, 0));
     const slotIndex = panelSlots.findIndex((slot) => slot.type === 'spirit_stone');
     expect(slotIndex).toBeGreaterThanOrEqual(0);
     const slot = panelSlots[slotIndex]!;
@@ -1093,7 +1104,7 @@ describe('天机轮：面板与转动（计划 4.1 / 4.2）', () => {
     const cost = WHEEL_SPIN_COST * tier;
     const expectedAmount = String(Math.floor(cost * slot.multiplier + 1e-6));
 
-    landOnSlot(slotIndex);
+    landOnSlot(slotIndex, realSlots);
     const spun = await spin(sect, tier);
     expect(spun.status).toBe(200);
     const payload = dataOf(spun) as Record<string, any>;
@@ -1144,12 +1155,12 @@ describe('天机轮：面板与转动（计划 4.1 / 4.2）', () => {
     await unlockGambling(sect.sectId);
     await setBalance(sect.sectId, 'spiritStone', 2_000_000);
 
-    const { slotIndex, slot } = await aimAtSlot(sect, 'big_spirit_stone');
+    const { slotIndex, slot, slots } = await aimAtSlot(sect, 'big_spirit_stone');
     const tier = 2;
     const cost = WHEEL_SPIN_COST * tier;
     const expectedAmount = String(Math.floor(cost * slot.multiplier * WHEEL_BIG_MULTIPLIER + 1e-6));
 
-    landOnSlot(slotIndex);
+    landOnSlot(slotIndex, slots);
     const spun = await spin(sect, tier);
     expect(spun.status).toBe(200);
     const outcome = (dataOf(spun) as Record<string, any>).result as Record<string, any>;
@@ -1187,7 +1198,7 @@ describe('天机轮：面板与转动（计划 4.1 / 4.2）', () => {
     await unlockGambling(sect.sectId);
     await setBalance(sect.sectId, 'spiritStone', 2_000_000);
 
-    const { slotIndex, slot } = await aimAtSlot(sect, 'pill');
+    const { slotIndex, slot, slots } = await aimAtSlot(sect, 'pill');
     expect(slot.pillId).not.toBeNull();
     expect(PILL_IDS).toContain(slot.pillId);
     const pillId = slot.pillId as string;
@@ -1200,7 +1211,7 @@ describe('天机轮：面板与转动（计划 4.1 / 4.2）', () => {
     await setPillQuantity(sect.sectId, pillId, 2);
 
     const tier = 3;
-    landOnSlot(slotIndex);
+    landOnSlot(slotIndex, slots);
     const spun = await spin(sect, tier);
     expect(spun.status).toBe(200);
     const outcome = (dataOf(spun) as Record<string, any>).result as Record<string, any>;
@@ -1228,8 +1239,8 @@ describe('天机轮：面板与转动（计划 4.1 / 4.2）', () => {
     await unlockGambling(sect.sectId);
     await setBalance(sect.sectId, 'spiritStone', 1_000_000);
 
-    const { slotIndex } = await aimAtSlot(sect, 'nothing');
-    landOnSlot(slotIndex);
+    const { slotIndex, slots } = await aimAtSlot(sect, 'nothing');
+    landOnSlot(slotIndex, slots);
     const spun = await spin(sect, 1);
     expect(spun.status).toBe(200);
     const outcome = (dataOf(spun) as Record<string, any>).result as Record<string, any>;
@@ -1288,8 +1299,8 @@ describe('天机轮：次数与余额的拒绝路径（计划 2.5 / 4.2）', () 
     await unlockGambling(sect.sectId);
     await setBalance(sect.sectId, 'spiritStone', 2_000_000);
 
-    const { slotIndex } = await aimAtSlot(sect, 'spirit_stone');
-    landOnSlot(slotIndex);
+    const { slotIndex, slots } = await aimAtSlot(sect, 'spirit_stone');
+    landOnSlot(slotIndex, slots);
     const spun = await spin(sect, 1);
     expect(spun.status).toBe(200);
     expect((dataOf(spun) as Record<string, any>).state.gambling.remaining).toBe(
@@ -1455,12 +1466,12 @@ describe('天机轮的战绩口径与 0020 迁移约束', () => {
     await unlockGambling(sect.sectId);
     await setBalance(sect.sectId, 'spiritStone', 2_000_000);
 
-    const { slotIndex, slot } = await aimAtSlot(sect, 'big_spirit_stone');
+    const { slotIndex, slot, slots } = await aimAtSlot(sect, 'big_spirit_stone');
     const tier = 2;
     const cost = WHEEL_SPIN_COST * tier;
     const reward = Math.floor(cost * slot.multiplier * WHEEL_BIG_MULTIPLIER + 1e-6);
 
-    landOnSlot(slotIndex);
+    landOnSlot(slotIndex, slots);
     expect((await spin(sect, tier)).status).toBe(200);
 
     // 天机轮无论输赢都先扣投入，赢的奖励只是「投入 × 倍率」——
@@ -1476,9 +1487,9 @@ describe('天机轮的战绩口径与 0020 迁移约束', () => {
     await unlockGambling(sect.sectId);
     await setBalance(sect.sectId, 'spiritStone', 2_000_000);
 
-    const { slotIndex } = await aimAtSlot(sect, 'pill');
+    const { slotIndex, slots } = await aimAtSlot(sect, 'pill');
     const tier = 1;
-    landOnSlot(slotIndex);
+    landOnSlot(slotIndex, slots);
     expect((await spin(sect, tier)).status).toBe(200);
 
     const stats = (await sect.state()).gambling.stats as Record<string, number>;
