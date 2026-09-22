@@ -357,6 +357,9 @@ export const WHEEL_MULTIPLIER_MAX = 1.5;
 /** 大额灵石格的额外倍率：奖励 = 投入 × 格子倍率 × 3。 */
 export const WHEEL_BIG_MULTIPLIER = 3;
 
+/** 草药/矿石格的换算系数：1 灵石 = 2 草药/矿石（游戏经济锚定）。 */
+export const WHEEL_MATERIAL_RATIO = 2;
+
 /** 各格子类型的落格权重：大奖概率低、谢谢惠顾概率偏高、普通格居中。 */
 export const WHEEL_SLOT_WEIGHTS: Record<WheelSlotType, number> = {
   big_spirit_stone: 1,
@@ -554,7 +557,8 @@ export function wheelSlotLabel(
 /**
  * 结算一格奖励（纯函数，计划 2.6）。
  *
- * 金额一律是**最小单位整数**：资源类 = floor(投入 × 格子倍率)，大额灵石再 ×3；
+ * 金额一律是**最小单位整数**：资源类 = floor(投入 × 格子倍率)，大额灵石再 ×3，
+ * 草药/矿石再 × WHEEL_MATERIAL_RATIO（1 灵石换 2 材料）；
  * 丹药 = 投入档位颗数（1x→1 颗 … 5x→5 颗），**不受格子倍率影响**；谢谢惠顾 = 无奖励。
  */
 export function wheelReward(slot: WheelSlot, tier: WheelTier, cost: number): WheelRewardDetail {
@@ -566,15 +570,12 @@ export function wheelReward(slot: WheelSlot, tier: WheelTier, cost: number): Whe
       ? { type: 'none' }
       : { type: 'pill', pillId: slot.pillId, quantity: tier };
   }
-  const multiplier =
-    slot.type === 'big_spirit_stone' ? slot.multiplier * WHEEL_BIG_MULTIPLIER : slot.multiplier;
+  let multiplier = slot.multiplier;
+  if (slot.type === 'big_spirit_stone') multiplier *= WHEEL_BIG_MULTIPLIER;
+  if (slot.type === 'herb' || slot.type === 'ore') multiplier *= WHEEL_MATERIAL_RATIO;
   return {
     type: 'resource',
-    // 两种灵石格都落到同一个资源 'spiritStone'（big_spirit_stone 只是更肥的那一格，
-    // 不是另一种资源 —— 否则会在 resource_balances 里凭空多出一条配置里没有的余额）。
     resourceId: slot.type === 'herb' || slot.type === 'ore' ? slot.type : 'spiritStone',
-    // 投入是 50000 的倍数、倍率是一位小数 → 数学上的积一定是 5000 的整数倍；
-    // 这里加的 1e-6 只是消掉 0.1 的二进制表示带来的浮点噪声（否则会莫名少 1 点最小单位）。
     amount: String(Math.floor(cost * multiplier + 1e-6)),
   };
 }

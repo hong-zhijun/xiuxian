@@ -488,21 +488,23 @@ describe('wheelSlotLabel：格面文案（计划 4.1）', () => {
 });
 
 describe('wheelReward：奖励结算（计划 2.6）', () => {
-  it('资源类 = floor(投入 × 倍率)；大额灵石再 ×3', () => {
+  it('资源类 = floor(投入 × 倍率)；大额灵石再 ×3；草药/矿石再 ×2', () => {
     expect(wheelReward(wheelSlot({ type: 'spirit_stone', multiplier: 1.3 }), 2, 100_000)).toEqual({
       type: 'resource',
       resourceId: 'spiritStone',
       amount: '130000',
     });
+    // 草药：150000 × 0.9 × 2 = 270000
     expect(wheelReward(wheelSlot({ type: 'herb', multiplier: 0.9 }), 3, 150_000)).toEqual({
       type: 'resource',
       resourceId: 'herb',
-      amount: '135000',
+      amount: '270000',
     });
+    // 矿石：50000 × 1.5 × 2 = 150000
     expect(wheelReward(wheelSlot({ type: 'ore', multiplier: 1.5 }), 1, 50_000)).toEqual({
       type: 'resource',
       resourceId: 'ore',
-      amount: '75000',
+      amount: '150000',
     });
     // 大额灵石格：金额 = floor(投入 × 格子倍率 × 3)，资源必须归到灵石 ——
     // 与格面文案（「灵石 ×3.3」）同一口径；若返回 'big_spirit_stone' 之类的 id，
