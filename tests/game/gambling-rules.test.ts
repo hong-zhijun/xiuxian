@@ -7,6 +7,10 @@ import {
   BETTABLE_RESOURCES,
   DAO_INSIGHT_CAP,
   DEBATE_DAILY_LIMIT,
+  DEBATE_TIER_ANCHOR,
+  DEBATE_TIER_ANCHOR_RANGE,
+  DEBATE_TIER_KEYS,
+  DEBATE_TIER_PROBABILITIES,
   DEGRADED_WIN_RATES,
   FREE_BET_MIN,
   FREE_BET_WIN_MULTIPLIER,
@@ -14,13 +18,17 @@ import {
   GAMBLING_UNLOCK_SECT_LEVEL,
   LUCK_REVEAL_THRESHOLD_1,
   LUCK_REVEAL_THRESHOLD_2,
+  OPPONENT_WEIGHT_SPREAD,
   PRESET_INSIGHT_REWARDS,
   PRESET_RESOURCE_REWARDS,
   PRESET_STAKES,
+  REVEAL_OPPONENT_FACTOR,
   debateDayStateOf,
+  debateTierProbability,
   freeBetReward,
   freeBetStake,
   gamblingUnlockBlockedReason,
+  generateOpponentAttrs,
   generateRevealHints,
   isBettableResource,
   isGamblingUnlocked,
@@ -103,10 +111,11 @@ describe('赌注与奖励表（计划第 3 节）', () => {
     expect(ATTRIBUTE_INSIGHT_REWARDS).toEqual({ 1: 2, 2: 4, 3: 6 });
   });
 
-  it('降级胜率：1x/2x/3x = 50% / 40% / 30%（基点）', () => {
-    expect(DEGRADED_WIN_RATES).toEqual({ 1: 5000, 2: 4000, 3: 3000 });
+  it('降级胜率：1x/2x/3x = 50% / 42% / 34%（基点，与档位表对齐）', () => {
+    expect(DEGRADED_WIN_RATES).toEqual({ 1: 5000, 2: 4200, 3: 3400 });
     expect(DEGRADED_WIN_RATES[1] / 10_000).toBeCloseTo(0.5);
-    expect(DEGRADED_WIN_RATES[3] / 10_000).toBeCloseTo(0.3);
+    expect(DEGRADED_WIN_RATES[2] / 10_000).toBeCloseTo(0.42);
+    expect(DEGRADED_WIN_RATES[3] / 10_000).toBeCloseTo(0.34);
   });
 });
 
@@ -184,5 +193,93 @@ describe('论道每日次数归一（计划 2.2：UTC+8 自然日重置）', () 
     );
     expect(negative.usedToday).toBe(0);
     expect(negative.remaining).toBe(DEBATE_DAILY_LIMIT);
+  });
+});
+
+describe('对手属性生成（归一化权重）', () => {
+  it('对手六项之和 ≈ 弟子六项之和 × 倍率系数', () => {
+    const discipleTotal = Object.values(ATTRIBUTE_SAMPLE).reduce((a, b) => a + b, 0);
+    for (const mult of [1, 2, 3] as const) {
+      const opponent = generateOpponentAttrs(ATTRIBUTE_SAMPLE, mult);
+      const opponentTotal = Object.values(opponent).reduce((a, b) => a + b, 0);
+      const expected = discipleTotal * REVEAL_OPPONENT_FACTOR[mult];
+      expect(opponentTotal).toBeGreaterThan(expected * 0.9);
+      expect(opponentTotal).toBeLessThan(expected * 1.1);
+    }
+  });
+
+  it('各项有长短板（不全等于均匀缩放）', () => {
+    const opponent = generateOpponentAttrs(ATTRIBUTE_SAMPLE, 2);
+    const ratios = BETTABLE_ATTRIBUTES.map(
+      (attr) => opponent[attr] / (ATTRIBUTE_SAMPLE[attr] || 1),
+    );
+    const allSame = ratios.every((r) => Math.abs(r - ratios[0]!) < 0.01);
+    expect(allSame).toBe(false);
+  });
+
+  it('每项保底 1，不封顶', () => {
+    const lowAttrs = { attack: 0, defense: 0, speed: 1, aptitude: 0, luck: 0, physique: 0 } as Record<
+      (typeof BETTABLE_ATTRIBUTES)[number],
+      number
+    >;
+    const opponent = generateOpponentAttrs(lowAttrs, 1);
+    for (const attr of BETTABLE_ATTRIBUTES) {
+      expect(opponent[attr]).toBeGreaterThanOrEqual(1);
+    }
+  });
+
+  it('spread 常量 = 0.40', () => {
+    expect(OPPONENT_WEIGHT_SPREAD).toBe(0.40);
+  });
+});
+
+describe('五档胜率（choice → 概率映射）', () => {
+  it('档位表五个 key 与概率值', () => {
+    expect(DEBATE_TIER_KEYS).toHaveLength(5);
+    expect(DEBATE_TIER_PROBABILITIES).toEqual({
+      disciple_clear: 0.65,
+      disciple_slight: 0.55,
+      even: 0.50,
+      opponent_slight: 0.42,
+      opponent_clear: 0.34,
+    });
+  });
+
+  it('倍率锚与 ±0.06 范围', () => {
+    expect(DEBATE_TIER_ANCHOR).toEqual({ 1: 0.50, 2: 0.42, 3: 0.34 });
+    expect(DEBATE_TIER_ANCHOR_RANGE).toBe(0.06);
+  });
+
+  it('纯弟子优势 → 加权概率接近 0.65，但被锚 clamp', () => {
+    const probs = { disciple_clear: 1, disciple_slight: 0, even: 0, opponent_slight: 0, opponent_clear: 0 };
+    expect(debateTierProbability(probs, 1)).toBeCloseTo(0.56);
+    expect(debateTierProbability(probs, 2)).toBeCloseTo(0.48);
+    expect(debateTierProbability(probs, 3)).toBeCloseTo(0.40);
+  });
+
+  it('纯对手优势 → 加权概率接近 0.34，被锚 clamp', () => {
+    const probs = { disciple_clear: 0, disciple_slight: 0, even: 0, opponent_slight: 0, opponent_clear: 1 };
+    expect(debateTierProbability(probs, 1)).toBeCloseTo(0.44);
+    expect(debateTierProbability(probs, 2)).toBeCloseTo(0.36);
+    expect(debateTierProbability(probs, 3)).toBeCloseTo(0.34);
+  });
+
+  it('even 独占 → 加权概率 = 0.50，锚 clamp 后按倍率分化', () => {
+    const probs = { disciple_clear: 0, disciple_slight: 0, even: 1, opponent_slight: 0, opponent_clear: 0 };
+    expect(debateTierProbability(probs, 1)).toBeCloseTo(0.50);
+    expect(debateTierProbability(probs, 2)).toBeCloseTo(0.48);
+    expect(debateTierProbability(probs, 3)).toBeCloseTo(0.40);
+  });
+
+  it('undefined / 空对象 / 全零 → null（触发降级）', () => {
+    expect(debateTierProbability(undefined, 1)).toBeNull();
+    expect(debateTierProbability({}, 1)).toBeNull();
+    expect(debateTierProbability({ disciple_clear: 0, even: 0 }, 1)).toBeNull();
+  });
+
+  it('降级胜率与锚表对齐', () => {
+    for (const mult of [1, 2, 3] as const) {
+      expect(DEGRADED_WIN_RATES[mult] / 10_000).toBeCloseTo(DEBATE_TIER_ANCHOR[mult]);
+    }
   });
 });

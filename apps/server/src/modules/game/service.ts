@@ -33,6 +33,7 @@ import {
   PRESET_RESOURCE_REWARDS,
   PRESET_STAKES,
   debateDayStateOf,
+  debateTierProbability,
   freeBetReward,
   freeBetStake,
   gamblingUnlockBlockedReason,
@@ -4685,38 +4686,25 @@ function debateAttributesOf(disciple: DiscipleRow): Record<BettableAttribute, nu
 }
 
 /**
- * 论道的 jev 状态文本（计划 4.1）：弟子实力快照 + 倍率对应的对手强度。
- * 纯文本、不含玩家标识；模型只用来估胜率，写库与发奖完全由服务端规则决定。
- * 境界与阶段合并展示（constants.ts 的阶段名本身就是「炼气一层」这种完整写法）。
+ * 论道的 jev 状态文本：双方六项属性，不含战力/天赋/倍率等额外信息，
+ * 让模型纯粹按数值对比分类。
  */
 function debateStateText(
   disciple: DiscipleRow,
-  multiplier: Multiplier,
   opponent: Record<BettableAttribute, number>,
 ): string {
-  const stage = findStage(disciple.realm_id, Number(disciple.stage));
   const attrs = debateAttributesOf(disciple);
-  const power = discipleCombatPower(
-    disciple.realm_id,
-    Number(disciple.stage),
-    attrs.attack,
-    attrs.defense,
-    attrs.speed,
-    disciple.talent,
-  );
-  const talentName = findTalent(disciple.talent)?.name ?? '无';
   return [
-    `论道赌局（${String(multiplier)}x 倍率）`,
-    `弟子：${disciple.name}（${stage.name}，攻击${String(attrs.attack)} 防御${String(attrs.defense)} ` +
+    `弟子：攻击${String(attrs.attack)} 防御${String(attrs.defense)} ` +
       `速度${String(attrs.speed)} 资质${String(attrs.aptitude)} 幸运${String(attrs.luck)} ` +
-      `体魄${String(attrs.physique)}，战力${String(power)}，天赋：${talentName}）`,
+      `体魄${String(attrs.physique)}`,
     `对手：攻击${String(opponent.attack)} 防御${String(opponent.defense)} ` +
       `速度${String(opponent.speed)} 资质${String(opponent.aptitude)} 幸运${String(opponent.luck)} ` +
       `体魄${String(opponent.physique)}`,
   ].join('\n');
 }
 
-/** 胜率判定结果：probability 是实际掷骰用的胜率，raw 是 jev 原始胜率（降级为 null）。 */
+/** 胜率判定结果：probability 是实际掷骰用的胜率，raw 是档位映射后的原始胜率（降级为 null）。 */
 interface DebateJudgement {
   probability: number;
   raw: number | null;
@@ -4725,9 +4713,10 @@ interface DebateJudgement {
 /**
  * 判定一次论道的胜率（计划 4.2~4.4）。
  *
- * 只发一个 noul 问题（取 win 的 0~1 概率）；没有 key、调用失败 / 超时 / 返回形状不符时
- * **一律降级**为本地固定胜率 DEGRADED_WIN_RATES（倍率越高胜率越低），保证玩家永远能继续。
- * 降级只记一条 warn，不向玩家泄露，也不把随机兜底藏进 infra 层。
+ * 发一个 choice 问题（五档分类），用各档概率加权映射成最终胜率，
+ * 再用倍率锚 clamp 防止不同倍率的胜率趋同。
+ * 没有 key、调用失败 / 超时 / 返回形状不符时
+ * **一律降级**为本地固定胜率 DEGRADED_WIN_RATES，保证玩家永远能继续。
  */
 async function judgeDebateOutcome(input: {
   env: Env;
@@ -4740,26 +4729,29 @@ async function judgeDebateOutcome(input: {
     try {
       const questions: Record<string, Question> = {
         win: {
-          type: 'noul',
-          instructions: '根据双方六项属性的具体数值对比，综合判断弟子在论道比试中取胜的概率。',
+          type: 'choice',
+          instructions: '根据双方六项属性的具体数值对比，判断弟子相对于对手的综合实力档位。',
           criteria: {
-            true: '弟子凭借自身实力或局部优势取胜',
-            false: '对手综合实力压过弟子，弟子落败',
+            disciple_clear: '弟子在多数属性上更高，或少数属性大幅领先',
+            disciple_slight: '弟子总体略高，但差距不大',
+            even: '双方互有高低、总体相当',
+            opponent_slight: '对手总体略高，但差距不大',
+            opponent_clear: '对手在多数属性上更高，或少数属性大幅领先',
           },
         },
       };
       const answers = await decide(
         apiKey,
-        debateStateText(input.disciple, input.multiplier, input.opponent),
+        debateStateText(input.disciple, input.opponent),
         questions,
       );
-      const probability = normalizeProbability((answers.win as NoulAnswer | undefined)?.noul);
+      const answer = answers.win as ChoiceAnswer | undefined;
+      const probability = debateTierProbability(answer?.probabilities, input.multiplier);
       if (probability !== null) {
         return { probability, raw: probability };
       }
       console.warn(`gambling_decisions_unexpected_shape disciple=${input.disciple.id}`);
     } catch (error) {
-      // 只记原因类别，不打 API key、不打响应体。
       console.warn(
         `gambling_decisions_failed disciple=${input.disciple.id} reason=${
           error instanceof Error ? error.name : 'unknown'

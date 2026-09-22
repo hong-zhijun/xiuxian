@@ -90,8 +90,9 @@ export const ATTRIBUTE_INSIGHT_REWARDS: Record<Multiplier, number> = { 1: 2, 2: 
 /**
  * 降级胜率（基点）：没有 OPENROUTER_API_KEY 或 Decisions 调用失败时使用。
  * 倍率越高押得越凶、对手越强，所以胜率越低（计划 4.4）。
+ * 与 DEBATE_TIER_PROBABILITIES 的中间档对齐：50/42/34。
  */
-export const DEGRADED_WIN_RATES: Record<Multiplier, number> = { 1: 5000, 2: 4000, 3: 3000 };
+export const DEGRADED_WIN_RATES: Record<Multiplier, number> = { 1: 5000, 2: 4200, 3: 3400 };
 
 /**
  * 倍率对应的对手强度描述（同时进 jev 状态文本与结果文案）。
@@ -151,24 +152,53 @@ export function revealCount(luck: number): number {
 }
 
 /**
- * 倍率决定对手强度基准（对手该项属性 ≈ 弟子该项属性 × 该系数）：
- * 倍率越高，模型之外展示给玩家的对手也越强，侦查文案才与「远强于己」的说法自洽。
+ * 倍率决定对手总体强度（对手六项属性之和 ≈ 弟子六项之和 × 该系数）。
+ * 1x 势均力敌，2x 略强，3x 明显强但不至于碾压。
  */
-export const REVEAL_OPPONENT_FACTOR: Record<Multiplier, number> = { 1: 1, 2: 1.15, 3: 1.35 };
+export const REVEAL_OPPONENT_FACTOR: Record<Multiplier, number> = { 1: 1.00, 2: 1.12, 3: 1.25 };
 
 /**
- * 生成对手六项属性（纯展示）：基准 = 弟子属性 × 倍率系数，
- * 再加 ±15% 随机扰动让每次对手不完全一样，最终夹到 1~100。
+ * 每项属性的独立权重幅度：权重在 [1-spread, 1+spread] 间均匀随机，
+ * 再归一化让六项之和精确等于目标总值。这样对手有长短板而不是均匀拉高。
+ */
+export const OPPONENT_WEIGHT_SPREAD = 0.40;
+
+/**
+ * 生成对手六项属性（纯展示 + 送入 jev）。
+ *
+ * 1. 先给每项一个 [1-spread, 1+spread] 的随机权重；
+ * 2. 算目标总值 = 弟子六项之和 × 倍率系数；
+ * 3. 把权重归一化使 Σ(弟子[i] × w[i]) = 目标总值；
+ * 4. 对手[i] = round(弟子[i] × w[i])，保底 1，不封顶（弟子封 100 但对手不必）。
  */
 export function generateOpponentAttrs(
   discipleAttrs: Record<BettableAttribute, number>,
   multiplier: Multiplier,
 ): Record<BettableAttribute, number> {
+  const factor = REVEAL_OPPONENT_FACTOR[multiplier];
+  const spread = OPPONENT_WEIGHT_SPREAD;
+
+  const rawWeights: number[] = [];
+  for (let i = 0; i < BETTABLE_ATTRIBUTES.length; i++) {
+    rawWeights.push(1 - spread + Math.random() * 2 * spread);
+  }
+
+  let discipleTotal = 0;
+  let weightedTotal = 0;
+  for (let i = 0; i < BETTABLE_ATTRIBUTES.length; i++) {
+    const v = Number(discipleAttrs[BETTABLE_ATTRIBUTES[i]!]) || 0;
+    discipleTotal += v;
+    weightedTotal += v * rawWeights[i]!;
+  }
+
+  const targetTotal = discipleTotal * factor;
+  const scale = weightedTotal > 0 ? targetTotal / weightedTotal : 1;
+
   const result = {} as Record<BettableAttribute, number>;
-  for (const attr of BETTABLE_ATTRIBUTES) {
-    const base = (Number(discipleAttrs[attr]) || 0) * REVEAL_OPPONENT_FACTOR[multiplier];
-    const jitter = 0.85 + Math.random() * 0.3;
-    result[attr] = Math.max(1, Math.min(100, Math.round(base * jitter)));
+  for (let i = 0; i < BETTABLE_ATTRIBUTES.length; i++) {
+    const attr = BETTABLE_ATTRIBUTES[i]!;
+    const v = Number(discipleAttrs[attr]) || 0;
+    result[attr] = Math.max(1, Math.round(v * rawWeights[i]! * scale));
   }
   return result;
 }
@@ -247,4 +277,58 @@ export function debateDayStateOf(sect: DebateDayCountRow, now: number): DebateDa
     remaining: Math.max(0, DEBATE_DAILY_LIMIT - usedToday),
     keyMatches,
   };
+}
+
+/* ---------- 五档胜率（choice 题型 → 概率映射） ---------- */
+
+/** jev choice 题的五个档位 key（从弟子优势到对手优势）。 */
+export const DEBATE_TIER_KEYS = [
+  'disciple_clear',
+  'disciple_slight',
+  'even',
+  'opponent_slight',
+  'opponent_clear',
+] as const;
+export type DebateTier = (typeof DEBATE_TIER_KEYS)[number];
+
+/** 每个档位对应的固定胜率。 */
+export const DEBATE_TIER_PROBABILITIES: Record<DebateTier, number> = {
+  disciple_clear: 0.65,
+  disciple_slight: 0.55,
+  even: 0.50,
+  opponent_slight: 0.42,
+  opponent_clear: 0.34,
+};
+
+/** 倍率锚：防止模型把不同倍率都判成同一档导致梯度丢失。 */
+export const DEBATE_TIER_ANCHOR: Record<Multiplier, number> = { 1: 0.50, 2: 0.42, 3: 0.34 };
+export const DEBATE_TIER_ANCHOR_RANGE = 0.06;
+
+/**
+ * 根据 jev 返回的 choice probabilities 加权计算胜率，再用倍率锚 clamp。
+ *
+ * p = Σ(档位概率 × 模型给的档位权重)，归一化后 clamp 到 [anchor - range, anchor + range]。
+ * 返回 null 表示输入无效（触发降级）。
+ */
+export function debateTierProbability(
+  probabilities: Record<string, number> | undefined,
+  multiplier: Multiplier,
+): number | null {
+  if (probabilities === undefined) return null;
+
+  let weightedSum = 0;
+  let totalWeight = 0;
+  for (const tier of DEBATE_TIER_KEYS) {
+    const w = Number(probabilities[tier]);
+    if (!Number.isFinite(w) || w < 0) continue;
+    weightedSum += DEBATE_TIER_PROBABILITIES[tier] * w;
+    totalWeight += w;
+  }
+  if (totalWeight <= 0) return null;
+
+  const raw = weightedSum / totalWeight;
+  const anchor = DEBATE_TIER_ANCHOR[multiplier];
+  const lo = anchor - DEBATE_TIER_ANCHOR_RANGE;
+  const hi = anchor + DEBATE_TIER_ANCHOR_RANGE;
+  return Math.min(hi, Math.max(lo, raw));
 }
