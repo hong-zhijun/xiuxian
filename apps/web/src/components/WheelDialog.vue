@@ -276,14 +276,7 @@ const wheelAriaLabel = computed(() => {
 </script>
 
 <template>
-  <section class="wheel-panel" aria-labelledby="wheel-panel-title">
-    <div class="wheel-head">
-      <div>
-        <p class="eyebrow">赌坊 · 天机轮</p>
-        <h3 id="wheel-panel-title" class="wheel-title">天机轮</h3>
-      </div>
-      <span class="count-badge">今日 {{ remaining }}/{{ dailyLimit }}</span>
-    </div>
+  <section class="wheel-panel" aria-labelledby="gambling-dialog-title">
 
     <p v-if="!wheel" class="blocked-hint">
       {{ state.gambling.blockedReason ?? '天机轮尚未开启' }}
@@ -418,22 +411,6 @@ const wheelAriaLabel = computed(() => {
 .wheel-panel {
   display: flex;
   flex-direction: column;
-}
-
-.wheel-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.wheel-title {
-  margin: 2px 0 0;
-  color: var(--gold, #caa96a);
-  font-family: 'STKaiti', 'KaiTi', serif;
-  font-size: 16px;
-  font-weight: 600;
-  letter-spacing: 0.05em;
 }
 
 /* ---------- 转盘本体 ---------- */

@@ -341,7 +341,7 @@ const RULES_TEXT = `论道赌局 · 玩法说明
 <template>
   <section class="gambling-dialog" aria-labelledby="gambling-dialog-title">
     <header class="section-heading panel-heading compact-heading">
-      <h2 id="gambling-dialog-title" class="gambling-title-gold">赌坊</h2>
+      <h2 id="gambling-dialog-title" class="gambling-title-gold">{{ stage === 'wheel' ? '天机轮' : '赌坊' }}</h2>
       <span class="count-badge">今日 {{ remaining }}/{{ dailyLimit }}</span>
     </header>
 
