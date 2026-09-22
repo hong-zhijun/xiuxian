@@ -253,20 +253,6 @@ function continueSpin(): void {
 const landedResult = computed(() => (phase.value === 'landed' ? shownResult.value : null));
 const hitIndex = computed(() => landedResult.value?.slotIndex ?? null);
 
-/** 所得一行：资源按 id 取服务端资源表里的名字，丹药直接用服务端给的丹名与数量。 */
-const rewardText = computed(() => {
-  const result = landedResult.value;
-  if (result === null) return '';
-  const reward = result.reward;
-  if (reward.type === 'resource') {
-    const name = props.state.resources.find((item) => item.id === reward.resourceId)?.name;
-    return `${name ?? reward.resourceId ?? '资源'} +${formatAmount(reward.amount ?? '0')}`;
-  }
-  if (reward.type === 'pill') {
-    return `${reward.pillName ?? '丹药'} ×${reward.quantity ?? 0}`;
-  }
-  return '谢谢惠顾';
-});
 
 /** 读屏用的一句总览：格面文案同样来自服务端。 */
 const wheelAriaLabel = computed(() => {
@@ -370,16 +356,6 @@ const wheelAriaLabel = computed(() => {
             <p class="eyebrow">天机已定</p>
             <strong class="wheel-result-label">{{ landedResult.slotLabel }}</strong>
             <p class="wheel-result-message">{{ landedResult.message }}</p>
-            <dl class="wheel-result-facts">
-              <div>
-                <dt>投入</dt>
-                <dd>{{ formatAmount(landedResult.cost) }} 灵石（{{ landedResult.tier }}x）</dd>
-              </div>
-              <div>
-                <dt>所得</dt>
-                <dd :class="{ 'is-blank': landedResult.reward.type === 'none' }">{{ rewardText }}</dd>
-              </div>
-            </dl>
           </div>
           <button
             class="action-button primary-action realm-button wheel-spin-button"
@@ -609,32 +585,6 @@ const wheelAriaLabel = computed(() => {
   line-height: 1.6;
 }
 
-.wheel-result-facts {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin: 12px 0 0;
-}
-
-.wheel-result-facts div {
-  display: flex;
-  gap: 10px;
-  font-size: 13px;
-}
-
-.wheel-result-facts dt {
-  flex: 0 0 auto;
-  color: var(--faint);
-}
-
-.wheel-result-facts dd {
-  margin: 0;
-  color: #dce6e0;
-}
-
-.wheel-result-facts dd.is-blank {
-  color: #7d9186;
-}
 
 .wheel-foot {
   display: flex;
