@@ -5624,6 +5624,7 @@ export async function shopSellPill(
   const recipe = requirePillRecipe(pillId);
   const price = shopPillPrice(recipe.id);
   if (price === null || price <= 0) {
+    throw new AppError('VALIDATION_ERROR', '该丹药暂不可出售', { pillId: recipe.id });
   }
   const revenue = shopPillRevenue(recipe.id, quantity);
 
