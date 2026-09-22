@@ -622,6 +622,30 @@ export async function fetchDiscipleLeaderboard(): Promise<DiscipleLeaderboardVie
   return apiRequest<DiscipleLeaderboardView>('/api/v1/game/disciple-leaderboard');
 }
 
+export interface ChatMessageView {
+  id: string;
+  sectName: string;
+  content: string;
+  isMe: boolean;
+  createdAt: string;
+}
+
+export async function fetchChatMessages(afterId?: string): Promise<ChatMessageView[]> {
+  const url = afterId
+    ? `/api/v1/game/chat?after=${encodeURIComponent(afterId)}`
+    : '/api/v1/game/chat';
+  const data = await apiRequest<{ messages: ChatMessageView[] }>(url);
+  return data.messages;
+}
+
+export async function sendChatMessage(content: string): Promise<ChatMessageView[]> {
+  const data = await apiRequest<{ messages: ChatMessageView[] }>('/api/v1/game/chat', {
+    method: 'POST',
+    body: { content },
+  });
+  return data.messages;
+}
+
 export async function fetchPublicSect(sectId: string): Promise<PublicSectView> {
   const data = await apiRequest<{ sect: PublicSectView }>(`/api/v1/game/sect/${sectId}`);
   return data.sect;

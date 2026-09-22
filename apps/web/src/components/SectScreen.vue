@@ -45,6 +45,7 @@ import ExplorePanel from './ExplorePanel.vue';
 import ExplorePartyDialog from './ExplorePartyDialog.vue';
 import GamblingHouseDialog from './GamblingHouseDialog.vue';
 import RealmExploreDialog from './RealmExploreDialog.vue';
+import ChatPanel from './ChatPanel.vue';
 import DiscipleLeaderboardPanel from './DiscipleLeaderboardPanel.vue';
 import LeaderboardPanel from './LeaderboardPanel.vue';
 import RecruitDialog from './RecruitDialog.vue';
@@ -1181,6 +1182,7 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
       </section>
 
       <aside class="management-rail">
+        <ChatPanel />
         <section v-if="state.sectUpgrade" class="game-panel sect-upgrade-panel" aria-labelledby="sect-upgrade-title">
           <header class="section-heading panel-heading compact-heading">
             <h2 id="sect-upgrade-title" class="home-section-title">{{ state.sectUpgrade.nextLevelName }}</h2>

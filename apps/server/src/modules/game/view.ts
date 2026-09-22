@@ -792,6 +792,15 @@ export interface DiscipleLeaderboardView {
   byAttributeScore: DiscipleLeaderboardEntryView[];
 }
 
+/** 全服聊天消息条目（GET /game/chat）。 */
+export interface ChatMessageView {
+  id: string;
+  sectName: string;
+  content: string;
+  isMe: boolean;
+  createdAt: string;
+}
+
 /** 不可挑战的稳定原因码（前端据此渲染文案，不做规则判断）。 */
 export type ChallengeBlockedReason =
   | 'self'

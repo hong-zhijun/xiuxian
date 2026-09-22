@@ -25,6 +25,7 @@ import {
   setDiscipleAvatarFrameRequestSchema,
   setDiscipleNoteRequestSchema,
   shopBuyRequestSchema,
+  sendChatMessageRequestSchema,
   shopSellPillRequestSchema,
   shopSellRequestSchema,
   startJourneyRequestSchema,
@@ -72,6 +73,8 @@ import {
   upgradeBuilding,
   upgradeSect,
   usePill,
+  listChatMessages,
+  sendChatMessage,
   wheelReset,
   wheelSpin,
 } from './service';
@@ -481,6 +484,21 @@ export function createGameRoutes(): Hono<AppEnv> {
     const result = await shopSellPill(getDb(c.env), userId, body.pillId, body.quantity, Date.now());
     return respondOk(c, { state: result.state, result: result.result });
   });
+  // 全服聊天
+  routes.get('/game/chat', async (c) => {
+    const userId = requireUserId(c);
+    const afterId = c.req.query('after') ?? undefined;
+    const messages = await listChatMessages(getDb(c.env), userId, afterId);
+    return respondOk(c, { messages });
+  });
+
+  routes.post('/game/chat', async (c) => {
+    const userId = requireUserId(c);
+    const body = await parseStrictJson(sendChatMessageRequestSchema, c);
+    const messages = await sendChatMessage(getDb(c.env), userId, body.content, Date.now());
+    return respondOk(c, { messages });
+  });
+
   return routes;
 }
 

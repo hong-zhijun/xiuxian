@@ -62,7 +62,18 @@ const emit = defineEmits<{
   requestBreakthrough: [discipleId: string];
 }>();
 
-const filter = ref<DiscipleFilter>({ ...DEFAULT_DISCIPLE_FILTER });
+function loadSavedFilter(): DiscipleFilter {
+  try {
+    const raw = localStorage.getItem('disciple-filter');
+    if (raw) {
+      const parsed = JSON.parse(raw) as Partial<DiscipleFilter>;
+      return { ...DEFAULT_DISCIPLE_FILTER, ...parsed };
+    }
+  } catch { /* ignore */ }
+  return { ...DEFAULT_DISCIPLE_FILTER };
+}
+
+const filter = ref<DiscipleFilter>(loadSavedFilter());
 const showMoreFilters = ref(false);
 const activeMoreCount = computed(() =>
   Number(filter.value.stage !== null) +
@@ -130,6 +141,10 @@ const rows = computed<RosterRow[]>(() =>
 );
 
 const anyFilterActive = computed(() => isFilterActive(filter.value));
+
+watch(filter, (v) => {
+  try { localStorage.setItem('disciple-filter', JSON.stringify(v)); } catch { /* ignore */ }
+}, { deep: true });
 
 function resetFilter(): void {
   filter.value = { ...DEFAULT_DISCIPLE_FILTER };

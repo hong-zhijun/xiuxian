@@ -251,3 +251,8 @@ export const shopSellPillRequestSchema = z.strictObject({
   pillId: z.string().min(1).max(64),
   quantity: z.number().int().min(1).max(SHOP_MAX_PILL_QUANTITY),
 });
+
+/** 全服聊天：content 做宽松上限，真正的长度限制在 DB CHECK（200 Unicode 码点）。 */
+export const sendChatMessageRequestSchema = z.strictObject({
+  content: z.string().min(1).max(200),
+});

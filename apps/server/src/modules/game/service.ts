@@ -212,6 +212,10 @@ import {
   updateSectDebateCounterStatement,
   updateSectWheelSeedStatement,
 } from './repository';
+import {
+  ChatMessageRepository,
+  insertChatMessageStatement,
+} from './repository';
 import { settleEconomy, type SettleResult } from './settle';
 
 import {
@@ -277,6 +281,7 @@ import {
   type ShopSellPillResultView,
   type DiscipleLeaderboardEntryView,
   type DiscipleLeaderboardView,
+  type ChatMessageView,
 } from './view';
 
 /**
@@ -5890,4 +5895,62 @@ export async function shopSellPill(
       message: `卖出 ${recipe.name} ×${String(quantity)}，获得 ${shopAmountText(revenue)} 灵石`,
     },
   };
+}
+
+// ── 全服聊天 ──
+
+const CHAT_RATE_LIMIT_MS = 5_000;
+const CHAT_PAGE_SIZE = 50;
+
+export async function listChatMessages(
+  db: D1Database,
+  userId: string,
+  afterId?: string,
+): Promise<ChatMessageView[]> {
+  const repo = new ChatMessageRepository(db);
+  const rows = afterId
+    ? await repo.findAfterId(afterId, CHAT_PAGE_SIZE)
+    : await repo.findRecent(CHAT_PAGE_SIZE);
+
+  const ordered = afterId ? rows : rows.slice().reverse();
+
+  return ordered.map((row) => ({
+    id: row.id,
+    sectName: row.sect_name,
+    content: row.content,
+    isMe: row.user_id === userId,
+    createdAt: new Date(row.created_at).toISOString(),
+  }));
+}
+
+export async function sendChatMessage(
+  db: D1Database,
+  userId: string,
+  content: string,
+  now: number,
+): Promise<ChatMessageView[]> {
+  const sectRepo = new SectRepository(db);
+  const chatRepo = new ChatMessageRepository(db);
+
+  const sect = await sectRepo.findByUserId(userId);
+  if (sect === null) {
+    throw new AppError('NOT_FOUND', '尚未建宗');
+  }
+
+  const latest = await chatRepo.findLatestByUserId(userId);
+  if (latest !== null && now - latest.created_at < CHAT_RATE_LIMIT_MS) {
+    throw new AppError('VALIDATION_ERROR', '发言太快，请稍后再试');
+  }
+
+  const id = crypto.randomUUID();
+  const stmt = insertChatMessageStatement({
+    id,
+    userId,
+    sectName: sect.name,
+    content: content.trim(),
+    now,
+  });
+  await chatRepo.execute(stmt);
+
+  return listChatMessages(db, userId);
 }

@@ -2082,6 +2082,59 @@ export function gamblingSnapshotGuardStatement(
   };
 }
 
+// ── 聊天消息 ──
+
+export interface ChatMessageRow {
+  id: string;
+  user_id: string;
+  sect_name: string;
+  content: string;
+  created_at: number;
+}
+
+export class ChatMessageRepository extends ParamRepository {
+  async findRecent(limit: number): Promise<ChatMessageRow[]> {
+    return this.all<ChatMessageRow>({
+      sql: 'SELECT id, user_id, sect_name, content, created_at FROM chat_messages ORDER BY created_at DESC, id DESC LIMIT ?',
+      params: [limit],
+    });
+  }
+
+  async findAfterId(afterId: string, limit: number): Promise<ChatMessageRow[]> {
+    return this.all<ChatMessageRow>({
+      sql: `SELECT id, user_id, sect_name, content, created_at FROM chat_messages
+            WHERE created_at > (SELECT created_at FROM chat_messages WHERE id = ?)
+               OR (created_at = (SELECT created_at FROM chat_messages WHERE id = ?) AND id > ?)
+            ORDER BY created_at ASC, id ASC LIMIT ?`,
+      params: [afterId, afterId, afterId, limit],
+    });
+  }
+
+  async findLatestByUserId(userId: string): Promise<ChatMessageRow | null> {
+    return this.one<ChatMessageRow>({
+      sql: 'SELECT id, user_id, sect_name, content, created_at FROM chat_messages WHERE user_id = ? ORDER BY created_at DESC, id DESC LIMIT 1',
+      params: [userId],
+    });
+  }
+
+  override async execute(query: ParameterizedQuery): Promise<D1Result> {
+    return super.execute(query);
+  }
+}
+
+export function insertChatMessageStatement(args: {
+  id: string;
+  userId: string;
+  sectName: string;
+  content: string;
+  now: number;
+}): ParameterizedQuery {
+  return {
+    sql: 'INSERT INTO chat_messages (id, user_id, sect_name, content, created_at) VALUES (?, ?, ?, ?, ?)',
+    params: [args.id, args.userId, args.sectName, args.content, args.now],
+  };
+}
+
 export function deleteGamblingSnapshotGuardStatement(commandId: string): ParameterizedQuery {
   return {
     sql: 'DELETE FROM mutation_guards WHERE command_id = ?',
