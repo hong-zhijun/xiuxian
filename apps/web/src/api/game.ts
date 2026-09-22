@@ -597,6 +597,9 @@ export interface DiscipleLeaderboardEntryView {
   rank: number;
   discipleId: string;
   discipleName: string;
+  gender: string;
+  realmId: string;
+  frameId: string;
   sectId: string;
   sectName: string;
   realmName: string;

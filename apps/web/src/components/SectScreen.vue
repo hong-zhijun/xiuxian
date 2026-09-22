@@ -1075,6 +1075,24 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
         </ul>
       </section>
 
+      <section class="log-shortcuts" aria-labelledby="rank-title">
+        <h2 id="rank-title" class="log-shortcuts-title">榜单</h2>
+        <div class="log-shortcuts-buttons">
+          <button class="action-chip" type="button" @click="openPanel = 'leaderboard'">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 3.5 14.6 9l6 .9-4.3 4.2 1 6-5.3-2.8-5.3 2.8 1-6L3.4 9.9l6-.9 2.6-5.5Z" />
+            </svg>
+            <span>江湖榜</span>
+          </button>
+          <button class="action-chip" type="button" @click="openPanel = 'disciple-leaderboard'">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 2a3 3 0 1 0 0 6 3 3 0 0 0 0-6Zm-5 8a3 3 0 1 0 0 6 3 3 0 0 0 0-6Zm10 0a3 3 0 1 0 0 6 3 3 0 0 0 0-6Zm-5 6v6m-5-4v4m10-4v4" />
+            </svg>
+            <span>天骄榜</span>
+          </button>
+        </div>
+      </section>
+
       <section class="log-shortcuts" aria-labelledby="log-title">
         <h2 id="log-title" class="log-shortcuts-title">日志</h2>
         <div class="log-shortcuts-buttons">
@@ -1095,74 +1113,51 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
       </section>
     </div>
 
-    <nav class="action-groups" aria-label="宗门操作">
-      <section class="action-group action-group-internal" aria-labelledby="internal-action-title">
-        <h2 id="internal-action-title" class="action-group-title">宗内管理</h2>
-        <div class="action-group-buttons" role="toolbar" aria-label="宗内管理操作">
-          <button
-            class="action-chip"
-            type="button"
-            :disabled="busy || recruitLoading"
-            :aria-label="recruitBadge > 0 ? `招贤台（还可招募 ${recruitBadge} 人）` : '招贤台'"
-            :title="recruitBadge > 0 ? `还可招募 ${recruitBadge} 人（弟子上限 − 现有门人）` : '张榜招贤'"
-            @click="requestRecruit"
-          >
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm-6.5 9.5a6.5 6.5 0 0 1 13 0M18 14.5v6m3-3h-6" />
-            </svg>
-            <span>招贤台</span>
-            <span v-if="recruitBadge > 0" class="chip-badge">{{ recruitBadge }}</span>
-          </button>
-          <button class="action-chip" type="button" @click="openPanel = 'alchemy'">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M9 3h6M10 3v4.2a6.5 6.5 0 1 0 4 0V3m-4.8 11h9.6" />
-            </svg>
-            <span>炼丹</span>
-          </button>
-          <button class="action-chip" type="button" @click="openPanel = 'defense-lineup'">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M12 3.2 5 6.3v5.2c0 4.1 2.9 7.8 7 9.3 4.1-1.5 7-5.2 7-9.3V6.3L12 3.2Zm-3 8.6h6" />
-            </svg>
-            <span>守擂阵容</span>
-          </button>
-        </div>
-      </section>
-
-      <section class="action-group action-group-external" aria-labelledby="external-action-title">
-        <h2 id="external-action-title" class="action-group-title">对外事务</h2>
-        <div class="action-group-buttons" role="toolbar" aria-label="对外事务操作">
-          <button class="action-chip" type="button" @click="openPanel = 'explore'">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Zm3.4 5.6-2.1 5-5 2.1 2.1-5 5-2.1Z" />
-            </svg>
-            <span>历练探索</span>
-          </button>
-          <button class="action-chip" type="button" @click="openPanel = 'leaderboard'">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M12 3.5 14.6 9l6 .9-4.3 4.2 1 6-5.3-2.8-5.3 2.8 1-6L3.4 9.9l6-.9 2.6-5.5Z" />
-            </svg>
-            <span>江湖榜</span>
-          </button>
-          <button class="action-chip" type="button" @click="openPanel = 'disciple-leaderboard'">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M12 2a3 3 0 1 0 0 6 3 3 0 0 0 0-6Zm-5 8a3 3 0 1 0 0 6 3 3 0 0 0 0-6Zm10 0a3 3 0 1 0 0 6 3 3 0 0 0 0-6Zm-5 6v6m-5-4v4m10-4v4" />
-            </svg>
-            <span>天骄榜</span>
-          </button>
-          <button class="action-chip" type="button" @click="openPanel = 'gambling'">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M5 5h14v14H5zM8.5 9h.01M12 12h.01M15.5 15h.01" />
-            </svg>
-            <span>赌坊</span>
-          </button>
-          <button class="action-chip" type="button" @click="openPanel = 'shop'">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M12 4.2v14.6M4.4 7.6h15.2M8.4 18.8h7.2M4.4 7.6 2.4 12.4h4L4.4 7.6Zm15.2 0-2 4.8h4l-2-4.8Z" />
-            </svg>
-            <span>坊市</span>
-          </button>
-        </div>
-      </section>
+    <nav class="action-bar" aria-label="宗门操作" role="toolbar">
+      <button
+        class="action-chip"
+        type="button"
+        :disabled="busy || recruitLoading"
+        :aria-label="recruitBadge > 0 ? `招贤台（还可招募 ${recruitBadge} 人）` : '招贤台'"
+        :title="recruitBadge > 0 ? `还可招募 ${recruitBadge} 人（弟子上限 − 现有门人）` : '张榜招贤'"
+        @click="requestRecruit"
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm-6.5 9.5a6.5 6.5 0 0 1 13 0M18 14.5v6m3-3h-6" />
+        </svg>
+        <span>招贤台</span>
+        <span v-if="recruitBadge > 0" class="chip-badge">{{ recruitBadge }}</span>
+      </button>
+      <button class="action-chip" type="button" @click="openPanel = 'alchemy'">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M9 3h6M10 3v4.2a6.5 6.5 0 1 0 4 0V3m-4.8 11h9.6" />
+        </svg>
+        <span>炼丹</span>
+      </button>
+      <button class="action-chip" type="button" @click="openPanel = 'defense-lineup'">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 3.2 5 6.3v5.2c0 4.1 2.9 7.8 7 9.3 4.1-1.5 7-5.2 7-9.3V6.3L12 3.2Zm-3 8.6h6" />
+        </svg>
+        <span>守擂阵容</span>
+      </button>
+      <button class="action-chip" type="button" @click="openPanel = 'explore'">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Zm3.4 5.6-2.1 5-5 2.1 2.1-5 5-2.1Z" />
+        </svg>
+        <span>历练探索</span>
+      </button>
+      <button class="action-chip" type="button" @click="openPanel = 'gambling'">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M5 5h14v14H5zM8.5 9h.01M12 12h.01M15.5 15h.01" />
+        </svg>
+        <span>赌坊</span>
+      </button>
+      <button class="action-chip" type="button" @click="openPanel = 'shop'">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 4.2v14.6M4.4 7.6h15.2M8.4 18.8h7.2M4.4 7.6 2.4 12.4h4L4.4 7.6Zm15.2 0-2 4.8h4l-2-4.8Z" />
+        </svg>
+        <span>坊市</span>
+      </button>
     </nav>
 
     <div class="management-grid">

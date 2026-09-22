@@ -1241,7 +1241,7 @@ ul {
 
 .overview-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   gap: 14px;
   margin-top: 18px;
 }
@@ -4344,46 +4344,12 @@ ul {
   color: var(--red-bright);
 }
 
-/* ---------- Grouped action bar ---------- */
-.action-groups {
+/* ---------- Action bar (single row) ---------- */
+.action-bar {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 14px;
-  margin-top: 14px;
-}
-
-.action-group {
-  display: grid;
-  min-width: 0;
-  grid-template-rows: auto auto;
-  gap: 8px;
-}
-
-.action-group-external {
-  justify-self: start;
-  padding-left: 14px;
-  border-left: 1px solid var(--line);
-}
-
-.action-group-title {
-  margin: 0;
-  color: var(--gold);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.14em;
-  line-height: 1.35;
-  white-space: nowrap;
-}
-
-.action-group-buttons {
-  display: grid;
-  min-width: 0;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 7px;
-}
-
-.action-group-external .action-group-buttons {
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  margin-top: 14px;
 }
 
 .action-chip {
@@ -5601,16 +5567,8 @@ h2.public-sect-name {
     border-top: 1px solid var(--line);
   }
 
-  .action-groups {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 10px;
-  }
-
-  .action-group-external {
-    padding-top: 10px;
-    padding-left: 0;
-    border-top: 1px solid var(--line);
-    border-left: 0;
+  .action-bar {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .management-grid {
@@ -5923,18 +5881,13 @@ h2.public-sect-name {
     text-align: left;
   }
 
-  .action-group {
-    gap: 6px;
+  .action-bar {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .action-group-buttons .action-chip {
+  .action-bar .action-chip {
     padding-right: 5px;
     padding-left: 5px;
-  }
-
-  .action-group-internal .action-group-buttons,
-  .action-group-external .action-group-buttons {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .disciple-list {

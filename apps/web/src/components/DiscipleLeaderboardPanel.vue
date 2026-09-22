@@ -3,6 +3,7 @@ import { ref } from 'vue';
 
 import type { DiscipleLeaderboardEntryView, DiscipleLeaderboardView } from '../api/game';
 import { fetchDiscipleLeaderboard } from '../api/game';
+import DiscipleAvatar from './DiscipleAvatar.vue';
 import LoadingState from './LoadingState.vue';
 
 const props = defineProps<{ busy: boolean }>();
@@ -86,6 +87,14 @@ function valueLabel(entry: DiscipleLeaderboardEntryView): string {
       >
         <div class="rank-open dlb-row">
           <span class="rank-no">{{ entry.rank }}</span>
+          <DiscipleAvatar
+            class="dlb-avatar"
+            :name="entry.discipleName"
+            :gender="entry.gender"
+            :realm-id="entry.realmId"
+            :frame-id="entry.frameId"
+            variant="roster"
+          />
           <span class="rank-copy">
             <span class="rank-title">
               <strong>{{ entry.discipleName }}</strong>
@@ -143,10 +152,16 @@ function valueLabel(entry: DiscipleLeaderboardEntryView): string {
   display: grid;
   width: 100%;
   min-width: 0;
-  grid-template-columns: 28px minmax(0, 1fr);
+  grid-template-columns: 28px 36px minmax(0, 1fr);
   align-items: center;
   gap: 8px;
   padding: 10px 6px;
+}
+
+.dlb-avatar {
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
 }
 
 .dlb-value {
