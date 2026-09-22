@@ -201,12 +201,11 @@ onUnmounted(() => {
 }
 
 .chat-msg.is-system .chat-name {
-  color: var(--gold);
+  color: #e06050;
 }
 
 .chat-msg.is-system .chat-text {
-  color: var(--gold);
-  font-style: italic;
+  color: #d4a76a;
 }
 
 .chat-input-row {
