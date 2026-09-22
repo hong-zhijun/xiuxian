@@ -100,7 +100,7 @@ describe('赌注与奖励表（计划第 3 节）', () => {
 
   it('模式 C：属性赌注点数与悟道值奖励', () => {
     expect(ATTRIBUTE_STAKES).toEqual({ 1: 1, 2: 2, 3: 3 });
-    expect(ATTRIBUTE_INSIGHT_REWARDS).toEqual({ 1: 2, 2: 3, 3: 4 });
+    expect(ATTRIBUTE_INSIGHT_REWARDS).toEqual({ 1: 2, 2: 4, 3: 6 });
   });
 
   it('降级胜率：1x/2x/3x = 50% / 40% / 30%（基点）', () => {

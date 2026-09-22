@@ -117,7 +117,7 @@ const PRESET_INSIGHT_DISPLAY: Record<number, number> = { 1: 1, 2: 2, 3: 3 };
 /** 属性赌注点数：与后端 ATTRIBUTE_STAKES 同口径。 */
 const ATTRIBUTE_STAKES_DISPLAY: Record<number, number> = { 1: 1, 2: 2, 3: 3 };
 /** 属性赌注赢的悟道值：与后端 ATTRIBUTE_INSIGHT_REWARDS 同口径。 */
-const ATTRIBUTE_INSIGHT_DISPLAY: Record<number, number> = { 1: 2, 2: 3, 3: 4 };
+const ATTRIBUTE_INSIGHT_DISPLAY: Record<number, number> = { 1: 2, 2: 4, 3: 6 };
 
 function resourceLabel(resourceId: string): string {
   return props.state.resources.find((resource) => resource.id === resourceId)?.name ?? resourceId;

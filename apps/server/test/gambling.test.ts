@@ -503,13 +503,13 @@ describe('模式 C：属性赌注', () => {
       attribute: 'defense',
     });
     expect(won.status).toBe(200);
-    // 2x 的悟道值奖励 = 3
-    expect((await discipleRow(sect.discipleIds[0])).dao_insight).toBe(3);
+    // 2x 的悟道值奖励 = 4
+    expect((await discipleRow(sect.discipleIds[0])).dao_insight).toBe(4);
     // 属性赌注赢的时候属性不动（defense 仍是建号时的值）。
     const row = await discipleRow(sect.discipleIds[0]);
     expect(JSON.parse((await debateLogs(sect.sectId))[1].reward_detail)).toEqual({
       type: 'insight',
-      insight: 3,
+      insight: 4,
     });
     expect(row.attack).toBe(0);
   });

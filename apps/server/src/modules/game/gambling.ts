@@ -85,7 +85,7 @@ export const FREE_BET_WIN_MULTIPLIER = 1.8;
 export const ATTRIBUTE_STAKES: Record<Multiplier, number> = { 1: 1, 2: 2, 3: 3 };
 
 /** 属性赌注：赢的悟道值。 */
-export const ATTRIBUTE_INSIGHT_REWARDS: Record<Multiplier, number> = { 1: 2, 2: 3, 3: 4 };
+export const ATTRIBUTE_INSIGHT_REWARDS: Record<Multiplier, number> = { 1: 2, 2: 4, 3: 6 };
 
 /**
  * 降级胜率（基点）：没有 OPENROUTER_API_KEY 或 Decisions 调用失败时使用。

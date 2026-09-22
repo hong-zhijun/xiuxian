@@ -4689,7 +4689,11 @@ function debateAttributesOf(disciple: DiscipleRow): Record<BettableAttribute, nu
  * 纯文本、不含玩家标识；模型只用来估胜率，写库与发奖完全由服务端规则决定。
  * 境界与阶段合并展示（constants.ts 的阶段名本身就是「炼气一层」这种完整写法）。
  */
-function debateStateText(disciple: DiscipleRow, multiplier: Multiplier): string {
+function debateStateText(
+  disciple: DiscipleRow,
+  multiplier: Multiplier,
+  opponent: Record<BettableAttribute, number>,
+): string {
   const stage = findStage(disciple.realm_id, Number(disciple.stage));
   const attrs = debateAttributesOf(disciple);
   const power = discipleCombatPower(
@@ -4702,10 +4706,13 @@ function debateStateText(disciple: DiscipleRow, multiplier: Multiplier): string 
   );
   const talentName = findTalent(disciple.talent)?.name ?? '无';
   return [
-    `论道赌局：${disciple.name}（${stage.name}，攻击${String(attrs.attack)} 防御${String(attrs.defense)} ` +
+    `论道赌局（${String(multiplier)}x 倍率）`,
+    `弟子：${disciple.name}（${stage.name}，攻击${String(attrs.attack)} 防御${String(attrs.defense)} ` +
       `速度${String(attrs.speed)} 资质${String(attrs.aptitude)} 幸运${String(attrs.luck)} ` +
       `体魄${String(attrs.physique)}，战力${String(power)}，天赋：${talentName}）`,
-    `赌注倍率：${String(multiplier)}x（${MULTIPLIER_HINTS[multiplier]}）`,
+    `对手：攻击${String(opponent.attack)} 防御${String(opponent.defense)} ` +
+      `速度${String(opponent.speed)} 资质${String(opponent.aptitude)} 幸运${String(opponent.luck)} ` +
+      `体魄${String(opponent.physique)}`,
   ].join('\n');
 }
 
@@ -4726,6 +4733,7 @@ async function judgeDebateOutcome(input: {
   env: Env;
   disciple: DiscipleRow;
   multiplier: Multiplier;
+  opponent: Record<BettableAttribute, number>;
 }): Promise<DebateJudgement> {
   const apiKey = readStringVar(input.env.OPENROUTER_API_KEY);
   if (apiKey !== undefined && apiKey.length > 0) {
@@ -4733,16 +4741,16 @@ async function judgeDebateOutcome(input: {
       const questions: Record<string, Question> = {
         win: {
           type: 'noul',
-          instructions: '根据弟子实力与对手强度，判断这名弟子在论道比试中取胜的概率。',
+          instructions: '根据双方六项属性的具体数值对比，综合判断弟子在论道比试中取胜的概率。即使对手整体略强，弟子仍有可能凭借某些属性优势或运气取胜。',
           criteria: {
-            true: '弟子综合实力占优，能在论道中取胜',
-            false: '对手更强，弟子落败',
+            true: '弟子凭借自身实力或局部优势取胜',
+            false: '对手综合实力压过弟子，弟子落败',
           },
         },
       };
       const answers = await decide(
         apiKey,
-        debateStateText(input.disciple, input.multiplier),
+        debateStateText(input.disciple, input.multiplier, input.opponent),
         questions,
       );
       const probability = normalizeProbability((answers.win as NoulAnswer | undefined)?.noul);
@@ -4909,7 +4917,7 @@ export async function daoDebate(
   const opponent = generateOpponentAttrs(attrs, multiplier);
 
   // 胜率判定（jev 或降级）→ 掷骰。Math.random 只在服务端用一次。
-  const judgement = await judgeDebateOutcome({ env, disciple, multiplier });
+  const judgement = await judgeDebateOutcome({ env, disciple, multiplier, opponent });
   const result: 'win' | 'lose' = Math.random() < judgement.probability ? 'win' : 'lose';
 
   // 结算：赢 → 发奖（赌注原封不动）；输 → 扣赌注（资源或属性点）。
