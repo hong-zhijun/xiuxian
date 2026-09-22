@@ -4265,7 +4265,7 @@ ul {
 /* ---------- Grouped action bar ---------- */
 .action-groups {
   display: grid;
-  grid-template-columns: minmax(0, 4fr) minmax(0, 3fr);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 14px;
   margin-top: 14px;
 }
@@ -4273,9 +4273,8 @@ ul {
 .action-group {
   display: grid;
   min-width: 0;
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: center;
-  gap: 10px;
+  grid-template-rows: auto auto;
+  gap: 8px;
 }
 
 .action-group-external {
@@ -5829,8 +5828,7 @@ h2.public-sect-name {
   }
 
   .action-group {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 7px;
+    gap: 6px;
   }
 
   .action-group-buttons .action-chip {
