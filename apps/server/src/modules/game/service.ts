@@ -4741,7 +4741,7 @@ async function judgeDebateOutcome(input: {
       const questions: Record<string, Question> = {
         win: {
           type: 'noul',
-          instructions: '根据双方六项属性的具体数值对比，综合判断弟子在论道比试中取胜的概率。即使对手整体略强，弟子仍有可能凭借某些属性优势或运气取胜。',
+          instructions: '根据双方六项属性的具体数值对比，综合判断弟子在论道比试中取胜的概率。',
           criteria: {
             true: '弟子凭借自身实力或局部优势取胜',
             false: '对手综合实力压过弟子，弟子落败',
