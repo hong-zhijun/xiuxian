@@ -455,6 +455,10 @@ const RULES_TEXT = `论道赌局 · 玩法说明
           <p v-if="freeAmountInput.trim() !== '' && !freeAmountValid" class="blocked-hint">
             数量需为不少于 {{ FREE_BET_MIN_DISPLAY }} 的整数（展示单位）。
           </p>
+          <p v-if="freeAmountValid" class="gambling-stake-hint">
+            赌注：{{ resourceLabel(betResourceId) }} {{ freeAmountDisplay }} ·
+            赢：{{ resourceLabel(betResourceId) }} {{ Math.floor(freeAmountDisplay * 1.8) }}
+          </p>
         </div>
 
         <!-- 属性赌注：六选一 -->
