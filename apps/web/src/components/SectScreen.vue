@@ -18,6 +18,7 @@ import type {
   RecruitPreview,
   SecretRealmView,
   SectStateView,
+  WheelSpinResult,
 } from '../api/game';
 import type { ToastTone } from '../types/ui';
 import type { AvatarFrameId } from '../utils/avatarFrames';
@@ -59,6 +60,8 @@ const props = defineProps<{
   exploreResult: ExploreChoiceResult | null;
   /** 0019 论道赌局最近一次结果；App.vue 负责拿结果，这里只负责展示（null = 还没打过）。 */
   daoDebateResult: DaoDebateResult | null;
+  /** 0020 天机轮最近一次结果；App.vue 负责拿结果，这里只负责展示（null = 还没转过）。 */
+  wheelResult: WheelSpinResult | null;
 }>();
 
 const emit = defineEmits<{
@@ -104,6 +107,9 @@ const emit = defineEmits<{
   /** 0019 赌坊：论道请求与悟道值加点都由 App.vue 绑定并调接口，这里只派发与展示。 */
   daoDebate: [input: DaoDebateInput];
   allocateDaoInsight: [discipleId: string, attribute: DaoAttribute, points: number];
+  /** 0020 天机轮：转动（带投入档位）与重置都由 App.vue 绑定并调接口，这里只派发与展示。 */
+  wheelSpin: [tier: number];
+  wheelReset: [];
 }>();
 
 /** 操作条里的弹窗开关：天机录 / 历练探索 / 江湖榜 / 守擂阵容 / 演武录 / 炼丹（宗门晋升与建筑仍在右栏常驻）。 */
@@ -117,6 +123,19 @@ const openPanel = ref<
   | 'gambling'
   | null
 >(null);
+
+/**
+ * 赌坊里当前在玩哪个玩法：只为赌坊弹窗那一层的加载层文案（论道 / 天机轮），
+ * 由 GamblingHouseDialog 在切换玩法时上报。
+ */
+const gamblingGame = ref<'debate' | 'wheel'>('debate');
+const gamblingLoadingText = computed(() =>
+  gamblingGame.value === 'wheel' ? '正在推演天机' : '正在论道',
+);
+
+function onGamblingGame(game: 'debate' | 'wheel'): void {
+  gamblingGame.value = game;
+}
 
 /**
  * 操作条角标：本次还能招几个人（今日剩余招募次数）。
@@ -603,14 +622,48 @@ function onGamblingRevealed(): void {
   if (result !== null) notifyDebateResult(result);
 }
 
+/** 0020 天机轮里点「转动天机」：请求由 App.vue 执行，这里只转发（弹窗留着等结果回填）。 */
+function onWheelSpin(tier: number): void {
+  if (props.busy) return;
+  emit('wheelSpin', tier);
+}
+
+/** 天机轮里点「重置转盘」：扣费与重排格局都在服务端，这里只转发。 */
+function onWheelReset(): void {
+  if (props.busy) return;
+  emit('wheelReset');
+}
+
+/** 天机轮结果同样只提示一次（转动停稳与关闭面板两条路径共用）。 */
+let notifiedWheel: WheelSpinResult | null = null;
+
+function notifyWheelResult(result: WheelSpinResult): void {
+  if (result === notifiedWheel) return;
+  notifiedWheel = result;
+  emit(
+    'notify',
+    result.reward.type === 'none' ? 'warning' : 'success',
+    `天机轮 · ${result.slotLabel}`,
+    result.message,
+  );
+}
+
+/** 转盘停稳：结果面板已经在弹窗里写出来了，这里补一条 toast（关掉弹窗也不会漏消息）。 */
+function onWheelRevealed(): void {
+  const result = props.wheelResult;
+  if (result !== null) notifyWheelResult(result);
+}
+
 /**
  * 关掉赌坊弹窗：结果由 App.vue 保留，下次打开仍是干净的玩法列表。
- * 但玩家可能在对峙阶段直接按 Esc / 点右上角 X —— 那时账其实已经结算了，
- * 所以这里必须补发一次提示，不能让他「灵石少了却什么都没看到」。
+ * 但玩家可能在对峙阶段（或天机轮转动中）直接按 Esc / 点右上角 X —— 那时账其实已经结算了，
+ * 所以这里必须按各自的机会补发一次提示，不能让他「灵石少了却什么都没看到」。
  */
 function onCloseGambling(): void {
   const result = props.daoDebateResult;
   if (result !== null) notifyDebateResult(result);
+  const wheel = props.wheelResult;
+  if (wheel !== null) notifyWheelResult(wheel);
   openPanel.value = null;
 }
 
@@ -1141,11 +1194,11 @@ function onDetailSetAvatarFrame(discipleId: string, frameId: AvatarFrameId): voi
       <ChallengeHistoryPanel :state="state" />
     </ModalShell>
 
-    <!-- 赌坊：三个阶段在同一弹窗里切换；结果由 App.vue 回填 daoDebateResult。 -->
+    <!-- 赌坊：每个玩法一个阶段，都在同一弹窗里切换；结果由 App.vue 回填（论道 / 天机轮各一份）。 -->
     <ModalShell
       v-if="openPanel === 'gambling'"
       :loading="busy"
-      loading-text="正在论道"
+      :loading-text="gamblingLoadingText"
       label="赌坊"
       @close="onCloseGambling"
     >
@@ -1153,7 +1206,12 @@ function onDetailSetAvatarFrame(discipleId: string, frameId: AvatarFrameId): voi
         :state="state"
         :busy="busy"
         :result="daoDebateResult"
+        :wheel-result="wheelResult"
         @debate="onDaoDebate"
+        @wheel-spin="onWheelSpin"
+        @wheel-reset="onWheelReset"
+        @wheel-reveal="onWheelRevealed"
+        @game="onGamblingGame"
         @close="onCloseGambling"
         @reveal="onGamblingRevealed"
       />

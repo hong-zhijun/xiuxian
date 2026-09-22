@@ -36,6 +36,11 @@ export interface SectRow {
   debate_date_key: string;
   /** 0019 赌坊：debate_date_key 对应日期内已受理的论道次数。 */
   debate_count: number;
+  /**
+   * 0020 天机轮：转盘格局种子。格局不落库，由 sect_id + wheel_seed 确定性生成
+   * （见 gambling.ts 的 wheelLayoutSeed）；每次重置 +1，只有它变，格局才变。
+   */
+  wheel_seed: number;
   created_at: number;
 }
 
@@ -184,7 +189,7 @@ export interface DaoDebateLogRow {
 export class SectRepository extends ParamRepository {
   async findByUserId(userId: string): Promise<SectRow | null> {
     return this.one<SectRow>({
-      sql: `SELECT id, user_id, name, level, vein_level, reputation, last_settled_at, recruit_date_key, recruit_count, recruit_refresh_level, recruit_refresh_used, created_at, defense_lineup, challenge_date_key, challenge_count, debate_date_key, debate_count
+      sql: `SELECT id, user_id, name, level, vein_level, reputation, last_settled_at, recruit_date_key, recruit_count, recruit_refresh_level, recruit_refresh_used, created_at, defense_lineup, challenge_date_key, challenge_count, debate_date_key, debate_count, wheel_seed
             FROM sects WHERE user_id = ?`,
       params: [userId],
     });
@@ -194,7 +199,7 @@ export class SectRepository extends ParamRepository {
   async findAll(): Promise<SectRow[]> {
     return this.all<SectRow>({
       sql: `SELECT id, user_id, name, level, vein_level, reputation, last_settled_at,
-                   recruit_date_key, recruit_count, recruit_refresh_level, recruit_refresh_used, created_at, defense_lineup, challenge_date_key, challenge_count, debate_date_key, debate_count
+                   recruit_date_key, recruit_count, recruit_refresh_level, recruit_refresh_used, created_at, defense_lineup, challenge_date_key, challenge_count, debate_date_key, debate_count, wheel_seed
             FROM sects ORDER BY level DESC, reputation DESC, created_at ASC`,
       params: [],
     });
@@ -204,7 +209,7 @@ export class SectRepository extends ParamRepository {
   async findById(sectId: string): Promise<SectRow | null> {
     return this.one<SectRow>({
       sql: `SELECT id, user_id, name, level, vein_level, reputation, last_settled_at,
-                   recruit_date_key, recruit_count, recruit_refresh_level, recruit_refresh_used, created_at, defense_lineup, challenge_date_key, challenge_count, debate_date_key, debate_count
+                   recruit_date_key, recruit_count, recruit_refresh_level, recruit_refresh_used, created_at, defense_lineup, challenge_date_key, challenge_count, debate_date_key, debate_count, wheel_seed
             FROM sects WHERE id = ?`,
       params: [sectId],
     });
@@ -1790,6 +1795,18 @@ export function updateSectDebateCounterStatement(
   };
 }
 
+/**
+ * 天机轮重置写回（0020）：格局种子 +1。格局不落库，由 sect_id + wheel_seed 派生
+ * （见 gambling.ts 的 wheelLayoutSeed），所以「重置」在库里就只是这一列 +1。
+ * 扣重置费、种子只 +1、计数不动由同一次 batch 保证（守卫见 gamblingSnapshotGuardStatement）。
+ */
+export function updateSectWheelSeedStatement(sectId: string, wheelSeed: number): ParameterizedQuery {
+  return {
+    sql: 'UPDATE sects SET wheel_seed = ? WHERE id = ?',
+    params: [wheelSeed, sectId],
+  };
+}
+
 /** 论道记录写入（0019）；赌注与奖励详情由调用方序列化成 JSON 字符串。 */
 export function insertDaoDebateLogStatement(row: {
   id: string;
@@ -1894,9 +1911,11 @@ function attributeColumnOf(attribute: BettableAttribute): string {
  * 记录一起回滚（计划 14.4）。
  *
  * 校验：
- * - 宗门行（等级 / 结算时间 / 论道日期键 / 论道计数）：每日 10 次上限不会被并发请求越过，
- *   也不会与任何并发命令双重结算；
+ * - 宗门行（等级 / 结算时间 / 论道日期键 / 论道计数）：每日 20 次上限（论道 + 天机轮共享）
+ *   不会被并发请求越过，也不会与任何并发命令双重结算；
  * - `resourceId` 非空时核对**这一条**资源的余额（押注扣减的依据）；
+ * - `pill` 非空时核对这条丹药库存仍是读到的数量（天机轮丹药格发奖的依据）；
+ * - `checkWheelSeed` 为真时核对宗门行的 wheel_seed 未变（天机轮转动与重置）；
  * - `disciple` 非空时核对目标弟子仍属本宗、结算相关列未变、被押属性仍是读到的值、
  *   悟道值两列未变，以及（本次涉及属性时）被写的那一列仍是读到的值、（rejectAway 时）
  *   此刻没有「尚未到期的历练」。
@@ -1914,17 +1933,30 @@ export function gamblingSnapshotGuardStatement(
      */
     disciple?: { row: DiscipleRow; attribute?: BettableAttribute };
     /**
+     * 天机轮丹药格中奖时涉及的丹药库存（快照值来自读取时的行）。
+     * 发奖是按快照算好的绝对值写入，所以必须核对这一条。
+     */
+    pill?: { pillId: string; quantity: number };
+    /**
      * 是否要求该弟子此刻没有「尚未到期的历练」
      * （论道要求：在外弟子不能参赌；悟道值加点不要求，计划 7.2 并未限制在外）。
      */
     rejectAway?: boolean;
+    /**
+     * 0020：是否核对宗门行的 wheel_seed。
+     * 天机轮的格局与奖励都由 wheel_seed 派生，转动中途被重置过，这一转的结果就无意义了；
+     * 重置自己改写这一列，也一样要核对（并发的两次重置只能成功一次）。
+     */
+    checkWheelSeed?: boolean;
     now: number;
   },
 ): ParameterizedQuery {
   const { sect, balances, resourceId, disciple } = snapshot;
+  // 0020：只在需要时把 wheel_seed 并入宗门行校验 —— 论道不依赖转盘格局，不必白挨一次重试。
+  const wheelSeedClause = snapshot.checkWheelSeed === true ? ' AND wheel_seed = ?' : '';
   const checks = [
     `EXISTS (SELECT 1 FROM sects WHERE id = ? AND level = ? AND last_settled_at = ?
-      AND debate_date_key = ? AND debate_count = ?)`,
+      AND debate_date_key = ? AND debate_count = ?${wheelSeedClause})`,
   ];
   const params: (string | number | null)[] = [
     commandId,
@@ -1934,6 +1966,9 @@ export function gamblingSnapshotGuardStatement(
     sect.debate_date_key,
     sect.debate_count,
   ];
+  if (snapshot.checkWheelSeed === true) {
+    params.push(sect.wheel_seed);
+  }
 
   for (const row of balances) {
     checks.push(
@@ -1946,6 +1981,15 @@ export function gamblingSnapshotGuardStatement(
     const row = balances.find((item) => item.resource_id === resourceId);
     checks.push('EXISTS (SELECT 1 FROM resource_balances WHERE sect_id = ? AND resource_id = ? AND balance = ?)');
     params.push(sect.id, resourceId, row === undefined ? 0 : row.balance);
+  }
+  if (snapshot.pill !== undefined) {
+    // 与炼丹守卫同一口径：这条丹药库存仍是读到的数量（没有行时视为 0）。
+    // 丹药发奖走的是绝对值 upsert（不是 quantity = quantity + ?），
+    // 不核对这一条就会被并发的炼制 / 服用悄悄覆盖。
+    checks.push(
+      'COALESCE((SELECT quantity FROM pill_inventories WHERE sect_id = ? AND pill_id = ?), 0) = ?',
+    );
+    params.push(sect.id, snapshot.pill.pillId, snapshot.pill.quantity);
   }
   if (disciple !== undefined) {
     // attribute 缺省时只校验弟子行本身（发悟道值奖励的路径也必须有这道守卫：

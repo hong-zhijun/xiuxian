@@ -169,7 +169,7 @@ export interface SectStateView {
     usedToday: number;
     remaining: number;
   };
-  /** 0019 赌坊面板：解锁（宗门 2 级，不依赖建筑）与当日论道次数（每日 10 次）。 */
+  /** 0019 赌坊面板：解锁（宗门 2 级，不依赖建筑）与当日次数（20 次/天，论道 + 天机轮共享）。 */
   gambling: {
     unlocked: boolean;
     blockedReason: string | null;
@@ -184,6 +184,8 @@ export interface SectStateView {
       netSpiritStone: number;
       totalInsight: number;
     } | null;
+    /** 0020 天机轮：赌坊未解锁时为 null；解锁后带当前格局与档位费用（全部服务端口径）。 */
+    wheel: WheelView | null;
   };
   /** 0014 宗门历练名额与最近 10 条历练摘要（仅本宗可见，结果由服务端决定）。 */
   journey: JourneyView;
@@ -1077,4 +1079,76 @@ export async function allocateDaoInsight(
     '/api/v1/game/allocate-dao-insight',
     { method: 'POST', body: { discipleId, attribute, points } },
   );
+}
+
+/* ---------- 0020 天机轮（赌坊第二个玩法） ---------- */
+
+/** 天机轮的单个格子（与后端 view.ts 的 WheelSlotView 一一对应）。 */
+export interface WheelSlotView {
+  /** 'spirit_stone' | 'big_spirit_stone' | 'herb' | 'ore' | 'pill' | 'nothing'。 */
+  type: string;
+  /** 格子倍率（0.8~1.5）；谢谢惠顾为 0，丹药格带值但不参与奖励计算。 */
+  multiplier: number;
+  /** 服务端拼好的格面文案（如「灵石 ×1.3」「谢谢惠顾」）—— 前端只渲染，不自己拼。 */
+  label: string;
+}
+
+/**
+ * 天机轮面板（与后端 view.ts 的 WheelView 一一对应）：赌坊未解锁时为 null。
+ * 格局由服务端按 seed 确定性生成，档位费用与重置费用也由服务端下发。
+ */
+export interface WheelView {
+  seed: number;
+  slots: WheelSlotView[];
+  /** 各档位的转动费用（最小单位；1 展示单位 = 1000 最小单位）。 */
+  costs: { tier: number; cost: number }[];
+  /** 重置费用（最小单位）。 */
+  resetCost: number;
+}
+
+/** 天机轮转动入参（与后端 wheelSpinRequestSchema 一一对应）：投入档位 1~5。 */
+export interface WheelSpinInput {
+  tier: number;
+}
+
+/** 天机轮转动结果（与后端 view.ts 的 WheelSpinResultView 一一对应）。 */
+export interface WheelSpinResult {
+  /** 命中的格子下标（对应 state.gambling.wheel.slots 的顺序）。 */
+  slotIndex: number;
+  tier: number;
+  /** 本次实际扣掉的灵石（最小单位）。 */
+  cost: string;
+  /** 命中格子的格面文案（结果面板直接渲染）。 */
+  slotLabel: string;
+  reward: {
+    type: 'resource' | 'pill' | 'none';
+    /** type = 'resource' 时有值。 */
+    resourceId?: string;
+    /** type = 'resource' 时有值（最小单位）。 */
+    amount?: string;
+    /** type = 'pill' 时有值。 */
+    pillId?: string;
+    pillName?: string;
+    quantity?: number;
+  };
+  /** 服务端拼好的结果文案。 */
+  message: string;
+}
+
+/**
+ * 0020 天机轮转动（POST /game/wheel-spin）：扣费、落格、发奖与每日次数
+ * 全部由服务端裁决，返回写库后的完整状态与结果。
+ */
+export async function wheelSpin(
+  input: WheelSpinInput,
+): Promise<{ state: SectStateView; result: WheelSpinResult }> {
+  return apiRequest<{ state: SectStateView; result: WheelSpinResult }>(
+    '/api/v1/game/wheel-spin',
+    { method: 'POST', body: input },
+  );
+}
+
+/** 0020 天机轮重置（POST /game/wheel-reset）：扣重置费、格局整盘重排，不消耗每日次数。 */
+export async function wheelReset(): Promise<{ state: SectStateView }> {
+  return apiRequest<{ state: SectStateView }>('/api/v1/game/wheel-reset', { method: 'POST' });
 }

@@ -4,7 +4,8 @@
  * 与 alchemy.ts / challenge.ts 同一模式：规则是少量玩法常量，放在游戏模块代码里，
  * 不进 GameConfigContent，也不改公共配置哈希；赌坊面板通过登录后的 /game/sync 返回。
  *
- * 本文件只放纯定义和纯计算：不读数据库、不取时间（不调用 Date.now()）、不用随机数。
+ * 本文件只放纯定义和纯计算：不读数据库、不取时间（不调用 Date.now()）；随机只出现在两处 ——
+ * 论道对手属性（Math.random，只影响本轮对手）与天机轮格局（seed 驱动的线性同余，必须可复现）。
  * 解锁判断、赌注/奖励换算、每日次数归一、幸运侦查文案都集中在这里，
  * 复用于 sync 视图、daoDebate 写路径与 allocateDaoInsight 写路径。
  *
@@ -13,13 +14,14 @@
  * 集成 + 降级胜率决定），本文件只提供降级胜率常量。
  */
 
+import { PILL_IDS, type PillId } from './alchemy';
 import { dateKeyUtc8 } from './constants';
 
 /** 赌坊解锁：宗门等级下限（不依赖建筑）。 */
 export const GAMBLING_UNLOCK_SECT_LEVEL = 2;
 
-/** 每日论道上限（UTC+8 自然日重置，全宗门共享计数）。 */
-export const DEBATE_DAILY_LIMIT = 10;
+/** 每日次数上限（UTC+8 自然日重置，全宗门共享计数）：论道赌局与天机轮**共享**这 20 次。 */
+export const DEBATE_DAILY_LIMIT = 20;
 
 /** 每个弟子悟道值的累计分配上限。 */
 export const DAO_INSIGHT_CAP = 50;
@@ -331,4 +333,223 @@ export function debateTierProbability(
   const lo = anchor - DEBATE_TIER_ANCHOR_RANGE;
   const hi = anchor + DEBATE_TIER_ANCHOR_RANGE;
   return Math.min(hi, Math.max(lo, raw));
+}
+
+/* ---------- 天机轮（0020 迁移 + 计划 2）：8 格转盘 ---------- */
+
+/** 转盘格数（8 等分，每格 45°）。 */
+export const WHEEL_SLOT_COUNT = 8;
+
+/** 投入档位（1x~5x）；费用 = WHEEL_SPIN_COST × 档位。 */
+export const WHEEL_TIERS = [1, 2, 3, 4, 5] as const;
+export type WheelTier = (typeof WHEEL_TIERS)[number];
+
+/** 1x 档费用（最小单位 = 展示 50）。 */
+export const WHEEL_SPIN_COST = 50_000;
+
+/** 重置费用（最小单位 = 展示 100）；重置不消耗每日次数，也不限次数。 */
+export const WHEEL_RESET_COST = 100_000;
+
+/** 格子倍率范围（含两端，一位小数）。 */
+export const WHEEL_MULTIPLIER_MIN = 0.8;
+export const WHEEL_MULTIPLIER_MAX = 1.5;
+
+/** 大额灵石格的额外倍率：奖励 = 投入 × 格子倍率 × 3。 */
+export const WHEEL_BIG_MULTIPLIER = 3;
+
+/** 大额灵石固定 1 格。 */
+export const WHEEL_BIG_SLOTS = 1;
+/** 谢谢惠顾固定 2 格。 */
+export const WHEEL_NOTHING_SLOTS = 2;
+/** 小额灵石的随机格数；剩下的 1~3 格给草药/矿石/丹药。 */
+export const WHEEL_SMALL_SLOTS_MIN = 2;
+export const WHEEL_SMALL_SLOTS_MAX = 4;
+
+/** 特殊格（草药 / 矿石 / 丹药）的候选类型：每种最多出现 1 格。 */
+const WHEEL_SPECIAL_TYPES = ['herb', 'ore', 'pill'] as const;
+
+/** 格子类型（与计划 4.1 的 view 口径一致）。 */
+export type WheelSlotType =
+  | 'spirit_stone'
+  | 'big_spirit_stone'
+  | 'herb'
+  | 'ore'
+  | 'pill'
+  | 'nothing';
+
+/** 一个转盘格：类型 + 倍率 + 丹药（格局由 seed 确定性生成）。 */
+export interface WheelSlot {
+  type: WheelSlotType;
+  /**
+   * 格子倍率（0.8~1.5，一位小数）；谢谢惠顾为 0。
+   * 丹药格也带倍率（格局只由 seed 决定，同一 seed 每次一样），但**不参与奖励计算**：
+   * 丹药数量只跟投入档位走（计划 2.6）。
+   */
+  multiplier: number;
+  /** 丹药格命中的丹药 id（同样由 seed 决定，所以格面文案稳定）；非丹药格为 null。 */
+  pillId: PillId | null;
+}
+
+/** 转盘奖励（写入 dao_debate_log.reward_detail，口径见计划 3.2）。 */
+export type WheelRewardDetail =
+  | { type: 'resource'; resourceId: string; amount: string }
+  | { type: 'pill'; pillId: string; quantity: number }
+  | { type: 'none' };
+
+/** 某一档的转动费用（最小单位）= 1x 费用 × 档位。 */
+export function wheelSpinCost(tier: WheelTier): number {
+  return WHEEL_SPIN_COST * tier;
+}
+
+/**
+ * 32 位无符号线性同余伪随机（Numerical Recipes 系数）。
+ * 全程整数运算（Math.imul）→ 跨平台一致，同一个 seed 永远给出同一串数。
+ * 这里刻意**不用** Math.random：格局必须可复现（计划 6.1）。
+ */
+function wheelRandomOf(seed: number): () => number {
+  let state = Math.floor(seed) >>> 0;
+  if (state === 0) {
+    // seed 0（新宗门）也必须有一个有效状态，否则整串随机数恒为 0。
+    state = 0x9e3779b9;
+  }
+  const nextState = (): number => {
+    state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+    return state;
+  };
+  // 暖机两次再开始取值：LCG 的头两个输出与 seed 的高位强相关（小 seed 时连乘都没进位，
+  // 第一个取值会稳定落在同一个区间）。生产路径的 seed 是 wheelLayoutSeed 的大整数混合结果，
+  // 本来就不会踩到这一点；暖机是为了让 generateWheelSlots 对任意 seed（含单测里 0~N 的小整数）
+  // 都给出打散的格局。
+  nextState();
+  nextState();
+  return () => nextState() / 4_294_967_296;
+}
+
+/** 闭区间 [min, max] 的确定性整数（random() 恒 < 1，所以不会溢出上界）。 */
+function wheelInt(random: () => number, min: number, max: number): number {
+  return min + Math.floor(random() * (max - min + 1));
+}
+
+/** 确定性 Fisher–Yates 洗牌（用自己那串随机数，不动全局 Math.random）。 */
+function wheelShuffle<T>(random: () => number, items: readonly T[]): T[] {
+  const result = [...items];
+  for (let i = result.length - 1; i > 0; i -= 1) {
+    const j = wheelInt(random, 0, i);
+    const swap = result[i]!;
+    result[i] = result[j]!;
+    result[j] = swap;
+  }
+  return result;
+}
+
+/**
+ * 转盘格局种子 = 宗门 id 与 wheel_seed 的混合（纯函数，计划 3.1）。
+ *
+ * sect_id 走一遍 FNV-1a 32 位哈希再与 wheel_seed 混合：不同宗门、同一宗门的不同 seed
+ * 都会得到不同格局；同一 (sect_id, wheel_seed) 永远一致 —— 所以每次 sync 下发的转盘都一样，
+ * 只有重置（wheel_seed + 1）才变。
+ */
+export function wheelLayoutSeed(sectId: string, wheelSeed: number): number {
+  let hash = 2166136261;
+  for (let i = 0; i < sectId.length; i += 1) {
+    hash = Math.imul(hash ^ sectId.charCodeAt(i), 16777619);
+  }
+  const seed = (Number.isFinite(wheelSeed) ? Math.floor(wheelSeed) : 0) >>> 0;
+  return (hash ^ Math.imul(seed + 1, 2654435761)) >>> 0;
+}
+
+/**
+ * 生成 8 格转盘格局（**确定性纯函数**：同一个 seed 永远同一布局，计划 2.1）。
+ *
+ * 固定：大额灵石 1 格 + 谢谢惠顾 2 格；随机：小额灵石 2~4 格，
+ * 剩下的 1~3 格从草药 / 矿石 / 丹药里取（每种最多 1 格）。
+ * 格子排布、每格倍率与丹药种类全部由 seed 决定，所以重启、换设备都不会让转盘变样。
+ */
+export function generateWheelSlots(seed: number): WheelSlot[] {
+  const random = wheelRandomOf(seed);
+
+  const smallCount = wheelInt(random, WHEEL_SMALL_SLOTS_MIN, WHEEL_SMALL_SLOTS_MAX);
+  const specialCount = WHEEL_SLOT_COUNT - WHEEL_BIG_SLOTS - WHEEL_NOTHING_SLOTS - smallCount;
+  const specials = wheelShuffle(random, WHEEL_SPECIAL_TYPES).slice(0, specialCount);
+
+  // 固定格 + 随机格一共正好 8 格（2~4 格小额时剩余 1~3 格特殊格）。
+  const types: WheelSlotType[] = [
+    'big_spirit_stone',
+    ...Array<WheelSlotType>(WHEEL_NOTHING_SLOTS).fill('nothing'),
+    ...Array<WheelSlotType>(smallCount).fill('spirit_stone'),
+    ...specials,
+  ];
+
+  return wheelShuffle(random, types).map((type) => {
+    if (type === 'nothing') {
+      return { type, multiplier: 0, pillId: null };
+    }
+    // 倍率只取一位小数：0.8 / 0.9 / … / 1.5（8 档均匀取）。
+    const multiplier =
+      (WHEEL_MULTIPLIER_MIN * 10 +
+        wheelInt(random, 0, Math.round((WHEEL_MULTIPLIER_MAX - WHEEL_MULTIPLIER_MIN) * 10))) /
+      10;
+    if (type === 'pill') {
+      return {
+        type,
+        multiplier,
+        pillId: PILL_IDS[wheelInt(random, 0, PILL_IDS.length - 1)] ?? null,
+      };
+    }
+    return { type, multiplier, pillId: null };
+  });
+}
+
+/**
+ * 格面文案（计划 4.1 的 label）：服务端拼好，前端只渲染。
+ *
+ * 资源名与丹药名由调用方传进来 —— 唯一一份中文名词表在配置与 alchemy.ts，
+ * 这里不复制第二份。大额灵石显示的是**实际结算倍率**（格子倍率 × 3），
+ * 玩家一眼就能看出这格更肥；丹药格显示数量随档位走（×1~5）。
+ */
+export function wheelSlotLabel(
+  slot: WheelSlot,
+  names: { resource: (resourceId: string) => string; pill: (pillId: string) => string },
+): string {
+  switch (slot.type) {
+    case 'nothing':
+      return '谢谢惠顾';
+    case 'pill':
+      return slot.pillId === null ? '丹药' : `${names.pill(slot.pillId)} ×1~${String(WHEEL_TIERS.length)}`;
+    case 'big_spirit_stone':
+      return `${names.resource('spiritStone')} ×${(slot.multiplier * WHEEL_BIG_MULTIPLIER).toFixed(1)}`;
+    case 'herb':
+    case 'ore':
+      return `${names.resource(slot.type)} ×${slot.multiplier.toFixed(1)}`;
+    default:
+      return `${names.resource('spiritStone')} ×${slot.multiplier.toFixed(1)}`;
+  }
+}
+
+/**
+ * 结算一格奖励（纯函数，计划 2.6）。
+ *
+ * 金额一律是**最小单位整数**：资源类 = floor(投入 × 格子倍率)，大额灵石再 ×3；
+ * 丹药 = 投入档位颗数（1x→1 颗 … 5x→5 颗），**不受格子倍率影响**；谢谢惠顾 = 无奖励。
+ */
+export function wheelReward(slot: WheelSlot, tier: WheelTier, cost: number): WheelRewardDetail {
+  if (slot.type === 'nothing') {
+    return { type: 'none' };
+  }
+  if (slot.type === 'pill') {
+    return slot.pillId === null
+      ? { type: 'none' }
+      : { type: 'pill', pillId: slot.pillId, quantity: tier };
+  }
+  const multiplier =
+    slot.type === 'big_spirit_stone' ? slot.multiplier * WHEEL_BIG_MULTIPLIER : slot.multiplier;
+  return {
+    type: 'resource',
+    // 两种灵石格都落到同一个资源 'spiritStone'（big_spirit_stone 只是更肥的那一格，
+    // 不是另一种资源 —— 否则会在 resource_balances 里凭空多出一条配置里没有的余额）。
+    resourceId: slot.type === 'herb' || slot.type === 'ore' ? slot.type : 'spiritStone',
+    // 投入是 50000 的倍数、倍率是一位小数 → 数学上的积一定是 5000 的整数倍；
+    // 这里加的 1e-6 只是消掉 0.1 的二进制表示带来的浮点噪声（否则会莫名少 1 点最小单位）。
+    amount: String(Math.floor(cost * multiplier + 1e-6)),
+  };
 }

@@ -197,3 +197,11 @@ export const allocateDaoInsightRequestSchema = z.strictObject({
   attribute: z.enum(BETTABLE_ATTRIBUTES),
   points: z.number().int().min(1).max(50),
 });
+
+/**
+ * 0020 天机轮转动：只做「类型 + 范围」的第一道防线（tier 1~5，与 WHEEL_TIERS 同口径）。
+ * 真正的规则（解锁、每日次数、灵石余额、格局与落格）全部在 service 里判定。
+ */
+export const wheelSpinRequestSchema = z.strictObject({
+  tier: z.number().int().min(1).max(5),
+});
