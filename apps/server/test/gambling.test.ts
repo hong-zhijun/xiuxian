@@ -490,6 +490,13 @@ describe('模式 C：属性赌注', () => {
     });
     expect(lost.status).toBe(200);
     expect((await discipleRow(sect.discipleIds[0])).attack).toBe(0);
+    // 对峙界面读的是下注前的属性快照：落败扣点之后，快照里的攻击仍是 3（与 opponent 同源）。
+    const lostPayload = dataOf(lost) as Record<string, any>;
+    expect(lostPayload.result.discipleAttributes.attack).toBe(3);
+    const lostDisciple = (lostPayload.state.disciples as { id: string; attack: number }[]).find(
+      (row) => row.id === sect.discipleIds[0],
+    );
+    expect(lostDisciple?.attack).toBe(0);
     expect(JSON.parse((await debateLogs(sect.sectId))[0].stake_detail)).toEqual({
       attribute: 'attack',
       points: 3,

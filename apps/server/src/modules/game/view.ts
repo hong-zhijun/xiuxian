@@ -258,6 +258,12 @@ export interface DaoDebateResultView {
   revealHints: string[];
   /** 对手六项属性（纯展示，基于弟子属性 × 倍率系数 + 随机扰动）。 */
   opponent: Record<string, number>;
+  /**
+   * 弟子下注当时的六项属性快照（与 opponent 同一时刻、同一口径）。
+   * 结算可能改属性（属性赌注落败会扣点），而对峙界面要并排展示双方数值，
+   * 所以必须读这份快照，不能读实时的弟子状态（否则两边数字不同源）。
+   */
+  discipleAttributes: Record<string, number>;
   /** jev 原始胜率（0~1 小数）；降级时为 null。 */
   winProbability: number | null;
   message: string;

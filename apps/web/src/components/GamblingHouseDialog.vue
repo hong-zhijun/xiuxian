@@ -29,7 +29,11 @@ const props = defineProps<{
 const emit = defineEmits<{
   debate: [input: DaoDebateInput];
   close: [];
-  notify: [tone: 'success' | 'warning', title: string, message: string];
+  /**
+   * 玩家点了「揭晓结果」：这里只声明「这一局的输赢已经被看到」，
+   * 提示文案与去重由 SectScreen 统一处理（关闭弹窗时也要补发同一条）。
+   */
+  reveal: [];
 }>();
 
 /** 所有资源数量都是最小单位整数，1 展示单位 = 1000 最小单位（与 utils/format.ts 同口径）。 */
@@ -194,14 +198,7 @@ watch(
 
 function revealResult(): void {
   stage.value = 'result';
-  if (props.result) {
-    emit(
-      'notify',
-      props.result.result === 'win' ? 'success' : 'warning',
-      `${props.result.result === 'win' ? '论道得胜' : '论道失利'} · ${props.result.discipleName}`,
-      props.result.message,
-    );
-  }
+  emit('reveal');
 }
 
 /** doc 11.3 的规则文案原文：前端只负责展示，不改写措辞与数值。 */
@@ -458,7 +455,7 @@ const RULES_TEXT = `论道赌局 · 玩法说明
             <strong>{{ result.discipleName }}</strong>
             <ul class="confrontation-attrs">
               <li v-for="option in ATTRIBUTE_OPTIONS" :key="option.value">
-                {{ option.label }} {{ selectedDisciple?.[option.value] ?? '—' }}
+                {{ option.label }} {{ result.discipleAttributes[option.value] ?? '—' }}
               </li>
             </ul>
           </div>

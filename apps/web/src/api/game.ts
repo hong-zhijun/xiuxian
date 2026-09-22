@@ -995,6 +995,11 @@ export interface DaoDebateResult {
   revealHints: string[];
   /** 对手六项属性（纯展示）。 */
   opponent: Record<string, number>;
+  /**
+   * 弟子下注当时的六项属性快照（与 opponent 同一时刻）。结算会改属性，
+   * 所以对峙界面要读这里，而不是实时的 state.disciples。
+   */
+  discipleAttributes: Record<string, number>;
   /** jev 原始胜率（0~1）；null = 本次判定走了本地降级、没用模型。 */
   winProbability: number | null;
   message: string;

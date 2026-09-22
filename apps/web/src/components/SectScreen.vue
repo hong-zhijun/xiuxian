@@ -582,8 +582,35 @@ function onDaoDebate(input: DaoDebateInput): void {
   emit('daoDebate', input);
 }
 
-/** 关掉赌坊弹窗：结果由 App.vue 保留，下次打开仍是干净的玩法列表。 */
+/** 赌坊结果只提示一次：把已提示过的结果对象记下来，避免「揭晓」与「关闭」各弹一条。 */
+let notifiedDebate: DaoDebateResult | null = null;
+
+/** 把这一局的输赢告诉玩家：「揭晓结果」与「对峙阶段直接关面板」两条路径共用。 */
+function notifyDebateResult(result: DaoDebateResult): void {
+  if (result === notifiedDebate) return;
+  notifiedDebate = result;
+  emit(
+    'notify',
+    result.result === 'win' ? 'success' : 'warning',
+    `${result.result === 'win' ? '论道得胜' : '论道失利'} · ${result.discipleName}`,
+    result.message,
+  );
+}
+
+/** 弹窗里点「揭晓结果」：结果屏已经把输赢写出来了，这里补一条 toast。 */
+function onGamblingRevealed(): void {
+  const result = props.daoDebateResult;
+  if (result !== null) notifyDebateResult(result);
+}
+
+/**
+ * 关掉赌坊弹窗：结果由 App.vue 保留，下次打开仍是干净的玩法列表。
+ * 但玩家可能在对峙阶段直接按 Esc / 点右上角 X —— 那时账其实已经结算了，
+ * 所以这里必须补发一次提示，不能让他「灵石少了却什么都没看到」。
+ */
 function onCloseGambling(): void {
+  const result = props.daoDebateResult;
+  if (result !== null) notifyDebateResult(result);
   openPanel.value = null;
 }
 
@@ -1128,7 +1155,7 @@ function onDetailSetAvatarFrame(discipleId: string, frameId: AvatarFrameId): voi
         :result="daoDebateResult"
         @debate="onDaoDebate"
         @close="onCloseGambling"
-        @notify="(tone, title, message) => emit('notify', tone, title, message)"
+        @reveal="onGamblingRevealed"
       />
     </ModalShell>
 

@@ -5030,6 +5030,7 @@ export async function daoDebate(
       rewardDescription,
       revealHints,
       opponent,
+      discipleAttributes: attrs,
       winProbability: judgement.raw,
       message,
     },
