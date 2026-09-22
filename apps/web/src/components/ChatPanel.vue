@@ -97,7 +97,7 @@ onUnmounted(() => {
       <div ref="listEl" class="chat-list">
         <p v-if="loadError && messages.length === 0" class="chat-hint">{{ loadError }}</p>
         <p v-else-if="messages.length === 0" class="chat-hint">暂无消息</p>
-        <div v-for="msg in messages" :key="msg.id" class="chat-msg" :class="{ 'is-me': msg.isMe }">
+        <div v-for="msg in messages" :key="msg.id" class="chat-msg" :class="{ 'is-me': msg.isMe, 'is-system': msg.isSystem }">
           <span class="chat-time">{{ formatTime(msg.createdAt) }}</span>
           <span class="chat-name">{{ msg.sectName }}</span>
           <span class="chat-text">{{ msg.content }}</span>
@@ -198,6 +198,15 @@ onUnmounted(() => {
 
 .chat-text {
   color: var(--fg);
+}
+
+.chat-msg.is-system .chat-name {
+  color: var(--gold);
+}
+
+.chat-msg.is-system .chat-text {
+  color: var(--gold);
+  font-style: italic;
 }
 
 .chat-input-row {

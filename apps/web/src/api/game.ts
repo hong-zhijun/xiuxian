@@ -627,6 +627,7 @@ export interface ChatMessageView {
   sectName: string;
   content: string;
   isMe: boolean;
+  isSystem: boolean;
   createdAt: string;
 }
 

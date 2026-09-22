@@ -5472,6 +5472,14 @@ export async function daoDebate(
     remaining: Math.max(0, DEBATE_DAILY_LIMIT - usedAfter),
   };
 
+  if (multiplier === 3 && result === 'win') {
+    broadcastSystemMessage(
+      db,
+      `${draft.sect.name}在论道赌局中获得3x奖励：${rewardDescription}`,
+      now,
+    ).catch(() => {});
+  }
+
   const message =
     result === 'win'
       ? `论道胜出：${disciple.name}击败了${MULTIPLIER_HINTS[multiplier]}，赢得${rewardDescription}（今日还剩 ${String(draft.debateDay.remaining)} 次）`
@@ -5681,6 +5689,14 @@ export async function wheelSpin(
     usedToday: usedAfter,
     remaining: Math.max(0, DEBATE_DAILY_LIMIT - usedAfter),
   };
+
+  if (tier === 5 && slot.type === 'big_spirit_stone' && reward.type === 'resource') {
+    broadcastSystemMessage(
+      db,
+      `${draft.sect.name}在天机轮中获得5x大额灵石奖励：${displayAmount(Number(reward.amount))}灵石`,
+      now,
+    ).catch(() => {});
+  }
 
   const rewardDescription =
     reward.type === 'resource'
@@ -5914,11 +5930,13 @@ export async function listChatMessages(
 
   const ordered = afterId ? rows : rows.slice().reverse();
 
+  const SYSTEM_USER_ID = 'system';
   return ordered.map((row) => ({
     id: row.id,
     sectName: row.sect_name,
     content: row.content,
     isMe: row.user_id === userId,
+    isSystem: row.user_id === SYSTEM_USER_ID,
     createdAt: new Date(row.created_at).toISOString(),
   }));
 }
@@ -5953,4 +5971,15 @@ export async function sendChatMessage(
   await chatRepo.execute(stmt);
 
   return listChatMessages(db, userId);
+}
+
+async function broadcastSystemMessage(db: D1Database, content: string, now: number): Promise<void> {
+  const repo = new ChatMessageRepository(db);
+  await repo.execute(insertChatMessageStatement({
+    id: crypto.randomUUID(),
+    userId: 'system',
+    sectName: '系统',
+    content,
+    now,
+  }));
 }
