@@ -154,7 +154,24 @@ export function revealCount(luck: number): number {
  * 倍率决定对手强度基准（对手该项属性 ≈ 弟子该项属性 × 该系数）：
  * 倍率越高，模型之外展示给玩家的对手也越强，侦查文案才与「远强于己」的说法自洽。
  */
-const REVEAL_OPPONENT_FACTOR: Record<Multiplier, number> = { 1: 1, 2: 1.15, 3: 1.35 };
+export const REVEAL_OPPONENT_FACTOR: Record<Multiplier, number> = { 1: 1, 2: 1.15, 3: 1.35 };
+
+/**
+ * 生成对手六项属性（纯展示）：基准 = 弟子属性 × 倍率系数，
+ * 再加 ±15% 随机扰动让每次对手不完全一样，最终夹到 1~100。
+ */
+export function generateOpponentAttrs(
+  discipleAttrs: Record<BettableAttribute, number>,
+  multiplier: Multiplier,
+): Record<BettableAttribute, number> {
+  const result = {} as Record<BettableAttribute, number>;
+  for (const attr of BETTABLE_ATTRIBUTES) {
+    const base = (Number(discipleAttrs[attr]) || 0) * REVEAL_OPPONENT_FACTOR[multiplier];
+    const jitter = 0.85 + Math.random() * 0.3;
+    result[attr] = Math.max(1, Math.min(100, Math.round(base * jitter)));
+  }
+  return result;
+}
 
 /** 侦查结论阈值（弟子值 / 对手基准值）；从高到低判定。 */
 const REVEAL_VERDICTS: readonly { min: number; text: string }[] = [

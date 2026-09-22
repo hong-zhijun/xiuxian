@@ -993,6 +993,8 @@ export interface DaoDebateResult {
   rewardDescription: string;
   /** 幸运侦查提示（纯展示，不参与胜负）；幸运不足时为空数组。 */
   revealHints: string[];
+  /** 对手六项属性（纯展示）。 */
+  opponent: Record<string, number>;
   /** jev 原始胜率（0~1）；null = 本次判定走了本地降级、没用模型。 */
   winProbability: number | null;
   message: string;

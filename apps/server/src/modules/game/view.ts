@@ -256,6 +256,8 @@ export interface DaoDebateResultView {
   rewardDescription: string;
   /** 侦查提示（幸运高时有值）。 */
   revealHints: string[];
+  /** 对手六项属性（纯展示，基于弟子属性 × 倍率系数 + 随机扰动）。 */
+  opponent: Record<string, number>;
   /** jev 原始胜率（0~1 小数）；降级时为 null。 */
   winProbability: number | null;
   message: string;

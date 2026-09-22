@@ -36,9 +36,9 @@ const UNITS_PER_DISPLAY = 1000;
 /** 自由输入的最小赌注：展示 10 = 后端 FREE_BET_MIN（10000 最小单位）。 */
 const FREE_BET_MIN_DISPLAY = 10;
 
-type Stage = 'mode-select' | 'configure' | 'result';
+type Stage = 'mode-select' | 'configure' | 'confrontation' | 'result';
 
-/** 挂载时停在玩法列表；只有「新结果到达」才切进 result（不因父组件残留旧 result 跳阶段）。 */
+/** 挂载时停在玩法列表；只有「新结果到达」才切进 confrontation（不因父组件残留旧 result 跳阶段）。 */
 const stage = ref<Stage>('mode-select');
 const showRules = ref(false);
 
@@ -107,6 +107,17 @@ const ATTRIBUTE_OPTIONS: readonly { value: DaoAttribute; label: string }[] = [
   { value: 'physique', label: '体魄' },
 ];
 
+/** 系统预设灵石赌注（展示单位）：与后端 PRESET_STAKES 同口径。 */
+const PRESET_STAKES_DISPLAY: Record<number, number> = { 1: 100, 2: 200, 3: 300 };
+/** 系统预设灵石奖励（展示单位）：与后端 PRESET_RESOURCE_REWARDS 同口径。 */
+const PRESET_REWARDS_DISPLAY: Record<number, number> = { 1: 180, 2: 360, 3: 540 };
+/** 系统预设悟道值奖励：与后端 PRESET_INSIGHT_REWARDS 同口径。 */
+const PRESET_INSIGHT_DISPLAY: Record<number, number> = { 1: 1, 2: 2, 3: 3 };
+/** 属性赌注点数：与后端 ATTRIBUTE_STAKES 同口径。 */
+const ATTRIBUTE_STAKES_DISPLAY: Record<number, number> = { 1: 1, 2: 2, 3: 3 };
+/** 属性赌注赢的悟道值：与后端 ATTRIBUTE_INSIGHT_REWARDS 同口径。 */
+const ATTRIBUTE_INSIGHT_DISPLAY: Record<number, number> = { 1: 2, 2: 3, 3: 4 };
+
 function resourceLabel(resourceId: string): string {
   return props.state.resources.find((resource) => resource.id === resourceId)?.name ?? resourceId;
 }
@@ -168,17 +179,21 @@ function continueDebate(): void {
   stage.value = 'configure';
 }
 
-// 结果到达才切进 result 阶段：挂载时父组件即便残留旧 result 也不会跳阶段。
+// 结果到达先进 confrontation（看对手属性），玩家点揭晓后再到 result。
 watch(
   () => props.result,
   (result) => {
     if (result !== null) {
-      stage.value = 'result';
-    } else if (stage.value === 'result') {
+      stage.value = 'confrontation';
+    } else if (stage.value === 'result' || stage.value === 'confrontation') {
       stage.value = 'configure';
     }
   },
 );
+
+function revealResult(): void {
+  stage.value = 'result';
+}
 
 /** doc 11.3 的规则文案原文：前端只负责展示，不改写措辞与数值。 */
 const RULES_TEXT = `论道赌局 · 玩法说明
@@ -311,6 +326,10 @@ const RULES_TEXT = `论道赌局 · 玩法说明
               悟道值
             </button>
           </div>
+          <p class="gambling-stake-hint">
+            赌注：灵石 {{ PRESET_STAKES_DISPLAY[multiplier] }} ·
+            赢：{{ rewardType === 'resource' ? `灵石 ${PRESET_REWARDS_DISPLAY[multiplier]}` : `悟道值 +${PRESET_INSIGHT_DISPLAY[multiplier]}` }}
+          </p>
         </div>
 
         <!-- 自由输入：资源类型 + 数量（展示单位） -->
@@ -368,6 +387,10 @@ const RULES_TEXT = `论道赌局 · 玩法说明
               {{ option.label }}
             </button>
           </div>
+          <p class="gambling-stake-hint">
+            赌注：{{ ATTRIBUTE_OPTIONS.find(o => o.value === betAttribute)?.label }} -{{ ATTRIBUTE_STAKES_DISPLAY[multiplier] }} 点 ·
+            赢：悟道值 +{{ ATTRIBUTE_INSIGHT_DISPLAY[multiplier] }}
+          </p>
         </div>
 
         <div class="party-select">
@@ -417,6 +440,47 @@ const RULES_TEXT = `论道赌局 · 玩法说明
       </template>
     </template>
 
+    <!-- ---------- 对峙：展示双方属性 + 侦查提示 ---------- -->
+    <template v-else-if="stage === 'confrontation'">
+      <template v-if="result">
+        <p class="eyebrow">论道对峙</p>
+        <div class="confrontation-panel">
+          <div class="confrontation-side">
+            <strong>{{ result.discipleName }}</strong>
+            <ul class="confrontation-attrs">
+              <li v-for="option in ATTRIBUTE_OPTIONS" :key="option.value">
+                {{ option.label }} {{ selectedDisciple?.[option.value] ?? '—' }}
+              </li>
+            </ul>
+          </div>
+          <span class="confrontation-vs">VS</span>
+          <div class="confrontation-side">
+            <strong>神秘对手</strong>
+            <ul class="confrontation-attrs">
+              <li v-for="option in ATTRIBUTE_OPTIONS" :key="option.value">
+                {{ option.label }} {{ result.opponent[option.value] ?? '?' }}
+              </li>
+            </ul>
+          </div>
+        </div>
+
+        <div v-if="result.revealHints.length > 0" class="gambling-reveals">
+          <p class="eyebrow">幸运侦查</p>
+          <ul>
+            <li v-for="(hint, index) in result.revealHints" :key="index">{{ hint }}</li>
+          </ul>
+        </div>
+
+        <button
+          class="action-button primary-action realm-button"
+          type="button"
+          @click="revealResult"
+        >
+          <span>揭晓结果</span>
+        </button>
+      </template>
+    </template>
+
     <!-- ---------- 结果展示 ---------- -->
     <template v-else>
       <template v-if="result">
@@ -443,17 +507,6 @@ const RULES_TEXT = `论道赌局 · 玩法说明
             <dd>{{ result.rewardDescription }}</dd>
           </div>
         </dl>
-
-        <div v-if="result.revealHints.length > 0" class="gambling-reveals">
-          <p class="eyebrow">侦查</p>
-          <ul>
-            <li v-for="(hint, index) in result.revealHints" :key="index">{{ hint }}</li>
-          </ul>
-        </div>
-
-        <p v-if="result.winProbability === null" class="disciple-detail-hint">
-          本次判定未使用模型（本地降级）。
-        </p>
 
         <div class="gambling-result-actions">
           <button class="action-button" type="button" @click="emit('close')">返回</button>
@@ -676,5 +729,59 @@ const RULES_TEXT = `论道赌局 · 玩法说明
   font-size: 13px;
   line-height: 1.7;
   white-space: pre-wrap;
+}
+
+.gambling-stake-hint {
+  margin-top: 8px;
+  color: #93a99e;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.confrontation-panel {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.confrontation-side {
+  flex: 1 1 0;
+  padding: 10px;
+  border: 1px solid rgba(202, 169, 106, 0.2);
+  border-radius: 6px;
+  text-align: center;
+}
+
+.confrontation-side strong {
+  display: block;
+  margin-bottom: 8px;
+  color: #dce6e0;
+  font-family: 'STKaiti', 'KaiTi', serif;
+  font-size: 14px;
+  letter-spacing: 0.05em;
+}
+
+.confrontation-attrs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  justify-content: center;
+  margin: 0;
+  padding: 0;
+  color: #93a99e;
+  font-size: 12px;
+  list-style: none;
+}
+
+.confrontation-vs {
+  display: flex;
+  align-items: center;
+  padding-top: 30px;
+  color: rgba(202, 169, 106, 0.6);
+  font-family: 'STKaiti', 'KaiTi', serif;
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
 }
 </style>

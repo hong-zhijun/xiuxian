@@ -36,6 +36,7 @@ import {
   freeBetReward,
   freeBetStake,
   gamblingUnlockBlockedReason,
+  generateOpponentAttrs,
   generateRevealHints,
   isBettableResource,
   type BetMode,
@@ -4903,12 +4904,9 @@ export async function daoDebate(
     };
   }
 
-  // 侦查文案按**下注前**的属性生成（纯展示，不影响胜负，也不调用 jev）。
-  const revealHints = generateRevealHints(
-    debateAttributesOf(disciple),
-    multiplier,
-    Number(disciple.luck),
-  );
+  const attrs = debateAttributesOf(disciple);
+  const revealHints = generateRevealHints(attrs, multiplier, Number(disciple.luck));
+  const opponent = generateOpponentAttrs(attrs, multiplier);
 
   // 胜率判定（jev 或降级）→ 掷骰。Math.random 只在服务端用一次。
   const judgement = await judgeDebateOutcome({ env, disciple, multiplier });
@@ -5023,6 +5021,7 @@ export async function daoDebate(
       stakeDescription: plan.stakeDescription,
       rewardDescription,
       revealHints,
+      opponent,
       winProbability: judgement.raw,
       message,
     },
