@@ -592,6 +592,33 @@ export async function fetchLeaderboard(): Promise<LeaderboardEntryView[]> {
   return data.entries;
 }
 
+/** 弟子榜单条目（与后端 view.ts 的 DiscipleLeaderboardEntryView 一一对应）。 */
+export interface DiscipleLeaderboardEntryView {
+  rank: number;
+  discipleId: string;
+  discipleName: string;
+  sectId: string;
+  sectName: string;
+  realmName: string;
+  stageName: string;
+  realmOrder: number;
+  stage: number;
+  combatPower: number;
+  attributeScore: number;
+  talent: string;
+  talentName: string;
+  isMe: boolean;
+}
+
+export interface DiscipleLeaderboardView {
+  byCombatPower: DiscipleLeaderboardEntryView[];
+  byAttributeScore: DiscipleLeaderboardEntryView[];
+}
+
+export async function fetchDiscipleLeaderboard(): Promise<DiscipleLeaderboardView> {
+  return apiRequest<DiscipleLeaderboardView>('/api/v1/game/disciple-leaderboard');
+}
+
 export async function fetchPublicSect(sectId: string): Promise<PublicSectView> {
   const data = await apiRequest<{ sect: PublicSectView }>(`/api/v1/game/sect/${sectId}`);
   return data.sect;

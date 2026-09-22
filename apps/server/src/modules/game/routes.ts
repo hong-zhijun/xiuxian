@@ -45,6 +45,7 @@ import {
   createSect,
   daoDebate,
   listDebateHistory,
+  listDiscipleLeaderboard,
   expelDisciple,
   exploreSectRealm,
   getActiveExploration,
@@ -199,6 +200,13 @@ export function createGameRoutes(): Hono<AppEnv> {
     const userId = requireUserId(c);
     const entries = await listLeaderboard(getDb(c.env), userId);
     return respondOk(c, { entries });
+  });
+
+  // 弟子榜单（只读：不结算、不写库）：战力 top 10 + 综合分 top 10。
+  routes.get('/game/disciple-leaderboard', async (c) => {
+    const userId = requireUserId(c);
+    const data = await listDiscipleLeaderboard(getDb(c.env), userId);
+    return respondOk(c, data);
   });
 
   // V3：公开档案（只读：不结算、不写库；只返回安全字段，宗门不存在 404）。

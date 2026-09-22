@@ -45,6 +45,7 @@ import ExplorePanel from './ExplorePanel.vue';
 import ExplorePartyDialog from './ExplorePartyDialog.vue';
 import GamblingHouseDialog from './GamblingHouseDialog.vue';
 import RealmExploreDialog from './RealmExploreDialog.vue';
+import DiscipleLeaderboardPanel from './DiscipleLeaderboardPanel.vue';
 import LeaderboardPanel from './LeaderboardPanel.vue';
 import RecruitDialog from './RecruitDialog.vue';
 import ShopDialog from './ShopDialog.vue';
@@ -125,6 +126,7 @@ const openPanel = ref<
   | 'events'
   | 'explore'
   | 'leaderboard'
+  | 'disciple-leaderboard'
   | 'defense-lineup'
   | 'challenge-history'
   | 'alchemy'
@@ -1126,6 +1128,12 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
             </svg>
             <span>江湖榜</span>
           </button>
+          <button class="action-chip" type="button" @click="openPanel = 'disciple-leaderboard'">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 2a3 3 0 1 0 0 6 3 3 0 0 0 0-6Zm-5 8a3 3 0 1 0 0 6 3 3 0 0 0 0-6Zm10 0a3 3 0 1 0 0 6 3 3 0 0 0 0-6Zm-5 6v6m-5-4v4m10-4v4" />
+            </svg>
+            <span>天骄榜</span>
+          </button>
           <button class="action-chip" type="button" @click="openPanel = 'challenge-history'">
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="M4 4h6v6H4zm10 0h6v6h-6zM4 14h6v6H4zm10 2a4 4 0 1 0 0-0" />
@@ -1334,6 +1342,10 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
 
     <ModalShell v-if="openPanel === 'leaderboard'" label="江湖榜" @close="openPanel = null">
       <LeaderboardPanel :state="state" :busy="busy" @challenge="onChallengeRequest" />
+    </ModalShell>
+
+    <ModalShell v-if="openPanel === 'disciple-leaderboard'" label="天骄榜" @close="openPanel = null">
+      <DiscipleLeaderboardPanel :busy="busy" />
     </ModalShell>
 
     <ModalShell

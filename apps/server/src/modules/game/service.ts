@@ -109,6 +109,7 @@ import {
   SECT_NAME_MAX_CHARS,
   SECT_NAME_MIN_CHARS,
   SECT_RENAME_COST,
+  attributeScore,
   generateAttributes,
   generateCandidates,
   generateTalent,
@@ -274,6 +275,8 @@ import {
   type ShopBuyResultView,
   type ShopSellResultView,
   type ShopSellPillResultView,
+  type DiscipleLeaderboardEntryView,
+  type DiscipleLeaderboardView,
 } from './view';
 
 /**
@@ -2783,6 +2786,91 @@ export async function listLeaderboard(
     });
   }
   return entries;
+}
+
+const DISCIPLE_LEADERBOARD_SIZE = 10;
+
+/**
+ * 弟子榜单：战力 top 10 + 综合分 top 10，只读、不结算、不写库。
+ *
+ * 遍历所有宗门的弟子，服务端现算战力与综合评分（与 sync 视图同一口径），
+ * 分别按两个维度取 top 10 返回。规模小（几十个弟子）不需要 SQL 层面优化。
+ */
+export async function listDiscipleLeaderboard(
+  db: D1Database,
+  userId: string,
+): Promise<DiscipleLeaderboardView> {
+  const sectRepository = new SectRepository(db);
+  const discipleRepository = new DiscipleRepository(db);
+  const [sects, mySect] = await Promise.all([
+    sectRepository.findAll(),
+    sectRepository.findByUserId(userId),
+  ]);
+  const mySectId = mySect?.id ?? null;
+  const sectNames = new Map(sects.map((s) => [s.id, s.name]));
+
+  interface RankedDisciple {
+    row: DiscipleRow;
+    sectId: string;
+    combatPower: number;
+    score: number;
+  }
+  const all: RankedDisciple[] = [];
+  for (const sect of sects) {
+    const disciples = await discipleRepository.findBySectId(sect.id);
+    for (const d of disciples) {
+      all.push({
+        row: d,
+        sectId: sect.id,
+        combatPower: discipleCombatPower(
+          d.realm_id, Number(d.stage),
+          Number(d.attack), Number(d.defense), Number(d.speed),
+          d.talent,
+        ),
+        score: attributeScore({
+          aptitude: Number(d.aptitude),
+          attack: Number(d.attack),
+          defense: Number(d.defense),
+          speed: Number(d.speed),
+          luck: Number(d.luck),
+          physique: Number(d.physique),
+        }),
+      });
+    }
+  }
+
+  function toEntry(item: RankedDisciple, rank: number): DiscipleLeaderboardEntryView {
+    const realm = findRealm(item.row.realm_id);
+    const stage = findStage(item.row.realm_id, Number(item.row.stage));
+    return {
+      rank,
+      discipleId: item.row.id,
+      discipleName: item.row.name,
+      sectId: item.sectId,
+      sectName: sectNames.get(item.sectId) ?? '',
+      realmName: realm.name,
+      stageName: stage.name,
+      realmOrder: realmIndex(realm.id),
+      stage: Number(item.row.stage),
+      combatPower: item.combatPower,
+      attributeScore: item.score,
+      talent: item.row.talent,
+      talentName: findTalent(item.row.talent)?.name ?? '无',
+      isMe: item.sectId === mySectId,
+    };
+  }
+
+  const byCombatPower = [...all]
+    .sort((a, b) => b.combatPower - a.combatPower || b.score - a.score)
+    .slice(0, DISCIPLE_LEADERBOARD_SIZE)
+    .map((item, i) => toEntry(item, i + 1));
+
+  const byAttributeScore = [...all]
+    .sort((a, b) => b.score - a.score || b.combatPower - a.combatPower)
+    .slice(0, DISCIPLE_LEADERBOARD_SIZE)
+    .map((item, i) => toEntry(item, i + 1));
+
+  return { byCombatPower, byAttributeScore };
 }
 
 /**

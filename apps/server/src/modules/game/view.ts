@@ -764,6 +764,31 @@ export interface LeaderboardEntryView {
   isMe: boolean;
 }
 
+/** 弟子榜单条目（跨宗门，公开字段只读）。 */
+export interface DiscipleLeaderboardEntryView {
+  rank: number;
+  discipleId: string;
+  discipleName: string;
+  sectId: string;
+  sectName: string;
+  realmName: string;
+  stageName: string;
+  realmOrder: number;
+  stage: number;
+  combatPower: number;
+  attributeScore: number;
+  talent: string;
+  talentName: string;
+  /** 是否属于当前用户的宗门。 */
+  isMe: boolean;
+}
+
+/** 弟子榜单（GET /game/disciple-leaderboard）：战力 top 10 + 综合分 top 10。 */
+export interface DiscipleLeaderboardView {
+  byCombatPower: DiscipleLeaderboardEntryView[];
+  byAttributeScore: DiscipleLeaderboardEntryView[];
+}
+
 /** 不可挑战的稳定原因码（前端据此渲染文案，不做规则判断）。 */
 export type ChallengeBlockedReason =
   | 'self'
