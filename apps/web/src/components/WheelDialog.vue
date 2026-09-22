@@ -3,6 +3,7 @@ import { computed, onUnmounted, ref, watch } from 'vue';
 
 import type { SectStateView, WheelSlotView, WheelSpinResult, WheelView } from '../api/game';
 import { formatAmount } from '../utils/format';
+import ModalShell from './ModalShell.vue';
 
 /**
  * 天机轮（赌坊第二个玩法）：纯 CSS + SVG 画盘，不用 canvas、不引第三方库。
@@ -23,11 +24,11 @@ const props = defineProps<{
 const emit = defineEmits<{
   spin: [tier: number];
   reset: [];
-  /** 回玩法列表（仍留在赌坊弹窗里）。 */
-  back: [];
   /** 转盘停稳、结果露出：与论道的 reveal 同一套处理，由 SectScreen 补一条提示。 */
   reveal: [];
 }>();
+
+const showOdds = ref(false);
 
 /* ---------- 转盘几何 ---------- */
 
@@ -377,9 +378,35 @@ const wheelAriaLabel = computed(() => {
         >
           重置转盘 · {{ resetCostText }} 灵石
         </button>
-        <button class="action-button wheel-foot-button" type="button" @click="emit('back')">返回</button>
+        <button class="action-button wheel-foot-button" type="button" @click="showOdds = true">概率说明</button>
       </div>
     </template>
+
+    <ModalShell v-if="showOdds" narrow label="天机轮概率说明" @close="showOdds = false">
+      <section class="wheel-odds-card" aria-labelledby="wheel-odds-title">
+        <h2 id="wheel-odds-title" class="disciple-detail-title">概率说明</h2>
+        <pre class="wheel-odds-text">天机轮共 8 格，各格类型随机生成。
+转动时并非等概率落格，各类型命中权重如下：
+
+  大额灵石　　权重 1（最低）
+  小额灵石　　权重 2
+  草药　　　　权重 2
+  矿石　　　　权重 2
+  丹药　　　　权重 2
+  谢谢惠顾　　权重 3（最高）
+
+实际概率取决于当前转盘的格子组成。
+例如 1 大额 + 3 小额 + 2 谢谢 + 1 草药 + 1 丹药：
+大额 ≈ 6%，小额各 ≈ 12%，草药 ≈ 12%，
+丹药 ≈ 12%，谢谢惠顾各 ≈ 18%。
+
+花费 100 灵石可重置转盘，格子类型与倍率全部刷新。
+每日论道与天机轮共享 50 次机会。</pre>
+        <button class="action-button primary-action realm-button" type="button" @click="showOdds = false">
+          <span>知道了</span>
+        </button>
+      </section>
+    </ModalShell>
   </section>
 </template>
 
@@ -596,5 +623,20 @@ const wheelAriaLabel = computed(() => {
   flex: 1 1 0;
   padding: 8px 12px;
   font-size: 13px;
+}
+
+.wheel-odds-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.wheel-odds-text {
+  margin: 0;
+  color: #c8d6ce;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.7;
+  white-space: pre-wrap;
 }
 </style>

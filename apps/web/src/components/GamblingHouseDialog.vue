@@ -271,11 +271,6 @@ function enterWheel(): void {
   stage.value = 'wheel';
 }
 
-/** 天机轮里点「返回」：回到玩法列表（论道那套阶段与表单原样保留）。 */
-function leaveWheel(): void {
-  reportGame('debate');
-  stage.value = 'mode-select';
-}
 
 /** 天机轮的点按一律转发给上层：接口调用、state 覆盖与提示都在 App.vue / SectScreen。 */
 function onWheelSpin(tier: number): void {
@@ -603,7 +598,6 @@ const RULES_TEXT = `论道赌局 · 玩法说明
         @spin="onWheelSpin"
         @reset="onWheelReset"
         @reveal="onWheelReveal"
-        @back="leaveWheel"
       />
     </template>
 
