@@ -1035,44 +1035,65 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
     </header>
 
 
-    <section class="overview-panel" aria-labelledby="resource-title">
-      <header class="section-heading overview-heading">
-        <h2 id="resource-title" class="home-section-title">山门百业，生生不息</h2>
-        <div class="settlement-badge">
-          <span class="pulse-dot" aria-hidden="true" />
-          <span>{{ settlementText }} · {{ formatTime(state.sect.lastSettledAt) }}</span>
-        </div>
-      </header>
+    <div class="overview-row">
+      <section class="overview-panel" aria-labelledby="resource-title">
+        <header class="section-heading overview-heading">
+          <h2 id="resource-title" class="home-section-title">山门百业，生生不息</h2>
+          <div class="settlement-badge">
+            <span class="pulse-dot" aria-hidden="true" />
+            <span>{{ settlementText }} · {{ formatTime(state.sect.lastSettledAt) }}</span>
+          </div>
+        </header>
 
-      <ul class="resource-grid">
-        <li
-          v-for="resource in state.resources"
-          :key="resource.id"
-          class="resource-card"
-          :class="[
-            resourceClass(resource.id),
-            {
-              'is-near-capacity': resourcePercent(resource.id, resource.capacity) >= 90,
-              'is-at-capacity': (liveResources[resource.id] ?? 0) >= Number(resource.capacity),
-            },
-          ]"
-        >
-          <div class="resource-glyph" aria-hidden="true">{{ resourceGlyph(resource.id) }}</div>
-          <div class="resource-main">
-            <span class="resource-name">{{ resource.name }}</span>
-            <strong>{{ formatAmount(liveResources[resource.id] ?? 0) }}</strong>
-            <span class="resource-capacity">库容 {{ formatAmount(resource.capacity) }}</span>
-          </div>
-          <div class="resource-rate">
-            <span>产速</span>
-            <strong>+{{ formatRate(resource.ratePerHour) }}<small>/时</small></strong>
-          </div>
-          <div class="resource-track" aria-hidden="true">
-            <span :style="{ width: `${resourcePercent(resource.id, resource.capacity)}%` }" />
-          </div>
-        </li>
-      </ul>
-    </section>
+        <ul class="resource-grid">
+          <li
+            v-for="resource in state.resources"
+            :key="resource.id"
+            class="resource-card"
+            :class="[
+              resourceClass(resource.id),
+              {
+                'is-near-capacity': resourcePercent(resource.id, resource.capacity) >= 90,
+                'is-at-capacity': (liveResources[resource.id] ?? 0) >= Number(resource.capacity),
+              },
+            ]"
+          >
+            <div class="resource-glyph" aria-hidden="true">{{ resourceGlyph(resource.id) }}</div>
+            <div class="resource-main">
+              <span class="resource-name">{{ resource.name }}</span>
+              <strong>{{ formatAmount(liveResources[resource.id] ?? 0) }}</strong>
+              <span class="resource-capacity">库容 {{ formatAmount(resource.capacity) }}</span>
+            </div>
+            <div class="resource-rate">
+              <span>产速</span>
+              <strong>+{{ formatRate(resource.ratePerHour) }}<small>/时</small></strong>
+            </div>
+            <div class="resource-track" aria-hidden="true">
+              <span :style="{ width: `${resourcePercent(resource.id, resource.capacity)}%` }" />
+            </div>
+          </li>
+        </ul>
+      </section>
+
+      <section class="log-shortcuts" aria-labelledby="log-title">
+        <h2 id="log-title" class="log-shortcuts-title">日志</h2>
+        <div class="log-shortcuts-buttons">
+          <button class="action-chip" type="button" @click="openPanel = 'events'">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M7 4h9a2 2 0 0 1 2 2v12a2 2 0 0 0 2 2H7a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Zm2 4h5m-5 4h5" />
+            </svg>
+            <span>天机录</span>
+          </button>
+          <button class="action-chip" type="button" @click="openPanel = 'challenge-history'">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M4 4h6v6H4zm10 0h6v6h-6zM4 14h6v6H4zm10 2a4 4 0 1 0 0-0" />
+            </svg>
+            <span>演武录</span>
+            <span v-if="state.challenge.remaining > 0" class="chip-badge">{{ state.challenge.remaining }}</span>
+          </button>
+        </div>
+      </section>
+    </div>
 
     <nav class="action-groups" aria-label="宗门操作">
       <section class="action-group action-group-internal" aria-labelledby="internal-action-title">
@@ -1097,12 +1118,6 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
               <path d="M9 3h6M10 3v4.2a6.5 6.5 0 1 0 4 0V3m-4.8 11h9.6" />
             </svg>
             <span>炼丹</span>
-          </button>
-          <button class="action-chip" type="button" @click="openPanel = 'events'">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M7 4h9a2 2 0 0 1 2 2v12a2 2 0 0 0 2 2H7a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Zm2 4h5m-5 4h5" />
-            </svg>
-            <span>天机录</span>
           </button>
           <button class="action-chip" type="button" @click="openPanel = 'defense-lineup'">
             <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -1133,13 +1148,6 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
               <path d="M12 2a3 3 0 1 0 0 6 3 3 0 0 0 0-6Zm-5 8a3 3 0 1 0 0 6 3 3 0 0 0 0-6Zm10 0a3 3 0 1 0 0 6 3 3 0 0 0 0-6Zm-5 6v6m-5-4v4m10-4v4" />
             </svg>
             <span>天骄榜</span>
-          </button>
-          <button class="action-chip" type="button" @click="openPanel = 'challenge-history'">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M4 4h6v6H4zm10 0h6v6h-6zM4 14h6v6H4zm10 2a4 4 0 1 0 0-0" />
-            </svg>
-            <span>演武录</span>
-            <span v-if="state.challenge.remaining > 0" class="chip-badge">{{ state.challenge.remaining }}</span>
           </button>
           <button class="action-chip" type="button" @click="openPanel = 'gambling'">
             <svg viewBox="0 0 24 24" aria-hidden="true">

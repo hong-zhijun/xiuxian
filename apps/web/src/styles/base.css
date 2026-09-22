@@ -1239,9 +1239,44 @@ ul {
   box-shadow: 0 15px 45px rgba(0, 0, 0, 0.15);
 }
 
-.overview-panel {
+.overview-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
   margin-top: 18px;
+}
+
+.overview-panel {
   padding: 15px 18px 16px;
+}
+
+.log-shortcuts {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 120px;
+  padding: 15px 18px 16px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.02), transparent 33%),
+    rgba(13, 32, 27, 0.9);
+  box-shadow: 0 15px 45px rgba(0, 0, 0, 0.15);
+}
+
+.log-shortcuts-title {
+  margin: 0;
+  color: var(--gold);
+  font-family: 'STKaiti', 'KaiTi', serif;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+}
+
+.log-shortcuts-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
 .section-heading {
@@ -4325,6 +4360,7 @@ ul {
 }
 
 .action-group-external {
+  justify-self: start;
   padding-left: 14px;
   border-left: 1px solid var(--line);
 }
@@ -4342,11 +4378,10 @@ ul {
 .action-group-buttons {
   display: grid;
   min-width: 0;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 7px;
 }
 
-/* 两组操作栏统一 5 列等宽（宗内管理 4 个按钮 + 对外事务 5 个按钮）。 */
 .action-group-external .action-group-buttons {
   grid-template-columns: repeat(5, minmax(0, 1fr));
 }
@@ -5822,6 +5857,20 @@ h2.public-sect-name {
 
   .sect-metrics dd {
     font-size: 18px;
+  }
+
+  .overview-row {
+    grid-template-columns: 1fr;
+  }
+
+  .log-shortcuts {
+    flex-direction: row;
+    align-items: center;
+    min-width: 0;
+  }
+
+  .log-shortcuts-buttons {
+    flex-direction: row;
   }
 
   .overview-panel,
