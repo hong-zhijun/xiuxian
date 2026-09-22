@@ -123,6 +123,7 @@ onUnmounted(() => {
 
 <style scoped>
 .chat-panel {
+  padding: 18px;
   margin-bottom: 12px;
 }
 
@@ -251,5 +252,11 @@ onUnmounted(() => {
   color: var(--red, #c75050);
   font-size: 12px;
   margin-top: 4px;
+}
+
+@media (max-width: 900px) {
+  .chat-panel {
+    padding: 14px;
+  }
 }
 </style>
