@@ -1062,7 +1062,7 @@ async function aimAtSlot(
   type: WheelSlot['type'],
 ): Promise<{ seed: number; slotIndex: number; slot: WheelSlot; slots: WheelSlot[] }> {
   for (let seed = 0; seed < 200; seed += 1) {
-    const slots = generateWheelSlots(wheelLayoutSeed(sect.sectId, seed));
+    const slots = generateWheelSlots(wheelLayoutSeed(sect.sectId, seed, TODAY));
     const slotIndex = slots.findIndex((slot) => slot.type === type);
     if (slotIndex >= 0) {
       await setWheelSeed(sect.sectId, seed);
@@ -1093,10 +1093,10 @@ describe('天机轮：面板与转动（计划 4.1 / 4.2）', () => {
     expect(panelSlots).toHaveLength(WHEEL_SLOT_COUNT);
     // 面板格局必须与转动用的是同一个 (sect_id, wheel_seed) 派生结果。
     expect(panelSlots.map((slot) => slot.type)).toEqual(
-      generateWheelSlots(wheelLayoutSeed(sect.sectId, 0)).map((slot) => slot.type),
+      generateWheelSlots(wheelLayoutSeed(sect.sectId, 0, TODAY)).map((slot) => slot.type),
     );
 
-    const realSlots = generateWheelSlots(wheelLayoutSeed(sect.sectId, 0));
+    const realSlots = generateWheelSlots(wheelLayoutSeed(sect.sectId, 0, TODAY));
     const slotIndex = panelSlots.findIndex((slot) => slot.type === 'spirit_stone');
     expect(slotIndex).toBeGreaterThanOrEqual(0);
     const slot = panelSlots[slotIndex]!;
@@ -1341,8 +1341,8 @@ describe('天机轮：重置（计划 4.3）', () => {
     // 挑一个「重置后格局一定不同」的起始 seed：格局是 (sect_id, wheel_seed) 的纯函数，可以预算。
     let startSeed = 0;
     for (let seed = 0; seed < 200; seed += 1) {
-      const current = JSON.stringify(generateWheelSlots(wheelLayoutSeed(sect.sectId, seed)));
-      const next = JSON.stringify(generateWheelSlots(wheelLayoutSeed(sect.sectId, seed + 1)));
+      const current = JSON.stringify(generateWheelSlots(wheelLayoutSeed(sect.sectId, seed, TODAY)));
+      const next = JSON.stringify(generateWheelSlots(wheelLayoutSeed(sect.sectId, seed + 1, TODAY)));
       if (current !== next) {
         startSeed = seed;
         break;
@@ -1368,7 +1368,7 @@ describe('天机轮：重置（计划 4.3）', () => {
     const slotsAfter = (await sect.state()).gambling.wheel.slots as Record<string, any>[];
     expect(slotsAfter).not.toEqual(slotsBefore);
     expect(slotsAfter.map((slot) => slot.type)).toEqual(
-      generateWheelSlots(wheelLayoutSeed(sect.sectId, startSeed + 1)).map((slot) => slot.type),
+      generateWheelSlots(wheelLayoutSeed(sect.sectId, startSeed + 1, TODAY)).map((slot) => slot.type),
     );
   });
 

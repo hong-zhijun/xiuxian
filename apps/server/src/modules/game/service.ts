@@ -5269,7 +5269,7 @@ const WHEEL_LOG_NAME = '天机轮';
  * 就是这里转动用的那张转盘（服务端不存格位，也不需要存）。
  */
 function draftWheelSlots(draft: SectDraft): WheelSlot[] {
-  return generateWheelSlots(wheelLayoutSeed(draft.sect.id, Number(draft.sect.wheel_seed) || 0));
+  return generateWheelSlots(wheelLayoutSeed(draft.sect.id, Number(draft.sect.wheel_seed) || 0, draft.debateDay.dateKey));
 }
 
 /** 格面与奖励文案要用的名字表：资源名取自配置、丹药名取自 alchemy.ts（各只有一份）。 */

@@ -354,22 +354,25 @@ describe('天机轮常量与费用（计划 2.3 / 2.4）', () => {
   });
 });
 
-describe('wheelLayoutSeed：宗门 id 与 wheel_seed 的混合（计划 3.1）', () => {
-  it('确定性：同一 (sect_id, wheel_seed) 永远同种子', () => {
-    expect(wheelLayoutSeed('sect-a', 0)).toBe(wheelLayoutSeed('sect-a', 0));
-    expect(wheelLayoutSeed('sect-a', 7)).toBe(wheelLayoutSeed('sect-a', 7));
+describe('wheelLayoutSeed：宗门 id × wheel_seed × 日期键的混合', () => {
+  const DAY = '2026-09-22';
+
+  it('确定性：同一 (sect_id, wheel_seed, dateKey) 永远同种子', () => {
+    expect(wheelLayoutSeed('sect-a', 0, DAY)).toBe(wheelLayoutSeed('sect-a', 0, DAY));
+    expect(wheelLayoutSeed('sect-a', 7, DAY)).toBe(wheelLayoutSeed('sect-a', 7, DAY));
   });
 
-  it('不同 sect_id / 不同 wheel_seed 得到不同种子', () => {
-    expect(wheelLayoutSeed('sect-a', 0)).not.toBe(wheelLayoutSeed('sect-b', 0));
-    expect(wheelLayoutSeed('sect-a', 0)).not.toBe(wheelLayoutSeed('sect-a', 1));
-    expect(wheelLayoutSeed('', 0)).not.toBe(wheelLayoutSeed('sect-a', 0));
+  it('不同 sect_id / 不同 wheel_seed / 不同日期 得到不同种子', () => {
+    expect(wheelLayoutSeed('sect-a', 0, DAY)).not.toBe(wheelLayoutSeed('sect-b', 0, DAY));
+    expect(wheelLayoutSeed('sect-a', 0, DAY)).not.toBe(wheelLayoutSeed('sect-a', 1, DAY));
+    expect(wheelLayoutSeed('sect-a', 0, DAY)).not.toBe(wheelLayoutSeed('sect-a', 0, '2026-09-23'));
+    expect(wheelLayoutSeed('', 0, DAY)).not.toBe(wheelLayoutSeed('sect-a', 0, DAY));
   });
 
   it('种子是 32 位无符号整数', () => {
     for (const sectId of ['sect-a', 'sect-b', '']) {
       for (const seed of [0, 1, 2, 99]) {
-        const layoutSeed = wheelLayoutSeed(sectId, seed);
+        const layoutSeed = wheelLayoutSeed(sectId, seed, DAY);
         expect(Number.isInteger(layoutSeed)).toBe(true);
         expect(layoutSeed).toBeGreaterThanOrEqual(0);
         expect(layoutSeed).toBeLessThanOrEqual(0xff_ff_ff_ff);

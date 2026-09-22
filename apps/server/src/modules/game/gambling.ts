@@ -466,16 +466,18 @@ function wheelShuffle<T>(random: () => number, items: readonly T[]): T[] {
 }
 
 /**
- * 转盘格局种子 = 宗门 id 与 wheel_seed 的混合（纯函数，计划 3.1）。
+ * 转盘格局种子 = 宗门 id × wheel_seed × 日期键 的混合（纯函数）。
  *
- * sect_id 走一遍 FNV-1a 32 位哈希再与 wheel_seed 混合：不同宗门、同一宗门的不同 seed
- * 都会得到不同格局；同一 (sect_id, wheel_seed) 永远一致 —— 所以每次 sync 下发的转盘都一样，
- * 只有重置（wheel_seed + 1）才变。
+ * 每天日期键变化 → 格局自动刷新；同一天内手动重置（wheel_seed +1）也会刷新。
+ * 同一 (sect_id, wheel_seed, dateKey) 永远一致。
  */
-export function wheelLayoutSeed(sectId: string, wheelSeed: number): number {
+export function wheelLayoutSeed(sectId: string, wheelSeed: number, dateKey: string): number {
   let hash = 2166136261;
   for (let i = 0; i < sectId.length; i += 1) {
     hash = Math.imul(hash ^ sectId.charCodeAt(i), 16777619);
+  }
+  for (let i = 0; i < dateKey.length; i += 1) {
+    hash = Math.imul(hash ^ dateKey.charCodeAt(i), 16777619);
   }
   const seed = (Number.isFinite(wheelSeed) ? Math.floor(wheelSeed) : 0) >>> 0;
   return (hash ^ Math.imul(seed + 1, 2654435761)) >>> 0;

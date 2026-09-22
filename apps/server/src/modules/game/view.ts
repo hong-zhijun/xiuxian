@@ -1159,7 +1159,7 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
   // 0019 赌坊面板：解锁只看宗门等级（不依赖建筑），当日次数来自归一后的 debateDay。
   // 0020 天机轮：解锁后每次都带当前格局；格局由 sect_id + wheel_seed 派生，只有重置才会变。
   const gamblingLockedReason = gamblingUnlockBlockedReason(Number(sect.level));
-  const wheelView = gamblingLockedReason === null ? buildWheelView(sect, config) : null;
+  const wheelView = gamblingLockedReason === null ? buildWheelView(sect, config, debateDay.dateKey) : null;
   const stats = input.debateStats;
   const gamblingView = {
     unlocked: gamblingLockedReason === null,
@@ -1251,7 +1251,7 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
  * 格面文案在这里拼好，资源名 / 丹药名都取自配置与 alchemy.ts（不复制第二份中文名词表）。
  * 档位费用与重置费用同样由服务端下发 —— 前端只渲染，不自己按档位算钱（计划 2.3 / 2.4）。
  */
-function buildWheelView(sect: SectRow, config: GameConfigContent): WheelView {
+function buildWheelView(sect: SectRow, config: GameConfigContent, dateKey: string): WheelView {
   const names = {
     resource: (resourceId: string): string =>
       config.resources.find((item) => item.id === resourceId)?.name ?? resourceId,
@@ -1260,7 +1260,7 @@ function buildWheelView(sect: SectRow, config: GameConfigContent): WheelView {
   };
   return {
     seed: Number(sect.wheel_seed) || 0,
-    slots: generateWheelSlots(wheelLayoutSeed(sect.id, Number(sect.wheel_seed))).map((slot) => ({
+    slots: generateWheelSlots(wheelLayoutSeed(sect.id, Number(sect.wheel_seed), dateKey)).map((slot) => ({
       type: slot.type,
       multiplier: slot.multiplier,
       label: wheelSlotLabel(slot, names),
