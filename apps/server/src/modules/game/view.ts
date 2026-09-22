@@ -763,6 +763,8 @@ export interface SectStateInput {
   challengeDay: ChallengeDayState;
   /** 0019 赌坊：论道当日次数状态（日期键归一由调用方按 UTC+8 完成）。 */
   debateDay: DebateDayState;
+  /** 赌坊战绩汇总（可选，sync 和论道返回时传入）。 */
+  debateStats?: { total: number; wins: number; losses: number; netSpiritStone: number; totalInsight: number };
   settleResult: SettleResult;
   /** 库里的最近事件行；本次结算刚触发的事件在 buildSectStateView 里合并进来。 */
   recentEventRows: readonly EventLogRow[];
@@ -1058,12 +1060,23 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
 
   // 0019 赌坊面板：解锁只看宗门等级（不依赖建筑），当日次数来自归一后的 debateDay。
   const gamblingLockedReason = gamblingUnlockBlockedReason(Number(sect.level));
+  const stats = input.debateStats;
   const gamblingView = {
     unlocked: gamblingLockedReason === null,
     blockedReason: gamblingLockedReason,
     dailyLimit: DEBATE_DAILY_LIMIT,
     usedToday: debateDay.usedToday,
     remaining: debateDay.remaining,
+    stats: stats !== undefined
+      ? {
+          total: stats.total,
+          wins: stats.wins,
+          losses: stats.losses,
+          winRate: stats.total > 0 ? Math.round((stats.wins / stats.total) * 100) : 0,
+          netSpiritStone: stats.netSpiritStone,
+          totalInsight: stats.totalInsight,
+        }
+      : null,
   };
 
   return {

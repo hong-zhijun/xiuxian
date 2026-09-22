@@ -259,6 +259,8 @@ export interface SectSnapshot {
   challengeDay: ChallengeDayState;
   /** 0019 赌坊：论道当日次数（dateKey + 已用 + 剩余；归一在 gambling.ts 完成）。 */
   debateDay: DebateDayState;
+  /** 赌坊战绩汇总（聚合 dao_debate_log）。 */
+  debateStats: DebateStats;
   /** 读快照时库里的最近事件行；本次结算刚触发的在本层另行合并（见 view.ts）。 */
   recentEvents: EventLogRow[];
   /** 0014：本宗未领取的历练记录（在外中 + 待领取）。 */
@@ -290,6 +292,60 @@ async function loadChallengeDayState(
     ? 0
     : await new ChallengeRepository(db).countTodayByAttacker(sect.id, dateKey, dayStartMs(now));
   return challengeDayStateOf(sect, now, legacyUsedToday);
+}
+
+/** 赌坊战绩汇总（从 dao_debate_log 聚合）。 */
+export interface DebateStats {
+  total: number;
+  wins: number;
+  losses: number;
+  /** 灵石净收益（最小单位；赢的奖励 - 输的赌注，可为负）。 */
+  netSpiritStone: number;
+  /** 累计获得的悟道值（只赢才有，不扣回）。 */
+  totalInsight: number;
+}
+
+async function loadDebateStats(db: D1Database, sectId: string): Promise<DebateStats> {
+  const row = await db
+    .prepare(
+      `SELECT
+         COUNT(*) AS total,
+         SUM(CASE WHEN result = 'win' THEN 1 ELSE 0 END) AS wins,
+         SUM(CASE WHEN result = 'lose' THEN 1 ELSE 0 END) AS losses,
+         COALESCE(SUM(CASE
+           WHEN result = 'win' AND json_extract(reward_detail, '$.type') = 'resource'
+                AND json_extract(reward_detail, '$.resourceId') = 'spiritStone'
+           THEN CAST(json_extract(reward_detail, '$.amount') AS INTEGER)
+           ELSE 0
+         END), 0)
+         - COALESCE(SUM(CASE
+           WHEN result = 'lose' AND bet_mode IN ('preset_spirit_stone', 'free_resource')
+                AND COALESCE(json_extract(stake_detail, '$.resourceId'), 'spiritStone') = 'spiritStone'
+           THEN CAST(json_extract(stake_detail, '$.amount') AS INTEGER)
+           ELSE 0
+         END), 0) AS net_spirit_stone,
+         COALESCE(SUM(CASE
+           WHEN result = 'win' AND json_extract(reward_detail, '$.type') = 'insight'
+           THEN json_extract(reward_detail, '$.insight')
+           ELSE 0
+         END), 0) AS total_insight
+       FROM dao_debate_log WHERE sect_id = ?`,
+    )
+    .bind(sectId)
+    .first<{
+      total: number;
+      wins: number;
+      losses: number;
+      net_spirit_stone: number;
+      total_insight: number;
+    }>();
+  return {
+    total: Number(row?.total) || 0,
+    wins: Number(row?.wins) || 0,
+    losses: Number(row?.losses) || 0,
+    netSpiritStone: Number(row?.net_spirit_stone) || 0,
+    totalInsight: Number(row?.total_insight) || 0,
+  };
 }
 
 async function loadSnapshot(
@@ -326,6 +382,7 @@ async function loadSnapshot(
   ]);
   // 0019 赌坊：论道当日次数（0019 是新表新列，没有需要按日志窗口兼容核对的旧记录）。
   const debateDay = debateDayStateOf(sect, now);
+  const debateStats = await loadDebateStats(db, sect.id);
   return {
     sect,
     disciples,
@@ -334,6 +391,7 @@ async function loadSnapshot(
     pillInventories,
     challengeDay,
     debateDay,
+    debateStats,
     recentEvents,
     journeys,
     recentJourneys,
@@ -635,6 +693,7 @@ class SectDraft {
       pillInventories: this.pillInventories,
       challengeDay: this.challengeDay,
       debateDay: this.debateDay,
+      debateStats: this.base.debateStats,
       settleResult: this.settleResult,
       now: this.now,
       recruitUsedToday: this.recruitUsedToday,
@@ -1339,6 +1398,7 @@ export async function createSect(
       ),
       // 0019：新宗门的论道计数从零开始（与挑战同口径：空日期键 + 0 次）。
       debateDay: debateDayStateOf({ debate_date_key: '', debate_count: 0 }, now),
+      debateStats: { total: 0, wins: 0, losses: 0, netSpiritStone: 0, totalInsight: 0 },
       recentEvents: [],
       // 0014：新宗门还没有任何历练记录。
       journeys: [],

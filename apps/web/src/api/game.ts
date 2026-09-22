@@ -176,6 +176,14 @@ export interface SectStateView {
     dailyLimit: number;
     usedToday: number;
     remaining: number;
+    stats: {
+      total: number;
+      wins: number;
+      losses: number;
+      winRate: number;
+      netSpiritStone: number;
+      totalInsight: number;
+    } | null;
   };
   /** 0014 宗门历练名额与最近 10 条历练摘要（仅本宗可见，结果由服务端决定）。 */
   journey: JourneyView;

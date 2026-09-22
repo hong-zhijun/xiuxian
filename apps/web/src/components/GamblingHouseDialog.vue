@@ -46,6 +46,7 @@ type Stage = 'mode-select' | 'configure' | 'confrontation' | 'result';
 /** 挂载时停在玩法列表；只有「新结果到达」才切进 confrontation（不因父组件残留旧 result 跳阶段）。 */
 const stage = ref<Stage>('mode-select');
 const showRules = ref(false);
+const showRecord = ref(false);
 
 /* ---------- 疗伤 / 在外判定：与挑战选人同一口径 ---------- */
 
@@ -125,6 +126,11 @@ const ATTRIBUTE_INSIGHT_DISPLAY: Record<number, number> = { 1: 2, 2: 4, 3: 6 };
 
 function resourceLabel(resourceId: string): string {
   return props.state.resources.find((resource) => resource.id === resourceId)?.name ?? resourceId;
+}
+
+function formatSpiritStone(minUnits: number): string {
+  const display = minUnits / UNITS_PER_DISPLAY;
+  return display >= 0 ? `+${String(display)}` : String(display);
 }
 
 const selectedDisciple = computed<DiscipleView | null>(
@@ -224,10 +230,7 @@ const RULES_TEXT = `论道赌局 · 玩法说明
 <template>
   <section class="gambling-dialog" aria-labelledby="gambling-dialog-title">
     <header class="section-heading panel-heading compact-heading">
-      <div>
-        <p class="eyebrow">赌坊</p>
-        <h2 id="gambling-dialog-title">论道赌局</h2>
-      </div>
+      <h2 id="gambling-dialog-title" class="gambling-title-gold">赌坊</h2>
       <span class="count-badge">今日 {{ remaining }}/{{ dailyLimit }}</span>
     </header>
 
@@ -235,7 +238,7 @@ const RULES_TEXT = `论道赌局 · 玩法说明
     <template v-if="stage === 'mode-select'">
       <div class="gambling-toolbar">
         <p class="lineup-note">选择一种玩法，押上筹码与天机相搏。</p>
-        <button class="quiet-button" type="button" @click="showRules = true">说明</button>
+        <button class="quiet-button" type="button" @click="showRecord = true">赌坊记录</button>
       </div>
 
       <p v-if="!unlocked" class="blocked-hint">
@@ -268,6 +271,7 @@ const RULES_TEXT = `论道赌局 · 玩法说明
         <div class="challenge-info">
           <span>今日剩余 {{ remaining }}/{{ dailyLimit }} 次</span>
           <span>出战弟子：{{ selectedDisciple?.name ?? '未选' }}</span>
+          <button class="quiet-button" type="button" @click="showRules = true">?</button>
         </div>
 
         <p class="eyebrow">赌注模式</p>
@@ -528,12 +532,53 @@ const RULES_TEXT = `论道赌局 · 玩法说明
       </template>
     </template>
 
-    <!-- 规则说明：doc 11.3 原文，用 narrow 弹窗展示，不改写措辞。 -->
+    <!-- 规则说明：移到 configure 页面的 ? 按钮触发 -->
     <ModalShell v-if="showRules" narrow label="论道赌局说明" @close="showRules = false">
       <section class="gambling-rules-card" aria-labelledby="gambling-rules-title">
         <h2 id="gambling-rules-title" class="disciple-detail-title">玩法说明</h2>
         <pre class="gambling-rules">{{ RULES_TEXT }}</pre>
         <button class="action-button primary-action realm-button" type="button" @click="showRules = false">
+          <span>知道了</span>
+        </button>
+      </section>
+    </ModalShell>
+
+    <!-- 赌坊记录：战绩汇总 -->
+    <ModalShell v-if="showRecord" narrow label="赌坊记录" @close="showRecord = false">
+      <section class="gambling-record-card" aria-labelledby="gambling-record-title">
+        <h2 id="gambling-record-title" class="disciple-detail-title">赌坊记录</h2>
+        <template v-if="state.gambling.stats && state.gambling.stats.total > 0">
+          <dl class="gambling-record-stats">
+            <div>
+              <dt>总场次</dt>
+              <dd>{{ state.gambling.stats.total }}</dd>
+            </div>
+            <div>
+              <dt>胜</dt>
+              <dd class="record-win">{{ state.gambling.stats.wins }}</dd>
+            </div>
+            <div>
+              <dt>负</dt>
+              <dd class="record-lose">{{ state.gambling.stats.losses }}</dd>
+            </div>
+            <div>
+              <dt>胜率</dt>
+              <dd>{{ state.gambling.stats.winRate }}%</dd>
+            </div>
+            <div>
+              <dt>灵石盈亏</dt>
+              <dd :class="state.gambling.stats.netSpiritStone >= 0 ? 'record-win' : 'record-lose'">
+                {{ formatSpiritStone(state.gambling.stats.netSpiritStone) }}
+              </dd>
+            </div>
+            <div>
+              <dt>累计悟道值</dt>
+              <dd class="record-win">+{{ state.gambling.stats.totalInsight }}</dd>
+            </div>
+          </dl>
+        </template>
+        <p v-else class="blocked-hint">暂无论道记录。</p>
+        <button class="action-button primary-action realm-button" type="button" @click="showRecord = false">
           <span>知道了</span>
         </button>
       </section>
@@ -545,6 +590,14 @@ const RULES_TEXT = `论道赌局 · 玩法说明
 .gambling-dialog {
   display: flex;
   flex-direction: column;
+}
+
+.gambling-title-gold {
+  color: var(--gold, #caa96a);
+  font-family: 'STKaiti', 'KaiTi', serif;
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
 }
 
 .gambling-toolbar {
@@ -789,5 +842,45 @@ const RULES_TEXT = `论道赌局 · 玩法说明
   font-size: 16px;
   font-weight: 700;
   letter-spacing: 0.1em;
+}
+
+.gambling-record-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.gambling-record-stats {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+  margin: 0;
+}
+
+.gambling-record-stats div {
+  display: flex;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border: 1px solid rgba(202, 169, 106, 0.15);
+  border-radius: 4px;
+  font-size: 13px;
+}
+
+.gambling-record-stats dt {
+  color: var(--faint, #7d9186);
+}
+
+.gambling-record-stats dd {
+  margin: 0;
+  color: #dce6e0;
+  font-weight: 500;
+}
+
+.record-win {
+  color: #77b89a;
+}
+
+.record-lose {
+  color: #c47272;
 }
 </style>
