@@ -729,6 +729,14 @@ export interface PublicDiscipleView {
   talentName: string;
   realmName: string;
   stageName: string;
+  /** 境界在 REALMS 表里的下标（0 = 最低）：前端按境界排序只认它，不按名称字符串比较。 */
+  realmOrder: number;
+  /** 境界内的阶段序号（1 起）。 */
+  stage: number;
+  /** 境界 id：公开档案的头像与名册用同一套配色。 */
+  realmId: string;
+  /** 当前战力（服务端现算；只由已公开的字段算出，不泄漏私有属性）。 */
+  combatPower: number;
 }
 
 /** 公开档案里的建筑：只有名称与等级，不含升级消耗。 */

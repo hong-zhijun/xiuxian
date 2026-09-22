@@ -2670,8 +2670,20 @@ export async function getPublicSect(
       speed: Number(disciple.speed),
       talent: disciple.talent,
       talentName: findTalent(disciple.talent)?.name ?? '无',
+      realmId: disciple.realm_id,
       realmName: findRealm(disciple.realm_id).name,
+      // 境界高低用服务端 REALMS 下标（前端排序只认它，不按境界名字符串比较）。
+      realmOrder: realmIndex(disciple.realm_id),
+      stage: Number(disciple.stage),
       stageName: findStage(disciple.realm_id, Number(disciple.stage)).name,
+      combatPower: discipleCombatPower(
+        disciple.realm_id,
+        Number(disciple.stage),
+        Number(disciple.attack),
+        Number(disciple.defense),
+        Number(disciple.speed),
+        disciple.talent,
+      ),
     })),
     buildings: buildings.map((building) => ({
       name: config.buildings.find((item) => item.id === building.def_id)?.name ?? building.def_id,

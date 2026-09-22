@@ -46,7 +46,28 @@ function sortByPower(): void {
   );
 }
 
-const canSubmit = computed(() => !props.busy && selected.value.length === LINEUP_SIZE);
+/** 服务端算好的挑战资格：能不能打、为什么不能打都由它裁决。 */
+const canChallenge = computed(() => props.target.challenge?.canChallenge === true);
+
+/** 不能挑战的原因文案（稳定原因码 → 中文）：只在挑战弹窗展示，档案页不重复。 */
+const BLOCKED_LABELS: Record<string, string> = {
+  self: '不能挑战自己的宗门',
+  daily_limit: '今日挑战次数已用完',
+  already_challenged_today: '今日已挑战过该宗门（同一目标每日 1 次）',
+  defender_insufficient: '对方门下弟子不足 3 人，暂时无法应战',
+};
+
+const blockedText = computed(() => {
+  const reason = props.target.challenge?.blockedReason;
+  if (reason === null || reason === undefined) {
+    return null;
+  }
+  return BLOCKED_LABELS[reason] ?? '暂时无法挑战';
+});
+
+const canSubmit = computed(
+  () => !props.busy && canChallenge.value && selected.value.length === LINEUP_SIZE,
+);
 
 function submit(): void {
   if (!canSubmit.value) {
@@ -188,6 +209,8 @@ const levelDiffText = computed(() => {
           {{ preview.defenseMode === 'configured' ? '对方已设置守擂阵容' : '对方将使用临时自动守擂' }}
         </span>
       </div>
+
+      <p v-if="blockedText" class="blocked-hint is-warning">{{ blockedText }}</p>
 
       <p class="lineup-note">
         双方各出 3 人逐对交手，先赢 2 轮者胜；对方守擂阵容不可见。点击顺序就是对阵顺序。
