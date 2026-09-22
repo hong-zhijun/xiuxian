@@ -435,6 +435,12 @@ export interface PublicDiscipleView {
   speed: number;
   talent: string;
   talentName: string;
+  /** 境界下标 / 阶段 / 境界 id（排序、头像配色用；境界不能按名称字符串比较）。 */
+  realmOrder: number;
+  stage: number;
+  realmId: string;
+  /** 当前战力（服务端现算；只由已公开的字段算出，不泄漏私有属性）。 */
+  combatPower: number;
 }
 
 /** 公开档案里的建筑：只有名字和等级（没有升级消耗）。 */
