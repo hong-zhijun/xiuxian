@@ -5473,11 +5473,13 @@ export async function daoDebate(
   };
 
   if (multiplier === 3 && result === 'win') {
-    broadcastSystemMessage(
-      db,
-      `${draft.sect.name}在论道赌局中获得3x奖励：${rewardDescription}`,
-      now,
-    ).catch(() => {});
+    try {
+      await broadcastSystemMessage(
+        db,
+        `${draft.sect.name}在论道赌局中获得3x奖励：${rewardDescription}`,
+        now,
+      );
+    } catch { /* 广播失败不影响主流程 */ }
   }
 
   const message =
@@ -5691,11 +5693,13 @@ export async function wheelSpin(
   };
 
   if (tier === 5 && slot.type === 'big_spirit_stone' && reward.type === 'resource') {
-    broadcastSystemMessage(
-      db,
-      `${draft.sect.name}在天机轮中获得5x大额灵石奖励：${displayAmount(Number(reward.amount))}灵石`,
-      now,
-    ).catch(() => {});
+    try {
+      await broadcastSystemMessage(
+        db,
+        `${draft.sect.name}在天机轮中获得5x大额灵石奖励：${displayAmount(Number(reward.amount))}灵石`,
+        now,
+      );
+    } catch { /* 广播失败不影响主流程 */ }
   }
 
   const rewardDescription =
