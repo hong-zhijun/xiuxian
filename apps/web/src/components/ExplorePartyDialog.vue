@@ -1,8 +1,10 @@
 <script setup lang="ts">
-import { computed, onUnmounted, ref, watch } from 'vue';
+import { computed, ref } from 'vue';
 
-import type { DiscipleView, SecretRealmView, SectStateView } from '../api/game';
+import type { SecretRealmView, SectStateView } from '../api/game';
 import { formatAmount } from '../utils/format';
+import { selectionBlockReason } from '../utils/discipleFilter';
+import DisciplePicker from './DisciplePicker.vue';
 
 /**
  * 选人出征（二级弹窗内容）。
@@ -22,68 +24,22 @@ const emit = defineEmits<{
 
 const selected = ref<string[]>([]);
 
-/** 每秒推进一次「现在」：疗伤到期后自动恢复可选，不必等下一次 sync。 */
-const nowTick = ref(Date.now());
-const clock = window.setInterval(() => {
-  nowTick.value = Date.now();
-}, 1000);
-
-onUnmounted(() => {
-  window.clearInterval(clock);
-});
-
-/** 受伤弟子不能出战（与服务端 `injured_until > now` 同一判定，这里只用于界面）。 */
-function isInjured(disciple: DiscipleView): boolean {
-  if (disciple.injuredUntil === null) {
-    return false;
-  }
-  return Date.parse(disciple.injuredUntil) > nowTick.value;
-}
-
-const injuredIds = computed(
-  () => new Set(props.state.disciples.filter((disciple) => isInjured(disciple)).map((disciple) => disciple.id)),
-);
-
-const availableIds = computed(() =>
-  props.state.disciples.filter((disciple) => !isInjured(disciple)).map((disciple) => disciple.id),
-);
 
 const resourceNameMap = computed<Record<string, string>>(() =>
   Object.fromEntries(props.state.resources.map((resource) => [resource.id, resource.name])),
 );
 
-/** 打着打着受伤/离队的弟子从名单里剔除，避免拿着无效队伍点「出发」。 */
-watch(
-  () => props.state,
-  () => {
-    selected.value = selected.value.filter((id) => !injuredIds.value.has(id));
-  },
-);
 
-function toggle(discipleId: string, event: Event): void {
-  const checked = (event.target as HTMLInputElement).checked;
-  const next = [...selected.value];
-  const index = next.indexOf(discipleId);
-  if (checked && index < 0) {
-    next.push(discipleId);
-  }
-  if (!checked && index >= 0) {
-    next.splice(index, 1);
-  }
-  selected.value = next;
-}
-
-/** 已勾选的可以取消；受伤的不能选；满员后其余不能选。 */
-function canPick(discipleId: string): boolean {
-  if (injuredIds.value.has(discipleId)) {
-    return false;
-  }
-  return selected.value.includes(discipleId) || selected.value.length < props.realm.maxParty;
-}
-
-/** 按队伍上限自动挑人（挑不齐最少人数时不点也行，只是省事）。 */
+/** 按队伍上限自动挑人（规则与选人控件同一份：疗伤中 / 在外历练都不能出征）。 */
 function pickUpToMax(): void {
-  selected.value = availableIds.value.slice(0, props.realm.maxParty);
+  const now = Date.now();
+  selected.value = props.state.disciples
+    .filter(
+      (disciple) =>
+        selectionBlockReason(disciple, now, { blockInjured: true, blockAway: true }) === null,
+    )
+    .slice(0, props.realm.maxParty)
+    .map((disciple) => disciple.id);
 }
 
 const canSubmit = computed(
@@ -131,28 +87,18 @@ function submit(): void {
       </span>
     </div>
 
-    <div class="party-select">
-      <div class="party-select-head">
-        <span class="eyebrow">选择弟子（{{ realm.minParty }}~{{ realm.maxParty }} 人）</span>
+    <DisciplePicker
+      v-model:selected="selected"
+      :disciples="state.disciples"
+      :min="realm.minParty"
+      :max="realm.maxParty"
+      :busy="busy"
+      title="选择出征弟子"
+    >
+      <template #actions>
         <button class="quiet-button" type="button" @click="pickUpToMax">按上限自动选</button>
-      </div>
-
-      <label
-        v-for="disciple in state.disciples"
-        :key="disciple.id"
-        class="party-member"
-        :class="{ 'is-injured': injuredIds.has(disciple.id), 'is-picked': selected.includes(disciple.id) }"
-      >
-        <input
-          type="checkbox"
-          :checked="selected.includes(disciple.id)"
-          :disabled="!canPick(disciple.id)"
-          @change="toggle(disciple.id, $event)"
-        />
-        <span>{{ disciple.name }}（{{ disciple.stageName }} · 资质 {{ disciple.aptitude }}）</span>
-        <small v-if="injuredIds.has(disciple.id)">疗伤中</small>
-      </label>
-    </div>
+      </template>
+    </DisciplePicker>
 
     <button
       class="action-button primary-action realm-button"
@@ -165,6 +111,5 @@ function submit(): void {
       <span>出发探索（{{ selected.length }}/{{ realm.maxParty }}）</span>
     </button>
 
-    <p v-if="selected.length < realm.minParty" class="blocked-hint">至少需要 {{ realm.minParty }} 名弟子</p>
   </section>
 </template>

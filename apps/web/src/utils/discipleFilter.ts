@@ -173,6 +173,36 @@ export function isInjured(disciple: FilterableDisciple, serverNowMs: number): bo
   return until > serverNowMs;
 }
 
+
+/** 选人控件需要的字段子集：比 FilterableDisciple 多一个历练状态（判断是否在外）。 */
+export interface SelectableDisciple extends FilterableDisciple {
+  journey: { status: 'none' | 'active' | 'ready' };
+}
+
+/** 选人控件的禁用开关（默认全禁；守擂阵容允许带伤守阵）。 */
+export interface SelectionBlockOptions {
+  /** 受伤弟子是否禁选。 */
+  blockInjured: boolean;
+  /** 在外历练的弟子是否禁选（服务端 requireNotAway 会拒绝这些操作）。 */
+  blockAway: boolean;
+}
+
+/**
+ * 选人控件里「这名弟子为什么不能选」（null = 可选）。
+ *
+ * 与服务端同一口径：疗伤 = `injuredUntil > serverNow`；在外 = `journey.status === 'active'`
+ * （`ready` 是「已归队待领取」，服务端也放行）。挑战 / 守擂 / 秘境 / 赌坊四处共用这一份判定，
+ * 免得再出现「前端能选、提交被服务端打回」。
+ */
+export function selectionBlockReason(
+  disciple: SelectableDisciple,
+  serverNowMs: number,
+  options: SelectionBlockOptions,
+): string | null {
+  if (options.blockInjured && isInjured(disciple, serverNowMs)) return '疗伤中';
+  if (options.blockAway && disciple.journey.status === 'active') return '在外历练';
+  return null;
+}
 /**
  * 修为是否已无增长空间：null 门槛（已达当前版本上限）或已到门槛。
  * 注意：这不代表可破境——可破境只看 `canBreakthrough`。

@@ -3520,8 +3520,8 @@ ul {
   background: rgba(202, 169, 106, 0.04);
 }
 
-/* 选人弹窗里的「选择弟子」标题行 */
-.party-select-head {
+/* 选人控件（挑战 / 守擂 / 秘境 / 赌坊 共用，见 components/DisciplePicker.vue） */
+.disciple-picker-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -3529,53 +3529,217 @@ ul {
   margin-bottom: 2px;
 }
 
-.party-select {
+/* 顶部排序：三个「从高到低」的键，当前生效的那个用金色描边。 */
+.disciple-picker-sort {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+.dp-sort-label {
+  color: #7f948a;
+  font-size: 11px;
+}
+
+.dp-sort-button {
+  padding: 1px 6px;
+  border: 1px solid rgba(167, 184, 173, 0.18);
+  border-radius: 3px;
+  color: #93a99e;
+  background: transparent;
+  font-family: inherit;
+  font-size: 11px;
+  line-height: 16px;
+  cursor: pointer;
+  transition: border-color 120ms ease, color 120ms ease, background 120ms ease;
+}
+
+.dp-sort-button:hover {
+  border-color: rgba(202, 169, 106, 0.4);
+  color: #dce6e0;
+}
+
+.dp-sort-button.is-active {
+  border-color: var(--gold-bright);
+  color: var(--gold-bright);
+  background: rgba(202, 169, 106, 0.1);
+}
+
+.disciple-picker {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 7px;
   margin: 10px 0;
   padding-top: 9px;
   border-top: 1px solid var(--line);
 }
 
-.party-member {
+/* 紧凑竖版卡片网格：比主界面名册（固定 4 列）更密，弹窗里一屏能放下十几人。 */
+.disciple-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(70px, 1fr));
+  align-items: start;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.dp-card {
+  position: relative;
   display: flex;
+  min-width: 0;
+  flex-direction: column;
   align-items: center;
-  gap: 8px;
-  padding: 5px 6px;
-  border-radius: 3px;
+  gap: 3px;
+  padding: 7px 3px 6px;
+  border: 1px solid rgba(119, 184, 154, 0.13);
+  border-radius: 4px;
   color: #b9c8bf;
-  font-size: 12px;
+  background: rgba(255, 255, 255, 0.015);
   cursor: pointer;
+  transition: border-color 120ms ease, background 120ms ease;
 }
 
-.party-member:hover {
-  background: rgba(119, 184, 154, 0.05);
+.dp-card:hover {
+  background: rgba(119, 184, 154, 0.06);
 }
 
-/* 已选中的弟子（选人弹窗里高亮一下） */
-.party-member.is-picked {
-  color: var(--gold-bright);
+/* 选中 = 金色卡片边框（唯一的选中标识；顺序/勾号是右上角那个小金标）。 */
+.dp-card.is-picked {
+  border-color: var(--gold-bright);
   background: rgba(202, 169, 106, 0.09);
+  box-shadow: inset 0 0 0 1px rgba(202, 169, 106, 0.16);
 }
 
-.party-member input {
-  width: 14px;
-  height: 14px;
-  accent-color: var(--jade);
+/* 原生控件视觉上藏起来但保留焦点：键盘 Tab 过来给一圈金色描边。 */
+.dp-card:focus-within {
+  box-shadow: 0 0 0 2px rgba(202, 169, 106, 0.3);
 }
 
-.party-member small {
-  margin-left: auto;
-  color: #8c7650;
-  font-size: 11px;
-}
-
-.party-member.is-injured,
-.party-member.is-injured:hover {
+/* 不能选：疗伤中 / 在外历练 / 已满员。 */
+.dp-card.is-blocked,
+.dp-card.is-blocked:hover {
   color: #6b7a72;
   background: transparent;
   cursor: not-allowed;
+}
+
+/* 原生 checkbox / radio 留在 DOM 里（语义、方向键切换、读屏都靠它），只做视觉隐藏。 */
+.dp-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+}
+
+/* 点选顺序（多选）/ 勾号（单选）：卡片右上角的小金标。 */
+.dp-order {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  display: flex;
+  width: 16px;
+  height: 16px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  color: #10231d;
+  background: var(--gold-bright);
+  font-size: 10px;
+  line-height: 1;
+}
+
+.dp-order.is-check {
+  font-size: 11px;
+}
+
+/* 头像：比名册的 48px 环略小，但已经够占到卡片宽度的一半，左右留白不明显。 */
+.dp-avatar {
+  display: flex;
+  width: 46px;
+  height: 46px;
+  align-items: center;
+  justify-content: center;
+}
+
+.dp-avatar .disciple-avatar {
+  width: 46px;
+  height: 46px;
+  font-size: 16px;
+}
+
+.dp-avatar .disciple-avatar::before,
+.dp-avatar .disciple-avatar::after,
+.dp-avatar .disciple-avatar i {
+  display: none;
+}
+
+.dp-name {
+  max-width: 100%;
+  height: 18px;
+  overflow: hidden;
+  color: #e4ece6;
+  font-family: 'STKaiti', 'KaiTi', serif;
+  font-size: 13px;
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dp-card.is-picked .dp-name {
+  color: var(--gold-bright);
+}
+
+/* 境界与战力各占一行（固定两行）：卡片高度不随「战力几位数 / 状态标有无」变化。 */
+.dp-meta {
+  display: flex;
+  min-height: 28px;
+  max-width: 100%;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  color: #93a99e;
+  font-size: 11px;
+  line-height: 1.3;
+}
+
+/* 单行不折：窄卡片里长境界名也不会把卡片撑高。 */
+.dp-meta span {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 状态行固定占位：没有状态标的卡片也保留这一行，整排卡片高度才一致。 */
+.dp-status-slot {
+  display: flex;
+  min-height: 17px;
+  align-items: center;
+  justify-content: center;
+}
+
+.dp-status {
+  padding: 0 4px;
+  border: 1px solid rgba(167, 184, 173, 0.24);
+  border-radius: 2px;
+  color: #a9bbb1;
+  font-size: 10px;
+  line-height: 15px;
+  white-space: nowrap;
+}
+
+/* 被禁的原因（疗伤中 / 在外历练）才用红：只是状态提示的（守擂带伤上阵）保持灰。 */
+.dp-status.is-blocked {
+  border-color: rgba(224, 123, 104, 0.42);
+  color: var(--red-bright);
 }
 
 .realm-button {

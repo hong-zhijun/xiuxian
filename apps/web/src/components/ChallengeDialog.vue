@@ -3,6 +3,7 @@ import { computed, onUnmounted, ref, watch } from 'vue';
 
 import type { ChallengeResultView, DiscipleView, PublicSectView, SectStateView } from '../api/game';
 import { formatAmount } from '../utils/format';
+import DisciplePicker from './DisciplePicker.vue';
 
 /**
  * 发起挑战（弹窗内容）：选攻方 3 人，点击顺序就是对阵顺序。
@@ -28,57 +29,15 @@ const LINEUP_SIZE = 3;
 
 const selected = ref<string[]>([]);
 
-/** 每秒推进一次「现在」：疗伤到期后自动恢复可选。 */
-const nowTick = ref(Date.now());
-const clock = window.setInterval(() => {
-  nowTick.value = Date.now();
-}, 1000);
 
 onUnmounted(() => {
-  window.clearInterval(clock);
   clearRevealTimers();
 });
-
-/** 受伤弟子不能出战（与服务端 `injured_until > now` 同一判定）。 */
-function isInjured(disciple: DiscipleView): boolean {
-  if (disciple.injuredUntil === null) {
-    return false;
-  }
-  return Date.parse(disciple.injuredUntil) > nowTick.value;
-}
-
-const available = computed(() => props.state.disciples.filter((disciple) => !isInjured(disciple)));
 
 const discipleById = computed(
   () => new Map(props.state.disciples.map((disciple) => [disciple.id, disciple])),
 );
 
-const availableIds = computed(() => new Set(available.value.map((disciple) => disciple.id)));
-
-function isPicked(discipleId: string): boolean {
-  return selected.value.includes(discipleId);
-}
-
-/** 未受伤才能选；已选的可以取消；选满 3 人后其余不可选。 */
-function canPick(discipleId: string): boolean {
-  if (!availableIds.value.has(discipleId)) {
-    return false;
-  }
-  return isPicked(discipleId) || selected.value.length < LINEUP_SIZE;
-}
-
-function toggle(discipleId: string, event: Event): void {
-  const checked = (event.target as HTMLInputElement).checked;
-  const next = [...selected.value];
-  const index = next.indexOf(discipleId);
-  if (checked && index < 0) {
-    next.push(discipleId);
-  }
-  if (!checked && index >= 0) {
-    next.splice(index, 1);
-  }
-  selected.value = next;
-}
 
 /** 把已选三人按战力从高到低重排（省得手动取消重选）。 */
 function sortByPower(): void {
@@ -235,7 +194,7 @@ const levelDiffText = computed(() => {
       </p>
 
       <div class="lineup-current">
-        <div class="party-select-head">
+        <div class="disciple-picker-head">
           <span class="eyebrow">我方出战顺序（{{ selected.length }}/{{ LINEUP_SIZE }}）</span>
           <button
             class="quiet-button"
@@ -258,30 +217,15 @@ const levelDiffText = computed(() => {
         </ol>
       </div>
 
-      <div class="party-select">
-        <div class="party-select-head">
-          <span class="eyebrow">选择出战弟子（未受伤 {{ available.length }} 位）</span>
-        </div>
-        <label
-          v-for="disciple in state.disciples"
-          :key="disciple.id"
-          class="party-member"
-          :class="{ 'is-picked': isPicked(disciple.id), 'is-injured': isInjured(disciple) }"
-        >
-          <input
-            type="checkbox"
-            :checked="isPicked(disciple.id)"
-            :disabled="!canPick(disciple.id)"
-            @change="toggle(disciple.id, $event)"
-          />
-          <span>
-            {{ disciple.name }}（{{ disciple.stageName }} · 攻 {{ disciple.attack }} 防 {{ disciple.defense }}
-            速 {{ disciple.speed }} · 战力 {{ disciple.combatPower }}）
-          </span>
-          <small v-if="isInjured(disciple)">疗伤中</small>
-        </label>
-        <p v-if="available.length === 0" class="blocked-hint">门下弟子都在疗伤，暂时无人可出战。</p>
-      </div>
+      <DisciplePicker
+        v-model:selected="selected"
+        :disciples="state.disciples"
+        :min="LINEUP_SIZE"
+        :max="LINEUP_SIZE"
+        :busy="busy"
+        show-order
+        title="选择出战弟子"
+      />
 
       <button
         class="action-button primary-action realm-button"
@@ -293,9 +237,6 @@ const levelDiffText = computed(() => {
       >
         <span>发起挑战（{{ selected.length }}/{{ LINEUP_SIZE }}）</span>
       </button>
-      <p v-if="selected.length !== LINEUP_SIZE" class="blocked-hint">
-        请选择 {{ LINEUP_SIZE }} 名弟子（当前 {{ selected.length }} 名）
-      </p>
       <p
         v-if="preview && preview.rewardPreview.spiritStone === 0"
         class="blocked-hint is-warning"
