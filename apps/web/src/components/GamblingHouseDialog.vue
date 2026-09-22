@@ -351,11 +351,6 @@ const RULES_TEXT = `论道赌局 · 玩法说明
           <h3 class="configure-title">论道赌局</h3>
           <button class="quiet-button" type="button" @click="showRules = true">说明</button>
         </div>
-        <div class="configure-status">
-          <span>今日剩余 {{ remaining }}/{{ dailyLimit }} 次</span>
-          <span class="configure-sep">·</span>
-          <span>出战：{{ selectedDisciple?.name ?? '未选' }}</span>
-        </div>
 
         <p class="eyebrow">赌注模式</p>
         <div class="gambling-modes" role="radiogroup" aria-label="赌注模式">
