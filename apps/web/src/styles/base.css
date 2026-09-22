@@ -4296,12 +4296,13 @@ ul {
 .action-group-buttons {
   display: grid;
   min-width: 0;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 7px;
 }
 
+/* 两组操作栏统一 5 列等宽（宗内管理 4 个按钮 + 对外事务 5 个按钮）。 */
 .action-group-external .action-group-buttons {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
 }
 
 .action-chip {

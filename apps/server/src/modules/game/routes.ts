@@ -22,6 +22,9 @@ import {
   setDefenseLineupSchema,
   setDiscipleAvatarFrameRequestSchema,
   setDiscipleNoteRequestSchema,
+  shopBuyRequestSchema,
+  shopSellPillRequestSchema,
+  shopSellRequestSchema,
   startJourneyRequestSchema,
   startRealmExploreSchema,
   upgradeBuildingRequestSchema,
@@ -56,6 +59,9 @@ import {
   setDefenseLineup,
   setDiscipleAvatarFrame,
   setDiscipleNote,
+  shopBuy,
+  shopSell,
+  shopSellPill,
   startJourney,
   startRealmExplore,
   upgradeBuilding,
@@ -416,6 +422,30 @@ export function createGameRoutes(): Hono<AppEnv> {
     const userId = requireUserId(c);
     const result = await wheelReset(getDb(c.env), userId, Date.now());
     return respondOk(c, { state: result.state });
+  });
+
+  // 坊市：买入材料（结算 → 白名单 / 灵石余额 / 材料容量校验 → 扣灵石、加材料，一次受保护 batch）。
+  routes.post('/game/shop-buy', async (c) => {
+    const userId = requireUserId(c);
+    const body = await parseStrictJson(shopBuyRequestSchema, c);
+    const result = await shopBuy(getDb(c.env), userId, body.resourceId, body.amount, Date.now());
+    return respondOk(c, { state: result.state, result: result.result });
+  });
+
+  // 坊市：卖出材料（结算 → 白名单 / 材料库存校验 → 扣材料、加灵石，一次受保护 batch）。
+  routes.post('/game/shop-sell', async (c) => {
+    const userId = requireUserId(c);
+    const body = await parseStrictJson(shopSellRequestSchema, c);
+    const result = await shopSell(getDb(c.env), userId, body.resourceId, body.amount, Date.now());
+    return respondOk(c, { state: result.state, result: result.result });
+  });
+
+  // 坊市：售丹（结算 → 丹方 / 回收价 / 库存校验 → 扣丹药、加灵石；守卫核对那条库存）。
+  routes.post('/game/shop-sell-pill', async (c) => {
+    const userId = requireUserId(c);
+    const body = await parseStrictJson(shopSellPillRequestSchema, c);
+    const result = await shopSellPill(getDb(c.env), userId, body.pillId, body.quantity, Date.now());
+    return respondOk(c, { state: result.state, result: result.result });
   });
   return routes;
 }

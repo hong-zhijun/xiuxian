@@ -191,6 +191,18 @@ export interface SectStateView {
   journey: JourneyView;
   /** V6 进行中的交互式秘境探索；null = 当前没有（刷新后据此恢复断点）。 */
   activeExploration: ActiveExplorationView | null;
+  /**
+   * 坊市面板：材料买卖价 + 可回收的丹药（价格单位都是最小单位灵石，前端只展示、不复算规则）。
+   * 买入价 / 卖出价按「1 展示单位材料」计价，买入会被服务端再按材料容量上限挡一次。
+   */
+  shop: {
+    /** 买 1 展示单位材料要花的灵石（最小单位，= 667）。 */
+    buyPrice: number;
+    /** 卖 1 展示单位材料能得的灵石（最小单位，= 500）。 */
+    sellPrice: number;
+    /** 可回收的丹药：有回收价的丹方都会下发（库存为 0 的也在列表里，前端自行标灰）；owned 是库存颗数。 */
+    pills: Array<{ id: string; name: string; owned: number; sellPrice: number }>;
+  };
 }
 
 /** 单个丹方（与后端 view.ts 的 AlchemyRecipeView 一一对应）。 */
@@ -1157,4 +1169,82 @@ export async function wheelSpin(
 /** 0020 天机轮重置（POST /game/wheel-reset）：扣重置费、格局整盘重排，不消耗每日次数。 */
 export async function wheelReset(): Promise<{ state: SectStateView }> {
   return apiRequest<{ state: SectStateView }>('/api/v1/game/wheel-reset', { method: 'POST' });
+}
+
+/* ---------- 坊市（材料买卖与丹药回收） ---------- */
+
+/** 可交易材料（与后端 shop.ts 的 SHOP_TRADABLE_RESOURCES 同口径）：灵石与灵气都不可买卖。 */
+export type ShopResourceId = 'herb' | 'ore';
+
+/** 买入回执（与后端 shop.ts 的 ShopBuyResult 一一对应）。 */
+export interface ShopBuyResult {
+  action: 'buy';
+  resourceId: string;
+  resourceName: string;
+  /** 买入的**展示单位**数量（= 服务端入账的最小单位 ÷ 1000）。 */
+  amount: number;
+  /** 花费灵石（最小单位）。 */
+  cost: number;
+  /** 服务端拼好的文案。 */
+  message: string;
+}
+
+/** 卖出材料回执（与后端 shop.ts 的 ShopSellResult 一一对应）。 */
+export interface ShopSellResult {
+  action: 'sell';
+  resourceId: string;
+  resourceName: string;
+  /** 卖出的**展示单位**数量。 */
+  amount: number;
+  /** 获得灵石（最小单位）。 */
+  revenue: number;
+  message: string;
+}
+
+/** 售丹回执（与后端 shop.ts 的 ShopSellPillResult 一一对应）。 */
+export interface ShopSellPillResult {
+  action: 'sell-pill';
+  pillId: string;
+  pillName: string;
+  /** 卖出的颗数。 */
+  quantity: number;
+  /** 获得灵石（最小单位）。 */
+  revenue: number;
+  message: string;
+}
+
+/**
+ * 坊市买入材料（POST /game/shop-buy）：amount 是**展示单位整数**（≥ 1）。
+ * 余额、可交易白名单与材料容量上限全部由服务端裁决，返回写库后的完整状态与回执。
+ */
+export async function shopBuy(
+  resourceId: ShopResourceId,
+  amount: number,
+): Promise<{ state: SectStateView; result: ShopBuyResult }> {
+  return apiRequest<{ state: SectStateView; result: ShopBuyResult }>('/api/v1/game/shop-buy', {
+    method: 'POST',
+    body: { resourceId, amount },
+  });
+}
+
+/** 坊市卖出材料（POST /game/shop-sell）：amount 是**展示单位整数**（≥ 1），库存由服务端校验。 */
+export async function shopSell(
+  resourceId: ShopResourceId,
+  amount: number,
+): Promise<{ state: SectStateView; result: ShopSellResult }> {
+  return apiRequest<{ state: SectStateView; result: ShopSellResult }>('/api/v1/game/shop-sell', {
+    method: 'POST',
+    body: { resourceId, amount },
+  });
+}
+
+/** 坊市卖出丹药（POST /game/shop-sell-pill）：quantity 是颗数（≥ 1），库存由服务端校验。 */
+export async function shopSellPill(
+  pillId: string,
+  quantity: number,
+): Promise<{ state: SectStateView; result: ShopSellPillResult }> {
+  return apiRequest<{ state: SectStateView; result: ShopSellPillResult }>(
+    '/api/v1/game/shop-sell-pill',
+    { method: 'POST', body: { pillId, quantity } },
+  );
 }

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { BETTABLE_ATTRIBUTES } from './gambling';
+import { SHOP_MAX_PILL_QUANTITY, SHOP_MAX_TRADE_AMOUNT, SHOP_TRADABLE_RESOURCES } from './shop';
 
 /**
  * 游戏接口的请求 schema（严格：未声明字段一律拒绝）。
@@ -204,4 +205,29 @@ export const allocateDaoInsightRequestSchema = z.strictObject({
  */
 export const wheelSpinRequestSchema = z.strictObject({
   tier: z.number().int().min(1).max(5),
+});
+
+/**
+ * 坊市买卖：resourceId 直接用 shop.ts 的可交易材料白名单，
+ * amount 是**展示单位整数**（≥1，上限与 SHOP_MAX_TRADE_AMOUNT 同口径）；
+ * 其余规则（余额、库存、容量上限）全部在 service 里判定。
+ */
+export const shopBuyRequestSchema = z.strictObject({
+  resourceId: z.enum(SHOP_TRADABLE_RESOURCES),
+  amount: z.number().int().min(1).max(SHOP_MAX_TRADE_AMOUNT),
+});
+
+/** 坊市卖出材料：请求体与买入完全同形，但语义相反（材料 → 灵石）。 */
+export const shopSellRequestSchema = z.strictObject({
+  resourceId: z.enum(SHOP_TRADABLE_RESOURCES),
+  amount: z.number().int().min(1).max(SHOP_MAX_TRADE_AMOUNT),
+});
+
+/**
+ * 坊市售丹：pillId 只做「类型 + 长度」的第一道防线，
+ * 真正的白名单（有回收价的丹药）由 shop.ts 的 SHOP_PILL_PRICES 判定。
+ */
+export const shopSellPillRequestSchema = z.strictObject({
+  pillId: z.string().min(1).max(64),
+  quantity: z.number().int().min(1).max(SHOP_MAX_PILL_QUANTITY),
 });

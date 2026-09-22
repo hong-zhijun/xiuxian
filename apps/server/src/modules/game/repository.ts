@@ -636,6 +636,7 @@ export function updateDiscipleCultivationStatement(
  * 普通结算也必须先核对快照，避免迟到的 sync 覆盖已领取的资源或新的弟子进度。
  * D1 单条语句最多绑定 100 个参数；满编宗门有 35 名弟子，每人 8 项校验，
  * 因此把校验拆成同一次 batch 内的多条守卫，任一失败都回滚整批。
+ * options.pill：坊市售丹把「这条丹药库存仍是读到的数量」也并进守卫（绝对值写回必须核对）。
  */
 export function settlementSnapshotGuardStatements(
   commandId: string,
@@ -644,7 +645,7 @@ export function settlementSnapshotGuardStatements(
     balances: readonly ResourceBalanceRow[];
     disciples: readonly DiscipleRow[];
   },
-  options: { checkRecruitState?: boolean } = {},
+  options: { checkRecruitState?: boolean; pill?: { pillId: string; quantity: number } } = {},
 ): { guards: ParameterizedQuery[]; cleanup: ParameterizedQuery[] } {
   const { sect, balances, disciples } = snapshot;
   const checks = [
@@ -665,6 +666,15 @@ export function settlementSnapshotGuardStatements(
   for (const row of balances) {
     checks.push('EXISTS (SELECT 1 FROM resource_balances WHERE id = ? AND sect_id = ? AND balance = ? AND remainder = ?)');
     params.push(row.id, sect.id, row.balance, row.remainder);
+  }
+
+  if (options.pill !== undefined) {
+    // 坊市售丹：库存是**绝对值**写回（UPDATE ... SET quantity = ?），
+    // 与炼丹守卫同一口径 —— 这条库存必须仍是读到的数量，否则整批回滚。
+    checks.push(
+      'COALESCE((SELECT quantity FROM pill_inventories WHERE sect_id = ? AND pill_id = ?), 0) = ?',
+    );
+    params.push(sect.id, options.pill.pillId, options.pill.quantity);
   }
 
   const guardIds = [commandId];

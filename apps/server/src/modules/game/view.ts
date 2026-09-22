@@ -27,6 +27,7 @@ import {
   wheelSpinCost,
   type DebateDayState,
 } from './gambling';
+import { SHOP_BUY_PRICE, SHOP_PILL_PRICES, SHOP_SELL_PRICE } from './shop';
 import {
   DEFENSE_LINEUP_SIZE,
   BREAKTHROUGH_ARRAY_BONUS_BP_PER_LEVEL,
@@ -349,6 +350,70 @@ export interface WheelSpinResultView {
   message: string;
 }
 
+/**
+ * 坊市的单种丹药（SectStateView.shop.pills 的元素）。
+ * owned 是当前库存（颗），sellPrice 是单颗回收价（最小单位灵石，写死在 shop.ts）。
+ */
+export interface ShopPillView {
+  id: string;
+  name: string;
+  owned: number;
+  sellPrice: number;
+}
+
+/**
+ * 坊市面板（SectStateView.shop，计划 4.1）。
+ *
+ * 价格一律由服务端下发（前端只做预览，不复制换算公式）；pills 覆盖全部有回收价的丹方，
+ * 库存为 0 也照原样下发。坊市没有解锁条件：1 级宗门即可使用。
+ */
+export interface ShopView {
+  /** 买 1 展示单位材料花多少灵石（最小单位）。 */
+  buyPrice: number;
+  /** 卖 1 展示单位材料得多少灵石（最小单位）。 */
+  sellPrice: number;
+  pills: ShopPillView[];
+}
+
+/** 坊市买入结果（POST /game/shop-buy 的 result，计划 4.2）。 */
+export interface ShopBuyResultView {
+  action: 'buy';
+  resourceId: string;
+  resourceName: string;
+  /** 买入的材料数量（展示单位整数）。 */
+  amount: number;
+  /** 花费的灵石（最小单位）。 */
+  cost: number;
+  /** 服务端拼好的结果文案。 */
+  message: string;
+}
+
+/** 坊市卖出材料结果（POST /game/shop-sell 的 result，计划 4.3）。 */
+export interface ShopSellResultView {
+  action: 'sell';
+  resourceId: string;
+  resourceName: string;
+  /** 卖出的材料数量（展示单位整数）。 */
+  amount: number;
+  /** 获得的灵石（最小单位）。 */
+  revenue: number;
+  /** 服务端拼好的结果文案。 */
+  message: string;
+}
+
+/** 坊市售丹结果（POST /game/shop-sell-pill 的 result，计划 4.4）。 */
+export interface ShopSellPillResultView {
+  action: 'sell-pill';
+  pillId: string;
+  pillName: string;
+  /** 卖出的丹药颗数。 */
+  quantity: number;
+  /** 获得的灵石（最小单位）。 */
+  revenue: number;
+  /** 服务端拼好的结果文案。 */
+  message: string;
+}
+
 /** 赌坊详细记录条目（GET /game/debate-history 的单条）。 */
 export interface DebateHistoryEntryView {
   id: string;
@@ -598,6 +663,11 @@ export interface SectStateView {
     /** 0020 天机轮：赌坊未解锁时为 null；解锁后带当前格局与档位费用。 */
     wheel: WheelView | null;
   };
+  /**
+   * 坊市面板：材料买卖价格与可售丹药（没有解锁条件，1 级宗门即可使用）。
+   * 价格与库存都由服务端算好，前端只渲染与预览（不复制换算公式）。
+   */
+  shop: ShopView;
   /** 0014 历练面板：名额 + 最近 10 条摘要（仅本宗可见）。 */
   journey: JourneyView;
   /** V6 交互式秘境探索：本宗当前进行中的一局；没有则 null（每宗门同时最多一局）。 */
@@ -1153,6 +1223,26 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
     }),
   };
 
+  // 坊市面板：价格是代码常量（shop.ts）；可售丹药 = 丹方里有回收价的那几种
+  // （价格表就是白名单），库存为 0 也照原样下发 —— 前端灰掉即可，不必等有库存才看见价格。
+  const shopView: ShopView = {
+    buyPrice: SHOP_BUY_PRICE,
+    sellPrice: SHOP_SELL_PRICE,
+    pills: PILL_RECIPES.flatMap((recipe) => {
+      const sellPrice = SHOP_PILL_PRICES[recipe.id];
+      if (sellPrice === undefined || sellPrice <= 0) {
+        return [];
+      }
+      const ownedRow = pillInventories.find((row) => row.pill_id === recipe.id);
+      return [{
+        id: recipe.id,
+        name: recipe.name,
+        owned: ownedRow === undefined ? 0 : Number(ownedRow.quantity),
+        sellPrice,
+      }];
+    }),
+  };
+
   // 0014：宗门历练名额 + 最近 10 条摘要（仅本宗可见）。
   const journeySlot = journeySlotView({ rows: journeys, recent: recentJourneys, now });
 
@@ -1243,6 +1333,8 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
     },
     /** 0019 赌坊面板（解锁判断与当日次数全部服务端算好，前端只渲染）。 */
     gambling: gamblingView,
+    /** 坊市面板（价格与可售丹药全部服务端算好，前端只渲染与预览）。 */
+    shop: shopView,
   };
 }
 

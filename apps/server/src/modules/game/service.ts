@@ -56,6 +56,16 @@ import {
   type WheelTier,
 } from './gambling';
 import {
+  UNITS_PER_DISPLAY,
+  asShopTradableResource,
+  shopBuyCost,
+  shopPillPrice,
+  shopPillRevenue,
+  shopSellRevenue,
+  toMinUnits,
+  type ShopTradableResource,
+} from './shop';
+import {
   CHALLENGE_DAILY_LIMIT,
   availableDefenders,
   asDefenseMode,
@@ -79,6 +89,7 @@ import {
   STONE_MINING_UNLOCK_SECT_LEVEL,
   breakthroughEnergyCost,
   dateKeyUtc8,
+  effectiveCapacity,
   dayStartMs,
   findRealm,
   findSectLevel,
@@ -251,6 +262,9 @@ import {
   type DebateHistoryEntryView,
   type DebateHistoryView,
   type WheelSpinResultView,
+  type ShopBuyResultView,
+  type ShopSellResultView,
+  type ShopSellPillResultView,
 } from './view';
 
 /**
@@ -643,6 +657,15 @@ class SectDraft {
     return this.config.resources.find((item) => item.id === resourceId)?.name ?? resourceId;
   }
 
+  /**
+   * 坊市：某资源的容量上限（最小单位），与结算 / 视图同一口径（配置容量 × 等级倍率）。
+   * 配置里没有的资源返回 0（正常路径不可达：余额行都来自配置里的资源）。
+   */
+  resourceCapacityOf(resourceId: string): number {
+    const definition = this.config.resources.find((item) => item.id === resourceId);
+    return definition === undefined ? 0 : effectiveCapacity(definition.capacity, this.capacityMultiplier);
+  }
+
   /** 资源检查（只读，不扣减）：不足时抛 INSUFFICIENT_RESOURCE（文案与载荷与旧实现一致）。 */
   requireResourceAvailable(resourceId: string, amount: number): void {
     const balance = this.balanceOf(resourceId);
@@ -715,14 +738,37 @@ class SectDraft {
     return row === undefined ? 0 : Number(row.quantity);
   }
 
+  /**
+   * 坊市售丹的守卫快照：**读快照时**的库存数量（守卫比较的是写库前的库状态，
+   * 不是内存里已经改过的值 —— 与 commitGambling 的 pill 快照同一口径）。
+   */
+  basePillQuantity(pillId: string): number {
+    const row = this.base.pillInventories.find((item) => item.pill_id === pillId);
+    return row === undefined ? 0 : Number(row.quantity);
+  }
+
   /** 服用前置检查 + 扣库存 1（内存与写库语句一起追加；库存不足抛 INVALID_STATUS）。 */
   requirePill(pillId: string): void {
+    this.removePill(pillId, 1);
+  }
+
+  /**
+   * 坊市：扣减丹药库存 quantity（内存与写库语句一起追加；不足抛 INVALID_STATUS）。
+   * 服用丹药的 requirePill 也走这里 —— 两者是同一件事，只是数量不同。
+   * 没有库存行视为 0（同一 (sect, pill) 正常只有一行或零行）。
+   */
+  removePill(pillId: string, quantity: number): void {
+    // 共享原语的兜底：只接受正整数（调用方由 schema / requirePill 保证，但 0 会让
+    // 下面生成 `WHERE id = ...` 的空转语句，宁可在入口就拒绝）。
+    if (!Number.isInteger(quantity) || quantity < 1) {
+      throw new AppError('INVALID_STATUS', '丹药数量不合法');
+    }
     const row = this.pillInventories.find((item) => item.pill_id === pillId);
-    const quantity = row === undefined ? 0 : Number(row.quantity);
-    if (quantity < 1) {
+    const owned = row === undefined ? 0 : Number(row.quantity);
+    if (owned < quantity) {
       throw new AppError('INVALID_STATUS', '丹药库存不足');
     }
-    const updated: PillInventoryRow = { ...row!, quantity: quantity - 1, updated_at: this.now };
+    const updated: PillInventoryRow = { ...row!, quantity: owned - quantity, updated_at: this.now };
     this.pillInventories = this.pillInventories.map((item) =>
       item.id === updated.id ? updated : item,
     );
@@ -776,7 +822,15 @@ class SectDraft {
     });
   }
 
-  async commit(options: { checkRecruitState?: boolean; staleRecruitBatchOnConflict?: boolean } = {}): Promise<void> {
+  async commit(options: {
+    checkRecruitState?: boolean;
+    staleRecruitBatchOnConflict?: boolean;
+    /**
+     * 坊市售丹：本次写入涉及的那条丹药库存（绝对值写回）。
+     * 传了就进守卫 —— 这条库存必须仍是读快照时的数量，否则整批回滚。
+     */
+    pillId?: string;
+  } = {}): Promise<void> {
     if (this.statements.length === 0) {
       return;
     }
@@ -785,7 +839,12 @@ class SectDraft {
       sect: this.base.sect,
       balances: this.base.balances,
       disciples: this.base.disciples,
-    }, { checkRecruitState: options.checkRecruitState });
+    }, {
+      checkRecruitState: options.checkRecruitState,
+      ...(options.pillId === undefined
+        ? {}
+        : { pill: { pillId: options.pillId, quantity: this.basePillQuantity(options.pillId) } }),
+    });
     try {
       await this.db.batch(prepareStatements(this.db, [
         ...guard.guards,
@@ -5431,4 +5490,156 @@ export async function wheelReset(
   await draft.commitGambling({ resourceId: 'spiritStone', checkWheelSeed: true });
 
   return { state: draft.view() };
+}
+
+/* ---------- 坊市（shop.ts 的纯规则 + 受保护 batch 提交） ---------- */
+
+/**
+ * 坊市文案里的灵石数量：买入价是 667 最小单位（= 0.667 灵石）这种零头，
+ * displayAmount 的两位小数会把它抹成 0.67，所以这里保留三位再裁掉多余的 0。
+ */
+function shopAmountText(minUnits: number): string {
+  const value = minUnits / UNITS_PER_DISPLAY;
+  return Number.isInteger(value) ? String(value) : String(Number(value.toFixed(3)));
+}
+
+/** 坊市可交易材料的第一道判定：灵石 / 灵气 / 客户端乱传的 id 一律拒绝（计划 2.1）。 */
+function requireTradableResource(resourceId: string): ShopTradableResource {
+  const traded = asShopTradableResource(resourceId);
+  if (traded === null) {
+    throw new AppError('VALIDATION_ERROR', '该资源不能在坊市交易', { resourceId });
+  }
+  return traded;
+}
+
+/**
+ * 坊市买入（POST /game/shop-buy，计划 4.2 / 5.2）：灵石 → 材料。
+ *
+ * 与其它写命令同一套路：结算 → 全部只读校验（材料白名单 / 灵石余额 / 材料容量）→
+ * 扣灵石、加材料 → **一次**受保护 batch（`commit()` 的守卫会核对全部资源余额，
+ * 并发的结算或交易只会让这一批回滚重试，不会写出半笔交易）。
+ *
+ * 容量用与结算同一口径的 effectiveCapacity：买入不允许把材料顶到容量之外
+ * （超出的部分在结算里会被算成溢出：room = 0，之后的产出全部丢弃），所以提前拒绝，并在 details 里给出还能买多少。
+ */
+export async function shopBuy(
+  db: D1Database,
+  userId: string,
+  resourceId: string,
+  amount: number,
+  now: number,
+): Promise<{ state: SectStateView; result: ShopBuyResultView }> {
+  const draft = await draftFor(db, userId, now);
+  const traded = requireTradableResource(resourceId);
+  const cost = shopBuyCost(amount);
+  const gained = toMinUnits(amount);
+
+  draft.requireResourceAvailable('spiritStone', cost);
+  const capacity = draft.resourceCapacityOf(traded);
+  const balance = draft.balanceOf(traded);
+  if (balance + gained > capacity) {
+    const room = Math.max(0, Math.floor((capacity - balance) / UNITS_PER_DISPLAY));
+    throw new AppError(
+      'CAPACITY_FULL',
+      `${draft.resourceName(traded)}将超过容量上限（最多还能买入 ${String(room)}）`,
+      {
+        resourceId: traded,
+        capacity: String(capacity),
+        balance: String(balance),
+        room: String(room),
+      },
+    );
+  }
+
+  // 校验全部通过后才真正扣减：requireResource 同时完成检查与扣减，语句与内存一起改。
+  draft.requireResource('spiritStone', cost);
+  draft.grantResource(traded, gained);
+  await draft.commit();
+
+  return {
+    state: draft.view(),
+    result: {
+      action: 'buy',
+      resourceId: traded,
+      resourceName: draft.resourceName(traded),
+      amount,
+      cost,
+      message: `买入 ${draft.resourceName(traded)} ×${String(amount)}，花费 ${shopAmountText(cost)} 灵石`,
+    },
+  };
+}
+
+/**
+ * 坊市卖出材料（POST /game/shop-sell，计划 4.3 / 5.2）：材料 → 灵石。
+ *
+ * 扣的是 `amount × UNITS_PER_DISPLAY` 最小单位材料（amount 是展示单位整数）；
+ * 卖得的灵石与秘境 / 挑战 / 历练奖励同一口径 —— 直接加余额、不夹容量
+ * （只有买入要挡容量，理由见 shopBuy）。
+ */
+export async function shopSell(
+  db: D1Database,
+  userId: string,
+  resourceId: string,
+  amount: number,
+  now: number,
+): Promise<{ state: SectStateView; result: ShopSellResultView }> {
+  const draft = await draftFor(db, userId, now);
+  const traded = requireTradableResource(resourceId);
+  const revenue = shopSellRevenue(amount);
+
+  // requireResource 同时完成检查与扣减（不足抛 INSUFFICIENT_RESOURCE，带缺少数量）。
+  draft.requireResource(traded, toMinUnits(amount));
+  draft.grantResource('spiritStone', revenue);
+  await draft.commit();
+
+  return {
+    state: draft.view(),
+    result: {
+      action: 'sell',
+      resourceId: traded,
+      resourceName: draft.resourceName(traded),
+      amount,
+      revenue,
+      message: `卖出 ${draft.resourceName(traded)} ×${String(amount)}，获得 ${shopAmountText(revenue)} 灵石`,
+    },
+  };
+}
+
+/**
+ * 坊市售丹（POST /game/shop-sell-pill，计划 4.4 / 5.2）：丹药 → 灵石。
+ *
+ * 丹药只能卖不能买：回收价出自 shop.ts 的 SHOP_PILL_PRICES（丹方以外的一律拒绝，
+ * 价格表就是白名单）。库存扣减是**绝对值**写回，所以 commit 必须带上 pillId ——
+ * 守卫会核对这条库存仍是读到的数量，并发的炼制 / 服用不会被这一批覆盖。
+ */
+export async function shopSellPill(
+  db: D1Database,
+  userId: string,
+  pillId: string,
+  quantity: number,
+  now: number,
+): Promise<{ state: SectStateView; result: ShopSellPillResultView }> {
+  const draft = await draftFor(db, userId, now);
+  // 未知丹方抛 NOT_FOUND（与炼制 / 服用同一文案）；有丹方但没回收价再抛一次。
+  const recipe = requirePillRecipe(pillId);
+  const price = shopPillPrice(recipe.id);
+  if (price === null || price <= 0) {
+  }
+  const revenue = shopPillRevenue(recipe.id, quantity);
+
+  draft.removePill(recipe.id, quantity);
+  draft.grantResource('spiritStone', revenue);
+  await draft.commit({ pillId: recipe.id });
+
+  return {
+    state: draft.view(),
+    result: {
+      action: 'sell-pill',
+      pillId: recipe.id,
+      pillName: recipe.name,
+      quantity,
+      revenue,
+      message: `卖出 ${recipe.name} ×${String(quantity)}，获得 ${shopAmountText(revenue)} 灵石`,
+    },
+  };
 }

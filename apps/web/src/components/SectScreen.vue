@@ -18,6 +18,7 @@ import type {
   RecruitPreview,
   SecretRealmView,
   SectStateView,
+  ShopResourceId,
   WheelSpinResult,
 } from '../api/game';
 import type { ToastTone } from '../types/ui';
@@ -28,6 +29,9 @@ import {
   fetchJourneyPreview,
   fetchRecruitPreview,
   fetchSecretRealms,
+  shopBuy,
+  shopSell,
+  shopSellPill,
 } from '../api/game';
 import { resourceGlyph } from '../utils/glyph';
 import AlchemyPanel from './AlchemyPanel.vue';
@@ -43,6 +47,7 @@ import GamblingHouseDialog from './GamblingHouseDialog.vue';
 import RealmExploreDialog from './RealmExploreDialog.vue';
 import LeaderboardPanel from './LeaderboardPanel.vue';
 import RecruitDialog from './RecruitDialog.vue';
+import ShopDialog from './ShopDialog.vue';
 import ModalShell from './ModalShell.vue';
 
 /**
@@ -112,7 +117,7 @@ const emit = defineEmits<{
   wheelReset: [];
 }>();
 
-/** 操作条里的弹窗开关：天机录 / 历练探索 / 江湖榜 / 守擂阵容 / 演武录 / 炼丹（宗门晋升与建筑仍在右栏常驻）。 */
+/** 操作条里的弹窗开关：天机录 / 历练探索 / 江湖榜 / 守擂阵容 / 演武录 / 炼丹 / 赌坊 / 坊市（宗门晋升与建筑仍在右栏常驻）。 */
 const openPanel = ref<
   | 'events'
   | 'explore'
@@ -121,6 +126,7 @@ const openPanel = ref<
   | 'challenge-history'
   | 'alchemy'
   | 'gambling'
+  | 'shop'
   | null
 >(null);
 
@@ -667,7 +673,64 @@ function onCloseGambling(): void {
   openPanel.value = null;
 }
 
-/** 0019 详情里点「分配」悟道值：归属、余额与上限都由服务端裁决，这里只转发。 */
+/* ---------- 坊市（商店）：接口在本组件调用，回执里的 state 交给 App 统一赋值 ---------- */
+
+/** 坊市交易在途：与 props.busy（App 的全局门闩）分开，只锁坊市这一层，避免连点重复下单。 */
+const shopSubmitting = ref(false);
+
+/**
+ * 坊市回执：App.vue 上「SectScreen 自己拿到新 state」的入口只有 @recruited / @recruit-refreshed，
+ * 两者都指向 onRecruitRefreshed（state.value = next + announceEvents），所以复用同一个入口，
+ * 不新增 App.vue 的绑定；坊市不写事件日志，announceEvents 不会因此多弹提示。
+ */
+function handOffShopState(next: SectStateView): void {
+  emit('recruited', next);
+}
+
+/** 买入材料（POST /game/shop-buy）：数量换算、余额与材料容量都由服务端再校验一遍。 */
+async function onShopBuy(resourceId: ShopResourceId, amount: number): Promise<void> {
+  if (props.busy || shopSubmitting.value) return;
+  shopSubmitting.value = true;
+  try {
+    const { state: next, result } = await shopBuy(resourceId, amount);
+    handOffShopState(next);
+    emit('notify', 'success', `买入 ${result.resourceName} ×${String(result.amount)}`, result.message);
+  } catch (caught) {
+    emit('notify', 'error', '交易未成', caught instanceof Error ? caught.message : '坊市暂时无法交割，请稍后重试。');
+  } finally {
+    shopSubmitting.value = false;
+  }
+}
+
+/** 卖出材料（POST /game/shop-sell）：库存由服务端校验，成功后留在卖出页。 */
+async function onShopSell(resourceId: ShopResourceId, amount: number): Promise<void> {
+  if (props.busy || shopSubmitting.value) return;
+  shopSubmitting.value = true;
+  try {
+    const { state: next, result } = await shopSell(resourceId, amount);
+    handOffShopState(next);
+    emit('notify', 'success', `卖出 ${result.resourceName} ×${String(result.amount)}`, result.message);
+  } catch (caught) {
+    emit('notify', 'error', '交易未成', caught instanceof Error ? caught.message : '坊市暂时无法交割，请稍后重试。');
+  } finally {
+    shopSubmitting.value = false;
+  }
+}
+
+/** 卖出丹药（POST /game/shop-sell-pill）：颗数上限与库存都由服务端裁决，成功后留在售丹页。 */
+async function onShopSellPill(pillId: string, quantity: number): Promise<void> {
+  if (props.busy || shopSubmitting.value) return;
+  shopSubmitting.value = true;
+  try {
+    const { state: next, result } = await shopSellPill(pillId, quantity);
+    handOffShopState(next);
+    emit('notify', 'success', `售出 ${result.pillName} ×${String(result.quantity)}`, result.message);
+  } catch (caught) {
+    emit('notify', 'error', '交易未成', caught instanceof Error ? caught.message : '坊市暂时无法交割，请稍后重试。');
+  } finally {
+    shopSubmitting.value = false;
+  }
+}
 function onDetailAllocateDaoInsight(
   discipleId: string,
   attribute: DaoAttribute,
@@ -989,6 +1052,12 @@ function onDetailSetAvatarFrame(discipleId: string, frameId: AvatarFrameId): voi
             </svg>
             <span>赌坊</span>
           </button>
+          <button class="action-chip" type="button" @click="openPanel = 'shop'">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 4.2v14.6M4.4 7.6h15.2M8.4 18.8h7.2M4.4 7.6 2.4 12.4h4L4.4 7.6Zm15.2 0-2 4.8h4l-2-4.8Z" />
+            </svg>
+            <span>坊市</span>
+          </button>
         </div>
       </section>
     </nav>
@@ -1214,6 +1283,26 @@ function onDetailSetAvatarFrame(discipleId: string, frameId: AvatarFrameId): voi
         @game="onGamblingGame"
         @close="onCloseGambling"
         @reveal="onGamblingRevealed"
+      />
+    </ModalShell>
+
+    <!--
+      坊市：三笔交易都在 ShopDialog 里当场算预览，接口调用与 toast 在本组件；
+      回执里的 state 交给 App 统一赋值（见 handOffShopState），交易成功留在当前标签页。
+    -->
+    <ModalShell
+      v-if="openPanel === 'shop'"
+      :loading="shopSubmitting"
+      loading-text="正在与坊市交割"
+      label="坊市"
+      @close="openPanel = null"
+    >
+      <ShopDialog
+        :state="state"
+        :busy="busy || shopSubmitting"
+        @buy="onShopBuy"
+        @sell="onShopSell"
+        @sell-pill="onShopSellPill"
       />
     </ModalShell>
 
