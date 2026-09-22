@@ -2030,6 +2030,39 @@ ul {
   letter-spacing: 0.16em;
 }
 
+.dao-insight-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.dao-insight-help {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border-radius: 50%;
+  font-size: 12px;
+  line-height: 1;
+}
+
+.dao-insight-help-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.dao-insight-help-text {
+  margin: 0;
+  color: #c8d6ce;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+}
+
 .disciple-note-row {
   display: flex;
   min-width: 0;
@@ -4104,7 +4137,7 @@ ul {
 }
 
 .action-group-external .action-group-buttons {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
 .action-chip {

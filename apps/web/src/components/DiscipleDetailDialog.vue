@@ -255,6 +255,8 @@ watch(daoPointsMax, (max) => {
   if (!Number.isFinite(current) || current < 1 || current > max) daoPointsInput.value = String(max);
 });
 
+const showDaoInsightHelp = ref(false);
+
 function allocateDaoInsight(): void {
   if (props.busy || !daoAllocatable.value || !daoPointsValid.value) return;
   emit('allocateDaoInsight', props.disciple.id, daoAttribute.value, daoPoints.value);
@@ -725,60 +727,70 @@ function confirmExpel(): void {
           这里只是把「本次最多能分多少」算出来给玩家看，不复制服务端的加点公式。
         -->
         <section class="disciple-detail-section" aria-labelledby="disciple-dao-insight-title">
-          <h3 id="disciple-dao-insight-title" class="disciple-detail-title">悟道值</h3>
-          <p class="disciple-detail-hint">
-            可用 {{ disciple.daoInsight }} 点 · 已分配 {{ disciple.daoInsightUsed }}/{{ daoInsightCap }} ·
-            剩余可分配额度 {{ disciple.daoInsightRemaining }} 点
-          </p>
-
-          <ul class="journey-directions" role="radiogroup" aria-label="加点属性">
-            <li v-for="option in DAO_ATTRIBUTE_OPTIONS" :key="option.value" class="journey-direction">
-              <button
-                class="journey-direction-button"
-                :class="{ 'is-selected': daoAttribute === option.value }"
-                type="button"
-                role="radio"
-                :disabled="busy"
-                :aria-checked="daoAttribute === option.value"
-                @click="daoAttribute = option.value"
-              >
-                <strong>{{ option.label }}</strong>
-                <small>当前 {{ disciple[option.value] }}</small>
-              </button>
-            </li>
-          </ul>
-
-          <div class="disciple-note-row">
-            <input
-              class="disciple-input"
-              type="number"
-              inputmode="numeric"
-              min="1"
-              :max="daoPointsMax"
-              step="1"
-              aria-label="分配点数"
-              :value="daoPointsInput"
-              :disabled="busy || !daoAllocatable"
-              @input="daoPointsInput = ($event.target as HTMLInputElement).value"
-            />
-            <button
-              class="action-button primary-action"
-              type="button"
-              :disabled="busy || !daoAllocatable || !daoPointsValid"
-              @click="allocateDaoInsight"
-            >
-              <span>分配</span>
-            </button>
+          <div class="dao-insight-heading">
+            <h3 id="disciple-dao-insight-title" class="disciple-detail-title">悟道值</h3>
+            <button class="quiet-button dao-insight-help" type="button" @click="showDaoInsightHelp = true">?</button>
           </div>
-          <p class="disciple-note-meta" role="status">
-            本次可分配 1 ~ {{ daoPointsMax }} 点（受可用悟道值、累计上限与属性 100 上限共同限制）
-          </p>
-          <p v-if="!daoAllocatable" class="blocked-hint">
-            暂无可分配额度：悟道值不足、累计已达上限，或该属性已到 100。
-          </p>
-          <p class="disciple-detail-hint">
-            1 点悟道值 = 1 点属性；每个弟子最多累计分配 {{ daoInsightCap }} 点。
-          </p>
+          <p class="disciple-detail-hint">当前可用 {{ disciple.daoInsight }} 点</p>
+
+          <template v-if="daoAllocatable">
+            <ul class="journey-directions" role="radiogroup" aria-label="加点属性">
+              <li v-for="option in DAO_ATTRIBUTE_OPTIONS" :key="option.value" class="journey-direction">
+                <button
+                  class="journey-direction-button"
+                  :class="{ 'is-selected': daoAttribute === option.value }"
+                  type="button"
+                  role="radio"
+                  :disabled="busy"
+                  :aria-checked="daoAttribute === option.value"
+                  @click="daoAttribute = option.value"
+                >
+                  <strong>{{ option.label }}</strong>
+                  <small>当前 {{ disciple[option.value] }}</small>
+                </button>
+              </li>
+            </ul>
+
+            <div class="disciple-note-row">
+              <input
+                class="disciple-input"
+                type="number"
+                inputmode="numeric"
+                min="1"
+                :max="daoPointsMax"
+                step="1"
+                aria-label="分配点数"
+                :value="daoPointsInput"
+                :disabled="busy"
+                @input="daoPointsInput = ($event.target as HTMLInputElement).value"
+              />
+              <button
+                class="action-button primary-action"
+                type="button"
+                :disabled="busy || !daoPointsValid"
+                @click="allocateDaoInsight"
+              >
+                <span>分配</span>
+              </button>
+            </div>
+            <p class="disciple-note-meta" role="status">
+              本次可分配 1 ~ {{ daoPointsMax }} 点
+            </p>
+          </template>
+
+          <ModalShell v-if="showDaoInsightHelp" narrow label="悟道值说明" @close="showDaoInsightHelp = false">
+            <section class="dao-insight-help-card" aria-labelledby="dao-insight-help-title">
+              <h2 id="dao-insight-help-title" class="disciple-detail-title">悟道值说明</h2>
+              <p class="disciple-detail-hint">已分配 {{ disciple.daoInsightUsed }}/{{ daoInsightCap }} · 剩余可分配额度 {{ disciple.daoInsightRemaining }} 点</p>
+              <pre class="dao-insight-help-text">1 点悟道值 = 1 点属性。
+每个弟子最多累计分配 {{ daoInsightCap }} 点。
+分配点数受可用悟道值、累计上限与属性 100 上限共同限制。
+悟道值通过赌坊论道获得。</pre>
+              <button class="action-button primary-action realm-button" type="button" @click="showDaoInsightHelp = false">
+                <span>知道了</span>
+              </button>
+            </section>
+          </ModalShell>
         </section>
 
         <section class="disciple-detail-section" aria-labelledby="disciple-overview-cultivation">
