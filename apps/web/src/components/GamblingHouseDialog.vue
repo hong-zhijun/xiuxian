@@ -347,10 +347,14 @@ const RULES_TEXT = `论道赌局 · 玩法说明
       </p>
 
       <template v-else>
-        <div class="challenge-info">
+        <div class="configure-header">
+          <h3 class="configure-title">论道赌局</h3>
+          <button class="quiet-button" type="button" @click="showRules = true">说明</button>
+        </div>
+        <div class="configure-status">
           <span>今日剩余 {{ remaining }}/{{ dailyLimit }} 次</span>
-          <span>出战弟子：{{ selectedDisciple?.name ?? '未选' }}</span>
-          <button class="quiet-button" type="button" @click="showRules = true">?</button>
+          <span class="configure-sep">·</span>
+          <span>出战：{{ selectedDisciple?.name ?? '未选' }}</span>
         </div>
 
         <p class="eyebrow">赌注模式</p>
@@ -727,6 +731,35 @@ const RULES_TEXT = `论道赌局 · 玩法说明
 
 .gambling-toolbar .lineup-note {
   margin-top: 0;
+}
+
+.configure-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 6px;
+}
+
+.configure-title {
+  margin: 0;
+  color: var(--gold, #caa96a);
+  font-family: 'STKaiti', 'KaiTi', serif;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+}
+
+.configure-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  color: #93a99e;
+  font-size: 12px;
+}
+
+.configure-sep {
+  color: rgba(147, 169, 158, 0.4);
 }
 
 .gambling-games {
