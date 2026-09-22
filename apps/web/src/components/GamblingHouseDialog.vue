@@ -1,16 +1,16 @@
 <script setup lang="ts">
-import { computed, onUnmounted, ref, watch } from 'vue';
+import { computed, ref, watch } from 'vue';
 
 import type {
   DaoAttribute,
   DaoDebateInput,
   DaoDebateResult,
   DebateHistoryEntry,
-  DiscipleView,
   SectStateView,
 } from '../api/game';
 import { fetchDebateHistory } from '../api/game';
 import ModalShell from './ModalShell.vue';
+import DisciplePicker from './DisciplePicker.vue';
 
 /**
  * 赌坊主面板（弹窗内容）：三个阶段在同一组件里切换 ——
@@ -127,41 +127,11 @@ function formatTime(iso: string): string {
   return `${String(d.getMonth() + 1)}/${String(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-/* ---------- 疗伤 / 在外判定：与挑战选人同一口径 ---------- */
-
-const nowTick = ref(Date.now());
-const clock = window.setInterval(() => {
-  nowTick.value = Date.now();
-}, 1000);
-
-onUnmounted(() => {
-  window.clearInterval(clock);
-});
-
-/** 受伤弟子不能出战（与服务端 injured_until > now 同一判定）。 */
-function isInjured(disciple: DiscipleView): boolean {
-  if (disciple.injuredUntil === null) {
-    return false;
-  }
-  return Date.parse(disciple.injuredUntil) > nowTick.value;
-}
-
-/** 不在疗伤、且不在外历练（journey.status === 'active'）的弟子才能代表宗门出战。 */
-function isAvailable(disciple: DiscipleView): boolean {
-  return !isInjured(disciple) && disciple.journey.status !== 'active';
-}
-
-function discipleBlockedReason(disciple: DiscipleView): string | null {
-  if (isInjured(disciple)) return '疗伤中';
-  if (disciple.journey.status === 'active') return '在外历练';
-  return null;
-}
-
-const availableDisciples = computed(() => props.state.disciples.filter(isAvailable));
-
 /* ---------- 配置表单 ---------- */
 
-const selectedDiscipleId = ref<string | null>(null);
+/** 选中的出战弟子（选人控件统一给数组，单选所以最多 1 个）。 */
+const selectedDiscipleIds = ref<string[]>([]);
+const selectedDiscipleId = computed(() => selectedDiscipleIds.value[0] ?? null);
 const betMode = ref<DaoDebateInput['betMode']>('preset_spirit_stone');
 const multiplier = ref<DaoDebateInput['multiplier']>(1);
 const rewardType = ref<'resource' | 'insight'>('resource');
@@ -211,10 +181,6 @@ function formatSpiritStone(minUnits: number): string {
   const display = minUnits / UNITS_PER_DISPLAY;
   return display >= 0 ? `+${String(display)}` : String(display);
 }
-
-const selectedDisciple = computed<DiscipleView | null>(
-  () => props.state.disciples.find((disciple) => disciple.id === selectedDiscipleId.value) ?? null,
-);
 
 const freeAmountDisplay = computed(() => Number(freeAmountInput.value.trim()));
 const freeAmountMinUnits = computed(() => Math.round(freeAmountDisplay.value * UNITS_PER_DISPLAY));
@@ -485,36 +451,15 @@ const RULES_TEXT = `论道赌局 · 玩法说明
           </p>
         </div>
 
-        <div class="party-select">
-          <div class="party-select-head">
-            <span class="eyebrow">选择出战弟子（可出战 {{ availableDisciples.length }} 位）</span>
-          </div>
-          <label
-            v-for="disciple in state.disciples"
-            :key="disciple.id"
-            class="party-member"
-            :class="{
-              'is-picked': selectedDiscipleId === disciple.id,
-              'is-injured': !isAvailable(disciple),
-            }"
-          >
-            <input
-              type="radio"
-              name="gambling-disciple"
-              :checked="selectedDiscipleId === disciple.id"
-              :disabled="busy || !isAvailable(disciple)"
-              @change="selectedDiscipleId = disciple.id"
-            />
-            <span>
-              {{ disciple.name }}（{{ disciple.stageName }} · 攻 {{ disciple.attack }} 防
-              {{ disciple.defense }} 身法 {{ disciple.speed }} · 战力 {{ disciple.combatPower }}）
-            </span>
-            <small v-if="discipleBlockedReason(disciple)">{{ discipleBlockedReason(disciple) }}</small>
-          </label>
-          <p v-if="availableDisciples.length === 0" class="blocked-hint">
-            门下弟子或在外历练、或在疗伤，暂时无人可出战。
-          </p>
-        </div>
+        <DisciplePicker
+          v-model:selected="selectedDiscipleIds"
+          :disciples="state.disciples"
+          mode="single"
+          :min="1"
+          :max="1"
+          :busy="busy"
+          title="选择出战弟子"
+        />
 
         <button
           class="action-button primary-action realm-button"
@@ -527,7 +472,6 @@ const RULES_TEXT = `论道赌局 · 玩法说明
           <span>开始论道</span>
         </button>
         <p v-if="remaining <= 0" class="blocked-hint">今日论道次数已用尽，明日再来。</p>
-        <p v-else-if="selectedDiscipleId === null" class="blocked-hint">请选择一名出战弟子。</p>
         <p v-else-if="!modeConfigured" class="blocked-hint">请先填写合法的押注数量。</p>
       </template>
     </template>
