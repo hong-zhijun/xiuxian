@@ -7,8 +7,13 @@ import { BETTABLE_ATTRIBUTES } from './gambling';
  * 账号/会话相关 schema 在 modules/auth/schema.ts。
  */
 
+/**
+ * 建宗：name 只做「类型 + 宽松上限」的第一道防线，真正的规则（trim / 单行纯文本 /
+ * 2-12 个 Unicode 码点）在 service.normalizeEntityName 里按码点判定 —— 与改名同一套口径，
+ * 免得出现「改名能用、建宗不能建」的名字（zod 的 .length 数的是 UTF-16 单元）。
+ */
 export const createSectRequestSchema = z.strictObject({
-  name: z.string().trim().min(2, '宗门名至少 2 个字符').max(12, '宗门名最多 12 个字符'),
+  name: z.string().max(64),
 });
 
 /**
@@ -90,6 +95,21 @@ export const setDiscipleNoteRequestSchema = z.strictObject({
 /** 0013 驱逐弟子：只带目标 id；归属与人数规则由 service 判定。 */
 export const expelDiscipleRequestSchema = z.strictObject({
   discipleId: z.string().min(1).max(64),
+});
+
+/**
+ * 改名（宗门 / 弟子）：只做「类型 + 宽松长度上限」的第一道防线，
+ * 真正的规则（trim / 单行纯文本 / 无控制字符 / 宗门 2-12、弟子 2-6 个 Unicode 码点）在
+ * service.normalizeEntityName 里按码点判定，长度与价格常量见 names.ts。
+ */
+export const renameSectRequestSchema = z.strictObject({
+  name: z.string().max(64),
+});
+
+/** 弟子改名：与宗门改名同一套规则（上限 6 个码点）；归属由 service 用 discipleById 判定。 */
+export const renameDiscipleRequestSchema = z.strictObject({
+  discipleId: z.string().min(1).max(64),
+  name: z.string().max(64),
 });
 
 /**

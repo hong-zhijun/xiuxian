@@ -47,7 +47,15 @@ import {
   realmIndex,
 } from './constants';
 import { RECENT_EVENTS_IN_SYNC, eventNameOf, type TriggeredEvent } from './events';
-import { attributeScore } from './names';
+import {
+  DISCIPLE_NAME_MAX_CHARS,
+  DISCIPLE_NAME_MIN_CHARS,
+  DISCIPLE_RENAME_COST,
+  SECT_NAME_MAX_CHARS,
+  SECT_NAME_MIN_CHARS,
+  SECT_RENAME_COST,
+  attributeScore,
+} from './names';
 import { discipleCombatPower } from './realms';
 import type {
   BuildingRow,
@@ -186,10 +194,14 @@ export interface BuildingView {
   blockedReason: string | null;
 }
 
+/**
+ * 招贤面板。
+ * 0021 起「每日 3 次」上限已去掉：宗门等级决定的弟子上限是唯一门槛
+ * （config.recruitment.dailyLimit 保留在配置里但不再参与判定，只作为历史字段）。
+ */
 export interface RecruitView {
   cost: Record<string, string>;
-  dailyLimit: number;
-  usedToday: number;
+  /** 还能招几个人（= 弟子上限 − 现有弟子数，不小于 0）。 */
   remaining: number;
   discipleCount: number;
   discipleCapacity: number;
@@ -547,6 +559,24 @@ export interface ExploreChoiceResultView {
   message: string;
 }
 
+/**
+ * 改名面板（0021：宗门 / 弟子改名）。
+ * 价格是灵石最小单位（1 展示单位 = 1000 最小单位，前端 formatAmount 做除法）；
+ * 长度规则按 Unicode 码点，与后端 normalizeEntityName 同一口径。
+ */
+export interface RenameView {
+  /** 宗门改名消耗（灵石，最小单位）。 */
+  sectCost: string;
+  /** 弟子改名消耗（灵石，最小单位）。 */
+  discipleCost: string;
+  /** 宗门名长度规则（码点）。 */
+  sectNameMinChars: number;
+  sectNameMaxChars: number;
+  /** 弟子名长度规则（码点）。 */
+  discipleNameMinChars: number;
+  discipleNameMaxChars: number;
+}
+
 export interface SectStateView {
   sect: {
     id: string;
@@ -568,6 +598,8 @@ export interface SectStateView {
   disciples: DiscipleView[];
   buildings: BuildingView[];
   recruit: RecruitView;
+  /** 改名消耗与名称长度规则（0021：规则与价格都由服务端给，前端只渲染与提示）。 */
+  rename: RenameView;
   assignments: AssignmentOptionView[];
   /** 最近触发的事件（新的在前，最多 10 条）。 */
   recentEvents: EventLogView[];
@@ -867,8 +899,6 @@ export interface SectStateInput {
   /** 库里的最近事件行；本次结算刚触发的事件在 buildSectStateView 里合并进来。 */
   recentEventRows: readonly EventLogRow[];
   now: number;
-  /** 今日已招募次数（由调用方按日期 key 归一）。 */
-  recruitUsedToday: number;
   /** 宗门等级的资源容量倍率（影响所有资源的实际容量）。 */
   /** 0014：本宗未领取的历练记录（在外中 + 待领取）。 */
   journeys: readonly DiscipleJourneyRow[];
@@ -894,7 +924,6 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
     debateDay,
     settleResult,
     now,
-    recruitUsedToday,
     journeys,
     recentJourneys,
     recentEventRows,
@@ -1097,22 +1126,22 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
 
   const discipleCapacity = levelDef.discipleCapacity;
   const buildingCapacity = levelDef.buildingCapacity;
-  const recruitRemaining = Math.max(0, config.recruitment.dailyLimit - recruitUsedToday);
+  const recruitRemaining = Math.max(0, discipleCapacity - disciples.length);
   const recruitCost = { ...config.recruitment.cost };
   const recruitLacking = Object.entries(recruitCost).find(
     ([resourceId, amount]) => (balancesByResource.get(resourceId) ?? 0) < Number(amount),
   );
+  // 0021：「每日 3 次」上限已去掉——只有「弟子上限已满」与灵石不足两条门槛
+  // （config.recruitment.dailyLimit 不再参与判定，保留在配置里只作为历史字段）。
   const recruitBlockedReason =
     disciples.length >= discipleCapacity
       ? '弟子上限已满'
-      : recruitRemaining <= 0
-        ? '今日招募次数已用完'
-        : recruitLacking !== undefined
-          ? `${
-              config.resources.find((resource) => resource.id === recruitLacking[0])?.name ??
-              recruitLacking[0]
-            }不足`
-          : null;
+      : recruitLacking !== undefined
+        ? `${
+            config.resources.find((resource) => resource.id === recruitLacking[0])?.name ??
+            recruitLacking[0]
+          }不足`
+        : null;
 
   const sectUpgrade = buildSectUpgradeView({
     config,
@@ -1200,13 +1229,19 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
     buildings: buildingViews,
     recruit: {
       cost: recruitCost,
-      dailyLimit: config.recruitment.dailyLimit,
-      usedToday: recruitUsedToday,
       remaining: recruitRemaining,
       discipleCount: disciples.length,
       discipleCapacity,
       canRecruit: recruitBlockedReason === null,
       blockedReason: recruitBlockedReason,
+    },
+    rename: {
+      sectCost: String(SECT_RENAME_COST),
+      discipleCost: String(DISCIPLE_RENAME_COST),
+      sectNameMinChars: SECT_NAME_MIN_CHARS,
+      sectNameMaxChars: SECT_NAME_MAX_CHARS,
+      discipleNameMinChars: DISCIPLE_NAME_MIN_CHARS,
+      discipleNameMaxChars: DISCIPLE_NAME_MAX_CHARS,
     },
     assignments: [
       { id: IDLE_ASSIGNMENT, name: '闲置', currentCount: null, maxCount: null },

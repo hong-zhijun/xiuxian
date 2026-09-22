@@ -214,6 +214,18 @@ export class SectRepository extends ParamRepository {
       params: [sectId],
     });
   }
+
+  /**
+   * 0021 宗门名占用检查：返回占用这个名字的宗门 id（没人用返回 null）。
+   * 只服务读路径（给友好文案）；并发抢名由 sects_name_uniq 唯一索引兜底。
+   */
+  async findIdByName(name: string): Promise<string | null> {
+    const row = await this.one<{ id: string }>({
+      sql: 'SELECT id FROM sects WHERE name = ?',
+      params: [name],
+    });
+    return row?.id ?? null;
+  }
 }
 
 export class DiscipleRepository extends ParamRepository {
@@ -851,6 +863,18 @@ export function updateSectDefenseLineupStatement(
 }
 
 /**
+ * 0021 宗门改名：只更新 name 一列（服务层已 trim 并校验为 2-12 个码点的单行纯文本）。
+ * sects 只有主键可用，所以这里是单条件更新：并发保护靠 commit() 的 mutation_guards 快照守卫
+ * （守卫核对 level / last_settled_at），同时也保证改名不会写出半行。
+ */
+export function updateSectNameStatement(sectId: string, name: string): ParameterizedQuery {
+  return {
+    sql: 'UPDATE sects SET name = ? WHERE id = ?',
+    params: [name, sectId],
+  };
+}
+
+/**
  * 0013 备注写回：note 已在服务层 trim 并校验（≤60 字、单行、无控制字符）。
  * 与驱逐删除保持一致用 `id + sect_id` 双条件：身份写错行时影响 0 行（批内快照守卫再兜一层）。
  */
@@ -877,6 +901,24 @@ export function updateDiscipleAvatarFrameStatement(
   return {
     sql: 'UPDATE disciples SET avatar_frame_id = ? WHERE id = ? AND sect_id = ?',
     params: [frameId, discipleId, sectId],
+  };
+}
+
+/**
+ * 0021 弟子改名：只更新 name 一列（服务层已 trim 并校验为 2-6 个码点的单行纯文本）。
+ * 与备注 / 头像框一致用 `id + sect_id` 双条件：身份写错行时影响 0 行（批内快照守卫再兜一层）。
+ *
+ * 历史表里的 disciple_name（0014 历练、0019 赌坊记录）是出发 / 开局时的姓名快照，
+ * 改名**不回填**——旧记录继续显示当时的名字（见 0014 迁移注释）。
+ */
+export function updateDiscipleNameStatement(
+  discipleId: string,
+  sectId: string,
+  name: string,
+): ParameterizedQuery {
+  return {
+    sql: 'UPDATE disciples SET name = ? WHERE id = ? AND sect_id = ?',
+    params: [name, discipleId, sectId],
   };
 }
 

@@ -968,6 +968,14 @@ ul {
   padding-right: 64px;
 }
 
+/* 0021 建宗页提示：宗门名全局唯一（唯一索引 + 服务端预检），提前说明免得白填一次。 */
+.founding-hint {
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.7;
+}
+
 .field-count {
   position: absolute;
   top: 50%;
@@ -1106,6 +1114,45 @@ ul {
   letter-spacing: 0.1em;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* 0021 改名：宗门名与铅笔同一行（铅笔跟着标题走，不做成大按钮，避免抢标题）。 */
+.sect-name-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+}
+
+.sect-rename {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  border: 1px solid rgba(202, 169, 106, 0.35);
+  border-radius: 999px;
+  color: var(--gold-bright);
+  background: rgba(202, 169, 106, 0.06);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+  transition: border-color 150ms ease, color 150ms ease, background-color 150ms ease;
+}
+
+.sect-rename svg {
+  width: 12px;
+  height: 12px;
+}
+
+.sect-rename:not(:disabled):hover {
+  border-color: rgba(234, 209, 154, 0.6);
+  background: rgba(202, 169, 106, 0.12);
+}
+
+.sect-rename:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .sect-metrics {

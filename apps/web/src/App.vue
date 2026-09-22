@@ -18,6 +18,8 @@ import {
   logout as apiLogout,
   recruit,
   refreshRecruitPreview,
+  renameDisciple,
+  renameSect,
   setDiscipleNote,
   setDiscipleAvatarFrame,
   setDefenseLineup,
@@ -654,6 +656,32 @@ function onSetAvatarFrame(discipleId: string, frameId: AvatarFrameId): void {
   );
 }
 
+/** 0021 宗门改名（一次 500 灵石）：名称规则与扣费都在服务端，这里只按回执提示。 */
+function onRenameSect(name: string): void {
+  void runAction(
+    () => renameSect(name),
+    (data) => ({
+      title: '宗门已更名',
+      message: `新匾挂上，山门此后称「${data.state.sect.name}」。`,
+    }),
+  );
+}
+
+/**
+ * 0021 弟子改名（一次 50 灵石）：旧名字在请求前先记下来（成功后 state 里只剩新名字），
+ * 提示里同时给出前后两个名字；字数、归属与扣费都由服务端裁决。
+ */
+function onRenameDisciple(discipleId: string, name: string): void {
+  const previous = state.value?.disciples.find((item) => item.id === discipleId)?.name ?? '该弟子';
+  void runAction(
+    () => renameDisciple(discipleId, name),
+    (data) => {
+      const next = data.state.disciples.find((item) => item.id === discipleId)?.name ?? name;
+      return { title: '弟子已更名', message: `「${previous}」此后名为「${next}」。` };
+    },
+  );
+}
+
 /**
  * 0013 驱逐弟子：二次确认在详情弹窗里完成（此处只会收到已确认的请求）。
  * 阵容清理与人数不足 3 人的后果都以服务端回执为准，前端不自己推算。
@@ -842,6 +870,8 @@ onUnmounted(() => {
       @use-pill="onUsePill"
       @save-note="onSaveNote"
       @set-avatar-frame="onSetAvatarFrame"
+      @rename-sect="onRenameSect"
+      @rename-disciple="onRenameDisciple"
       @expel="onExpelDisciple"
       @start-journey="onStartJourney"
       @claim-journey="onClaimJourney"

@@ -101,8 +101,7 @@ export interface BuildingView {
 
 export interface RecruitView {
   cost: Record<string, string>;
-  dailyLimit: number;
-  usedToday: number;
+  /** 还能招几个人（= 弟子上限 − 现有弟子数）。0021 起已无「每日 3 次」上限。 */
   remaining: number;
   discipleCount: number;
   discipleCapacity: number;
@@ -130,6 +129,20 @@ export interface AssignmentOptionView {
   maxCount: number | null;
 }
 
+/** 改名面板（与后端 view.ts 的 RenameView 一一对应）：价格是最小单位，前端 formatAmount 做除法。 */
+export interface RenameView {
+  /** 宗门改名消耗（灵石，最小单位）。 */
+  sectCost: string;
+  /** 弟子改名消耗（灵石，最小单位）。 */
+  discipleCost: string;
+  /** 宗门名长度规则（Unicode 码点）。 */
+  sectNameMinChars: number;
+  sectNameMaxChars: number;
+  /** 弟子名长度规则（Unicode 码点）。 */
+  discipleNameMinChars: number;
+  discipleNameMaxChars: number;
+}
+
 export interface SectStateView {
   sect: {
     id: string;
@@ -149,6 +162,8 @@ export interface SectStateView {
   disciples: DiscipleView[];
   buildings: BuildingView[];
   recruit: RecruitView;
+  /** 改名消耗与名称长度规则（0021：宗门 / 弟子改名，规则与价格都由服务端给）。 */
+  rename: RenameView;
   /** 可选岗位（含闲置）；有上限的岗位（如采灵）会给出 currentCount / maxCount。 */
   assignments: AssignmentOptionView[];
   /** 最近事件（新→旧，服务端最多返回 10 条）。 */
@@ -707,6 +722,31 @@ export async function setDiscipleAvatarFrame(
     '/api/v1/game/set-disciple-avatar-frame',
     { method: 'POST', body: { discipleId, frameId } },
   );
+  return data.state;
+}
+
+/**
+ * 0021 宗门改名（POST /game/rename-sect）：一次 500 灵石（价目由 state.rename.sectCost 给出）。
+ * 名称规则（2-12 个码点、单行纯文本）与灵石余额都由服务端最终裁决；
+ * 提交的名字与当前名字相同则不扣费、不写库（服务端显式早退）。
+ */
+export async function renameSect(name: string): Promise<SectStateView> {
+  const data = await apiRequest<{ state: SectStateView }>('/api/v1/game/rename-sect', {
+    method: 'POST',
+    body: { name },
+  });
+  return data.state;
+}
+
+/**
+ * 0021 弟子改名（POST /game/rename-disciple）：一次 50 灵石、2-6 个码点。
+ * 与私有备注同一规则：在外历练期间也能改；历史记录（历练 / 赌坊）里的姓名快照不回填。
+ */
+export async function renameDisciple(discipleId: string, name: string): Promise<SectStateView> {
+  const data = await apiRequest<{ state: SectStateView }>('/api/v1/game/rename-disciple', {
+    method: 'POST',
+    body: { discipleId, name },
+  });
   return data.state;
 }
 

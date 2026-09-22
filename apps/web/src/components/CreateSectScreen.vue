@@ -17,7 +17,10 @@ const name = ref('');
 const busy = ref(false);
 
 const cleanName = computed(() => name.value.trim());
-const nameCount = computed(() => cleanName.value.length);
+// 按 Unicode 码点计数（与服务端 normalizeEntityName 同一口径；星平面字符算 1 个）。
+// maxlength 是浏览器按 UTF-16 单元算的，所以留 24 个单元 = 12 个星平面字符的余量，
+// 真正的规则由 validateName 的 nameCount 判定。
+const nameCount = computed(() => Array.from(cleanName.value).length);
 
 function validateName(): boolean {
   if (nameCount.value < 2 || nameCount.value > 12) {
@@ -84,7 +87,7 @@ async function submit(): Promise<void> {
               <input
                 v-model="name"
                 minlength="2"
-                maxlength="12"
+                maxlength="24"
                 autocomplete="off"
                 placeholder="例如：太虚剑宗"
                 required
@@ -92,6 +95,8 @@ async function submit(): Promise<void> {
               <span class="field-count">{{ nameCount }}/12</span>
             </span>
           </label>
+
+          <p class="founding-hint">宗门名不可与其他宗门重名；立派之后再改名要花 500 灵石。</p>
 
           <button class="action-button primary-action founding-submit" type="submit" :disabled="busy">
             <span>{{ busy ? '敕令正在落印' : '敕立山门' }}</span>

@@ -19,6 +19,8 @@ import {
   exploreRequestSchema,
   journeyPreviewQuerySchema,
   recruitRequestSchema,
+  renameDiscipleRequestSchema,
+  renameSectRequestSchema,
   setDefenseLineupSchema,
   setDiscipleAvatarFrameRequestSchema,
   setDiscipleNoteRequestSchema,
@@ -53,6 +55,8 @@ import {
   previewRecruit,
   recruitDisciple,
   refreshRecruit,
+  renameDisciple,
+  renameSect,
   setDefenseLineup,
   setDiscipleAvatarFrame,
   setDiscipleNote,
@@ -262,6 +266,28 @@ export function createGameRoutes(): Hono<AppEnv> {
       userId,
       body.discipleId,
       body.frameId,
+      Date.now(),
+    );
+    return respondOk(c, { state });
+  });
+
+  // 0021：宗门改名（结算 → 名称归一化 → 扣 500 灵石 → 单列写回，一次受保护 batch；同名早退不扣费）。
+  routes.post('/game/rename-sect', async (c) => {
+    const userId = requireUserId(c);
+    const body = await parseStrictJson(renameSectRequestSchema, c);
+    const state = await renameSect(getDb(c.env), userId, body.name, Date.now());
+    return respondOk(c, { state });
+  });
+
+  // 0021：弟子改名（同上，扣 50 灵石；在外历练期间也允许改，历史快照不回填）。
+  routes.post('/game/rename-disciple', async (c) => {
+    const userId = requireUserId(c);
+    const body = await parseStrictJson(renameDiscipleRequestSchema, c);
+    const state = await renameDisciple(
+      getDb(c.env),
+      userId,
+      body.discipleId,
+      body.name,
       Date.now(),
     );
     return respondOk(c, { state });
