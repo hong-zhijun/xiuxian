@@ -1128,6 +1128,7 @@ function onDetailSetAvatarFrame(discipleId: string, frameId: AvatarFrameId): voi
         :result="daoDebateResult"
         @debate="onDaoDebate"
         @close="onCloseGambling"
+        @notify="(tone, title, message) => emit('notify', tone, title, message)"
       />
     </ModalShell>
 

@@ -29,6 +29,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   debate: [input: DaoDebateInput];
   close: [];
+  notify: [tone: 'success' | 'warning', title: string, message: string];
 }>();
 
 /** 所有资源数量都是最小单位整数，1 展示单位 = 1000 最小单位（与 utils/format.ts 同口径）。 */
@@ -193,6 +194,14 @@ watch(
 
 function revealResult(): void {
   stage.value = 'result';
+  if (props.result) {
+    emit(
+      'notify',
+      props.result.result === 'win' ? 'success' : 'warning',
+      `${props.result.result === 'win' ? '论道得胜' : '论道失利'} · ${props.result.discipleName}`,
+      props.result.message,
+    );
+  }
 }
 
 /** doc 11.3 的规则文案原文：前端只负责展示，不改写措辞与数值。 */

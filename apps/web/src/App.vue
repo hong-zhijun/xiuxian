@@ -496,11 +496,6 @@ async function onDaoDebate(input: DaoDebateInput): Promise<void> {
     state.value = next;
     announceEvents(next);
     daoDebateResult.value = result;
-    notify(
-      result.result === 'win' ? 'success' : 'warning',
-      `${result.result === 'win' ? '论道得胜' : '论道失利'} · ${result.discipleName}`,
-      result.message,
-    );
   } catch (caught) {
     handleError(caught);
   } finally {
