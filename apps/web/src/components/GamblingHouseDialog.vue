@@ -561,11 +561,11 @@ const RULES_TEXT = `论道赌局 · 玩法说明
         </div>
 
         <button
-          class="action-button primary-action realm-button"
+          class="action-button primary-action realm-button confrontation-action"
           type="button"
           @click="revealResult"
         >
-          <span>揭晓结果</span>
+          <span>开始比试</span>
         </button>
       </template>
     </template>
@@ -959,6 +959,12 @@ const RULES_TEXT = `论道赌局 · 玩法说明
   font-size: 16px;
   font-weight: 700;
   letter-spacing: 0.1em;
+}
+
+.confrontation-action {
+  margin-top: 16px;
+  padding: 8px 20px;
+  font-size: 13px;
 }
 
 .gambling-record-card {
