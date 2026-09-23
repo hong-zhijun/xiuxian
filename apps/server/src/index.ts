@@ -1,4 +1,6 @@
 import { createApp } from './app';
+import { getDb } from './infra/db/client';
+import { settleCurrentRound } from './modules/game/service';
 
 const app = createApp();
 
@@ -10,5 +12,10 @@ export default {
       return app.fetch(request, env, ctx);
     }
     return (env as unknown as { ASSETS: Fetcher }).ASSETS.fetch(request);
+  },
+
+  async scheduled(_event: ScheduledController, env: Env, _ctx: ExecutionContext) {
+    const db = getDb(env);
+    await settleCurrentRound(db, Date.now());
   },
 } satisfies ExportedHandler<Env>;

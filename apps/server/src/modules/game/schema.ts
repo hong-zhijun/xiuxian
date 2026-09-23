@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-import { BETTABLE_ATTRIBUTES, RACE_BET_MAX, RACE_BET_MIN, RACE_HORSE_COUNT } from './gambling';
+import { BETTABLE_ATTRIBUTES, RACE_BEAST_COUNT, RACE_BET_MAX, RACE_BET_MIN } from './gambling';
 import { SHOP_MAX_PILL_QUANTITY, SHOP_MAX_TRADE_AMOUNT, SHOP_TRADABLE_RESOURCES } from './shop';
 
 /**
@@ -258,11 +258,10 @@ export const sendChatMessageRequestSchema = z.strictObject({
 });
 
 /**
- * 0023 赛马：只做「类型 + 范围」的第一道防线（马 0~4、赌注与 RACE_BET_MIN / RACE_BET_MAX 同口径）。
- * 真正的规则（解锁、每日次数、灵石余额、赔率与开奖）全部在 service 与 gambling.ts 里判定。
+ * 0024 灵兽竞逐下注：只做「类型 + 范围」的第一道防线。
+ * 真正的规则（解锁、阶段、每日次数、灵石余额）全部在 service 里判定。
  */
-export const horseRaceRequestSchema = z.strictObject({
-  horseIndex: z.number().int().min(0).max(RACE_HORSE_COUNT - 1),
-  /** 赌注（最小单位整数）。 */
+export const raceBetRequestSchema = z.strictObject({
+  beastIndex: z.number().int().min(0).max(RACE_BEAST_COUNT - 1),
   betAmount: z.number().int().min(RACE_BET_MIN).max(RACE_BET_MAX),
 });

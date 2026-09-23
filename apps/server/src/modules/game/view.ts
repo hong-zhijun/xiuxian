@@ -363,32 +363,50 @@ export interface WheelSpinResultView {
 }
 
 /**
- * 0023 赛马结果（POST /game/horse-race 的 result，计划第 6 节）。
+ * 0024 灵兽竞逐状态（GET /game/race-state 的返回值）。
  *
- * steps 是 5 × RACE_STEP_COUNT 的累计进度，前端只用它播动画；
- * 赔率要在动画开始前就显示出来，所以 horses 里带 odds；胜负与金额照 result / rewardAmount 渲染。
+ * 前端根据 phase 切换界面：betting 投注 → sealed 封盘/动画 → settled 结算结果 → closed 休赛。
  */
-export interface HorseRaceResultView {
-  /** 5 匹马：名字、权重、胜率与赔率（顺序即马的下标 0~4）。 */
-  horses: { name: string; weight: number; winRate: number; odds: number }[];
-  /** 每匹马的最终名次（1-based，下标 = 马的下标）。 */
-  ranks: number[];
-  /** 冠军马的下标（0~4）。 */
-  winnerIndex: number;
-  /** 玩家押的马的下标（0~4）。 */
-  selectedIndex: number;
-  /** 赌注（最小单位，字符串）。 */
-  betAmount: string;
-  /** 选中马的赔率（一位小数）。 */
+export interface RaceStateView {
+  /** 当前轮次的 round_key（如 "2026-09-23T08:00"）。 */
+  roundKey: string;
+  /** 当前阶段。 */
+  phase: 'betting' | 'sealed' | 'settled' | 'closed';
+  /** 距下一阶段切换的剩余秒数。 */
+  remainingSeconds: number;
+  /** 5 只灵兽的信息。 */
+  beasts: RaceBeastView[];
+  /** 总投注池（最小单位）。 */
+  totalPool: string;
+  /** 当前玩家在本轮的投注列表。 */
+  myBets: RaceMyBetView[];
+  /** 当前玩家在本轮的投注总额（最小单位）。 */
+  myTotalBet: string;
+  /** 结算后：冠军下标（0~4），未结算时为 null。 */
+  winnerIndex: number | null;
+  /** 结算后：每匹灵兽的最终名次（1-based），未结算时为 null。 */
+  ranks: number[] | null;
+  /** 结算后：动画序列（5 × 8），未结算时为 null。 */
+  steps: number[][] | null;
+  /** 结算后：当前玩家本轮赢得的灵石（最小单位），未结算时为 null。 */
+  myWinnings: string | null;
+}
+
+export interface RaceBeastView {
+  index: number;
+  name: string;
+  weight: number;
+  winRate: number;
+  /** 该灵兽上的总投注额（最小单位）。 */
+  pool: string;
+  /** 互赌倍率（一位小数）；无人投注时为 0。 */
   odds: number;
-  /** 'win' | 'lose'。 */
-  result: 'win' | 'lose';
-  /** 奖励灵石（最小单位，字符串）；输时为 '0'。 */
-  rewardAmount: string;
-  /** 5 × 8 的动画序列（累计进度 0→1）。 */
-  steps: number[][];
-  /** 服务端拼好的结果文案。 */
-  message: string;
+}
+
+export interface RaceMyBetView {
+  beastIndex: number;
+  beastName: string;
+  amount: string;
 }
 
 /**
@@ -723,6 +741,8 @@ export interface SectStateView {
     remaining: number;
     /** 0020 天机轮：赌坊未解锁时为 null；解锁后带当前格局与档位费用。 */
     wheel: WheelView | null;
+    /** 0024 灵兽竞逐：当前轮次状态。 */
+    race: RaceStateView | null;
   };
   /**
    * 坊市面板：材料买卖价格与可售丹药（没有解锁条件，1 级宗门即可使用）。
@@ -1365,6 +1385,9 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
       : null,
     // 0020 天机轮：格局 + 档位费用 + 重置费用（都是服务端口径，前端只渲染）。
     wheel: wheelView,
+    // 0024 灵兽竞逐：轮次状态由前端单独 GET 拉取（不在 sync 里包含，因为要定时轮询），
+    // buildSectStateView 只填 null 占位，前端通过 /game/race-state 独立获取。
+    race: null,
   };
 
   return {

@@ -41,6 +41,10 @@
       "migrations_dir": "../../migrations"
     }
   ],
+  // 灵兽竞逐结算：每 10 分钟触发 scheduled()，选冠军 + 发奖
+  "triggers": {
+    "crons": ["*/10 * * * *"]
+  },
   // 前端静态资源：Worker 同时服务 API 和前端，同域无 CORS 问题
   "assets": {
     "directory": "../web/dist",

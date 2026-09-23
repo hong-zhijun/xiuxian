@@ -1266,50 +1266,50 @@ export async function wheelReset(): Promise<{ state: SectStateView }> {
   return apiRequest<{ state: SectStateView }>('/api/v1/game/wheel-reset', { method: 'POST' });
 }
 
-/* ---------- 0023 赛马（赌坊第三个玩法） ---------- */
+/* ---------- 0024 灵兽竞逐（赌坊第三个玩法） ---------- */
 
-/** 赛马的一匹马（与后端 view.ts 的 HorseRaceResultView.horses 一一对应）。 */
-export interface HorseRaceHorse {
+export interface RaceBeastView {
+  index: number;
   name: string;
-  /** 本局随机实力权重（服务端 1~5）。 */
   weight: number;
-  /** 由权重归一化的胜率（0~1）。 */
   winRate: number;
-  /** 赔率（一位小数，最低 1.2）。 */
+  pool: string;
   odds: number;
 }
 
-/** 赛马结果（POST /game/horse-race 的 result；与后端 HorseRaceResultView 一一对应）。 */
-export interface HorseRaceResult {
-  horses: HorseRaceHorse[];
-  /** 每匹马的最终名次（1-based，下标 = 马 index）。 */
-  ranks: number[];
-  winnerIndex: number;
-  selectedIndex: number;
-  /** 赌注（最小单位，字符串）。 */
-  betAmount: string;
-  /** 选中马的赔率（一位小数）。 */
-  odds: number;
-  result: 'win' | 'lose';
-  /** 奖励灵石（最小单位，字符串）；输时 '0'。 */
-  rewardAmount: string;
-  /** 5 × 8 的累计进度序列（动画用，值域 0~1）。 */
-  steps: number[][];
-  /** 服务端拼好的结果文案。 */
-  message: string;
+export interface RaceMyBetView {
+  beastIndex: number;
+  beastName: string;
+  amount: string;
 }
 
-/**
- * 0023 赛马（POST /game/horse-race）：一次一局，扣每日赌坊次数（与论道 / 天机轮共享）。
- * 名次、赔率、奖励与次数全由服务端裁决，betAmount 传**最小单位**整数（1 展示单位 = 1000）。
- */
-export async function horseRace(
-  horseIndex: number,
+export interface RaceStateView {
+  roundKey: string;
+  phase: 'betting' | 'sealed' | 'settled' | 'closed';
+  remainingSeconds: number;
+  beasts: RaceBeastView[];
+  totalPool: string;
+  myBets: RaceMyBetView[];
+  myTotalBet: string;
+  winnerIndex: number | null;
+  ranks: number[] | null;
+  steps: number[][] | null;
+  myWinnings: string | null;
+}
+
+export async function fetchRaceState(): Promise<{ state: SectStateView; race: RaceStateView }> {
+  return apiRequest<{ state: SectStateView; race: RaceStateView }>(
+    '/api/v1/game/race-state',
+  );
+}
+
+export async function placeRaceBet(
+  beastIndex: number,
   betAmount: number,
-): Promise<{ state: SectStateView; result: HorseRaceResult }> {
-  return apiRequest<{ state: SectStateView; result: HorseRaceResult }>(
-    '/api/v1/game/horse-race',
-    { method: 'POST', body: { horseIndex, betAmount } },
+): Promise<{ state: SectStateView; race: RaceStateView }> {
+  return apiRequest<{ state: SectStateView; race: RaceStateView }>(
+    '/api/v1/game/race-bet',
+    { method: 'POST', body: { beastIndex, betAmount } },
   );
 }
 

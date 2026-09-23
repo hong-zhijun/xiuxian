@@ -580,21 +580,18 @@ export function wheelReward(slot: WheelSlot, tier: WheelTier, cost: number): Whe
   };
 }
 
-/* ---------- 赛马（0023 迁移 + docs/赛马开发计划.md） ---------- */
+/* ---------- 灵兽竞逐（0024 迁移 + docs/灵兽竞逐开发计划.md） ---------- */
 
-/** 每局固定 5 匹马。 */
-export const RACE_HORSE_COUNT = 5;
+/** 每轮固定 5 只灵兽。 */
+export const RACE_BEAST_COUNT = 5;
 
-/** 马名（修仙风格）：每局只随机实力权重，不随机名字，所以前端在「下注」阶段就能显示完整马名。 */
-export const HORSE_NAMES = ['赤兔', '绝影', '的卢', '乌骓', '踏雪'] as const;
+/** 灵兽名（修仙风格）。 */
+export const BEAST_NAMES = ['麒麟', '玄龟', '朱雀', '白虎', '青龙'] as const;
 
-/** 庄家抽水：赔率 = (1 / 胜率) × (1 − HOUSE_EDGE)。 */
+/** 庄家抽水率（互赌/parimutuel：净池 = 总池 × (1 − HOUSE_EDGE)）。 */
 export const RACE_HOUSE_EDGE = 0.1;
 
-/** 赔率下限：热门马的赔率不能被抽水压到 1x 附近（计划 2.1）。 */
-export const RACE_ODDS_MIN = 1.2;
-
-/** 实力权重范围（整数，含端点）；权重之和决定每匹马胜率。 */
+/** 实力权重范围（整数，含端点）；权重之和决定胜率。 */
 export const RACE_WEIGHT_MIN = 1;
 export const RACE_WEIGHT_MAX = 5;
 
@@ -602,10 +599,10 @@ export const RACE_WEIGHT_MAX = 5;
 export const RACE_BET_MIN = 10_000;
 export const RACE_BET_MAX = 500_000;
 
-/** 大奖广播阈值：选中马的赔率 ≥ 此值且押中 → 全服聊天广播（计划 2.6）。 */
-export const RACE_BROADCAST_ODDS_THRESHOLD = 8.0;
+/** 大奖广播阈值：实际倍率 ≥ 此值且中奖 → 全服聊天广播。 */
+export const RACE_BROADCAST_PAYOUT_THRESHOLD = 5.0;
 
-/** 跑马动画步数：前端 8 步 × ~440ms ≈ 3.5 秒（计划 2.7）。 */
+/** 跑马动画步数：前端 8 步 × ~440ms ≈ 3.5 秒。 */
 export const RACE_STEP_COUNT = 8;
 
 /** 名次每落后一名，终点进度少 0.06：冠军 1.00、末位 0.76。 */
@@ -614,45 +611,96 @@ export const RACE_RANK_GAP = 0.06;
 /** 中间步的最大抖动幅度（随进度收窄，最后一步恒为 0）。 */
 const RACE_STEP_JITTER = 0.12;
 
-/** 赛马记录里的 disciple_name（与天机轮写 '天机轮' 同一模式；两列都是 NOT NULL）。 */
-export const RACE_LOG_NAME = '赛马';
+/** 灵兽竞逐记录里的 disciple_name（与天机轮写 '天机轮' 同一模式）。 */
+export const RACE_LOG_NAME = '灵兽竞逐';
 
-/** 一匹马的赛前信息。 */
-export interface RaceHorse {
-  /** 0 ~ 4。 */
-  index: number;
-  name: string;
-  /** 随机实力权重（RACE_WEIGHT_MIN ~ RACE_WEIGHT_MAX）。 */
-  weight: number;
-  /** 胜率（权重 / 权重之和，0~1）。 */
-  winRate: number;
-  /** 赔率（一位小数，最低 RACE_ODDS_MIN）。 */
-  odds: number;
+/** 轮次时长（毫秒）：10 分钟。 */
+export const RACE_ROUND_MS = 10 * 60 * 1000;
+
+/** 投注阶段时长（毫秒）：前 8 分钟。 */
+export const RACE_BETTING_MS = 8 * 60 * 1000;
+
+/** 运营时段（UTC+8 小时）。 */
+export const RACE_OPERATE_START_HOUR = 8;
+export const RACE_OPERATE_END_HOUR = 23;
+
+/** 竞逐阶段。 */
+export type RacePhase = 'betting' | 'sealed' | 'closed';
+
+export interface RacePhaseInfo {
+  phase: RacePhase;
+  roundKey: string;
+  /** 距下一阶段切换的剩余毫秒。 */
+  remainingMs: number;
 }
 
-/** 一局赛马的完整结果（纯函数产出，service 再包一层视图）。 */
-export interface RaceResult {
-  horses: RaceHorse[];
-  /** [马0名次, 马1名次, ...]，1-based。 */
-  ranks: number[];
-  /** 冠军马的下标（0~4）。 */
-  winnerIndex: number;
-  /** 5 × RACE_STEP_COUNT 的累计进度（0→1），前端动画直接读。 */
-  steps: number[][];
+/** 从时间戳计算当前轮次的 round_key（UTC+8 对齐到 10 分钟）。 */
+export function raceRoundKeyOf(now: number): string {
+  const utc8 = now + 8 * 3_600_000;
+  const aligned = Math.floor(utc8 / RACE_ROUND_MS) * RACE_ROUND_MS;
+  const d = new Date(aligned - 8 * 3_600_000);
+  const yyyy = String(d.getUTCFullYear());
+  const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(d.getUTCDate()).padStart(2, '0');
+  const hh = String(d.getUTCHours()).padStart(2, '0');
+  const min = String(d.getUTCMinutes()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}T${hh}:${min}`;
 }
 
-/** 第 index 匹马的名字（index 必在 0~4；兜底只为类型收窄，正常走不到）。 */
-export function horseNameAt(index: number): string {
-  return HORSE_NAMES[index] ?? `第${String(index + 1)}号马`;
+/** 判断给定时间戳是否在运营时段内（UTC+8 的 08:00–23:00）。 */
+export function isRaceOperatingHour(now: number): boolean {
+  const utc8Hour = new Date(now + 8 * 3_600_000).getUTCHours();
+  return utc8Hour >= RACE_OPERATE_START_HOUR && utc8Hour < RACE_OPERATE_END_HOUR;
 }
 
-/** 赔率 = max(1.2, (1 / 胜率) × (1 − 抽水))，四舍五入到一位小数。 */
-export function raceOdds(winRate: number): number {
-  if (!(winRate > 0)) return RACE_ODDS_MIN;
-  return Math.max(RACE_ODDS_MIN, Math.round((1 / winRate) * (1 - RACE_HOUSE_EDGE) * 10) / 10);
+/** 计算当前阶段与倒计时。 */
+export function racePhaseOf(now: number): RacePhaseInfo {
+  const roundKey = raceRoundKeyOf(now);
+  if (!isRaceOperatingHour(now)) {
+    const utc8 = now + 8 * 3_600_000;
+    const todayStart = new Date(utc8);
+    todayStart.setUTCHours(RACE_OPERATE_START_HOUR, 0, 0, 0);
+    let nextOpen = todayStart.getTime() - 8 * 3_600_000;
+    if (nextOpen <= now) nextOpen += 24 * 3_600_000;
+    return { phase: 'closed', roundKey, remainingMs: nextOpen - now };
+  }
+
+  const utc8 = now + 8 * 3_600_000;
+  const roundStart = Math.floor(utc8 / RACE_ROUND_MS) * RACE_ROUND_MS - 8 * 3_600_000;
+  const elapsed = now - roundStart;
+  if (elapsed < RACE_BETTING_MS) {
+    return { phase: 'betting', roundKey, remainingMs: RACE_BETTING_MS - elapsed };
+  }
+  return { phase: 'sealed', roundKey, remainingMs: RACE_ROUND_MS - elapsed };
 }
 
-/** 按权重加权随机选一个下标（与 wheelWeightedPick 同一模式；roll ∈ [0, 1)）。 */
+/** 从 round_key 确定性生成 5 只灵兽的权重（简单字符哈希 → 伪随机）。 */
+export function beastWeightsFromRoundKey(roundKey: string): number[] {
+  let hash = 0;
+  for (let i = 0; i < roundKey.length; i += 1) {
+    hash = ((hash << 5) - hash + roundKey.charCodeAt(i)) | 0;
+  }
+  const weights: number[] = [];
+  for (let i = 0; i < RACE_BEAST_COUNT; i += 1) {
+    hash = ((hash * 1103515245 + 12345) & 0x7fffffff) | 0;
+    weights.push(RACE_WEIGHT_MIN + (Math.abs(hash) % (RACE_WEIGHT_MAX - RACE_WEIGHT_MIN + 1)));
+  }
+  return weights;
+}
+
+/** 灵兽名（index 必在 0~4）。 */
+export function beastNameAt(index: number): string {
+  return BEAST_NAMES[index] ?? `第${String(index + 1)}号灵兽`;
+}
+
+/** 互赌倍率：净池 / 该灵兽的总投注额。无人投注返回 0。 */
+export function parimutuelOdds(totalPool: number, beastPool: number): number {
+  if (beastPool <= 0 || totalPool <= 0) return 0;
+  const netPool = totalPool * (1 - RACE_HOUSE_EDGE);
+  return Math.round((netPool / beastPool) * 10) / 10;
+}
+
+/** 按权重加权随机选一个下标（roll ∈ [0, 1)）。 */
 export function raceWeightedPick(weights: readonly number[], roll: number): number {
   let total = 0;
   for (const weight of weights) total += weight;
@@ -665,10 +713,7 @@ export function raceWeightedPick(weights: readonly number[], roll: number): numb
   return weights.length - 1;
 }
 
-/**
- * 名次（纯函数）：冠军固定第 1，其余按权重降序 —— 权重相同按下标升序，保证结果确定。
- * 只赌冠军，所以 2~5 名不必再逐个随机（计划 2.1）。
- */
+/** 名次（纯函数）：冠军固定第 1，其余按权重降序。 */
 export function raceRanksOf(weights: readonly number[], winnerIndex: number): number[] {
   const ranks = new Array<number>(weights.length).fill(weights.length);
   ranks[winnerIndex] = 1;
@@ -682,13 +727,7 @@ export function raceRanksOf(weights: readonly number[], winnerIndex: number): nu
   return ranks;
 }
 
-/**
- * 跑马动画序列（纯函数）：每匹马 RACE_STEP_COUNT 步的**累计进度**（0 → 目标）。
- *
- * - 目标进度 = 1 − (名次 − 1) × RACE_RANK_GAP：冠军 1.00、末位 0.76，名次一眼可辨；
- * - 中间步 = 基础进度 + 抖动（幅度随进度收窄），看起来会有超车；
- * - 最后一步严格等于目标，动画播完时画面与 ranks 完全一致。
- */
+/** 跑马动画序列（纯函数）。 */
 export function generateRaceSteps(
   ranks: readonly number[],
   random: () => number = Math.random,
@@ -707,32 +746,4 @@ export function generateRaceSteps(
     }
     return series;
   });
-}
-
-/**
- * 生成一局赛马（纯函数，随机源可注入以便测试）。
- *
- * 1. 5 匹马各摇一个 RACE_WEIGHT_MIN~RACE_WEIGHT_MAX 的整数权重；
- * 2. 胜率 = 权重 / 权重之和；赔率 = raceOdds(胜率)；
- * 3. 按胜率加权随机选冠军（与天机轮落格同一模式）；
- * 4. 其余马按权重降序排名次，再生成 8 步动画序列。
- *
- * 与天机轮不同：赛马**不需要** seed —— 它是「点一次跑一次」，不存在「格局被重置」的概念，
- * 每次请求都用 Math.random 现摇（计划 2.8）。
- */
-export function generateRace(random: () => number = Math.random): RaceResult {
-  const weights: number[] = [];
-  for (let index = 0; index < RACE_HORSE_COUNT; index += 1) {
-    weights.push(RACE_WEIGHT_MIN + Math.floor(random() * (RACE_WEIGHT_MAX - RACE_WEIGHT_MIN + 1)));
-  }
-
-  const total = weights.reduce((sum, weight) => sum + weight, 0);
-  const horses: RaceHorse[] = weights.map((weight, index) => {
-    const winRate = weight / total;
-    return { index, name: horseNameAt(index), weight, winRate, odds: raceOdds(winRate) };
-  });
-
-  const winnerIndex = raceWeightedPick(weights, random());
-  const ranks = raceRanksOf(weights, winnerIndex);
-  return { horses, ranks, winnerIndex, steps: generateRaceSteps(ranks, random) };
 }

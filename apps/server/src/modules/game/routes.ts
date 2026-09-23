@@ -17,7 +17,7 @@ import {
   daoDebateRequestSchema,
   expelDiscipleRequestSchema,
   exploreRequestSchema,
-  horseRaceRequestSchema,
+  raceBetRequestSchema,
   journeyPreviewQuerySchema,
   recruitRequestSchema,
   renameDiscipleRequestSchema,
@@ -53,7 +53,8 @@ import {
   getActiveExploration,
   getPublicSect,
   getSectState,
-  horseRace,
+  getRaceState,
+  placeRaceBet,
   listChallengeHistory,
   listLeaderboard,
   listRecentEvents,
@@ -463,12 +464,19 @@ export function createGameRoutes(): Hono<AppEnv> {
     return respondOk(c, { state: result.state });
   });
 
-  // 0023 赛马：一场定胜负（结算 → 解锁/次数/参数/余额校验 → 现摇整局 → 扣注、发奖、记录同批提交）。
-  routes.post('/game/horse-race', async (c) => {
+  // 0024 灵兽竞逐：获取当前轮次状态（投注池、倍率、阶段、倒计时）。
+  routes.get('/game/race-state', async (c) => {
     const userId = requireUserId(c);
-    const body = await parseStrictJson(horseRaceRequestSchema, c);
-    const result = await horseRace(getDb(c.env), userId, body, Date.now());
-    return respondOk(c, { state: result.state, result: result.result });
+    const result = await getRaceState(getDb(c.env), userId, Date.now());
+    return respondOk(c, { state: result.state, race: result.race });
+  });
+
+  // 0024 灵兽竞逐：下注（验证阶段 + 灵石余额 + 写投注 + 更新池）。
+  routes.post('/game/race-bet', async (c) => {
+    const userId = requireUserId(c);
+    const body = await parseStrictJson(raceBetRequestSchema, c);
+    const result = await placeRaceBet(getDb(c.env), userId, body, Date.now());
+    return respondOk(c, { state: result.state, race: result.race });
   });
 
   // 坊市：买入材料（结算 → 白名单 / 灵石余额 / 材料容量校验 → 扣灵石、加材料，一次受保护 batch）。

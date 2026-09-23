@@ -2141,3 +2141,114 @@ export function deleteGamblingSnapshotGuardStatement(commandId: string): Paramet
     params: [commandId],
   };
 }
+
+/* ---------- 灵兽竞逐（0024） ---------- */
+
+export interface RaceRoundRow {
+  id: string;
+  round_key: string;
+  beast_weights: string;
+  status: string;
+  winner_index: number | null;
+  total_pool: number;
+  settled_at: number | null;
+  created_at: number;
+}
+
+export interface RaceBetRow {
+  id: string;
+  round_id: string;
+  sect_id: string;
+  beast_index: number;
+  amount: number;
+  created_at: number;
+}
+
+export class RaceRepository extends ParamRepository {
+  async findRoundByKey(roundKey: string): Promise<RaceRoundRow | null> {
+    return this.one<RaceRoundRow>({
+      sql: 'SELECT * FROM race_rounds WHERE round_key = ?',
+      params: [roundKey],
+    });
+  }
+
+  async findBettingRoundsBefore(now: number): Promise<RaceRoundRow[]> {
+    return this.all<RaceRoundRow>({
+      sql: "SELECT * FROM race_rounds WHERE status = 'betting' AND created_at <= ?",
+      params: [now],
+    });
+  }
+
+  async betsByRound(roundId: string): Promise<RaceBetRow[]> {
+    return this.all<RaceBetRow>({
+      sql: 'SELECT * FROM race_bets WHERE round_id = ? ORDER BY created_at ASC',
+      params: [roundId],
+    });
+  }
+
+  async betsByRoundAndSect(roundId: string, sectId: string): Promise<RaceBetRow[]> {
+    return this.all<RaceBetRow>({
+      sql: 'SELECT * FROM race_bets WHERE round_id = ? AND sect_id = ? ORDER BY created_at ASC',
+      params: [roundId, sectId],
+    });
+  }
+
+  async beastPoolsByRound(roundId: string): Promise<{ beast_index: number; total: number }[]> {
+    return this.all<{ beast_index: number; total: number }>({
+      sql: 'SELECT beast_index, SUM(amount) as total FROM race_bets WHERE round_id = ? GROUP BY beast_index',
+      params: [roundId],
+    });
+  }
+
+  async hasBetInRound(roundId: string, sectId: string): Promise<boolean> {
+    const row = await this.one<{ cnt: number }>({
+      sql: 'SELECT COUNT(*) as cnt FROM race_bets WHERE round_id = ? AND sect_id = ?',
+      params: [roundId, sectId],
+    });
+    return (row?.cnt ?? 0) > 0;
+  }
+
+  override async execute(query: ParameterizedQuery): Promise<D1Result> {
+    return super.execute(query);
+  }
+}
+
+export function insertRaceRoundStatement(row: {
+  id: string;
+  roundKey: string;
+  beastWeights: string;
+  now: number;
+}): ParameterizedQuery {
+  return {
+    sql: 'INSERT INTO race_rounds (id, round_key, beast_weights, status, total_pool, created_at) VALUES (?, ?, ?, ?, 0, ?)',
+    params: [row.id, row.roundKey, row.beastWeights, 'betting', row.now],
+  };
+}
+
+export function insertRaceBetStatement(row: {
+  id: string;
+  roundId: string;
+  sectId: string;
+  beastIndex: number;
+  amount: number;
+  now: number;
+}): ParameterizedQuery {
+  return {
+    sql: 'INSERT INTO race_bets (id, round_id, sect_id, beast_index, amount, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+    params: [row.id, row.roundId, row.sectId, row.beastIndex, row.amount, row.now],
+  };
+}
+
+export function updateRaceRoundPoolStatement(roundId: string, delta: number): ParameterizedQuery {
+  return {
+    sql: 'UPDATE race_rounds SET total_pool = total_pool + ? WHERE id = ?',
+    params: [delta, roundId],
+  };
+}
+
+export function settleRaceRoundStatement(roundId: string, winnerIndex: number, now: number): ParameterizedQuery {
+  return {
+    sql: "UPDATE race_rounds SET status = 'settled', winner_index = ?, settled_at = ? WHERE id = ?",
+    params: [winnerIndex, now, roundId],
+  };
+}
