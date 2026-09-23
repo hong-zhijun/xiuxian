@@ -1313,6 +1313,34 @@ export async function placeRaceBet(
   );
 }
 
+export interface RaceBeastStatView {
+  index: number;
+  name: string;
+  wins: number;
+  winRate: number;
+}
+
+export interface RaceHistoryRoundView {
+  roundKey: string;
+  winnerIndex: number;
+  winnerName: string;
+  totalPool: string;
+  winnerOdds: number;
+  settledAt: number;
+}
+
+export interface RaceHistoryView {
+  beastStats: RaceBeastStatView[];
+  rounds: RaceHistoryRoundView[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+export async function fetchRaceHistory(page: number): Promise<RaceHistoryView> {
+  return apiRequest<RaceHistoryView>(`/api/v1/game/race-history?page=${String(page)}`);
+}
+
 /* ---------- 坊市（材料买卖与丹药回收） ---------- */
 
 /** 可交易材料（与后端 shop.ts 的 SHOP_TRADABLE_RESOURCES 同口径）：灵石与灵气都不可买卖。 */

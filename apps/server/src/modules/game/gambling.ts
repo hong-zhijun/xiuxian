@@ -591,6 +591,13 @@ export const BEAST_NAMES = ['麒麟', '玄龟', '朱雀', '白虎', '青龙'] as
 /** 庄家抽水率（互赌/parimutuel：净池 = 总池 × (1 − HOUSE_EDGE)）。 */
 export const RACE_HOUSE_EDGE = 0.1;
 
+/**
+ * 虚拟底池基数（最小单位 / 每权重点）：
+ * 每只灵兽按 weight × VIRTUAL_BASE 注入虚拟底池，锚定初始赔率。
+ * 真实投注在此基础上推动赔率变化，真实池越大虚拟部分越可忽略。
+ */
+export const RACE_VIRTUAL_BASE = 20_000;
+
 /** 实力权重范围（整数，含端点）；权重之和决定胜率。 */
 export const RACE_WEIGHT_MIN = 1;
 export const RACE_WEIGHT_MAX = 5;
@@ -693,11 +700,24 @@ export function beastNameAt(index: number): string {
   return BEAST_NAMES[index] ?? `第${String(index + 1)}号灵兽`;
 }
 
-/** 互赌倍率：净池 / 该灵兽的总投注额。无人投注返回 0。 */
+/** 纯互赌倍率：净池 / 该灵兽的总投注额。无人投注返回 0。仅用于结算。 */
 export function parimutuelOdds(totalPool: number, beastPool: number): number {
   if (beastPool <= 0 || totalPool <= 0) return 0;
   const netPool = totalPool * (1 - RACE_HOUSE_EDGE);
   return Math.round((netPool / beastPool) * 10) / 10;
+}
+
+/** 展示赔率：虚拟底池（锚定权重）+ 真实投注池混合计算。 */
+export function raceDisplayOdds(
+  realTotal: number, realBeastPool: number,
+  weight: number, totalWeight: number,
+): number {
+  const virtualBeast = weight * RACE_VIRTUAL_BASE;
+  const virtualTotal = totalWeight * RACE_VIRTUAL_BASE;
+  const effectiveTotal = realTotal + virtualTotal;
+  const effectiveBeast = realBeastPool + virtualBeast;
+  if (effectiveBeast <= 0) return 0;
+  return Math.round((effectiveTotal * (1 - RACE_HOUSE_EDGE)) / effectiveBeast * 10) / 10;
 }
 
 /** 按权重加权随机选一个下标（roll ∈ [0, 1)）。 */

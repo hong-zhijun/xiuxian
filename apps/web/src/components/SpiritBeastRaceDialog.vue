@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 
-import type { RaceStateView, SectStateView } from '../api/game';
-import { fetchRaceState, placeRaceBet } from '../api/game';
+import type { RaceHistoryView, RaceStateView, SectStateView } from '../api/game';
+import { fetchRaceHistory, fetchRaceState, placeRaceBet } from '../api/game';
 import { formatAmount } from '../utils/format';
 
 const props = defineProps<{
@@ -205,6 +205,43 @@ function oddsText(odds: number): string {
   return odds > 0 ? `${odds.toFixed(1)}x` : '—';
 }
 
+/* ---------- 历史记录 ---------- */
+
+type Tab = 'live' | 'history';
+const activeTab = ref<Tab>('live');
+
+const history = ref<RaceHistoryView | null>(null);
+const historyPage = ref(1);
+const historyLoading = ref(false);
+
+async function loadHistory(page: number): Promise<void> {
+  historyLoading.value = true;
+  try {
+    history.value = await fetchRaceHistory(page);
+    historyPage.value = page;
+  } catch { /* ignore */ } finally {
+    historyLoading.value = false;
+  }
+}
+
+function switchTab(tab: Tab): void {
+  activeTab.value = tab;
+  if (tab === 'history' && history.value === null) {
+    void loadHistory(1);
+  }
+}
+
+function formatRoundTime(roundKey: string): string {
+  const parts = roundKey.split('T');
+  if (parts.length < 2) return roundKey;
+  const [date, time] = parts;
+  return `${date!.slice(5)} ${time!}`;
+}
+
+function winRateText(rate: number): string {
+  return `${(rate * 100).toFixed(1)}%`;
+}
+
 watch(() => race.value?.phase, (phase) => {
   if (phase === 'sealed' && animPhase.value === 'idle') {
     // wait for next poll to get settled data
@@ -226,7 +263,67 @@ onUnmounted(() => {
 
 <template>
   <section class="race-panel" aria-labelledby="gambling-dialog-title">
-    <template v-if="loading">
+    <!-- Tab 切换 -->
+    <div class="race-tabs">
+      <button
+        class="race-tab" :class="{ 'is-active': activeTab === 'live' }"
+        type="button" @click="switchTab('live')"
+      >当前竞逐</button>
+      <button
+        class="race-tab" :class="{ 'is-active': activeTab === 'history' }"
+        type="button" @click="switchTab('history')"
+      >历史记录</button>
+    </div>
+
+    <!-- ==================== 历史记录 Tab ==================== -->
+    <template v-if="activeTab === 'history'">
+      <template v-if="historyLoading && !history">
+        <p class="race-note">加载中…</p>
+      </template>
+      <template v-else-if="history">
+        <!-- 灵兽胜率统计 -->
+        <div class="race-stats">
+          <div v-for="s in history.beastStats" :key="s.index" class="race-stat-card">
+            <strong>{{ s.name }}</strong>
+            <span class="race-stat-wins">{{ s.wins }} 胜</span>
+            <span class="race-stat-rate">{{ winRateText(s.winRate) }}</span>
+          </div>
+        </div>
+
+        <!-- 历史列表 -->
+        <ul v-if="history.rounds.length > 0" class="race-history-list">
+          <li v-for="r in history.rounds" :key="r.roundKey" class="race-history-row">
+            <span class="race-history-time">{{ formatRoundTime(r.roundKey) }}</span>
+            <strong class="race-history-winner">{{ r.winnerName }}</strong>
+            <span class="race-history-odds">{{ oddsText(r.winnerOdds) }}</span>
+            <span class="race-history-pool">奖池 {{ formatAmount(r.totalPool) }}</span>
+          </li>
+        </ul>
+        <p v-else class="race-note">暂无历史记录</p>
+
+        <!-- 分页 -->
+        <div v-if="history.total > history.pageSize" class="race-pager">
+          <button
+            class="action-button race-pager-button" type="button"
+            :disabled="historyPage <= 1 || historyLoading"
+            @click="loadHistory(historyPage - 1)"
+          >上一页</button>
+          <span class="race-pager-info">{{ historyPage }} / {{ Math.ceil(history.total / history.pageSize) }}</span>
+          <button
+            class="action-button race-pager-button" type="button"
+            :disabled="historyPage >= Math.ceil(history.total / history.pageSize) || historyLoading"
+            @click="loadHistory(historyPage + 1)"
+          >下一页</button>
+        </div>
+      </template>
+
+      <div class="race-foot">
+        <button class="action-button race-foot-button" type="button" @click="emit('back')">返回赌坊</button>
+      </div>
+    </template>
+
+    <!-- ==================== 当前竞逐 Tab ==================== -->
+    <template v-else-if="loading">
       <p class="race-note">加载中…</p>
     </template>
 
@@ -671,5 +768,130 @@ onUnmounted(() => {
   flex: 1 1 0;
   padding: 8px 12px;
   font-size: 13px;
+}
+
+/* ---------- Tab 栏 ---------- */
+
+.race-tabs {
+  display: flex;
+  gap: 0;
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.race-tab {
+  flex: 1 1 0;
+  padding: 8px 0;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: #7d9186;
+  font-size: 13px;
+  cursor: pointer;
+  transition: color 160ms ease, border-color 160ms ease;
+}
+
+.race-tab:hover {
+  color: #a9bcb2;
+}
+
+.race-tab.is-active {
+  border-bottom-color: var(--gold, #caa96a);
+  color: var(--gold, #caa96a);
+}
+
+/* ---------- 灵兽胜率统计 ---------- */
+
+.race-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.race-stat-card {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 80px;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.014);
+  text-align: center;
+}
+
+.race-stat-card strong {
+  color: #dce6e0;
+  font-size: 13px;
+}
+
+.race-stat-wins {
+  color: var(--gold, #caa96a);
+  font-size: 12px;
+}
+
+.race-stat-rate {
+  color: #7d9186;
+  font-size: 11px;
+}
+
+/* ---------- 历史列表 ---------- */
+
+.race-history-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.race-history-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  font-size: 12px;
+}
+
+.race-history-time {
+  flex: 0 0 82px;
+  color: #7d9186;
+}
+
+.race-history-winner {
+  flex: 0 0 44px;
+  color: var(--gold, #caa96a);
+  font-weight: 600;
+}
+
+.race-history-odds {
+  flex: 0 0 46px;
+  color: #a9bcb2;
+}
+
+.race-history-pool {
+  flex: 1 1 auto;
+  color: #7d9186;
+  text-align: right;
+}
+
+/* ---------- 分页 ---------- */
+
+.race-pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.race-pager-button {
+  padding: 4px 12px;
+  font-size: 12px;
+}
+
+.race-pager-info {
+  color: #7d9186;
+  font-size: 12px;
 }
 </style>

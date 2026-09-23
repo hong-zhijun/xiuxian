@@ -45,6 +45,7 @@ import {
   generateRaceSteps,
   isRaceOperatingHour,
   parimutuelOdds,
+  raceDisplayOdds,
   racePhaseOf,
   raceRanksOf,
   raceWeightedPick,
@@ -301,6 +302,9 @@ import {
   type RaceStateView,
   type RaceBeastView,
   type RaceMyBetView,
+  type RaceHistoryView,
+  type RaceHistoryRoundView,
+  type RaceBeastStatView,
   type ShopBuyResultView,
   type ShopSellResultView,
   type ShopSellPillResultView,
@@ -5839,7 +5843,7 @@ async function buildRaceStateView(
       remainingSeconds: Math.ceil(phaseInfo.remainingMs / 1000),
       beasts: weights.map((w, i) => ({
         index: i, name: beastNameAt(i), weight: w, winRate: totalW > 0 ? w / totalW : 0,
-        pool: '0', odds: 0,
+        pool: '0', odds: raceDisplayOdds(0, 0, w, totalW),
       })),
       totalPool: '0',
       myBets: [],
@@ -5863,7 +5867,7 @@ async function buildRaceStateView(
       index: i, name: beastNameAt(i), weight: w,
       winRate: totalW > 0 ? w / totalW : 0,
       pool: String(pool),
-      odds: parimutuelOdds(totalPool, pool),
+      odds: raceDisplayOdds(totalPool, pool, w, totalW),
     };
   });
 
@@ -6105,6 +6109,47 @@ export async function settleCurrentRound(db: D1Database, now: number): Promise<v
       }
     }
   }
+}
+
+const RACE_HISTORY_PAGE_SIZE = 10;
+
+export async function getRaceHistory(db: D1Database, page: number): Promise<RaceHistoryView> {
+  const repo = new RaceRepository(db);
+  const total = await repo.countSettledRounds();
+  const offset = (page - 1) * RACE_HISTORY_PAGE_SIZE;
+  const rounds = await repo.listSettledRounds(RACE_HISTORY_PAGE_SIZE, offset);
+
+  const roundIds = rounds.map((r) => r.id);
+  const poolRows = await repo.beastPoolsByRoundIds(roundIds);
+  const poolByRound = new Map<string, Map<number, number>>();
+  for (const p of poolRows) {
+    let m = poolByRound.get(p.round_id);
+    if (!m) { m = new Map(); poolByRound.set(p.round_id, m); }
+    m.set(p.beast_index, p.total);
+  }
+
+  const historyRounds: RaceHistoryRoundView[] = rounds.map((r) => {
+    const winnerIndex = r.winner_index ?? 0;
+    const pm = poolByRound.get(r.id);
+    const winnerPool = pm?.get(winnerIndex) ?? 0;
+    return {
+      roundKey: r.round_key,
+      winnerIndex,
+      winnerName: beastNameAt(winnerIndex),
+      totalPool: String(r.total_pool),
+      winnerOdds: parimutuelOdds(r.total_pool, winnerPool),
+      settledAt: r.settled_at ?? r.created_at,
+    };
+  });
+
+  const winCounts = await repo.beastWinCounts();
+  const winMap = new Map(winCounts.map((w) => [w.winner_index, w.cnt]));
+  const beastStats: RaceBeastStatView[] = BEAST_NAMES.map((name, i) => {
+    const wins = winMap.get(i) ?? 0;
+    return { index: i, name, wins, winRate: total > 0 ? Math.round((wins / total) * 1000) / 1000 : 0 };
+  });
+
+  return { beastStats, rounds: historyRounds, total, page, pageSize: RACE_HISTORY_PAGE_SIZE };
 }
 
 class ParamRepository2 {

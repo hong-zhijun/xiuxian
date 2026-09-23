@@ -2211,6 +2211,37 @@ export class RaceRepository extends ParamRepository {
   override async execute(query: ParameterizedQuery): Promise<D1Result> {
     return super.execute(query);
   }
+
+  async countSettledRounds(): Promise<number> {
+    const row = await this.one<{ cnt: number }>({
+      sql: "SELECT COUNT(*) as cnt FROM race_rounds WHERE status = 'settled'",
+      params: [],
+    });
+    return row?.cnt ?? 0;
+  }
+
+  async listSettledRounds(limit: number, offset: number): Promise<RaceRoundRow[]> {
+    return this.all<RaceRoundRow>({
+      sql: "SELECT * FROM race_rounds WHERE status = 'settled' ORDER BY settled_at DESC LIMIT ? OFFSET ?",
+      params: [limit, offset],
+    });
+  }
+
+  async beastWinCounts(): Promise<{ winner_index: number; cnt: number }[]> {
+    return this.all<{ winner_index: number; cnt: number }>({
+      sql: "SELECT winner_index, COUNT(*) as cnt FROM race_rounds WHERE status = 'settled' AND winner_index IS NOT NULL GROUP BY winner_index",
+      params: [],
+    });
+  }
+
+  async beastPoolsByRoundIds(roundIds: string[]): Promise<{ round_id: string; beast_index: number; total: number }[]> {
+    if (roundIds.length === 0) return [];
+    const placeholders = roundIds.map(() => '?').join(',');
+    return this.all<{ round_id: string; beast_index: number; total: number }>({
+      sql: `SELECT round_id, beast_index, SUM(amount) as total FROM race_bets WHERE round_id IN (${placeholders}) GROUP BY round_id, beast_index`,
+      params: roundIds,
+    });
+  }
 }
 
 export function insertRaceRoundStatement(row: {

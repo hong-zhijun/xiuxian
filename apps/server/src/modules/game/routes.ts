@@ -53,6 +53,7 @@ import {
   getActiveExploration,
   getPublicSect,
   getSectState,
+  getRaceHistory,
   getRaceState,
   placeRaceBet,
   listChallengeHistory,
@@ -477,6 +478,12 @@ export function createGameRoutes(): Hono<AppEnv> {
     const body = await parseStrictJson(raceBetRequestSchema, c);
     const result = await placeRaceBet(getDb(c.env), userId, body, Date.now());
     return respondOk(c, { state: result.state, race: result.race });
+  });
+
+  routes.get('/game/race-history', async (c) => {
+    const page = Math.max(1, Math.floor(Number(c.req.query('page') ?? '1')) || 1);
+    const result = await getRaceHistory(getDb(c.env), page);
+    return respondOk(c, result);
   });
 
   // 坊市：买入材料（结算 → 白名单 / 灵石余额 / 材料容量校验 → 扣灵石、加材料，一次受保护 batch）。

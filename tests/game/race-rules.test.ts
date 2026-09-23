@@ -5,11 +5,13 @@ import {
   RACE_BEAST_COUNT,
   RACE_RANK_GAP,
   RACE_STEP_COUNT,
+  RACE_VIRTUAL_BASE,
   RACE_WEIGHT_MAX,
   RACE_WEIGHT_MIN,
   beastWeightsFromRoundKey,
   generateRaceSteps,
   parimutuelOdds,
+  raceDisplayOdds,
   raceRanksOf,
   raceWeightedPick,
 } from '../../apps/server/src/modules/game/gambling';
@@ -29,6 +31,43 @@ describe('灵兽竞逐：互赌倍率', () => {
   it('无人投注返回 0', () => {
     expect(parimutuelOdds(100000, 0)).toBe(0);
     expect(parimutuelOdds(0, 0)).toBe(0);
+  });
+});
+
+describe('灵兽竞逐：展示赔率（虚拟底池）', () => {
+  it('无人投注时赔率 = 总权重 × 0.9 / 该灵兽权重', () => {
+    // weights [3, 1, 5, 2, 4], totalW = 15
+    // beast 0 (w=3): 15*0.9/3 = 4.5
+    const odds0 = raceDisplayOdds(0, 0, 3, 15);
+    expect(odds0).toBe(4.5);
+    // beast 1 (w=1): 15*0.9/1 = 13.5
+    const odds1 = raceDisplayOdds(0, 0, 1, 15);
+    expect(odds1).toBe(13.5);
+    // beast 2 (w=5): 15*0.9/5 = 2.7
+    const odds2 = raceDisplayOdds(0, 0, 5, 15);
+    expect(odds2).toBe(2.7);
+  });
+
+  it('有人投注后赔率在初始基础上变化', () => {
+    const totalW = 15;
+    const w = 3; // beast 0
+    const initialOdds = raceDisplayOdds(0, 0, w, totalW);
+    // 往 beast 0 下注 100K 后赔率应降低
+    const afterBet = raceDisplayOdds(100_000, 100_000, w, totalW);
+    expect(afterBet).toBeLessThan(initialOdds);
+    // 往其他灵兽下注 100K 后 beast 0 赔率应升高
+    const afterOtherBet = raceDisplayOdds(100_000, 0, w, totalW);
+    expect(afterOtherBet).toBeGreaterThan(initialOdds);
+  });
+
+  it('大量真实投注后虚拟底池影响可忽略', () => {
+    const totalW = 15;
+    const w = 3;
+    const bigPool = 100_000_000;
+    const beastPool = 20_000_000;
+    const display = raceDisplayOdds(bigPool, beastPool, w, totalW);
+    const pure = parimutuelOdds(bigPool, beastPool);
+    expect(Math.abs(display - pure)).toBeLessThan(0.2);
   });
 });
 

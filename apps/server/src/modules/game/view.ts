@@ -409,6 +409,30 @@ export interface RaceMyBetView {
   amount: string;
 }
 
+export interface RaceBeastStatView {
+  index: number;
+  name: string;
+  wins: number;
+  winRate: number;
+}
+
+export interface RaceHistoryRoundView {
+  roundKey: string;
+  winnerIndex: number;
+  winnerName: string;
+  totalPool: string;
+  winnerOdds: number;
+  settledAt: number;
+}
+
+export interface RaceHistoryView {
+  beastStats: RaceBeastStatView[];
+  rounds: RaceHistoryRoundView[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
 /**
  * 坊市的单种丹药（SectStateView.shop.pills 的元素）。
  * owned 是当前库存（颗），sellPrice 是单颗回收价（最小单位灵石，写死在 shop.ts）。
