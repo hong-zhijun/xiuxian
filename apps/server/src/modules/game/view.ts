@@ -390,6 +390,8 @@ export interface RaceStateView {
   steps: number[][] | null;
   /** 结算后：当前玩家本轮赢得的灵石（最小单位），未结算时为 null。 */
   myWinnings: string | null;
+  /** 本轮所有投注动态（按时间倒序）。 */
+  betFeed: RaceBetFeedView[];
 }
 
 export interface RaceBeastView {
@@ -404,6 +406,13 @@ export interface RaceBeastView {
 }
 
 export interface RaceMyBetView {
+  beastIndex: number;
+  beastName: string;
+  amount: string;
+}
+
+export interface RaceBetFeedView {
+  sectName: string;
   beastIndex: number;
   beastName: string;
   amount: string;

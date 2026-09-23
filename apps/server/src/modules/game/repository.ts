@@ -2193,6 +2193,15 @@ export class RaceRepository extends ParamRepository {
     });
   }
 
+  async betFeedByRound(roundId: string): Promise<{ sect_name: string; beast_index: number; amount: number; created_at: number }[]> {
+    return this.all<{ sect_name: string; beast_index: number; amount: number; created_at: number }>({
+      sql: `SELECT s.name as sect_name, b.beast_index, b.amount, b.created_at
+            FROM race_bets b JOIN sects s ON s.id = b.sect_id
+            WHERE b.round_id = ? ORDER BY b.created_at DESC`,
+      params: [roundId],
+    });
+  }
+
   async beastPoolsByRound(roundId: string): Promise<{ beast_index: number; total: number }[]> {
     return this.all<{ beast_index: number; total: number }>({
       sql: 'SELECT beast_index, SUM(amount) as total FROM race_bets WHERE round_id = ? GROUP BY beast_index',

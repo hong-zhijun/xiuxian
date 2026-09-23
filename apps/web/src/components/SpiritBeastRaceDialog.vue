@@ -446,6 +446,19 @@ onUnmounted(() => {
         </template>
       </p>
 
+      <!-- 投注动态（默认折叠） -->
+      <details v-if="race.betFeed.length > 0" class="race-feed-details">
+        <summary class="race-feed-summary">投注动态（{{ race.betFeed.length }} 条）</summary>
+        <ul class="race-feed-list">
+          <li v-for="(f, i) in race.betFeed" :key="i" class="race-feed-row">
+            <span class="race-feed-sect">{{ f.sectName }}</span>
+            <span class="race-feed-arrow">押</span>
+            <strong class="race-feed-beast">{{ f.beastName }}</strong>
+            <span class="race-feed-amount">{{ formatAmount(f.amount) }} 灵石</span>
+          </li>
+        </ul>
+      </details>
+
       <!-- 我的投注列表 -->
       <ul v-if="race.myBets.length > 0" class="race-my-bets">
         <li v-for="(bet, i) in race.myBets" :key="i" class="race-my-bet-row">
@@ -568,6 +581,63 @@ onUnmounted(() => {
   margin-top: 10px;
   color: #a9bcb2;
   font-size: 12px;
+}
+
+/* ---------- 投注动态 ---------- */
+
+.race-feed-details {
+  margin-top: 10px;
+}
+
+.race-feed-summary {
+  color: #7d9186;
+  font-size: 12px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.race-feed-summary:hover {
+  color: #a9bcb2;
+}
+
+.race-feed-list {
+  max-height: 160px;
+  margin: 6px 0 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.race-feed-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 0;
+  font-size: 12px;
+}
+
+.race-feed-sect {
+  flex: 0 0 auto;
+  max-width: 90px;
+  overflow: hidden;
+  color: #c8d6ce;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.race-feed-arrow {
+  color: #7d9186;
+}
+
+.race-feed-beast {
+  color: var(--gold, #caa96a);
+  font-weight: 600;
+}
+
+.race-feed-amount {
+  flex: 1 1 auto;
+  color: #a9bcb2;
+  text-align: right;
 }
 
 .race-my-bets {

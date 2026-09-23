@@ -301,6 +301,7 @@ import {
   type RaceStateView,
   type RaceBeastView,
   type RaceMyBetView,
+  type RaceBetFeedView,
   type RaceHistoryView,
   type RaceHistoryRoundView,
   type RaceBeastStatView,
@@ -5827,6 +5828,7 @@ async function buildRaceStateView(
       ranks: null,
       steps: null,
       myWinnings: null,
+      betFeed: [],
     };
   }
 
@@ -5851,6 +5853,7 @@ async function buildRaceStateView(
       ranks: null,
       steps: null,
       myWinnings: null,
+      betFeed: [],
     };
   }
 
@@ -5870,13 +5873,22 @@ async function buildRaceStateView(
     };
   });
 
-  const myBetRows = await repo.betsByRoundAndSect(round.id, sectId);
+  const [myBetRows, feedRows] = await Promise.all([
+    repo.betsByRoundAndSect(round.id, sectId),
+    repo.betFeedByRound(round.id),
+  ]);
   const myBets: RaceMyBetView[] = myBetRows.map((b) => ({
     beastIndex: b.beast_index,
     beastName: beastNameAt(b.beast_index),
     amount: String(b.amount),
   }));
   const myTotalBet = myBetRows.reduce((s, b) => s + b.amount, 0);
+  const betFeed: RaceBetFeedView[] = feedRows.map((r) => ({
+    sectName: r.sect_name,
+    beastIndex: r.beast_index,
+    beastName: beastNameAt(r.beast_index),
+    amount: String(r.amount),
+  }));
 
   let winnerIndex: number | null = null;
   let ranks: number[] | null = null;
@@ -5914,6 +5926,7 @@ async function buildRaceStateView(
     ranks,
     steps,
     myWinnings,
+    betFeed,
   };
 }
 

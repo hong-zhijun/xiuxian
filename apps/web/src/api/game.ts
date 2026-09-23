@@ -1295,6 +1295,14 @@ export interface RaceStateView {
   ranks: number[] | null;
   steps: number[][] | null;
   myWinnings: string | null;
+  betFeed: RaceBetFeedView[];
+}
+
+export interface RaceBetFeedView {
+  sectName: string;
+  beastIndex: number;
+  beastName: string;
+  amount: string;
 }
 
 export async function fetchRaceState(): Promise<{ state: SectStateView; race: RaceStateView }> {
