@@ -337,6 +337,16 @@ onUnmounted(() => {
       </div>
     </template>
 
+    <!-- 本轮无人投注 -->
+    <template v-else-if="race?.phase === 'settled' && race.winnerIndex === null">
+      <p class="eyebrow">灵兽竞逐 · 本轮无人投注</p>
+      <p class="race-note">无人参与，灵兽们休息了一轮。</p>
+      <p class="race-note">下一轮即将开始，倒计时：{{ formatCountdown(countdown) }}</p>
+      <div class="race-foot">
+        <button class="action-button race-foot-button" type="button" @click="emit('back')">返回赌坊</button>
+      </div>
+    </template>
+
     <!-- 结算后展示（带动画） -->
     <template v-else-if="race?.phase === 'settled' && animPhase === 'racing'">
       <p class="eyebrow">赛程 · 第 {{ animStep }}/{{ race.steps?.[0]?.length ?? 8 }} 步</p>

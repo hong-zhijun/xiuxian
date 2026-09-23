@@ -5838,7 +5838,7 @@ async function buildRaceStateView(
     const totalW = weights.reduce((s, w) => s + w, 0);
     return {
       roundKey: phaseInfo.roundKey,
-      phase: phaseInfo.phase,
+      phase: phaseInfo.phase === 'sealed' ? 'settled' : phaseInfo.phase,
       remainingSeconds: Math.ceil(phaseInfo.remainingMs / 1000),
       beasts: weights.map((w, i) => ({
         index: i, name: beastNameAt(i), weight: w, winRate: totalW > 0 ? w / totalW : 0,
