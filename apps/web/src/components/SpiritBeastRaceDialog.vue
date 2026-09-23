@@ -4,6 +4,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import type { RaceHistoryView, RaceStateView, SectStateView } from '../api/game';
 import { fetchRaceHistory, fetchRaceState, placeRaceBet } from '../api/game';
 import { formatAmount } from '../utils/format';
+import ModalShell from './ModalShell.vue';
 import SpiritBeastRaceTrack from './SpiritBeastRaceTrack.vue';
 
 const props = defineProps<{
@@ -30,6 +31,8 @@ const submitting = ref(false);
 const errorMsg = ref('');
 
 const selectedBeast = ref<number | null>(null);
+/** 投注 / 抽水说明弹窗。 */
+const showRules = ref(false);
 const betInput = ref('');
 
 let pollTimer: number | undefined;
@@ -391,11 +394,14 @@ onUnmounted(() => {
 
     <!-- 投注/封盘阶段 -->
     <template v-else-if="race">
-      <p class="eyebrow">
-        灵兽竞逐 ·
-        {{ race.phase === 'betting' ? '投注中' : '封盘中' }}
-        <span class="race-countdown">{{ formatCountdown(countdown) }}</span>
-      </p>
+      <div class="race-head">
+        <p class="eyebrow">
+          灵兽竞逐 ·
+          {{ race.phase === 'betting' ? '投注中' : '封盘中' }}
+          <span class="race-countdown">{{ formatCountdown(countdown) }}</span>
+        </p>
+        <button class="race-rules-button" type="button" @click="showRules = true">说明</button>
+      </div>
 
       <!-- 灵兽卡片 -->
       <div class="race-horses" role="radiogroup" aria-label="选择灵兽">
@@ -489,6 +495,35 @@ onUnmounted(() => {
         </button>
       </div>
     </template>
+
+    <ModalShell v-if="showRules" narrow label="灵兽竞逐说明" @close="showRules = false">
+      <section class="race-rules-card" aria-labelledby="race-rules-title">
+        <h2 id="race-rules-title" class="disciple-detail-title">投注说明</h2>
+        <pre class="race-rules-text">每轮 10 分钟：逢 x2 分开盘投注，逢整十分封盘开跑并结算，
+随后 2 分钟播放比赛、公布结果。每日 08:02–23:00 开放。
+
+· 单注 10~500 灵石，同一轮可多次下注、押多只灵兽。
+· 每轮首次下注占用 1 次赌坊次数（与论道、天机轮共享每日 50 次）。
+· 只押冠军：押中得「赌注 × 倍率」（含本金），未押中则赌注归庄。
+· 第 2~5 名与比赛过程只作展示，不影响输赢。</pre>
+        <h2 class="disciple-detail-title">倍率与抽水</h2>
+        <pre class="race-rules-text">每只灵兽每轮有实力值（1~10），开盘即定，整轮不变。
+夺冠概率 = 该兽实力 ÷ 五兽实力之和
+倍率 = 五兽实力之和 × 90% ÷ 该兽实力（保留一位小数）
+
+即庄家抽水约 10%：长期看每押 100 灵石约返还 90，
+押热门还是押冷门，平均回报都一样，区别只在波动大小。
+
+例：实力 3 / 9 / 6 / 2 / 2，合计 22
+　青龙实力 2：胜率约 9%，倍率 22 × 0.9 ÷ 2 ≈ 9.9x
+　玄龟实力 9：胜率约 41%，倍率 22 × 0.9 ÷ 9 ≈ 2.2x
+
+押中倍率 5x 及以上会全服广播。</pre>
+        <button class="action-button primary-action realm-button" type="button" @click="showRules = false">
+          <span>知道了</span>
+        </button>
+      </section>
+    </ModalShell>
   </section>
 </template>
 
@@ -496,6 +531,43 @@ onUnmounted(() => {
 .race-panel {
   display: flex;
   flex-direction: column;
+}
+
+.race-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.race-rules-button {
+  flex: 0 0 auto;
+  padding: 2px 10px;
+  border: 1px solid rgba(202, 169, 106, 0.4);
+  border-radius: 2px;
+  background: rgba(202, 169, 106, 0.08);
+  color: var(--gold, #caa96a);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.race-rules-button:hover {
+  background: rgba(202, 169, 106, 0.16);
+}
+
+.race-rules-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.race-rules-text {
+  margin: 0;
+  color: #c8d6ce;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.7;
+  white-space: pre-wrap;
 }
 
 .race-countdown {

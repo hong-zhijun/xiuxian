@@ -594,7 +594,7 @@ export const RACE_HOUSE_EDGE = 0.1;
 
 /** 实力权重范围（整数，含端点）；权重之和决定胜率。 */
 export const RACE_WEIGHT_MIN = 1;
-export const RACE_WEIGHT_MAX = 5;
+export const RACE_WEIGHT_MAX = 10;
 
 /** 赌注范围（灵石最小单位；1 展示单位 = 1000 最小单位）：即展示 10 ~ 500。 */
 export const RACE_BET_MIN = 10_000;
@@ -690,7 +690,7 @@ export function beastWeightsFromRoundKey(roundKey: string): number[] {
   const weights: number[] = [];
   for (let i = 0; i < RACE_BEAST_COUNT; i += 1) {
     hash = ((hash * 1103515245 + 12345) & 0x7fffffff) | 0;
-    weights.push(RACE_WEIGHT_MIN + (Math.abs(hash) % (RACE_WEIGHT_MAX - RACE_WEIGHT_MIN + 1)));
+    weights.push(RACE_WEIGHT_MIN + ((hash >>> 16) % (RACE_WEIGHT_MAX - RACE_WEIGHT_MIN + 1)));
   }
   return weights;
 }
