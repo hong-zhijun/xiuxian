@@ -47,11 +47,20 @@
       "REGISTRATION_ENABLED": {
         "description": "设为 `true` 开放注册，设为 `false` 关闭注册。"
       },
-      "INVITE_CODES": {
-        "description": "注册邀请码，多个用逗号分隔；留空表示注册无需邀请码。"
-      },
       "REALM_EXPLORE_ENABLED": {
         "description": "是否启用交互式秘境探索。未配置 OpenRouter key 时自动使用本地随机判定。"
+      },
+      "ENVIRONMENT": {
+        "description": "运行环境，保持 `production` 即可（登录 Cookie 会带 Secure）。"
+      },
+      "SESSION_TTL_SECONDS": {
+        "description": "登录保持时长（秒），默认 604800 = 7 天。"
+      },
+      "LOGIN_RATE_LIMIT_MAX_ATTEMPTS": {
+        "description": "时间窗口内允许的登录失败次数，默认 5。"
+      },
+      "LOGIN_RATE_LIMIT_WINDOW_SECONDS": {
+        "description": "登录失败计数的时间窗口（秒），默认 60。"
       }
     }
   }
