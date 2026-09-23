@@ -621,6 +621,15 @@ export const RACE_ROUND_MS = 10 * 60 * 1000;
 /** 投注阶段时长（毫秒）：前 8 分钟。 */
 export const RACE_BETTING_MS = 8 * 60 * 1000;
 
+/** 轮次相对整 10 分钟的偏移：x2 开始投注、x0 整点封盘开跑（Cron 同时结算），结算后留 2 分钟看动画与结果。 */
+export const RACE_ROUND_OFFSET_MS = 2 * 60 * 1000;
+
+/** 当前轮次的开始时间戳（UTC+8 按 10 分钟对齐后再后移 2 分钟）。 */
+export function raceRoundStartOf(now: number): number {
+  const shifted = now + 8 * 3_600_000 - RACE_ROUND_OFFSET_MS;
+  return Math.floor(shifted / RACE_ROUND_MS) * RACE_ROUND_MS + RACE_ROUND_OFFSET_MS - 8 * 3_600_000;
+}
+
 /** 运营时段（UTC+8 小时）。 */
 export const RACE_OPERATE_START_HOUR = 8;
 export const RACE_OPERATE_END_HOUR = 23;
@@ -637,9 +646,7 @@ export interface RacePhaseInfo {
 
 /** 从时间戳计算当前轮次的 round_key（UTC+8 对齐到 10 分钟）。 */
 export function raceRoundKeyOf(now: number): string {
-  const utc8 = now + 8 * 3_600_000;
-  const aligned = Math.floor(utc8 / RACE_ROUND_MS) * RACE_ROUND_MS;
-  const d = new Date(aligned - 8 * 3_600_000);
+  const d = new Date(raceRoundStartOf(now));
   const yyyy = String(d.getUTCFullYear());
   const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
   const dd = String(d.getUTCDate()).padStart(2, '0');
@@ -648,9 +655,9 @@ export function raceRoundKeyOf(now: number): string {
   return `${yyyy}-${mm}-${dd}T${hh}:${min}`;
 }
 
-/** 判断给定时间戳是否在运营时段内（UTC+8 的 08:00–23:00）。 */
+/** 判断给定时间戳所在轮次是否在运营时段内（按轮次开始时间算：首轮 08:02 开始，末轮 22:52 开始、23:00 开跑）。 */
 export function isRaceOperatingHour(now: number): boolean {
-  const utc8Hour = new Date(now + 8 * 3_600_000).getUTCHours();
+  const utc8Hour = new Date(raceRoundStartOf(now) + 8 * 3_600_000).getUTCHours();
   return utc8Hour >= RACE_OPERATE_START_HOUR && utc8Hour < RACE_OPERATE_END_HOUR;
 }
 
@@ -661,13 +668,12 @@ export function racePhaseOf(now: number): RacePhaseInfo {
     const utc8 = now + 8 * 3_600_000;
     const todayStart = new Date(utc8);
     todayStart.setUTCHours(RACE_OPERATE_START_HOUR, 0, 0, 0);
-    let nextOpen = todayStart.getTime() - 8 * 3_600_000;
+    let nextOpen = todayStart.getTime() - 8 * 3_600_000 + RACE_ROUND_OFFSET_MS;
     if (nextOpen <= now) nextOpen += 24 * 3_600_000;
     return { phase: 'closed', roundKey, remainingMs: nextOpen - now };
   }
 
-  const utc8 = now + 8 * 3_600_000;
-  const roundStart = Math.floor(utc8 / RACE_ROUND_MS) * RACE_ROUND_MS - 8 * 3_600_000;
+  const roundStart = raceRoundStartOf(now);
   const elapsed = now - roundStart;
   if (elapsed < RACE_BETTING_MS) {
     return { phase: 'betting', roundKey, remainingMs: RACE_BETTING_MS - elapsed };
@@ -721,17 +727,33 @@ export function raceWeightedPick(weights: readonly number[], roll: number): numb
 }
 
 /** 名次（纯函数）：冠军固定第 1，其余按权重降序。 */
-export function raceRanksOf(weights: readonly number[], winnerIndex: number): number[] {
+export function raceRanksOf(
+  weights: readonly number[],
+  winnerIndex: number,
+  random: () => number = Math.random,
+): number[] {
   const ranks = new Array<number>(weights.length).fill(weights.length);
   ranks[winnerIndex] = 1;
-  weights
+  // 冠军之外的名次同样按权重不放回抽取：热门更可能靠前，但不固定第二。
+  const rest = weights
     .map((weight, index) => ({ weight, index }))
-    .filter((item) => item.index !== winnerIndex)
-    .sort((a, b) => b.weight - a.weight || a.index - b.index)
-    .forEach((item, position) => {
-      ranks[item.index] = position + 2;
-    });
+    .filter((item) => item.index !== winnerIndex);
+  for (let place = 2; rest.length > 0; place += 1) {
+    const picked = raceWeightedPick(rest.map((item) => item.weight), random());
+    ranks[rest[picked]!.index] = place;
+    rest.splice(picked, 1);
+  }
   return ranks;
+}
+
+/** 名次随机源：由 round_key 确定性生成，所有人、每次请求看到的名次都一致（名次不落库）。 */
+export function raceRankRandomOf(roundKey: string): () => number {
+  const key = `${roundKey}:ranks`;
+  let hash = 0;
+  for (let i = 0; i < key.length; i += 1) {
+    hash = ((hash << 5) - hash + key.charCodeAt(i)) | 0;
+  }
+  return wheelRandomOf(hash);
 }
 
 /** 跑马动画序列（纯函数）。 */

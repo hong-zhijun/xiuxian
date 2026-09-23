@@ -39,13 +39,14 @@ import {
   RACE_BET_MIN,
   RACE_BROADCAST_PAYOUT_THRESHOLD,
   RACE_LOG_NAME,
-  RACE_ROUND_MS,
+  RACE_BETTING_MS,
   beastNameAt,
   beastWeightsFromRoundKey,
   generateRaceSteps,
   isRaceOperatingHour,
   raceFixedOdds,
   racePhaseOf,
+  raceRankRandomOf,
   raceRanksOf,
   raceWeightedPick,
   WHEEL_RESET_COST,
@@ -5900,7 +5901,7 @@ async function buildRaceStateView(
     phase = 'settled';
     winnerIndex = round.winner_index;
     if (winnerIndex !== null) {
-      ranks = raceRanksOf(weights, winnerIndex);
+      ranks = raceRanksOf(weights, winnerIndex, raceRankRandomOf(round.round_key));
       steps = generateRaceSteps(ranks);
       const winnerW = weights[winnerIndex] ?? 1;
       const odds = raceFixedOdds(winnerW, totalW);
@@ -6035,7 +6036,8 @@ export async function settleCurrentRound(db: D1Database, now: number): Promise<v
   for (const round of rounds) {
     const roundStartUtc8 = new Date(round.round_key + ':00.000Z').getTime() + 8 * 3_600_000;
     const roundStartMs = roundStartUtc8 - 8 * 3_600_000;
-    if (now - roundStartMs < RACE_ROUND_MS) continue;
+    // 投注期（8 分钟）一结束就结算：封盘后不再接受下注，剩下 2 分钟留给前端播动画、看结果。
+    if (now - roundStartMs < RACE_BETTING_MS) continue;
 
     const weights: number[] = JSON.parse(round.beast_weights) as number[];
     const winnerIndex = raceWeightedPick(weights, Math.random());

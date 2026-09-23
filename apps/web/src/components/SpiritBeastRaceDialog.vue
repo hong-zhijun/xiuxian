@@ -93,7 +93,8 @@ async function loadRaceState(): Promise<void> {
     race.value = raceData;
     countdown.value = raceData.remainingSeconds;
 
-    if (prevPhase === 'sealed' && raceData.phase === 'settled') {
+    // 同一轮第一次看到已结算就播动画（Cron 整点结算，轮询可能直接从 betting 跳到 settled）。
+    if (prevRoundKey === raceData.roundKey && prevPhase !== 'settled' && raceData.phase === 'settled') {
       startSettledAnimation(raceData);
     }
     if (prevRoundKey && prevRoundKey !== raceData.roundKey) {
@@ -502,7 +503,7 @@ onUnmounted(() => {
         </p>
       </template>
       <template v-else>
-        <p class="race-note">已封盘，等待结算中…</p>
+        <p class="race-note">已封盘，灵兽即将开跑…</p>
       </template>
 
       <div class="race-foot">

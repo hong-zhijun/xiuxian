@@ -11,6 +11,7 @@ import {
   generateRaceSteps,
   parimutuelOdds,
   raceFixedOdds,
+  raceRankRandomOf,
   raceRanksOf,
   raceWeightedPick,
 } from '../../apps/server/src/modules/game/gambling';
@@ -49,10 +50,16 @@ describe('灵兽竞逐：固定赔率', () => {
 });
 
 describe('灵兽竞逐：名次', () => {
-  it('冠军固定第 1，其余按权重降序；权重相同按下标升序', () => {
-    expect(raceRanksOf([1, 5, 5, 5, 5], 0)).toEqual([1, 2, 3, 4, 5]);
-    expect(raceRanksOf([3, 3, 3, 3, 3], 2)).toEqual([2, 3, 1, 4, 5]);
-    expect(raceRanksOf([5, 4, 3, 2, 1], 0)).toEqual([1, 2, 3, 4, 5]);
+  it('冠军固定第 1，其余按权重加权随机（roll 恒为 0 时依次取剩余第一个）', () => {
+    expect(raceRanksOf([1, 5, 5, 5, 5], 0, () => 0)).toEqual([1, 2, 3, 4, 5]);
+    expect(raceRanksOf([3, 3, 3, 3, 3], 2, () => 0)).toEqual([2, 3, 1, 4, 5]);
+    expect(raceRanksOf([5, 4, 3, 2, 1], 0, () => 0.999)).toEqual([1, 5, 4, 3, 2]);
+  });
+
+  it('同一 round_key 的名次随机源可复现', () => {
+    const a = raceRanksOf([2, 5, 1, 4, 3], 3, raceRankRandomOf('2026-09-23T02:02'));
+    const b = raceRanksOf([2, 5, 1, 4, 3], 3, raceRankRandomOf('2026-09-23T02:02'));
+    expect(a).toEqual(b);
   });
 
   it('名次刚好是 1~5 的一个排列', () => {
