@@ -1,5 +1,5 @@
 /*
- * 玄门山海 · 修仙宗门视觉系统
+ * 玄门山海 · 开山立派视觉系统
  * 兼容目标：Chrome 109 / Firefox 115 ESR。
  * 仅使用稳定的 Flex/Grid、渐变、变换与基础媒体查询，不依赖外部字体或新式浏览器 API。
  */
@@ -1062,7 +1062,7 @@ ul {
   z-index: 30;
   display: grid;
   min-height: 80px;
-  grid-template-columns: minmax(245px, 1fr) auto minmax(180px, 1fr);
+  grid-template-columns: minmax(220px, auto) minmax(0, 1fr) auto;
   align-items: center;
   gap: 28px;
   padding: 13px 18px;
@@ -1094,6 +1094,16 @@ ul {
   min-width: 0;
   align-items: center;
   gap: 14px;
+}
+
+.sect-identity-text {
+  min-width: 0;
+}
+
+/* 世界名只做点缀：放在宗门名下方、调淡，不和标题抢视线。 */
+.sect-identity .sect-world {
+  margin-top: 2px;
+  color: var(--faint);
 }
 
 .sect-logo {
@@ -1128,10 +1138,12 @@ ul {
   display: inline-flex;
   flex: 0 0 auto;
   align-items: center;
-  gap: 4px;
-  padding: 3px 10px;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
   border: 1px solid rgba(202, 169, 106, 0.35);
-  border-radius: 999px;
+  border-radius: 50%;
   color: var(--gold-bright);
   background: rgba(202, 169, 106, 0.06);
   font-size: 11px;
@@ -1162,6 +1174,8 @@ ul {
 }
 
 .sect-metrics > div {
+  flex: 1 1 0;
+  max-width: 200px;
   min-width: 100px;
   padding: 1px 24px;
   border-left: 1px solid var(--line);
@@ -1183,6 +1197,14 @@ ul {
   color: var(--gold-bright);
   font-family: Georgia, 'Times New Roman', serif;
   font-size: 21px;
+}
+
+.sect-metric-title {
+  margin-left: 6px;
+  color: #c8d6ce;
+  font-family: 'STKaiti', 'KaiTi', serif;
+  font-size: 14px;
+  letter-spacing: 0.06em;
 }
 
 .sect-metrics dd b {

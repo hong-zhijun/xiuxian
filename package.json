@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "修仙宗门挂机文字游戏（前端 Cloudflare Pages，后端 Cloudflare Workers + D1）",
+  "description": "开山立派：修仙宗门经营挂机文字游戏（前端 Cloudflare Pages，后端 Cloudflare Workers + D1）",
   "engines": {
     "node": ">=22.13.0"
   },

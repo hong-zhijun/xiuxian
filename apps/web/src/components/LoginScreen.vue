@@ -88,7 +88,7 @@ onMounted(() => {
       <div class="lore-brand">
         <img class="lore-logo" src="/brand-logo.png" alt="" aria-hidden="true" />
         <div>
-          <p class="eyebrow">太初界 · 宗门志</p>
+          <p class="eyebrow">开山立派 · 太初界</p>
           <h1 id="world-title">万法归山海<br /><span>一念启仙途</span></h1>
         </div>
       </div>

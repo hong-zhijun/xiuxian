@@ -992,8 +992,7 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
     <header class="game-topbar">
       <div class="sect-identity">
         <img class="sect-logo" src="/brand-logo.png" alt="" aria-hidden="true" />
-        <div>
-          <p class="eyebrow">太初界 · 掌门府</p>
+        <div class="sect-identity-text">
           <div class="sect-name-row">
             <h1>{{ state.sect.name }}</h1>
             <button
@@ -1001,22 +1000,25 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
               type="button"
               :disabled="busy"
               aria-label="宗门改名"
+              title="改名"
               @click="openRenameDialog"
             >
               <svg viewBox="0 0 24 24" aria-hidden="true">
                 <path d="M4 20h4L20 8l-4-4L4 16v4Z" />
                 <path d="M14 6l4 4" />
               </svg>
-              <span>改名</span>
             </button>
           </div>
-          <p class="sect-level">{{ state.sect.levelName }}（{{ state.sect.level }}/{{ MAX_SECT_LEVEL }}）· 声望 {{ state.sect.reputation }}</p>
+          <p class="eyebrow sect-world">太初界 · 掌门府</p>
         </div>
       </div>
 
       <dl class="sect-metrics" aria-label="宗门概况">
-        <div><dt>宗门品阶</dt><dd><b>LV.</b>{{ state.sect.level }}</dd></div>
-        <div><dt>灵脉品阶</dt><dd><b>LV.</b>{{ state.sect.veinLevel }}</dd></div>
+        <div>
+          <dt>宗门品阶</dt>
+          <dd><b>LV.</b>{{ state.sect.level }}<span class="sect-metric-title">{{ state.sect.levelName }}</span></dd>
+        </div>
+        <div><dt>声望</dt><dd>{{ state.sect.reputation }}</dd></div>
         <div><dt>门下弟子</dt><dd>{{ state.recruit.discipleCount }}<b>/{{ state.sect.discipleCapacity }}</b></dd></div>
       </dl>
 
