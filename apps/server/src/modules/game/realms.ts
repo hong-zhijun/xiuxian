@@ -39,7 +39,7 @@ export const SECRET_REALMS: readonly SecretRealmDef[] = [
     rewards: { spiritStone: '30000', herb: '15000' },
     minParty: 1,
     maxParty: 2,
-    dailyLimit: null,
+    dailyLimit: 3,
     requiredSectLevel: 1,
   },
   {
@@ -51,7 +51,7 @@ export const SECRET_REALMS: readonly SecretRealmDef[] = [
     rewards: { ore: '50000', spiritStone: '20000' },
     minParty: 1,
     maxParty: 2,
-    dailyLimit: null,
+    dailyLimit: 3,
     requiredSectLevel: 1,
   },
   {
@@ -63,7 +63,7 @@ export const SECRET_REALMS: readonly SecretRealmDef[] = [
     rewards: { spiritStone: '80000', spiritualEnergy: '50000', herb: '30000' },
     minParty: 1,
     maxParty: 3,
-    dailyLimit: null,
+    dailyLimit: 3,
     requiredSectLevel: 3,
   },
   {
@@ -87,7 +87,7 @@ export const SECRET_REALMS: readonly SecretRealmDef[] = [
     rewards: { spiritStone: '300000', ore: '150000', herb: '100000', spiritualEnergy: '80000' },
     minParty: 2,
     maxParty: 3,
-    dailyLimit: 2,
+    dailyLimit: 3,
     requiredSectLevel: 6,
   },
   {
@@ -99,7 +99,7 @@ export const SECRET_REALMS: readonly SecretRealmDef[] = [
     rewards: { spiritStone: '500000', ore: '250000', herb: '200000', spiritualEnergy: '150000' },
     minParty: 3,
     maxParty: 3,
-    dailyLimit: 1,
+    dailyLimit: 3,
     requiredSectLevel: 8,
   },
 ];
