@@ -3,6 +3,7 @@ import { nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 
 import type { ChatMessageView } from '../api/game';
 import { fetchChatMessages, sendChatMessage } from '../api/game';
+import { EMOJI_LIST, renderEmoji } from '../utils/emoji';
 
 const collapsed = ref(localStorage.getItem('chat-collapsed') === '1');
 const messages = ref<ChatMessageView[]>([]);
@@ -10,6 +11,8 @@ const input = ref('');
 const sending = ref(false);
 const listEl = ref<HTMLElement | null>(null);
 const loadError = ref<string | null>(null);
+const showEmojiPicker = ref(false);
+const inputEl = ref<HTMLInputElement | null>(null);
 
 watch(collapsed, (v) => {
   localStorage.setItem('chat-collapsed', v ? '1' : '0');
@@ -63,6 +66,19 @@ async function handleSend(): Promise<void> {
   }
 }
 
+function insertEmoji(code: string): void {
+  input.value += `[${code}]`;
+  showEmojiPicker.value = false;
+  inputEl.value?.focus();
+}
+
+function onPickerOutsideClick(e: MouseEvent): void {
+  const target = e.target as HTMLElement;
+  if (!target.closest('.emoji-picker-wrap')) {
+    showEmojiPicker.value = false;
+  }
+}
+
 function formatTime(iso: string): string {
   const d = new Date(iso);
   const h = String(d.getHours()).padStart(2, '0');
@@ -70,13 +86,19 @@ function formatTime(iso: string): string {
   return `${h}:${m}`;
 }
 
+function renderContent(text: string): string {
+  return renderEmoji(text);
+}
+
 onMounted(() => {
   load();
   pollTimer = setInterval(load, 8_000);
+  document.addEventListener('click', onPickerOutsideClick);
 });
 
 onUnmounted(() => {
   if (pollTimer !== undefined) clearInterval(pollTimer);
+  document.removeEventListener('click', onPickerOutsideClick);
 });
 </script>
 
@@ -100,12 +122,34 @@ onUnmounted(() => {
         <div v-for="msg in messages" :key="msg.id" class="chat-msg" :class="{ 'is-me': msg.isMe, 'is-system': msg.isSystem }">
           <span class="chat-time">{{ formatTime(msg.createdAt) }}</span>
           <span class="chat-name">{{ msg.sectName }}</span>
-          <span class="chat-text">{{ msg.content }}</span>
+          <!-- eslint-disable-next-line vue/no-v-html -->
+          <span class="chat-text" v-html="renderContent(msg.content)"></span>
         </div>
       </div>
 
       <form class="chat-input-row" @submit.prevent="handleSend">
+        <div class="emoji-picker-wrap">
+          <button
+            class="emoji-toggle-btn"
+            type="button"
+            title="表情"
+            @click.stop="showEmojiPicker = !showEmojiPicker"
+          >😊</button>
+          <div v-if="showEmojiPicker" class="emoji-picker" @click.stop>
+            <button
+              v-for="emoji in EMOJI_LIST"
+              :key="emoji.code"
+              class="emoji-item"
+              type="button"
+              :title="emoji.label"
+              @click="insertEmoji(emoji.code)"
+            >
+              <img :src="`/emoji/${emoji.file}`" :alt="emoji.label" />
+            </button>
+          </div>
+        </div>
         <input
+          ref="inputEl"
           v-model="input"
           class="chat-input"
           type="text"
@@ -200,6 +244,14 @@ onUnmounted(() => {
   color: var(--fg);
 }
 
+/* v-html 内的 img 需要 :deep 穿透 scoped */
+.chat-text :deep(.chat-emoji) {
+  width: 20px;
+  height: 20px;
+  vertical-align: text-bottom;
+  margin: 0 1px;
+}
+
 .chat-msg.is-system .chat-name {
   color: #e06050;
 }
@@ -213,6 +265,58 @@ onUnmounted(() => {
   gap: 6px;
   padding-top: 6px;
   border-top: 1px solid var(--line);
+  align-items: center;
+}
+
+.emoji-picker-wrap {
+  position: relative;
+}
+
+.emoji-toggle-btn {
+  background: none;
+  border: none;
+  font-size: 18px;
+  cursor: pointer;
+  padding: 2px;
+  line-height: 1;
+}
+
+.emoji-picker {
+  position: absolute;
+  bottom: 32px;
+  left: 0;
+  width: 240px;
+  max-height: 180px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  background: rgba(13, 32, 27, 0.97);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 6px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  z-index: 10;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+}
+
+.emoji-item {
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  cursor: pointer;
+  padding: 3px;
+  line-height: 0;
+}
+
+.emoji-item:hover {
+  background: rgba(119, 184, 154, 0.15);
+  border-color: rgba(119, 184, 154, 0.3);
+}
+
+.emoji-item img {
+  width: 28px;
+  height: 28px;
 }
 
 .chat-input {
