@@ -116,6 +116,13 @@ function formatStake(entry: DebateHistoryEntry): string {
       return `${attrLabel} -${String(detail.points)}点`;
     }
     if (entry.betMode === 'beast_race') {
+      // 新记录：逐只列出押注额 + 冠军；旧记录（只写了押中的那只）退回原格式。
+      if (Array.isArray(detail.bets)) {
+        const bets = (detail.bets as { beastName?: string; amount?: string }[])
+          .map((b) => `${String(b.beastName ?? '')} ${String(Number(b.amount) / UNITS_PER_DISPLAY)}`)
+          .join('、');
+        return `押 ${bets} · 冠军 ${String(detail.winnerName ?? '')}`;
+      }
       return `押 ${String(detail.beastName ?? '')} · ${(entry.multiplier / 10).toFixed(1)}x`;
     }
     if (entry.betMode === 'horse_race') {

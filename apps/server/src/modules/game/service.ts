@@ -399,8 +399,9 @@ async function loadDebateStats(db: D1Database, sectId: string): Promise<DebateSt
           -- 论道：只有败北才真扣赌注（赢的奖励里已含退还的赌注 + 净赢），所以只减 lose 那一条；
           -- 天机轮（0020）：无论输赢都先扣投入，赢的奖励只是「投入 × 倍率」，
           -- 所以每一次转动都要按注额全额减，否则每次中奖都会把投入当成净赚。
+          -- 灵兽竞逐（0024）同天机轮：每轮都减总投入，押中的赔付（含本金）在上面加回。
           WHEN (result = 'lose' AND bet_mode IN ('preset_spirit_stone', 'free_resource'))
-               OR bet_mode = 'wheel'
+               OR bet_mode IN ('wheel', 'beast_race')
           THEN CASE
             WHEN COALESCE(json_extract(stake_detail, '$.resourceId'), 'spiritStone') = 'spiritStone'
             THEN CAST(json_extract(stake_detail, '$.amount') AS INTEGER)
@@ -6051,20 +6052,27 @@ export async function settleCurrentRound(db: D1Database, now: number): Promise<v
     const stmts: ParameterizedQuery[] = [];
     stmts.push(settleRaceRoundStatement(round.id, winnerIndex, now));
 
-    const sectPayouts = new Map<string, { total: number; sectName: string }>();
-
+    // 按宗门汇总本轮下注：每个下过注的宗门都写一条赌坊记录（押中 win / 未押中 lose），
+    // 记录里带上押了哪几只、各押多少、总投入与拿回，战绩统计据此扣本金、算净收益。
+    const sectBets = new Map<string, { perBeast: Map<number, number>; stake: number; payout: number }>();
     for (const bet of bets) {
-      if (bet.beast_index !== winnerIndex) continue;
-      const payout = Math.floor(bet.amount * odds + 1e-6);
-      if (payout <= 0) continue;
+      let entry = sectBets.get(bet.sect_id);
+      if (entry === undefined) {
+        entry = { perBeast: new Map(), stake: 0, payout: 0 };
+        sectBets.set(bet.sect_id, entry);
+      }
+      entry.perBeast.set(bet.beast_index, (entry.perBeast.get(bet.beast_index) ?? 0) + bet.amount);
+      entry.stake += bet.amount;
+      if (bet.beast_index === winnerIndex) {
+        entry.payout += Math.floor(bet.amount * odds + 1e-6);
+      }
+    }
 
-      stmts.push(resourceDeltaStatement(bet.sect_id, 'spiritStone', payout, now));
-
-      const existing = sectPayouts.get(bet.sect_id);
-      if (existing !== undefined) {
-        existing.total += payout;
-      } else {
-        sectPayouts.set(bet.sect_id, { total: payout, sectName: '' });
+    const sectPayouts = new Map<string, { total: number; sectName: string }>();
+    for (const [sectId, entry] of sectBets) {
+      if (entry.payout > 0) {
+        stmts.push(resourceDeltaStatement(sectId, 'spiritStone', entry.payout, now));
+        sectPayouts.set(sectId, { total: entry.payout, sectName: '' });
       }
     }
 
@@ -6081,7 +6089,9 @@ export async function settleCurrentRound(db: D1Database, now: number): Promise<v
       }
     }
 
-    for (const [sectId, info] of sectPayouts) {
+    for (const [sectId, entry] of sectBets) {
+      const picked = [...entry.perBeast.keys()].sort((a, b) => a - b);
+      const pickedWeight = picked.reduce((s, i) => s + (weights[i] ?? 0), 0);
       stmts.push(insertDaoDebateLogStatement({
         id: crypto.randomUUID(),
         sectId,
@@ -6090,14 +6100,19 @@ export async function settleCurrentRound(db: D1Database, now: number): Promise<v
         betMode: 'beast_race',
         multiplier: Math.max(1, Math.round(odds * 10)),
         stakeDetail: JSON.stringify({
-          beastIndex: winnerIndex,
-          beastName: beastNameAt(winnerIndex),
+          resourceId: 'spiritStone',
+          amount: String(entry.stake),
+          bets: picked.map((i) => ({ beastIndex: i, beastName: beastNameAt(i), amount: String(entry.perBeast.get(i) ?? 0) })),
+          winnerIndex,
+          winnerName: beastNameAt(winnerIndex),
         }),
-        result: 'win',
-        rewardDetail: JSON.stringify({
-          type: 'resource', resourceId: 'spiritStone', amount: String(info.total),
-        }),
-        winProbability: weights[winnerIndex]! / totalW,
+        result: entry.payout > 0 ? 'win' : 'lose',
+        rewardDetail: JSON.stringify(
+          entry.payout > 0
+            ? { type: 'resource', resourceId: 'spiritStone', amount: String(entry.payout) }
+            : { type: 'none' },
+        ),
+        winProbability: totalW > 0 ? pickedWeight / totalW : null,
         now,
       }));
     }

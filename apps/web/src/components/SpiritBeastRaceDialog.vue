@@ -193,6 +193,16 @@ function notifyResult(data: RaceStateView): void {
   }
 }
 
+/** 本轮我押在某只灵兽上的总额（最小单位）。 */
+function myBetOn(beastIndex: number): number {
+  return (race.value?.myBets ?? [])
+    .filter((b) => b.beastIndex === beastIndex)
+    .reduce((s, b) => s + Number(b.amount), 0);
+}
+
+/** 本轮净输赢 = 拿回（押中赔付，含本金） − 总投入。 */
+const myNet = computed(() => Number(race.value?.myWinnings ?? '0') - Number(race.value?.myTotalBet ?? '0'));
+
 function oddsText(odds: number): string {
   return odds > 0 ? `${odds.toFixed(1)}x` : '—';
 }
@@ -364,23 +374,21 @@ onUnmounted(() => {
           <strong class="race-rank-name">{{ beast.name }}</strong>
           <span class="race-rank-odds">{{ oddsText(beast.odds) }}</span>
           <span v-if="beast.index === race.winnerIndex" class="race-rank-tag">冠军</span>
-          <span v-if="race.myBets.some(b => b.beastIndex === beast.index)" class="race-rank-tag is-picked">你押的</span>
+          <span v-if="race.myBets.some(b => b.beastIndex === beast.index)" class="race-rank-tag is-picked">你押的 · {{ formatAmount(String(myBetOn(beast.index))) }}</span>
         </li>
       </ul>
 
       <template v-if="Number(race.myTotalBet) > 0">
         <div class="race-outcome" role="status" aria-live="polite">
-          <strong class="race-outcome-label" :class="Number(race.myWinnings ?? '0') > 0 ? 'is-win' : 'is-lose'">
-            {{ Number(race.myWinnings ?? '0') > 0 ? '赢' : '输' }}
+          <strong class="race-outcome-label" :class="myNet >= 0 ? 'is-win' : 'is-lose'">
+            {{ myNet > 0 ? '赢' : myNet < 0 ? '输' : '平' }}
           </strong>
           <p class="race-outcome-net">
-            灵石
-            <strong :class="Number(race.myWinnings ?? '0') > 0 ? 'is-win' : 'is-lose'">
-              {{ Number(race.myWinnings ?? '0') > 0
-                ? `+${formatAmount(race.myWinnings ?? '0')}`
-                : `-${formatAmount(race.myTotalBet)}`
-              }}
+            投入 {{ formatAmount(race.myTotalBet) }} · 拿回 {{ formatAmount(race.myWinnings ?? '0') }} · 净
+            <strong :class="myNet >= 0 ? 'is-win' : 'is-lose'">
+              {{ myNet >= 0 ? '+' : '-' }}{{ formatAmount(String(Math.abs(myNet))) }}
             </strong>
+            灵石
           </p>
         </div>
       </template>
