@@ -21,6 +21,14 @@
 
 ## 部署到 Cloudflare
 
+### 方式一：一键部署
+
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/hong-zhijun/xiuxian)
+
+点击按钮后按页面提示操作：Cloudflare 会把仓库复制到你的 GitHub、创建 D1 数据库，并在部署时自动执行数据库迁移。表单里的 Worker 名称和数据库名称可以自行修改。
+
+### 方式二：Fork + GitHub Actions
+
 仓库自带 GitHub Actions：推送到 `main` 分支就会自动构建、执行数据库迁移并部署。
 
 1. **Fork 本仓库。**

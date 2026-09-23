@@ -26,7 +26,9 @@
     "db:seed:local": "npm run db:seed:local -w apps/server",
     "accounts": "tsx scripts/accounts/manage.ts",
     "deploy:server:dry-run": "npm run build:server",
-    "deploy:web:dry-run": "npm run build:web"
+    "deploy:web:dry-run": "npm run build:web",
+    "db:migrate:cloudflare": "wrangler d1 migrations apply DB --remote --config wrangler.jsonc",
+    "deploy": "npm run db:migrate:cloudflare && wrangler deploy --config wrangler.jsonc"
   },
   "devDependencies": {
     "@types/node": "22.20.3",
@@ -36,5 +38,21 @@
     "tsx": "4.23.13",
     "typescript": "5.9.3",
     "vitest": "4.1.11"
+  },
+  "cloudflare": {
+    "bindings": {
+      "DB": {
+        "description": "保存账号、宗门与游戏进度。部署时会自动执行仓库中的数据库迁移。"
+      },
+      "REGISTRATION_ENABLED": {
+        "description": "设为 `true` 开放注册，设为 `false` 关闭注册。"
+      },
+      "INVITE_CODES": {
+        "description": "注册邀请码，多个用逗号分隔；留空表示注册无需邀请码。"
+      },
+      "REALM_EXPLORE_ENABLED": {
+        "description": "是否启用交互式秘境探索。未配置 OpenRouter key 时自动使用本地随机判定。"
+      }
+    }
   }
 }

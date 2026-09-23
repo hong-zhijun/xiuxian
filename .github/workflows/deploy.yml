@@ -10,6 +10,8 @@ concurrency:
 
 jobs:
   deploy:
+    # 只在原仓库部署：通过「Deploy to Cloudflare」按钮或 fork 复制出的仓库没有这些 secret，跳过而不是报错
+    if: github.repository_owner == 'hong-zhijun'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
