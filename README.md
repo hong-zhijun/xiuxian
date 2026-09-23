@@ -60,7 +60,6 @@ npm run dev:server   # 终端 1：本地 Worker（127.0.0.1:8787）
 npm run dev:web      # 终端 2：前端（localhost:5173）
 ```
 
-更多说明见 [docs/setup.md](docs/setup.md)。
 
 ## 许可证
 
