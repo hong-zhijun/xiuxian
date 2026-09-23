@@ -33,6 +33,11 @@ import {
   PRESET_INSIGHT_REWARDS,
   PRESET_RESOURCE_REWARDS,
   PRESET_STAKES,
+  RACE_BET_MAX,
+  RACE_BET_MIN,
+  RACE_BROADCAST_ODDS_THRESHOLD,
+  RACE_HORSE_COUNT,
+  RACE_LOG_NAME,
   WHEEL_RESET_COST,
   debateDayStateOf,
   debateTierProbability,
@@ -40,6 +45,7 @@ import {
   freeBetStake,
   gamblingUnlockBlockedReason,
   generateOpponentAttrs,
+  generateRace,
   generateRevealHints,
   generateWheelSlots,
   isBettableResource,
@@ -276,6 +282,7 @@ import {
   type DebateHistoryEntryView,
   type DebateHistoryView,
   type WheelSpinResultView,
+  type HorseRaceResultView,
   type ShopBuyResultView,
   type ShopSellResultView,
   type ShopSellPillResultView,
@@ -5762,6 +5769,145 @@ export async function wheelReset(
   await draft.commitGambling({ resourceId: 'spiritStone', checkWheelSeed: true });
 
   return { state: draft.view() };
+}
+
+/**
+ * 赛马（POST /game/horse-race，计划第 5 节）。
+ *
+ * 与天机轮同一套路：结算 → 解锁 / 次数 / 参数 / 余额校验（全部只读）→ 服务端生成整局结果
+ * → 扣赌注、发奖、计数、记录 → **一次**受保护 batch。
+ *
+ * 与天机轮的两点差别：
+ * - 没有格局 seed（点一次跑一次，不存在「重置格局」的概念），所以 commitGambling 不带 checkWheelSeed；
+ * - 马匹权重、冠军与动画序列由 generateRace 用 Math.random 现摇（计划 2.8）。
+ */
+export async function horseRace(
+  db: D1Database,
+  userId: string,
+  input: { horseIndex: number; betAmount: number },
+  now: number,
+): Promise<{ state: SectStateView; result: HorseRaceResultView }> {
+  const draft = await draftFor(db, userId, now);
+  requireGamblingUnlocked(draft);
+
+  // 每日次数：与论道、天机轮共享同一个计数列（计划 2.5）。
+  const day = draft.debateDay;
+  if (day.remaining <= 0) {
+    throw new AppError(
+      'DAILY_LIMIT',
+      `今日赌坊次数已用完（论道、天机轮与赛马共 ${String(DEBATE_DAILY_LIMIT)} 次/天）`,
+    );
+  }
+
+  // 参数再兜一层：schema 已收窄过，这里防的是绕过 schema 的调用方（与其它命令同一习惯）。
+  if (input.horseIndex < 0 || input.horseIndex >= RACE_HORSE_COUNT) {
+    throw new AppError('VALIDATION_ERROR', '没有这匹马', { horseIndex: input.horseIndex });
+  }
+  if (input.betAmount < RACE_BET_MIN || input.betAmount > RACE_BET_MAX) {
+    throw new AppError(
+      'VALIDATION_ERROR',
+      `赌注需要在 ${displayAmount(RACE_BET_MIN)} ~ ${displayAmount(RACE_BET_MAX)} 灵石之间`,
+      { min: RACE_BET_MIN, max: RACE_BET_MAX },
+    );
+  }
+
+  // 只读检查：余额不足直接拒绝，此时还没有生成结果、也没有任何写语句。
+  draft.requireResourceAvailable('spiritStone', input.betAmount);
+
+  const race = generateRace();
+  const selected = race.horses[input.horseIndex]!;
+  const won = race.winnerIndex === input.horseIndex;
+  // 奖励按选中马的赔率算，floor 到最小单位整数（计划 2.4）。
+  // `+ 1e-6` 与天机轮同一手法：赔率是一位小数（如 18.9），double 乘法会算出
+  // 100000 × 18.9 = 1889999.9999999998 这种误差，不补一下会少发 1 个最小单位。
+  const rewardAmount = won ? Math.floor(input.betAmount * selected.odds + 1e-6) : 0;
+
+  // 校验全部通过后才真正动账（与论道 / 天机轮同一顺序：先只读检查、后写），语句与内存一起改。
+  draft.requireResource('spiritStone', input.betAmount);
+  if (won) {
+    draft.grantResource('spiritStone', rewardAmount);
+  }
+
+  // 计数写回：日期键归一到今天、计数 = 已用 + 1（内存同步，返回的 state 就是新值）。
+  const usedAfter = day.usedToday + 1;
+  draft.addStatement(updateSectDebateCounterStatement(draft.sect.id, day.dateKey, usedAfter));
+  draft.sect.debate_date_key = day.dateKey;
+  draft.sect.debate_count = usedAfter;
+
+  // 赛马记录：multiplier 存「赔率 × 10」（0023 迁移已把 CHECK 放宽到 1~999）；
+  // 没有出战弟子，disciple_id = ''、disciple_name = '赛马'（与天机轮同一模式）。
+  // win_probability 写选中马的本地胜率 —— 赛马不用 jev，但胜率是权重算出来的真实值。
+  const rewardDetail = won
+    ? { type: 'resource', resourceId: 'spiritStone', amount: String(rewardAmount) }
+    : { type: 'none' };
+  draft.addStatement(
+    insertDaoDebateLogStatement({
+      id: crypto.randomUUID(),
+      sectId: draft.sect.id,
+      discipleId: '',
+      discipleName: RACE_LOG_NAME,
+      betMode: 'horse_race',
+      multiplier: Math.max(1, Math.round(selected.odds * 10)),
+      stakeDetail: JSON.stringify({
+        amount: String(input.betAmount),
+        horseIndex: input.horseIndex,
+        horseName: selected.name,
+        odds: selected.odds,
+      }),
+      result: won ? 'win' : 'lose',
+      rewardDetail: JSON.stringify(rewardDetail),
+      winProbability: selected.winRate,
+      now,
+    }),
+  );
+
+  // 唯一的一次受保护提交：守卫（宗门行 + 灵石余额）+ 结算 + 扣赌注 / 发奖 + 计数 + 记录同一个 batch。
+  await draft.commitGambling({ resourceId: 'spiritStone' });
+
+  draft.debateDay = {
+    ...day,
+    usedToday: usedAfter,
+    remaining: Math.max(0, DEBATE_DAILY_LIMIT - usedAfter),
+  };
+
+  // 大奖广播（计划 2.6）：押中高赔率的冷门 → 全服聊天。
+  // Workers 不等未完成的 Promise，所以必须 await（广播失败不影响主流程）。
+  if (won && selected.odds >= RACE_BROADCAST_ODDS_THRESHOLD) {
+    try {
+      await broadcastSystemMessage(
+        db,
+        `${draft.sect.name}在赛马中押中冷门${selected.name}（${selected.odds.toFixed(1)}x），赢得${displayAmount(rewardAmount)}灵石！`,
+        now,
+      );
+    } catch {
+      /* 广播失败不影响主流程 */
+    }
+  }
+
+  const message = won
+    ? `赛马结果：${selected.name}拔得头筹，你押中 ${selected.odds.toFixed(1)}x，赢得 ${displayAmount(rewardAmount)} 灵石（今日还剩 ${String(draft.debateDay.remaining)} 次）`
+    : `赛马结果：${race.horses[race.winnerIndex]!.name}拔得头筹，你押的${selected.name}未能夺冠，损失 ${displayAmount(input.betAmount)} 灵石（今日还剩 ${String(draft.debateDay.remaining)} 次）`;
+
+  return {
+    state: draft.view(),
+    result: {
+      horses: race.horses.map((horse) => ({
+        name: horse.name,
+        weight: horse.weight,
+        winRate: horse.winRate,
+        odds: horse.odds,
+      })),
+      ranks: race.ranks,
+      winnerIndex: race.winnerIndex,
+      selectedIndex: input.horseIndex,
+      betAmount: String(input.betAmount),
+      odds: selected.odds,
+      result: won ? 'win' : 'lose',
+      rewardAmount: String(rewardAmount),
+      steps: race.steps,
+      message,
+    },
+  };
 }
 
 /* ---------- 坊市（shop.ts 的纯规则 + 受保护 batch 提交） ---------- */

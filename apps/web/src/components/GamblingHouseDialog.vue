@@ -6,23 +6,27 @@ import type {
   DaoDebateInput,
   DaoDebateResult,
   DebateHistoryEntry,
+  HorseRaceResult,
   SectStateView,
   WheelSpinResult,
 } from '../api/game';
 import { fetchDebateHistory } from '../api/game';
 import ModalShell from './ModalShell.vue';
 import DisciplePicker from './DisciplePicker.vue';
+import HorseRaceDialog from './HorseRaceDialog.vue';
 import WheelDialog from './WheelDialog.vue';
 
 /**
  * 赌坊主面板（弹窗内容）：每个玩法一个阶段，在同一组件里切换 ——
  * mode-select（玩法列表）/ 论道的 configure（赌注配置）· confrontation（对峙）· result（结果）
  * / wheel（天机轮，交给 WheelDialog 渲染）。
+ * / horse-race（赛马，交给 HorseRaceDialog 渲染）。
  *
  * 三种赌注模式的字段、解锁、每日次数、弟子归属与胜负都由服务端裁决：
  * 这里只按 betMode 收集各自的必填项，绝不自己算数额或改服务端文案
  * （stakeDescription / rewardDescription / message 原样展示）。
  * 天机轮同理：盘面、费用与落格全在服务端，本组件只把它当第二个玩法接进同一套 props / emits。
+ * 赛马同理：马匹、赔率与名次全在服务端生成，本组件只转发开跑请求（动画与结果面板都在 HorseRaceDialog 里）。
  * 未解锁时只显示服务端的 blockedReason；受伤或在外历练的弟子不能出战（与挑战选人同一口径）。
  */
 const props = defineProps<{
@@ -32,6 +36,8 @@ const props = defineProps<{
   result: DaoDebateResult | null;
   /** 刚转出的一次天机轮结果；null = 还没转过（上层每次转动前会清空）。 */
   wheelResult: WheelSpinResult | null;
+  /** 刚跑完的一局赛马；null = 还没跑过（上层每次开跑前会清空）。 */
+  horseRaceResult: HorseRaceResult | null;
 }>();
 
 const emit = defineEmits<{
@@ -46,18 +52,21 @@ const emit = defineEmits<{
   wheelSpin: [tier: number];
   wheelReset: [];
   wheelReveal: [];
-  /** 当前在玩哪个玩法：只为让赌坊弹窗的加载层文案对得上（论道 / 天机轮）。 */
+  /** 赛马的开跑请求与「动画播完」回执：接口调用在上层，赛程与结果面板在 HorseRaceDialog 里。 */
+  horseRace: [horseIndex: number, betAmount: number];
+  horseRaceReveal: [];
+  /** 当前在玩哪个玩法：只为让赌坊弹窗的加载层文案对得上（论道 / 天机轮 / 赛马）。 */
   game: [game: GamblingGame];
 }>();
 
-type GamblingGame = 'debate' | 'wheel';
+type GamblingGame = 'debate' | 'wheel' | 'horse-race';
 
 /** 所有资源数量都是最小单位整数，1 展示单位 = 1000 最小单位（与 utils/format.ts 同口径）。 */
 const UNITS_PER_DISPLAY = 1000;
 /** 自由输入的最小赌注：展示 10 = 后端 FREE_BET_MIN（10000 最小单位）。 */
 const FREE_BET_MIN_DISPLAY = 10;
 
-type Stage = 'mode-select' | 'configure' | 'confrontation' | 'result' | 'wheel';
+type Stage = 'mode-select' | 'configure' | 'confrontation' | 'result' | 'wheel' | 'horse-race';
 
 /** 挂载时停在玩法列表；只有「新结果到达」才切进 confrontation（不因父组件残留旧 result 跳阶段）。 */
 const stage = ref<Stage>('mode-select');
@@ -102,6 +111,8 @@ const BET_MODE_LABELS: Record<string, string> = {
   attribute: '属性赌注',
   // 0020 天机轮：记录列表里的倍率列对它是「投入档位」，所以文案要区分开。
   wheel: '天机轮',
+  // 0023 赛马：倍率列存的是「赔率 × 10」，展示时要还原（见 formatMultiplier）。
+  horse_race: '赛马',
 };
 
 function formatStake(entry: DebateHistoryEntry): string {
@@ -111,12 +122,28 @@ function formatStake(entry: DebateHistoryEntry): string {
       const attrLabel = ATTRIBUTE_OPTIONS.find((o) => o.value === detail.attribute)?.label ?? String(detail.attribute);
       return `${attrLabel} -${String(detail.points)}点`;
     }
+    // 0023 赛马：stake_detail = { amount, horseIndex, horseName, odds }——马名与赔率都是服务端写下的。
+    if (entry.betMode === 'horse_race') {
+      const amount = Number(detail.amount) / UNITS_PER_DISPLAY;
+      const odds = Number.isFinite(Number(detail.odds)) ? Number(detail.odds) : entry.multiplier / 10;
+      return `押 ${String(detail.horseName ?? '')} ${odds.toFixed(1)}x · 赌注 ${String(amount)}`;
+    }
     const amount = Number(detail.amount) / UNITS_PER_DISPLAY;
     const resName = resourceLabel(String(detail.resourceId ?? 'spiritStone'));
     return `${resName} ${String(amount)}`;
   } catch {
     return '—';
   }
+}
+
+/**
+ * 记录列表的倍率列：赛马存的是「赔率 × 10」（3.2x 存 32，因为该列是 INTEGER），
+ * 直接渲染会变成 32x，所以这里还原成赔率；其余玩法（含天机轮的投入档位）就是原值。
+ */
+function formatMultiplier(entry: DebateHistoryEntry): string {
+  return entry.betMode === 'horse_race'
+    ? `${(entry.multiplier / 10).toFixed(1)}x`
+    : `${String(entry.multiplier)}x`;
 }
 
 function formatReward(entry: DebateHistoryEntry): string {
@@ -288,6 +315,31 @@ function onWheelReveal(): void {
   emit('wheelReveal');
 }
 
+/* ---------- 0023 赛马（赌坊第三个玩法） ---------- */
+
+/** 进入赛马：不需要服务端先给盘面（马匹是点「开跑」时才生成的），只要赌坊解锁就放行。 */
+function enterHorseRace(): void {
+  if (!unlocked.value) return;
+  reportGame('horse-race');
+  stage.value = 'horse-race';
+}
+
+/** 赛马的点按一律转发给上层：接口调用、state 覆盖与提示都在 App.vue / SectScreen。 */
+function onHorseRace(horseIndex: number, betAmount: number): void {
+  if (props.busy) return;
+  emit('horseRace', horseIndex, betAmount);
+}
+
+/** 跑马动画播完：交给 SectScreen 补一条结果提示（与天机轮的 reveal 同一套去重）。 */
+function onHorseRaceReveal(): void {
+  emit('horseRaceReveal');
+}
+
+/** 赛马里的「返回赌坊」：回到玩法列表（本局结果留在上层，下次进来仍是干净的选马页）。 */
+function backToModeSelect(): void {
+  stage.value = 'mode-select';
+}
+
 /** 结果看完了回到配置（保留上一次的模式与选的弟子，方便连赌）。 */
 function continueDebate(): void {
   reportGame('debate');
@@ -295,11 +347,11 @@ function continueDebate(): void {
 }
 
 // 结果到达先进 confrontation（看对手属性），玩家点揭晓后再到 result。
-// 天机轮不参与这里：它的结果由 WheelDialog 自己消费（stage 是 'wheel' 时不动）。
+// 天机轮 / 赛马不参与这里：它们的结果由各自的子组件消费（stage 是 'wheel' | 'horse-race' 时不动）。
 watch(
   () => props.result,
   (result) => {
-    if (stage.value === 'wheel') return;
+    if (stage.value === 'wheel' || stage.value === 'horse-race') return;
     if (result !== null) {
       stage.value = 'confrontation';
     } else if (stage.value === 'result' || stage.value === 'confrontation') {
@@ -372,6 +424,17 @@ const RULES_TEXT = `论道赌局 · 玩法说明
           >
             <strong>天机轮</strong>
             <small>八格天机，落到哪格得哪格；花灵石可重排格局。</small>
+          </button>
+        </li>
+        <li>
+          <button
+            class="gambling-game-button"
+            type="button"
+            :disabled="busy || !unlocked"
+            @click="enterHorseRace"
+          >
+            <strong>赛马</strong>
+            <small>5 匹马 · 赔率浮动 · 只赌冠军</small>
           </button>
         </li>
       </ul>
@@ -601,6 +664,18 @@ const RULES_TEXT = `论道赌局 · 玩法说明
       />
     </template>
 
+    <!-- ---------- 赛马：选马/赛道/结果全在子组件里，这里只接线。 ---------- -->
+    <template v-else-if="stage === 'horse-race'">
+      <HorseRaceDialog
+        :state="state"
+        :busy="busy"
+        :result="horseRaceResult"
+        @race="onHorseRace"
+        @reveal="onHorseRaceReveal"
+        @back="backToModeSelect"
+      />
+    </template>
+
     <!-- ---------- 结果展示 ---------- -->
     <template v-else>
       <template v-if="result">
@@ -698,7 +773,7 @@ const RULES_TEXT = `论道赌局 · 玩法说明
                     :class="entry.result === 'win' ? 'record-win' : 'record-lose'"
                   >{{ entry.result === 'win' ? '胜' : '负' }}</span>
                   <span class="history-disciple">{{ entry.discipleName }}</span>
-                  <span class="history-mode">{{ BET_MODE_LABELS[entry.betMode] ?? entry.betMode }} {{ entry.multiplier }}x</span>
+                  <span class="history-mode">{{ BET_MODE_LABELS[entry.betMode] ?? entry.betMode }} {{ formatMultiplier(entry) }}</span>
                   <span class="history-time">{{ formatTime(entry.createdAt) }}</span>
                 </div>
                 <div class="history-row-bottom">

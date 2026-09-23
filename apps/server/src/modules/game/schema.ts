@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-import { BETTABLE_ATTRIBUTES } from './gambling';
+import { BETTABLE_ATTRIBUTES, RACE_BET_MAX, RACE_BET_MIN, RACE_HORSE_COUNT } from './gambling';
 import { SHOP_MAX_PILL_QUANTITY, SHOP_MAX_TRADE_AMOUNT, SHOP_TRADABLE_RESOURCES } from './shop';
 
 /**
@@ -255,4 +255,14 @@ export const shopSellPillRequestSchema = z.strictObject({
 /** 全服聊天：content 做宽松上限，真正的长度限制在 DB CHECK（200 Unicode 码点）。 */
 export const sendChatMessageRequestSchema = z.strictObject({
   content: z.string().min(1).max(200),
+});
+
+/**
+ * 0023 赛马：只做「类型 + 范围」的第一道防线（马 0~4、赌注与 RACE_BET_MIN / RACE_BET_MAX 同口径）。
+ * 真正的规则（解锁、每日次数、灵石余额、赔率与开奖）全部在 service 与 gambling.ts 里判定。
+ */
+export const horseRaceRequestSchema = z.strictObject({
+  horseIndex: z.number().int().min(0).max(RACE_HORSE_COUNT - 1),
+  /** 赌注（最小单位整数）。 */
+  betAmount: z.number().int().min(RACE_BET_MIN).max(RACE_BET_MAX),
 });

@@ -17,6 +17,7 @@ import {
   daoDebateRequestSchema,
   expelDiscipleRequestSchema,
   exploreRequestSchema,
+  horseRaceRequestSchema,
   journeyPreviewQuerySchema,
   recruitRequestSchema,
   renameDiscipleRequestSchema,
@@ -52,6 +53,7 @@ import {
   getActiveExploration,
   getPublicSect,
   getSectState,
+  horseRace,
   listChallengeHistory,
   listLeaderboard,
   listRecentEvents,
@@ -459,6 +461,14 @@ export function createGameRoutes(): Hono<AppEnv> {
     const userId = requireUserId(c);
     const result = await wheelReset(getDb(c.env), userId, Date.now());
     return respondOk(c, { state: result.state });
+  });
+
+  // 0023 赛马：一场定胜负（结算 → 解锁/次数/参数/余额校验 → 现摇整局 → 扣注、发奖、记录同批提交）。
+  routes.post('/game/horse-race', async (c) => {
+    const userId = requireUserId(c);
+    const body = await parseStrictJson(horseRaceRequestSchema, c);
+    const result = await horseRace(getDb(c.env), userId, body, Date.now());
+    return respondOk(c, { state: result.state, result: result.result });
   });
 
   // 坊市：买入材料（结算 → 白名单 / 灵石余额 / 材料容量校验 → 扣灵石、加材料，一次受保护 batch）。

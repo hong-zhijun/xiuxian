@@ -579,3 +579,160 @@ export function wheelReward(slot: WheelSlot, tier: WheelTier, cost: number): Whe
     amount: String(Math.floor(cost * multiplier + 1e-6)),
   };
 }
+
+/* ---------- 赛马（0023 迁移 + docs/赛马开发计划.md） ---------- */
+
+/** 每局固定 5 匹马。 */
+export const RACE_HORSE_COUNT = 5;
+
+/** 马名（修仙风格）：每局只随机实力权重，不随机名字，所以前端在「下注」阶段就能显示完整马名。 */
+export const HORSE_NAMES = ['赤兔', '绝影', '的卢', '乌骓', '踏雪'] as const;
+
+/** 庄家抽水：赔率 = (1 / 胜率) × (1 − HOUSE_EDGE)。 */
+export const RACE_HOUSE_EDGE = 0.1;
+
+/** 赔率下限：热门马的赔率不能被抽水压到 1x 附近（计划 2.1）。 */
+export const RACE_ODDS_MIN = 1.2;
+
+/** 实力权重范围（整数，含端点）；权重之和决定每匹马胜率。 */
+export const RACE_WEIGHT_MIN = 1;
+export const RACE_WEIGHT_MAX = 5;
+
+/** 赌注范围（灵石最小单位；1 展示单位 = 1000 最小单位）：即展示 10 ~ 500。 */
+export const RACE_BET_MIN = 10_000;
+export const RACE_BET_MAX = 500_000;
+
+/** 大奖广播阈值：选中马的赔率 ≥ 此值且押中 → 全服聊天广播（计划 2.6）。 */
+export const RACE_BROADCAST_ODDS_THRESHOLD = 8.0;
+
+/** 跑马动画步数：前端 8 步 × ~440ms ≈ 3.5 秒（计划 2.7）。 */
+export const RACE_STEP_COUNT = 8;
+
+/** 名次每落后一名，终点进度少 0.06：冠军 1.00、末位 0.76。 */
+export const RACE_RANK_GAP = 0.06;
+
+/** 中间步的最大抖动幅度（随进度收窄，最后一步恒为 0）。 */
+const RACE_STEP_JITTER = 0.12;
+
+/** 赛马记录里的 disciple_name（与天机轮写 '天机轮' 同一模式；两列都是 NOT NULL）。 */
+export const RACE_LOG_NAME = '赛马';
+
+/** 一匹马的赛前信息。 */
+export interface RaceHorse {
+  /** 0 ~ 4。 */
+  index: number;
+  name: string;
+  /** 随机实力权重（RACE_WEIGHT_MIN ~ RACE_WEIGHT_MAX）。 */
+  weight: number;
+  /** 胜率（权重 / 权重之和，0~1）。 */
+  winRate: number;
+  /** 赔率（一位小数，最低 RACE_ODDS_MIN）。 */
+  odds: number;
+}
+
+/** 一局赛马的完整结果（纯函数产出，service 再包一层视图）。 */
+export interface RaceResult {
+  horses: RaceHorse[];
+  /** [马0名次, 马1名次, ...]，1-based。 */
+  ranks: number[];
+  /** 冠军马的下标（0~4）。 */
+  winnerIndex: number;
+  /** 5 × RACE_STEP_COUNT 的累计进度（0→1），前端动画直接读。 */
+  steps: number[][];
+}
+
+/** 第 index 匹马的名字（index 必在 0~4；兜底只为类型收窄，正常走不到）。 */
+export function horseNameAt(index: number): string {
+  return HORSE_NAMES[index] ?? `第${String(index + 1)}号马`;
+}
+
+/** 赔率 = max(1.2, (1 / 胜率) × (1 − 抽水))，四舍五入到一位小数。 */
+export function raceOdds(winRate: number): number {
+  if (!(winRate > 0)) return RACE_ODDS_MIN;
+  return Math.max(RACE_ODDS_MIN, Math.round((1 / winRate) * (1 - RACE_HOUSE_EDGE) * 10) / 10);
+}
+
+/** 按权重加权随机选一个下标（与 wheelWeightedPick 同一模式；roll ∈ [0, 1)）。 */
+export function raceWeightedPick(weights: readonly number[], roll: number): number {
+  let total = 0;
+  for (const weight of weights) total += weight;
+  const target = roll * total;
+  let acc = 0;
+  for (let index = 0; index < weights.length; index += 1) {
+    acc += weights[index]!;
+    if (target < acc) return index;
+  }
+  return weights.length - 1;
+}
+
+/**
+ * 名次（纯函数）：冠军固定第 1，其余按权重降序 —— 权重相同按下标升序，保证结果确定。
+ * 只赌冠军，所以 2~5 名不必再逐个随机（计划 2.1）。
+ */
+export function raceRanksOf(weights: readonly number[], winnerIndex: number): number[] {
+  const ranks = new Array<number>(weights.length).fill(weights.length);
+  ranks[winnerIndex] = 1;
+  weights
+    .map((weight, index) => ({ weight, index }))
+    .filter((item) => item.index !== winnerIndex)
+    .sort((a, b) => b.weight - a.weight || a.index - b.index)
+    .forEach((item, position) => {
+      ranks[item.index] = position + 2;
+    });
+  return ranks;
+}
+
+/**
+ * 跑马动画序列（纯函数）：每匹马 RACE_STEP_COUNT 步的**累计进度**（0 → 目标）。
+ *
+ * - 目标进度 = 1 − (名次 − 1) × RACE_RANK_GAP：冠军 1.00、末位 0.76，名次一眼可辨；
+ * - 中间步 = 基础进度 + 抖动（幅度随进度收窄），看起来会有超车；
+ * - 最后一步严格等于目标，动画播完时画面与 ranks 完全一致。
+ */
+export function generateRaceSteps(
+  ranks: readonly number[],
+  random: () => number = Math.random,
+): number[][] {
+  return ranks.map((rank) => {
+    const target = Math.max(0, 1 - (rank - 1) * RACE_RANK_GAP);
+    const series: number[] = [];
+    for (let step = 1; step <= RACE_STEP_COUNT; step += 1) {
+      if (step === RACE_STEP_COUNT) {
+        series.push(target);
+        continue;
+      }
+      const progress = step / RACE_STEP_COUNT;
+      const noise = (random() - 0.5) * RACE_STEP_JITTER * (1 - progress);
+      series.push(Math.min(1, Math.max(0, progress * target + noise)));
+    }
+    return series;
+  });
+}
+
+/**
+ * 生成一局赛马（纯函数，随机源可注入以便测试）。
+ *
+ * 1. 5 匹马各摇一个 RACE_WEIGHT_MIN~RACE_WEIGHT_MAX 的整数权重；
+ * 2. 胜率 = 权重 / 权重之和；赔率 = raceOdds(胜率)；
+ * 3. 按胜率加权随机选冠军（与天机轮落格同一模式）；
+ * 4. 其余马按权重降序排名次，再生成 8 步动画序列。
+ *
+ * 与天机轮不同：赛马**不需要** seed —— 它是「点一次跑一次」，不存在「格局被重置」的概念，
+ * 每次请求都用 Math.random 现摇（计划 2.8）。
+ */
+export function generateRace(random: () => number = Math.random): RaceResult {
+  const weights: number[] = [];
+  for (let index = 0; index < RACE_HORSE_COUNT; index += 1) {
+    weights.push(RACE_WEIGHT_MIN + Math.floor(random() * (RACE_WEIGHT_MAX - RACE_WEIGHT_MIN + 1)));
+  }
+
+  const total = weights.reduce((sum, weight) => sum + weight, 0);
+  const horses: RaceHorse[] = weights.map((weight, index) => {
+    const winRate = weight / total;
+    return { index, name: horseNameAt(index), weight, winRate, odds: raceOdds(winRate) };
+  });
+
+  const winnerIndex = raceWeightedPick(weights, random());
+  const ranks = raceRanksOf(weights, winnerIndex);
+  return { horses, ranks, winnerIndex, steps: generateRaceSteps(ranks, random) };
+}

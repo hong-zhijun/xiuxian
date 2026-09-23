@@ -20,6 +20,7 @@ watch(collapsed, (v) => {
 
 let pollTimer: ReturnType<typeof setInterval> | undefined;
 let latestId: string | undefined;
+let sendVersion = 0;
 
 function scrollToBottom(): void {
   const el = listEl.value;
@@ -27,10 +28,16 @@ function scrollToBottom(): void {
 }
 
 async function load(): Promise<void> {
+  const v = sendVersion;
   try {
     const result = await fetchChatMessages(latestId);
+    if (v !== sendVersion) return;
     if (latestId && result.length > 0) {
-      messages.value = [...messages.value, ...result];
+      const existing = new Set(messages.value.map((m) => m.id));
+      const fresh = result.filter((m) => !existing.has(m.id));
+      if (fresh.length > 0) {
+        messages.value = [...messages.value, ...fresh];
+      }
     } else if (!latestId) {
       messages.value = result;
     }
@@ -49,6 +56,7 @@ async function handleSend(): Promise<void> {
   const content = input.value.trim();
   if (content === '' || sending.value) return;
   sending.value = true;
+  sendVersion++;
   try {
     const result = await sendChatMessage(content);
     messages.value = result;

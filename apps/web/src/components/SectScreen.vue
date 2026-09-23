@@ -11,6 +11,7 @@ import type {
   DiscipleView,
   ExploreChoiceResult,
   GameActionData,
+  HorseRaceResult,
   JourneyDirection,
   JourneyPreviewView,
   PublicSectView,
@@ -69,6 +70,8 @@ const props = defineProps<{
   daoDebateResult: DaoDebateResult | null;
   /** 0020 天机轮最近一次结果；App.vue 负责拿结果，这里只负责展示（null = 还没转过）。 */
   wheelResult: WheelSpinResult | null;
+  /** 0023 赛马最近一次结果；App.vue 负责拿结果，这里只负责展示（null = 还没跑过）。 */
+  horseRaceResult: HorseRaceResult | null;
 }>();
 
 const emit = defineEmits<{
@@ -120,6 +123,8 @@ const emit = defineEmits<{
   /** 0020 天机轮：转动（带投入档位）与重置都由 App.vue 绑定并调接口，这里只派发与展示。 */
   wheelSpin: [tier: number];
   wheelReset: [];
+  /** 0023 赛马：开跑（马 index + 最小单位赌注）由 App.vue 绑定并调接口，这里只派发与展示。 */
+  horseRace: [horseIndex: number, betAmount: number];
 }>();
 
 /** 操作条里的弹窗开关：天机录 / 历练探索 / 江湖榜 / 守擂阵容 / 演武录 / 炼丹 / 赌坊 / 坊市（宗门晋升与建筑仍在右栏常驻）。 */
@@ -137,15 +142,16 @@ const openPanel = ref<
 >(null);
 
 /**
- * 赌坊里当前在玩哪个玩法：只为赌坊弹窗那一层的加载层文案（论道 / 天机轮），
+ * 赌坊里当前在玩哪个玩法：只为赌坊弹窗那一层的加载层文案（论道 / 天机轮 / 赛马），
  * 由 GamblingHouseDialog 在切换玩法时上报。
  */
-const gamblingGame = ref<'debate' | 'wheel'>('debate');
-const gamblingLoadingText = computed(() =>
-  gamblingGame.value === 'wheel' ? '正在推演天机' : '正在论道',
-);
+const gamblingGame = ref<'debate' | 'wheel' | 'horse-race'>('debate');
+const gamblingLoadingText = computed(() => {
+  if (gamblingGame.value === 'wheel') return '正在推演天机';
+  return gamblingGame.value === 'horse-race' ? '正在策马入场' : '正在论道';
+});
 
-function onGamblingGame(game: 'debate' | 'wheel'): void {
+function onGamblingGame(game: 'debate' | 'wheel' | 'horse-race'): void {
   gamblingGame.value = game;
 }
 
@@ -701,6 +707,12 @@ function onWheelReset(): void {
   emit('wheelReset');
 }
 
+/** 0023 赛马里点「开跑」：请求由 App.vue 执行，这里只转发（弹窗留着等结果回填）。 */
+function onHorseRace(horseIndex: number, betAmount: number): void {
+  if (props.busy) return;
+  emit('horseRace', horseIndex, betAmount);
+}
+
 /** 天机轮结果同样只提示一次（转动停稳与关闭面板两条路径共用）。 */
 let notifiedWheel: WheelSpinResult | null = null;
 
@@ -722,8 +734,31 @@ function onWheelRevealed(): void {
 }
 
 /**
+ * 赛马结果同样只提示一次：与天机轮不同，胜负要等跑马动画播完（弹窗 emit reveal）才报，
+ * 否则 toast 会抢在动画之前剧透（计划 §12.10）。
+ */
+let notifiedHorseRace: HorseRaceResult | null = null;
+
+function notifyHorseRaceResult(result: HorseRaceResult): void {
+  if (result === notifiedHorseRace) return;
+  notifiedHorseRace = result;
+  emit(
+    'notify',
+    result.result === 'win' ? 'success' : 'warning',
+    `赛马 · 押 ${result.horses[result.selectedIndex]?.name ?? '?'} ${result.odds.toFixed(1)}x`,
+    result.message,
+  );
+}
+
+/** 跑马动画播完：结果面板已经在弹窗里写出来了，这里补一条 toast（关掉弹窗也不会漏消息）。 */
+function onHorseRaceRevealed(): void {
+  const result = props.horseRaceResult;
+  if (result !== null) notifyHorseRaceResult(result);
+}
+
+/**
  * 关掉赌坊弹窗：结果由 App.vue 保留，下次打开仍是干净的玩法列表。
- * 但玩家可能在对峙阶段（或天机轮转动中）直接按 Esc / 点右上角 X —— 那时账其实已经结算了，
+ * 但玩家可能在对峙阶段（或天机轮转动 / 赛马奔跑中）直接按 Esc / 点右上角 X —— 那时账其实已经结算了，
  * 所以这里必须按各自的机会补发一次提示，不能让他「灵石少了却什么都没看到」。
  */
 function onCloseGambling(): void {
@@ -731,6 +766,8 @@ function onCloseGambling(): void {
   if (result !== null) notifyDebateResult(result);
   const wheel = props.wheelResult;
   if (wheel !== null) notifyWheelResult(wheel);
+  const race = props.horseRaceResult;
+  if (race !== null) notifyHorseRaceResult(race);
   openPanel.value = null;
 }
 
@@ -1380,10 +1417,13 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
         :busy="busy"
         :result="daoDebateResult"
         :wheel-result="wheelResult"
+        :horse-race-result="horseRaceResult"
         @debate="onDaoDebate"
         @wheel-spin="onWheelSpin"
         @wheel-reset="onWheelReset"
         @wheel-reveal="onWheelRevealed"
+        @horse-race="onHorseRace"
+        @horse-race-reveal="onHorseRaceRevealed"
         @game="onGamblingGame"
         @close="onCloseGambling"
         @reveal="onGamblingRevealed"

@@ -1266,6 +1266,53 @@ export async function wheelReset(): Promise<{ state: SectStateView }> {
   return apiRequest<{ state: SectStateView }>('/api/v1/game/wheel-reset', { method: 'POST' });
 }
 
+/* ---------- 0023 赛马（赌坊第三个玩法） ---------- */
+
+/** 赛马的一匹马（与后端 view.ts 的 HorseRaceResultView.horses 一一对应）。 */
+export interface HorseRaceHorse {
+  name: string;
+  /** 本局随机实力权重（服务端 1~5）。 */
+  weight: number;
+  /** 由权重归一化的胜率（0~1）。 */
+  winRate: number;
+  /** 赔率（一位小数，最低 1.2）。 */
+  odds: number;
+}
+
+/** 赛马结果（POST /game/horse-race 的 result；与后端 HorseRaceResultView 一一对应）。 */
+export interface HorseRaceResult {
+  horses: HorseRaceHorse[];
+  /** 每匹马的最终名次（1-based，下标 = 马 index）。 */
+  ranks: number[];
+  winnerIndex: number;
+  selectedIndex: number;
+  /** 赌注（最小单位，字符串）。 */
+  betAmount: string;
+  /** 选中马的赔率（一位小数）。 */
+  odds: number;
+  result: 'win' | 'lose';
+  /** 奖励灵石（最小单位，字符串）；输时 '0'。 */
+  rewardAmount: string;
+  /** 5 × 8 的累计进度序列（动画用，值域 0~1）。 */
+  steps: number[][];
+  /** 服务端拼好的结果文案。 */
+  message: string;
+}
+
+/**
+ * 0023 赛马（POST /game/horse-race）：一次一局，扣每日赌坊次数（与论道 / 天机轮共享）。
+ * 名次、赔率、奖励与次数全由服务端裁决，betAmount 传**最小单位**整数（1 展示单位 = 1000）。
+ */
+export async function horseRace(
+  horseIndex: number,
+  betAmount: number,
+): Promise<{ state: SectStateView; result: HorseRaceResult }> {
+  return apiRequest<{ state: SectStateView; result: HorseRaceResult }>(
+    '/api/v1/game/horse-race',
+    { method: 'POST', body: { horseIndex, betAmount } },
+  );
+}
+
 /* ---------- 坊市（材料买卖与丹药回收） ---------- */
 
 /** 可交易材料（与后端 shop.ts 的 SHOP_TRADABLE_RESOURCES 同口径）：灵石与灵气都不可买卖。 */

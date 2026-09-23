@@ -15,6 +15,7 @@ import {
   expelDisciple,
   explore,
   fetchMe,
+  horseRace,
   logout as apiLogout,
   recruit,
   refreshRecruitPreview,
@@ -42,6 +43,7 @@ import type {
   ExpelDiscipleOutcome,
   ExploreChoiceResult,
   ExploreOutcome,
+  HorseRaceResult,
   InsightAllocateOutcome,
   JourneyClaimOutcomeView,
   JourneyDirection,
@@ -88,6 +90,9 @@ const daoDebateResult = ref<DaoDebateResult | null>(null);
 
 /** 0020 天机轮最近一次结果（交给 SectScreen 的赌坊弹窗展示；null = 还没转过）。 */
 const wheelResult = ref<WheelSpinResult | null>(null);
+
+/** 0023 赛马最近一次结果（交给 SectScreen 的赌坊弹窗展示；null = 还没跑过）。 */
+const horseRaceResult = ref<HorseRaceResult | null>(null);
 
 let syncTimer: number | undefined;
 let nextToastId = 1;
@@ -550,6 +555,27 @@ async function onWheelReset(): Promise<void> {
   }
 }
 
+/**
+ * 0023 赛马开跑：名次、赔率、奖励与每日次数全在服务端，这里只回填 state 并把结果交给赌坊弹窗。
+ * 与天机轮同款：先清空上一次结果，HorseRaceDialog 的 watch 才能把新结果当成一次新事件（并据此开跑）。
+ * 结果提示不在这里弹——跑马动画播完（弹窗 emit reveal）后由 SectScreen 补，避免提前剧透胜负。
+ */
+async function onHorseRace(horseIndex: number, betAmount: number): Promise<void> {
+  if (busy.value) return;
+  busy.value = true;
+  horseRaceResult.value = null;
+  try {
+    const { state: next, result } = await horseRace(horseIndex, betAmount);
+    state.value = next;
+    announceEvents(next);
+    horseRaceResult.value = result;
+  } catch (caught) {
+    handleError(caught);
+  } finally {
+    busy.value = false;
+  }
+}
+
 /** 0019 分配悟道值：归属、余额与上限都在服务端裁决，这里只按回执提示加完后的属性值。 */
 function onAllocateDaoInsight(discipleId: string, attribute: DaoAttribute, points: number): void {
   void runAction(
@@ -846,6 +872,7 @@ onUnmounted(() => {
       :explore-result="exploreResult"
       :dao-debate-result="daoDebateResult"
       :wheel-result="wheelResult"
+      :horse-race-result="horseRaceResult"
       @refresh="refresh(true)"
       @logout="onLogout"
       @recruited="onRecruitRefreshed"
@@ -863,6 +890,7 @@ onUnmounted(() => {
       @dismiss-challenge-result="onDismissChallengeResult"
       @wheel-spin="onWheelSpin"
       @wheel-reset="onWheelReset"
+      @horse-race="onHorseRace"
       @dao-debate="onDaoDebate"
       @allocate-dao-insight="onAllocateDaoInsight"
       @breakthrough="onBreakthrough"

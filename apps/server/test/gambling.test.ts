@@ -768,7 +768,7 @@ describe('悟道值加点', () => {
 /* ---------- 迁移约束（0019） ---------- */
 
 describe('0019 迁移的数据库约束', () => {
-  it('dao_insight 不能为负、dao_insight_used 不能超过 50、倍率只能是 1~5（0020 放宽后）', async () => {
+  it('dao_insight 不能为负、dao_insight_used 不能超过 50、倍率只能是 1~999（0023 放宽后）', async () => {
     const sect = await makeSect('gh-db');
     const discipleId = sect.discipleIds[0] as string;
 
@@ -782,26 +782,32 @@ describe('0019 迁移的数据库约束', () => {
         .run(),
     ).rejects.toThrow(/CHECK/i);
 
-    // 0020 把 multiplier 的 CHECK 从 1~3 放宽到 1~5（天机轮投入档位）；6 仍然越界。
+    // 0020 把 multiplier 的 CHECK 从 1~3 放宽到 1~5（天机轮投入档位），
+    // 0023 再放宽到 1~999（赛马存「选中马的赔率 × 10」，冷门 18.9x → 189）；1000 仍然越界。
     await expect(
       env.DB.prepare(
         `INSERT INTO dao_debate_log (id, sect_id, disciple_id, disciple_name, bet_mode, multiplier,
            stake_detail, result, reward_detail, win_probability, created_at)
-         VALUES (?, ?, ?, ?, 'attribute', 6, '{}', 'win', '{}', NULL, ?)`,
+         VALUES (?, ?, ?, ?, 'horse_race', 1000, '{}', 'win', '{}', NULL, ?)`,
       )
-        .bind(crypto.randomUUID(), sect.sectId, discipleId, '甲', Date.now())
+        .bind(crypto.randomUUID(), sect.sectId, discipleId, '赛马', Date.now())
         .run(),
     ).rejects.toThrow(/CHECK/i);
 
-    // 上界这一侧：5 档（天机轮最大投入）必须被接受。
-    await env.DB.prepare(
-      `INSERT INTO dao_debate_log (id, sect_id, disciple_id, disciple_name, bet_mode, multiplier,
-         stake_detail, result, reward_detail, win_probability, created_at)
-       VALUES (?, ?, ?, ?, 'wheel', 5, '{}', 'win', '{}', NULL, ?)`,
-    )
-      .bind(crypto.randomUUID(), sect.sectId, discipleId, '天机轮', Date.now())
-      .run();
-    expect(await debateLogs(sect.sectId)).toHaveLength(1);
+    // 上界这一侧：天机轮最大档位 5 与赛马冷门赔率 189 都必须被接受。
+    for (const [multiplier, betMode, name] of [
+      [5, 'wheel', '天机轮'],
+      [189, 'horse_race', '赛马'],
+    ] as const) {
+      await env.DB.prepare(
+        `INSERT INTO dao_debate_log (id, sect_id, disciple_id, disciple_name, bet_mode, multiplier,
+           stake_detail, result, reward_detail, win_probability, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, '{}', 'win', '{}', NULL, ?)`,
+      )
+        .bind(crypto.randomUUID(), sect.sectId, discipleId, name, betMode, multiplier, Date.now())
+        .run();
+    }
+    expect(await debateLogs(sect.sectId)).toHaveLength(2);
   });
 
   it('新宗门与旧弟子的默认值：debate 计数为 0/空、悟道值为 0', async () => {

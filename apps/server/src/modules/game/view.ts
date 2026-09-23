@@ -363,6 +363,35 @@ export interface WheelSpinResultView {
 }
 
 /**
+ * 0023 赛马结果（POST /game/horse-race 的 result，计划第 6 节）。
+ *
+ * steps 是 5 × RACE_STEP_COUNT 的累计进度，前端只用它播动画；
+ * 赔率要在动画开始前就显示出来，所以 horses 里带 odds；胜负与金额照 result / rewardAmount 渲染。
+ */
+export interface HorseRaceResultView {
+  /** 5 匹马：名字、权重、胜率与赔率（顺序即马的下标 0~4）。 */
+  horses: { name: string; weight: number; winRate: number; odds: number }[];
+  /** 每匹马的最终名次（1-based，下标 = 马的下标）。 */
+  ranks: number[];
+  /** 冠军马的下标（0~4）。 */
+  winnerIndex: number;
+  /** 玩家押的马的下标（0~4）。 */
+  selectedIndex: number;
+  /** 赌注（最小单位，字符串）。 */
+  betAmount: string;
+  /** 选中马的赔率（一位小数）。 */
+  odds: number;
+  /** 'win' | 'lose'。 */
+  result: 'win' | 'lose';
+  /** 奖励灵石（最小单位，字符串）；输时为 '0'。 */
+  rewardAmount: string;
+  /** 5 × 8 的动画序列（累计进度 0→1）。 */
+  steps: number[][];
+  /** 服务端拼好的结果文案。 */
+  message: string;
+}
+
+/**
  * 坊市的单种丹药（SectStateView.shop.pills 的元素）。
  * owned 是当前库存（颗），sellPrice 是单颗回收价（最小单位灵石，写死在 shop.ts）。
  */
