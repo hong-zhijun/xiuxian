@@ -4,6 +4,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import type { RaceHistoryView, RaceStateView, SectStateView } from '../api/game';
 import { fetchRaceHistory, fetchRaceState, placeRaceBet } from '../api/game';
 import { formatAmount } from '../utils/format';
+import SpiritBeastRaceTrack from './SpiritBeastRaceTrack.vue';
 
 const props = defineProps<{
   state: SectStateView;
@@ -22,9 +23,6 @@ const emit = defineEmits<{
 const RACE_BET_MIN_DISPLAY = 10;
 const RACE_BET_MAX_DISPLAY = 500;
 const UNITS_PER_DISPLAY = 1000;
-
-const RACE_STEP_MS = 440;
-const LANE_TRAVEL_PERCENT = 86;
 
 const race = ref<RaceStateView | null>(null);
 const loading = ref(true);
@@ -99,6 +97,7 @@ async function loadRaceState(): Promise<void> {
     }
     if (prevRoundKey && prevRoundKey !== raceData.roundKey) {
       animPhase.value = 'idle';
+      notified.value = false;
     }
   } catch {
     /* ignore polling errors */
@@ -158,9 +157,6 @@ function stopCountdown(): void {
 
 type AnimPhase = 'idle' | 'racing' | 'result';
 const animPhase = ref<AnimPhase>('idle');
-const animProgress = ref<number[]>([0, 0, 0, 0, 0]);
-const animStep = ref(0);
-let animTimer: number | undefined;
 
 function startSettledAnimation(data: RaceStateView): void {
   if (!data.steps || !data.ranks) {
@@ -169,24 +165,16 @@ function startSettledAnimation(data: RaceStateView): void {
     return;
   }
   animPhase.value = 'racing';
-  animProgress.value = [0, 0, 0, 0, 0];
-  animStep.value = 0;
-  playAnimStep(data, 0);
 }
 
-function playAnimStep(data: RaceStateView, step: number): void {
-  const steps = data.steps!;
-  const count = steps[0]?.length ?? 0;
-  if (step >= count) {
-    animPhase.value = 'result';
-    notifyResult(data);
-    return;
-  }
-  animProgress.value = steps.map((lane) => lane[step] ?? 0);
-  animStep.value = step + 1;
-  const waitMs = window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : RACE_STEP_MS;
-  animTimer = window.setTimeout(() => playAnimStep(data, step + 1), waitMs);
+/** SVG 动画播完（或跳过）：切到结果页并提示输赢。回放时不重复提示。 */
+function finishAnimation(): void {
+  animPhase.value = 'result';
+  if (!notified.value && race.value) notifyResult(race.value);
+  notified.value = true;
 }
+
+const notified = ref(false);
 
 function notifyResult(data: RaceStateView): void {
   if (data.winnerIndex === null) return;
@@ -258,7 +246,6 @@ onMounted(() => {
 onUnmounted(() => {
   stopPolling();
   stopCountdown();
-  window.clearTimeout(animTimer);
 });
 </script>
 
@@ -350,25 +337,14 @@ onUnmounted(() => {
 
     <!-- 结算后展示（带动画） -->
     <template v-else-if="race?.phase === 'settled' && animPhase === 'racing'">
-      <p class="eyebrow">赛程 · 第 {{ animStep }}/{{ race.steps?.[0]?.length ?? 8 }} 步</p>
-      <div class="race-track">
-        <div
-          v-for="beast in race.beasts"
-          :key="beast.index"
-          class="race-lane"
-          :class="{ 'is-picked': race.myBets.some(b => b.beastIndex === beast.index) }"
-        >
-          <span class="race-lane-name">{{ beast.name }}</span>
-          <span class="race-lane-odds">{{ oddsText(beast.odds) }}</span>
-          <span class="race-lane-track">
-            <span
-              class="race-horse"
-              :style="{ transform: `translateX(${(animProgress[beast.index] ?? 0) * LANE_TRAVEL_PERCENT}%)` }"
-            >🐴</span>
-          </span>
-        </div>
-      </div>
-      <p class="race-note">灵兽奔跑中，终线之后才见分晓。</p>
+      <p class="eyebrow">灵兽竞逐 · 开跑</p>
+      <SpiritBeastRaceTrack
+        :beasts="race.beasts"
+        :steps="race.steps ?? []"
+        :winner-index="race.winnerIndex ?? 0"
+        :picked="race.myBets.map((b) => b.beastIndex)"
+        @done="finishAnimation"
+      />
     </template>
 
     <!-- 结算后结果 -->
@@ -408,6 +384,7 @@ onUnmounted(() => {
 
       <p class="race-note">下一轮即将开始，倒计时：{{ formatCountdown(countdown) }}</p>
       <div class="race-foot">
+        <button v-if="race.steps" class="action-button race-foot-button" type="button" @click="animPhase = 'racing'">回放比赛</button>
         <button class="action-button race-foot-button" type="button" @click="emit('back')">返回赌坊</button>
       </div>
     </template>
@@ -678,74 +655,6 @@ onUnmounted(() => {
   color: #7d9186;
   font-size: 12px;
   line-height: 1.6;
-}
-
-/* ---------- 赛道 ---------- */
-
-.race-track {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-top: 8px;
-  padding: 12px 0;
-}
-
-.race-lane {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  height: 36px;
-  padding: 0 8px;
-  border: 1px solid transparent;
-  border-radius: 4px;
-  background: rgba(255, 255, 255, 0.03);
-}
-
-.race-lane.is-picked {
-  border-color: rgba(202, 169, 106, 0.45);
-}
-
-.race-lane-name {
-  flex: 0 0 44px;
-  color: #dce6e0;
-  font-size: 13px;
-}
-
-.race-lane-odds {
-  flex: 0 0 46px;
-  color: var(--gold, #caa96a);
-  font-size: 12px;
-}
-
-.race-lane-track {
-  position: relative;
-  flex: 1 1 auto;
-  height: 30px;
-  overflow: hidden;
-  border-radius: 3px;
-  background: linear-gradient(90deg, rgba(255, 255, 255, 0.02), rgba(255, 255, 255, 0.06));
-}
-
-.race-lane-track::after {
-  content: '';
-  position: absolute;
-  top: 0;
-  right: 14%;
-  bottom: 0;
-  border-right: 1px dashed rgba(202, 169, 106, 0.35);
-}
-
-.race-horse {
-  position: absolute;
-  top: 0;
-  left: 0;
-  display: flex;
-  width: 100%;
-  height: 100%;
-  align-items: center;
-  font-size: 20px;
-  line-height: 1;
-  transition: transform 400ms ease;
 }
 
 /* ---------- 结果 ---------- */
