@@ -20,7 +20,7 @@
     {
       "binding": "DB",
       "database_name": "xiuxian-game-db",
-      "database_id": "ecd948e1-401e-4285-bf6f-13653fec2647",
+      "database_id": "__D1_DATABASE_ID__",
       "migrations_dir": "../../migrations"
     }
   ],

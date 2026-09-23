@@ -23,6 +23,12 @@ jobs:
 
       - run: npm run build
 
+      # 生产配置里的 D1 database_id 是占位符，部署时用仓库 secret 替换（开源仓库不写死任何人的数据库）
+      - run: sed -i "s/__D1_DATABASE_ID__/${D1_DATABASE_ID}/" wrangler.production.jsonc
+        working-directory: apps/server
+        env:
+          D1_DATABASE_ID: ${{ secrets.D1_DATABASE_ID }}
+
       - run: npx wrangler d1 migrations apply DB --remote --config wrangler.production.jsonc
         working-directory: apps/server
         env:
