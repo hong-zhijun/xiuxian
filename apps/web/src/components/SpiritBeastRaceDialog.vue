@@ -584,6 +584,12 @@ onUnmounted(() => {
   padding: 0;
   overflow-y: auto;
   list-style: none;
+  /* 隐藏滚动条但保留滚动：Firefox 用 scrollbar-width，Chrome 109 用 ::-webkit-scrollbar */
+  scrollbar-width: none;
+}
+
+.race-feed-list::-webkit-scrollbar {
+  display: none;
 }
 
 .race-feed-row {
