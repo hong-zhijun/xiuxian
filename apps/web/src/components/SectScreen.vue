@@ -122,7 +122,7 @@ const emit = defineEmits<{
   wheelReset: [];
 }>();
 
-/** 操作条里的弹窗开关：天机录 / 历练探索 / 江湖榜 / 守擂阵容 / 演武录 / 炼丹 / 赌坊 / 坊市（宗门晋升与建筑仍在右栏常驻）。 */
+/** 操作条里的弹窗开关：天机录 / 秘境探索 / 江湖榜 / 守擂阵容 / 演武录 / 炼丹 / 赌坊 / 坊市（宗门晋升与建筑仍在右栏常驻）。 */
 const openPanel = ref<
   | 'events'
   | 'explore'
@@ -1152,7 +1152,7 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
         <svg viewBox="0 0 24 24" aria-hidden="true">
           <path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Zm3.4 5.6-2.1 5-5 2.1 2.1-5 5-2.1Z" />
         </svg>
-        <span>历练探索</span>
+        <span>秘境探索</span>
       </button>
       <button class="action-chip" type="button" @click="openPanel = 'gambling'">
         <svg viewBox="0 0 24 24" aria-hidden="true">

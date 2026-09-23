@@ -2571,9 +2571,9 @@ export async function exploreSectRealm(
     throw new AppError('INVALID_STATUS', `需要宗门 ${realm.requiredSectLevel} 级才能进入`);
   }
 
-  // 2. 演武场检查：宗门必须有演武场才能探索（V2-1 在 4 级解锁）
+  // 2. 演武场检查：高阶秘境必须有演武场才能探索（V2-1 在 4 级解锁）
   const arena = draft.buildings.find((b) => b.def_id === ARENA_BUILDING_ID);
-  if (!arena) {
+  if (realm.requiresArena && !arena) {
     throw new AppError('INVALID_STATUS', '需要先建造演武场');
   }
 
@@ -2635,7 +2635,7 @@ export async function exploreSectRealm(
 
   // 8. 计算战力与成功率
   const power = partyCombatPower(members);
-  const arenaLevel = arena.level;
+  const arenaLevel = arena?.level ?? 0;
   const chanceBp = explorationSuccessChanceBp(power, realm.difficulty, arenaLevel);
   const roll = Math.floor(Math.random() * 10_000);
   const success = roll < chanceBp;
@@ -2743,7 +2743,7 @@ export async function listSecretRealms(
       usedToday,
       requiredSectLevel: realm.requiredSectLevel,
       locked,
-      hasArena: arena !== undefined,
+      hasArena: arena !== undefined || !realm.requiresArena,
       exploreEnabled,
     });
   }
@@ -4806,7 +4806,7 @@ export async function startRealmExplore(
     throw new AppError('INVALID_STATUS', `需要宗门 ${String(realm.requiredSectLevel)} 级才能进入`);
   }
   const arena = draft.buildings.find((building) => building.def_id === ARENA_BUILDING_ID);
-  if (arena === undefined) {
+  if (realm.requiresArena && arena === undefined) {
     throw new AppError('INVALID_STATUS', '需要先建造演武场');
   }
   if (draft.activeExploration !== null) {

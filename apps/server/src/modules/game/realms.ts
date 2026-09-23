@@ -27,6 +27,8 @@ export interface SecretRealmDef {
   dailyLimit: number | null;
   /** 需要的最低宗门等级。 */
   requiredSectLevel: number;
+  /** 是否需要演武场才能探索；低阶秘境可跳过。 */
+  requiresArena: boolean;
 }
 
 export const SECRET_REALMS: readonly SecretRealmDef[] = [
@@ -41,6 +43,7 @@ export const SECRET_REALMS: readonly SecretRealmDef[] = [
     maxParty: 2,
     dailyLimit: 3,
     requiredSectLevel: 1,
+    requiresArena: false,
   },
   {
     id: 'savageMine',
@@ -53,6 +56,7 @@ export const SECRET_REALMS: readonly SecretRealmDef[] = [
     maxParty: 2,
     dailyLimit: 3,
     requiredSectLevel: 1,
+    requiresArena: false,
   },
   {
     id: 'fallenStarAbyss',
@@ -65,6 +69,7 @@ export const SECRET_REALMS: readonly SecretRealmDef[] = [
     maxParty: 3,
     dailyLimit: 3,
     requiredSectLevel: 3,
+    requiresArena: true,
   },
   {
     id: 'beastNest',
@@ -77,6 +82,7 @@ export const SECRET_REALMS: readonly SecretRealmDef[] = [
     maxParty: 3,
     dailyLimit: 3,
     requiredSectLevel: 4,
+    requiresArena: true,
   },
   {
     id: 'ancientRealm',
@@ -89,6 +95,7 @@ export const SECRET_REALMS: readonly SecretRealmDef[] = [
     maxParty: 3,
     dailyLimit: 3,
     requiredSectLevel: 6,
+    requiresArena: true,
   },
   {
     id: 'tribulationRuins',
@@ -101,6 +108,7 @@ export const SECRET_REALMS: readonly SecretRealmDef[] = [
     maxParty: 3,
     dailyLimit: 3,
     requiredSectLevel: 8,
+    requiresArena: true,
   },
 ];
 

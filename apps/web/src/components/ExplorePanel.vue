@@ -64,7 +64,7 @@ function realmBlockedReason(realm: SecretRealmView): string | null {
   if (realm.locked) {
     return `宗门需达 ${realm.requiredSectLevel} 级`;
   }
-  if (!hasArena.value) {
+  if (!realm.hasArena) {
     return '尚无演武场';
   }
   if (realm.dailyLimit !== null && realm.usedToday >= realm.dailyLimit) {
@@ -126,7 +126,7 @@ function realmGlyph(realmId: string): string {
   <section class="explore-panel" aria-labelledby="explore-title">
     <header class="section-heading panel-heading compact-heading">
       <div>
-        <p class="eyebrow">历练探索</p>
+        <p class="eyebrow">秘境探索</p>
         <h2 id="explore-title">秘境</h2>
       </div>
       <span class="count-badge">{{ realms.length }} 处</span>
@@ -150,7 +150,7 @@ function realmGlyph(realmId: string): string {
     </p>
 
     <p v-if="!loading && loadError" class="explore-hint">{{ loadError }}</p>
-    <p v-else-if="!loading && realms.length > 0 && !hasArena" class="explore-hint">宗门尚无演武场（4 级解锁），暂时无法外派弟子探索秘境。</p>
+    <p v-else-if="!loading && realms.length > 0 && !hasArena" class="explore-hint">部分高阶秘境需要建造演武场（4 级解锁）方可探索。</p>
 
     <ul v-if="!loading && realms.length > 0" class="realm-list">
       <li v-for="realm in realms" :key="realm.id" class="realm-row" :class="{ 'is-locked': realm.locked }">
