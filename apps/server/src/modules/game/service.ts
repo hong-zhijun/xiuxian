@@ -44,8 +44,7 @@ import {
   beastWeightsFromRoundKey,
   generateRaceSteps,
   isRaceOperatingHour,
-  parimutuelOdds,
-  raceDisplayOdds,
+  raceFixedOdds,
   racePhaseOf,
   raceRanksOf,
   raceWeightedPick,
@@ -5843,7 +5842,7 @@ async function buildRaceStateView(
       remainingSeconds: Math.ceil(phaseInfo.remainingMs / 1000),
       beasts: weights.map((w, i) => ({
         index: i, name: beastNameAt(i), weight: w, winRate: totalW > 0 ? w / totalW : 0,
-        pool: '0', odds: raceDisplayOdds(0, 0, w, totalW),
+        pool: '0', odds: raceFixedOdds(w, totalW),
       })),
       totalPool: '0',
       myBets: [],
@@ -5867,7 +5866,7 @@ async function buildRaceStateView(
       index: i, name: beastNameAt(i), weight: w,
       winRate: totalW > 0 ? w / totalW : 0,
       pool: String(pool),
-      odds: raceDisplayOdds(totalPool, pool, w, totalW),
+      odds: raceFixedOdds(w, totalW),
     };
   });
 
@@ -5891,11 +5890,12 @@ async function buildRaceStateView(
     if (winnerIndex !== null) {
       ranks = raceRanksOf(weights, winnerIndex);
       steps = generateRaceSteps(ranks);
-      const winnerPool = poolMap.get(winnerIndex) ?? 0;
+      const winnerW = weights[winnerIndex] ?? 1;
+      const odds = raceFixedOdds(winnerW, totalW);
       let myWin = 0;
       for (const bet of myBetRows) {
-        if (bet.beast_index === winnerIndex && winnerPool > 0) {
-          myWin += Math.floor(bet.amount * parimutuelOdds(totalPool, winnerPool) + 1e-6);
+        if (bet.beast_index === winnerIndex) {
+          myWin += Math.floor(bet.amount * odds + 1e-6);
         }
       }
       myWinnings = String(myWin);
@@ -6027,11 +6027,11 @@ export async function settleCurrentRound(db: D1Database, now: number): Promise<v
     const weights: number[] = JSON.parse(round.beast_weights) as number[];
     const winnerIndex = raceWeightedPick(weights, Math.random());
 
+    const totalW = weights.reduce((s, w) => s + w, 0);
+    const winnerW = weights[winnerIndex] ?? 1;
+    const odds = raceFixedOdds(winnerW, totalW);
+
     const bets = await repo.betsByRound(round.id);
-    const pools = await repo.beastPoolsByRound(round.id);
-    const poolMap = new Map(pools.map((p) => [p.beast_index, p.total]));
-    const totalPool = round.total_pool;
-    const winnerPool = poolMap.get(winnerIndex) ?? 0;
 
     const stmts: ParameterizedQuery[] = [];
     stmts.push(settleRaceRoundStatement(round.id, winnerIndex, now));
@@ -6040,8 +6040,7 @@ export async function settleCurrentRound(db: D1Database, now: number): Promise<v
 
     for (const bet of bets) {
       if (bet.beast_index !== winnerIndex) continue;
-      if (winnerPool <= 0) continue;
-      const payout = Math.floor(bet.amount * parimutuelOdds(totalPool, winnerPool) + 1e-6);
+      const payout = Math.floor(bet.amount * odds + 1e-6);
       if (payout <= 0) continue;
 
       stmts.push(resourceDeltaStatement(bet.sect_id, 'spiritStone', payout, now));
@@ -6068,14 +6067,13 @@ export async function settleCurrentRound(db: D1Database, now: number): Promise<v
     }
 
     for (const [sectId, info] of sectPayouts) {
-      const actualOdds = winnerPool > 0 ? parimutuelOdds(totalPool, winnerPool) : 0;
       stmts.push(insertDaoDebateLogStatement({
         id: crypto.randomUUID(),
         sectId,
         discipleId: '',
         discipleName: RACE_LOG_NAME,
         betMode: 'beast_race',
-        multiplier: Math.max(1, Math.round(actualOdds * 10)),
+        multiplier: Math.max(1, Math.round(odds * 10)),
         stakeDetail: JSON.stringify({
           beastIndex: winnerIndex,
           beastName: beastNameAt(winnerIndex),
@@ -6084,7 +6082,7 @@ export async function settleCurrentRound(db: D1Database, now: number): Promise<v
         rewardDetail: JSON.stringify({
           type: 'resource', resourceId: 'spiritStone', amount: String(info.total),
         }),
-        winProbability: weights[winnerIndex]! / weights.reduce((s, w) => s + w, 0),
+        winProbability: weights[winnerIndex]! / totalW,
         now,
       }));
     }
@@ -6092,14 +6090,13 @@ export async function settleCurrentRound(db: D1Database, now: number): Promise<v
     const prepared = prepareStatements(db, stmts);
     await db.batch(prepared);
 
-    const actualOdds = winnerPool > 0 ? parimutuelOdds(totalPool, winnerPool) : 0;
-    if (actualOdds >= RACE_BROADCAST_PAYOUT_THRESHOLD && sectPayouts.size > 0) {
+    if (odds >= RACE_BROADCAST_PAYOUT_THRESHOLD && sectPayouts.size > 0) {
       for (const [, info] of sectPayouts) {
         if (info.total > 0 && info.sectName) {
           try {
             await broadcastSystemMessage(
               db,
-              `${info.sectName}在灵兽竞逐中押中${beastNameAt(winnerIndex)}（${actualOdds.toFixed(1)}x），赢得${displayAmount(info.total)}灵石！`,
+              `${info.sectName}在灵兽竞逐中押中${beastNameAt(winnerIndex)}（${odds.toFixed(1)}x），赢得${displayAmount(info.total)}灵石！`,
               now,
             );
           } catch {
@@ -6119,25 +6116,17 @@ export async function getRaceHistory(db: D1Database, page: number): Promise<Race
   const offset = (page - 1) * RACE_HISTORY_PAGE_SIZE;
   const rounds = await repo.listSettledRounds(RACE_HISTORY_PAGE_SIZE, offset);
 
-  const roundIds = rounds.map((r) => r.id);
-  const poolRows = await repo.beastPoolsByRoundIds(roundIds);
-  const poolByRound = new Map<string, Map<number, number>>();
-  for (const p of poolRows) {
-    let m = poolByRound.get(p.round_id);
-    if (!m) { m = new Map(); poolByRound.set(p.round_id, m); }
-    m.set(p.beast_index, p.total);
-  }
-
   const historyRounds: RaceHistoryRoundView[] = rounds.map((r) => {
     const winnerIndex = r.winner_index ?? 0;
-    const pm = poolByRound.get(r.id);
-    const winnerPool = pm?.get(winnerIndex) ?? 0;
+    const ws: number[] = JSON.parse(r.beast_weights) as number[];
+    const totalW = ws.reduce((s, w) => s + w, 0);
+    const winnerW = ws[winnerIndex] ?? 1;
     return {
       roundKey: r.round_key,
       winnerIndex,
       winnerName: beastNameAt(winnerIndex),
       totalPool: String(r.total_pool),
-      winnerOdds: parimutuelOdds(r.total_pool, winnerPool),
+      winnerOdds: raceFixedOdds(winnerW, totalW),
       settledAt: r.settled_at ?? r.created_at,
     };
   });
