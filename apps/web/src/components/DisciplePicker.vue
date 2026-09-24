@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 
 import type { DiscipleView } from '../api/game';
-import { isInjured, selectionBlockReason } from '../utils/discipleFilter';
+import { isInjured, selectionBlockReason, severeInjuryStatusLabel } from '../utils/discipleFilter';
 import DiscipleAvatar from './DiscipleAvatar.vue';
 
 /**
@@ -38,6 +38,16 @@ const props = withDefaults(
     emptyText?: string;
     /** 所有候选都被禁用时的提示（默认：都在疗伤或在外的统一文案）。 */
     allBlockedText?: string;
+    /**
+     * 0027 世界 Boss 二期：弟子疲劳表（弟子 id → 最近 60 分钟出战讨伐的次数）。
+     * 只有讨伐会传；传了才在卡片状态栏显示「本小时 n/3」/「冒进 xx%」/「必重伤」。
+     */
+    fatigue?: Record<string, number>;
+    /**
+     * 0027 世界 Boss 二期：词缀推荐的额外排序属性 —— 在排序按钮里追加一个「xx ↓」按钮
+     * （若已存在如「幸运 ↓」则不重复），不默认选中。
+     */
+    extraSort?: 'attack' | 'defense' | 'speed' | 'luck' | 'physique';
   }>(),
   {
     mode: 'multi',
@@ -58,14 +68,39 @@ const emit = defineEmits<{
   'update:selected': [discipleIds: string[]];
 }>();
 
-/** 顶部排序的三个键：都是「从高到低」，比较口径与 utils/discipleFilter 的 sortDisciples 一致。 */
-type DiscipleSortKey = 'realm' | 'power' | 'luck';
+/**
+ * 顶部排序的键：都是「从高到低」，比较口径与该组件 `ordered` 里的排序实现一致。
+ * 除默认的 境界 / 战力 / 幸运 外，词缀推荐（extraSort）还会用到 攻击 / 防御 / 身法 / 体魄。
+ */
+type DiscipleSortKey = 'realm' | 'power' | 'luck' | 'attack' | 'defense' | 'speed' | 'physique';
+
+/** extraSort 允许追加的排序属性。 */
+type ExtraSortKey = 'attack' | 'defense' | 'speed' | 'luck' | 'physique';
 
 const SORT_OPTIONS: readonly { value: DiscipleSortKey; label: string; hint: string }[] = [
   { value: 'realm', label: '境界 ↓', hint: '按大境界从高到低' },
   { value: 'power', label: '战力 ↓', hint: '按战力从高到低' },
   { value: 'luck', label: '幸运 ↓', hint: '按幸运值从高到低' },
 ];
+
+/** extraSort 的按钮文案（「幸运 ↓」与 SORT_OPTIONS 重合，追加时按 value 去重）。 */
+const EXTRA_SORT_OPTIONS: Record<ExtraSortKey, { label: string; hint: string }> = {
+  attack: { label: '攻击 ↓', hint: '按攻击从高到低' },
+  defense: { label: '防御 ↓', hint: '按防御从高到低' },
+  speed: { label: '身法 ↓', hint: '按身法从高到低' },
+  luck: { label: '幸运 ↓', hint: '按幸运值从高到低' },
+  physique: { label: '体魄 ↓', hint: '按体魄从高到低' },
+};
+
+/** 排序按钮列表：默认三项 +（词缀推荐时）追加按钮；已存在的同名项不重复，且不默认选中。 */
+const sortOptions = computed(() => {
+  const options: { value: DiscipleSortKey; label: string; hint: string }[] = [...SORT_OPTIONS];
+  const extra = props.extraSort;
+  if (extra !== undefined && !options.some((option) => option.value === extra)) {
+    options.push({ value: extra, ...EXTRA_SORT_OPTIONS[extra] });
+  }
+  return options;
+});
 
 /** 当前排序：初值由 `sort` prop 决定，之后由玩家在顶部切换。 */
 const sortKey = ref<DiscipleSortKey>(props.sort);
@@ -125,6 +160,41 @@ const statusById = computed(() => {
   return map;
 });
 
+/**
+ * 卡片状态栏的疲劳标：只有状态正常（statusById 里没有）且 fatigue > 0 的弟子才有。
+ * 1、2 次是提示（「本小时 n/3」），3 次起是红色风险，百分比按体魄修正后四舍五入：
+ * 30% 档 = 0.30 − max(0, 体魄−50)/10 × 0.03，70% 档同理；5 次起必然重伤。
+ * 「狂暴」词缀的 ×2 由调用方体现，这里只按基础概率 + 体魄修正。
+ */
+const fatigueById = computed(() => {
+  const map = new Map<string, { text: string; danger: boolean }>();
+  if (props.fatigue === undefined) return map;
+  for (const disciple of props.disciples) {
+    const label = fatigueStatusText(disciple);
+    if (label !== null) map.set(disciple.id, label);
+  }
+  return map;
+});
+
+/** 冒进受伤概率（基础概率按体魄减免后的整数百分比）。 */
+function fatigueProbability(base: number, physique: number): number {
+  const penalty = (Math.max(0, physique - 50) / 10) * 0.03;
+  return Math.round((base - penalty) * 100);
+}
+
+function fatigueStatusText(disciple: DiscipleView): { text: string; danger: boolean } | null {
+  const count = props.fatigue?.[disciple.id] ?? 0;
+  if (count <= 0) return null;
+  if (count >= 5) return { text: '必重伤', danger: true };
+  if (count === 4) {
+    return { text: `冒进 ${String(fatigueProbability(0.7, disciple.physique))}%`, danger: true };
+  }
+  if (count === 3) {
+    return { text: `冒进 ${String(fatigueProbability(0.3, disciple.physique))}%`, danger: true };
+  }
+  return { text: `本小时 ${String(count)}/3`, danger: false };
+}
+
 /** 满员后未选中的不可点（已选的仍可取消）。 */
 const full = computed(() => props.selected.length >= props.max);
 
@@ -149,6 +219,14 @@ const ordered = computed(() => {
     list.sort((a, b) => b.combatPower - a.combatPower);
   } else if (sortKey.value === 'luck') {
     list.sort((a, b) => b.luck - a.luck);
+  } else if (sortKey.value === 'attack') {
+    list.sort((a, b) => b.attack - a.attack);
+  } else if (sortKey.value === 'defense') {
+    list.sort((a, b) => b.defense - a.defense);
+  } else if (sortKey.value === 'speed') {
+    list.sort((a, b) => b.speed - a.speed);
+  } else if (sortKey.value === 'physique') {
+    list.sort((a, b) => b.physique - a.physique);
   } else {
     // 大境界从高到低，同境界再比阶段（与 utils/discipleFilter 的 sortDisciples 同口径）。
     list.sort((a, b) => b.realmOrder - a.realmOrder || b.stage - a.stage);
@@ -233,6 +311,163 @@ watch(
     if (next.length !== props.selected.length) emit('update:selected', next);
   },
 );
+
+/*
+ * 属性速览小卡片（浮层）：
+ * - 电脑端右键（contextmenu + preventDefault）；手机端长按 500ms（移动 > 10px 取消）。
+ * - 只读展示，绝不改选中状态；点别处 / Esc / 滚动（capture）都关闭；同时只开一个。
+ * - 位置用 getBoundingClientRect 夹在弹窗（.modal-card）可视区内，放不下就向上 / 向左翻转。
+ */
+const popoverDisciple = ref<DiscipleView | null>(null);
+const popoverEl = ref<HTMLElement | null>(null);
+const popoverAnchorEl = ref<HTMLElement | null>(null);
+const popoverPos = ref({ left: 0, top: 0 });
+
+/** 长按期间置位：吞掉松手时那次 click，保证长按弹小卡片不会改变选中状态。 */
+const suppressClick = ref(false);
+let longPressTimer: number | undefined;
+let pressOrigin: { x: number; y: number } | null = null;
+const LONG_PRESS_MS = 500;
+const LONG_PRESS_MOVE_PX = 10;
+
+/** 小卡片里的当前状态（与卡片状态栏同口径；重伤额外倒算剩余时间）。 */
+const popoverStatus = computed(() => {
+  const disciple = popoverDisciple.value;
+  if (disciple === null) return '';
+  const severe = severeInjuryStatusLabel(disciple, nowTick.value);
+  if (severe !== null) return severe;
+  if (isInjured(disciple, nowTick.value)) return '疗伤中';
+  if (disciple.journey.status === 'active') return '在外历练';
+  return '正常';
+});
+
+/** 小卡片里的「本小时 n/3」（只在传了 fatigue 时展示）。 */
+const popoverFatigueCount = computed(() => {
+  const disciple = popoverDisciple.value;
+  if (disciple === null) return 0;
+  return props.fatigue?.[disciple.id] ?? 0;
+});
+
+function cancelLongPress(): void {
+  if (longPressTimer !== undefined) {
+    window.clearTimeout(longPressTimer);
+    longPressTimer = undefined;
+  }
+  pressOrigin = null;
+}
+
+/** 点在别处才关闭；点在锚点卡片（长按松手的那次 click）或浮层自身不算「别处」。 */
+function onDocumentClick(event: MouseEvent): void {
+  const target = event.target as Node | null;
+  if (target === null) return;
+  if (popoverEl.value?.contains(target) === true) return;
+  if (popoverAnchorEl.value?.contains(target) === true) return;
+  closePopover();
+}
+
+function onDocumentKeydown(event: KeyboardEvent): void {
+  if (event.key === 'Escape') closePopover();
+}
+
+function closePopover(): void {
+  if (popoverDisciple.value === null) return;
+  popoverDisciple.value = null;
+  popoverAnchorEl.value = null;
+  window.removeEventListener('click', onDocumentClick, true);
+  window.removeEventListener('keydown', onDocumentKeydown, true);
+  window.removeEventListener('scroll', closePopover, true);
+  window.removeEventListener('resize', closePopover, true);
+}
+
+/** 依据锚点卡片与弹窗可视区夹出小卡片位置（必要时向上 / 向左翻转）。 */
+function positionPopover(): void {
+  const el = popoverEl.value;
+  const anchor = popoverAnchorEl.value;
+  if (el === null || anchor === null) return;
+  const box = el.getBoundingClientRect();
+  const card = anchor.getBoundingClientRect();
+  const hostRect = anchor.closest('.modal-card')?.getBoundingClientRect();
+  const bounds = {
+    left: hostRect?.left ?? 0,
+    top: hostRect?.top ?? 0,
+    right: hostRect?.right ?? window.innerWidth,
+    bottom: hostRect?.bottom ?? window.innerHeight,
+  };
+  const margin = 8;
+
+  let left = card.left;
+  if (left + box.width > bounds.right - margin) left = card.right - box.width;
+  if (left < bounds.left + margin) left = bounds.left + margin;
+
+  let top = card.bottom + 6;
+  if (top + box.height > bounds.bottom - margin) top = card.top - box.height - 6;
+  if (top < bounds.top + margin) top = bounds.top + margin;
+
+  popoverPos.value = { left, top };
+}
+
+function openPopover(disciple: DiscipleView, anchor: HTMLElement): void {
+  // 重新打开时先摘掉上一轮的监听，避免叠加。
+  window.removeEventListener('click', onDocumentClick, true);
+  window.removeEventListener('keydown', onDocumentKeydown, true);
+  window.removeEventListener('scroll', closePopover, true);
+  window.removeEventListener('resize', closePopover, true);
+
+  popoverDisciple.value = disciple;
+  popoverAnchorEl.value = anchor;
+  const rect = anchor.getBoundingClientRect();
+  popoverPos.value = { left: rect.left, top: rect.bottom + 6 };
+
+  window.addEventListener('click', onDocumentClick, true);
+  window.addEventListener('keydown', onDocumentKeydown, true);
+  window.addEventListener('scroll', closePopover, true);
+  window.addEventListener('resize', closePopover, true);
+
+  // 渲染后量一次实际尺寸再夹位置（nextTick 在首次绘制前跑完，不会闪一下）。
+  void nextTick(positionPopover);
+}
+
+function onCardContextMenu(disciple: DiscipleView, event: MouseEvent): void {
+  event.preventDefault();
+  openPopover(disciple, event.currentTarget as HTMLElement);
+}
+
+function onCardPointerDown(disciple: DiscipleView, event: PointerEvent): void {
+  suppressClick.value = false;
+  if (event.pointerType === 'mouse') return; // 鼠标走右键，不长按
+  cancelLongPress();
+  pressOrigin = { x: event.clientX, y: event.clientY };
+  const anchor = event.currentTarget as HTMLElement;
+  longPressTimer = window.setTimeout(() => {
+    longPressTimer = undefined;
+    suppressClick.value = true;
+    openPopover(disciple, anchor);
+  }, LONG_PRESS_MS);
+}
+
+function onCardPointerMove(event: PointerEvent): void {
+  if (longPressTimer === undefined || pressOrigin === null) return;
+  const moved =
+    Math.abs(event.clientX - pressOrigin.x) > LONG_PRESS_MOVE_PX ||
+    Math.abs(event.clientY - pressOrigin.y) > LONG_PRESS_MOVE_PX;
+  if (moved) cancelLongPress();
+}
+
+function onCardPointerEnd(): void {
+  cancelLongPress();
+}
+
+function onCardClick(event: MouseEvent): void {
+  if (!suppressClick.value) return;
+  event.preventDefault();
+  event.stopPropagation();
+  suppressClick.value = false;
+}
+
+onUnmounted(() => {
+  cancelLongPress();
+  closePopover();
+});
 </script>
 
 <template>
@@ -246,7 +481,7 @@ watch(
     <div class="disciple-picker-sort" role="group" aria-label="排序方式">
       <span class="dp-sort-label">排序</span>
       <button
-        v-for="option in SORT_OPTIONS"
+        v-for="option in sortOptions"
         :key="option.value"
         class="dp-sort-button"
         :class="{ 'is-active': sortKey === option.value }"
@@ -268,6 +503,12 @@ watch(
             'is-blocked': blockedIds.has(disciple.id),
           }"
           :aria-disabled="disabled(disciple)"
+          @click="onCardClick"
+          @contextmenu="onCardContextMenu(disciple, $event)"
+          @pointerdown="onCardPointerDown(disciple, $event)"
+          @pointerup="onCardPointerEnd"
+          @pointercancel="onCardPointerEnd"
+          @pointermove="onCardPointerMove"
         >
           <input
             class="dp-input"
@@ -302,6 +543,13 @@ watch(
             >
               {{ statusById.get(disciple.id)?.text }}
             </span>
+            <span
+              v-else-if="fatigueById.has(disciple.id)"
+              class="dp-fatigue"
+              :class="{ 'is-danger': fatigueById.get(disciple.id)?.danger }"
+            >
+              {{ fatigueById.get(disciple.id)?.text }}
+            </span>
             <span v-else class="dp-luck">幸运 {{ disciple.luck }}</span>
           </span>
         </label>
@@ -321,5 +569,99 @@ watch(
     <p v-else-if="blockedIds.size === disciples.length" class="blocked-hint">{{ allBlockedText }}</p>
     <p v-else-if="selected.length < min" class="blocked-hint">{{ countHint }}</p>
     <slot name="hint" />
+
+    <!-- 属性速览小卡片（右键 / 长按触发，只读，不改变选中状态） -->
+    <div
+      v-if="popoverDisciple"
+      ref="popoverEl"
+      class="dp-popover"
+      role="dialog"
+      aria-label="弟子属性速览"
+      :style="{ left: `${popoverPos.left}px`, top: `${popoverPos.top}px` }"
+    >
+      <p class="dp-popover-name">{{ popoverDisciple.name }}</p>
+      <p class="dp-popover-line">
+        境界：{{ popoverDisciple.realmName }} · {{ popoverDisciple.stageName }}
+      </p>
+      <p class="dp-popover-line">天赋：{{ popoverDisciple.talentName }}</p>
+      <p class="dp-popover-line">战力：{{ popoverDisciple.combatPower }}</p>
+      <ul class="dp-popover-attrs">
+        <li>攻击 {{ popoverDisciple.attack }}</li>
+        <li>防御 {{ popoverDisciple.defense }}</li>
+        <li>身法 {{ popoverDisciple.speed }}</li>
+        <li>幸运 {{ popoverDisciple.luck }}</li>
+        <li>体魄 {{ popoverDisciple.physique }}</li>
+        <li>资质 {{ popoverDisciple.aptitude }}</li>
+      </ul>
+      <p class="dp-popover-line">状态：{{ popoverStatus }}</p>
+      <p v-if="fatigue !== undefined" class="dp-popover-line">
+        本小时 {{ popoverFatigueCount }}/3
+      </p>
+    </div>
   </div>
 </template>
+
+<style scoped>
+/* 卡片状态栏的疲劳标：普通档（本小时 n/3）沿用回退色，风险档（冒进 / 必重伤）用红。 */
+.dp-fatigue {
+  color: #7d9186;
+  font-size: 10px;
+  line-height: 15px;
+}
+
+.dp-fatigue.is-danger {
+  color: var(--red-bright);
+}
+
+/* 长按弹属性速览：禁掉长按选中文本 / 系统菜单，避免和 500ms 长按打架。 */
+.disciple-picker .dp-card {
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+/* 属性速览小卡片：fixed 定位（视口坐标，left/top 由 positionPopover 夹好）。 */
+.dp-popover {
+  position: fixed;
+  z-index: 1000;
+  min-width: 150px;
+  max-width: 240px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: #b9c8bf;
+  background: rgba(8, 24, 20, 0.98);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+  font-size: 11px;
+  line-height: 1.5;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.dp-popover-name {
+  margin: 0 0 3px;
+  color: var(--gold-bright);
+  font-family: 'STKaiti', 'KaiTi', serif;
+  font-size: 13px;
+}
+
+.dp-popover-line {
+  margin: 0;
+  color: #93a99e;
+}
+
+.dp-popover-attrs {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0 10px;
+  margin: 4px 0;
+  padding: 4px 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  list-style: none;
+  color: #c8d6cd;
+}
+
+.dp-popover-attrs li {
+  white-space: nowrap;
+}
+</style>
