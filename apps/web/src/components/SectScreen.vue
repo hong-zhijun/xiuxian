@@ -1059,7 +1059,13 @@ async function onForgeEquipment(
     const { state: next, outcome } = await forgeEquipment(slot, mainAttr, quality);
     handOffEquipmentState(next);
     await loadEquipment();
-    emit('notify', 'success', `炼得 ${outcome.name}`, `${outcome.slotName} · 已放入背包。`);
+    if (outcome.result === 'fail') {
+      emit('notify', 'error', '炼器失败', '炉火失控，返还一半灵石与矿石，玄铁已损耗。');
+    } else if (outcome.result === 'downgrade') {
+      emit('notify', 'success', `火候偏差，炼得 ${outcome.name ?? ''}`, `${outcome.slotName} · 品质降了一档，已放入背包。`);
+    } else {
+      emit('notify', 'success', `炼得 ${outcome.name ?? ''}`, `${outcome.slotName} · 已放入背包。`);
+    }
   } catch (caught) {
     emit('notify', 'error', '炼器未成', caught instanceof Error ? caught.message : '炉火不济，请稍后重试。');
   } finally {

@@ -71,6 +71,7 @@ import {
   FORGE_QUALITY,
   FORGE_RECIPES,
   FORGE_WORKSHOP_ID,
+  forgeOddsOf,
   forgeWorkshopUpgradeFrom,
   attrNameOf,
   forgeUnlockBlockedReason,
@@ -356,6 +357,8 @@ export interface EquipmentView {
     workshopLevel: number;
     unlocked: boolean;
     cost: Record<string, string>;
+    /** 按当前炼器坊等级算的成功 / 降级 / 失败概率（0~1）。 */
+    odds: { success: number; downgrade: number; fail: number };
   }[];
   /** 可炼部位；法器的 mainAttrChoices 非空（玩家必须选身法或幸运）。 */
   slots: {
@@ -415,6 +418,7 @@ export function buildEquipmentView(input: {
       workshopLevel: recipe.workshopLevel,
       unlocked: input.workshopLevel >= recipe.workshopLevel,
       cost: { ...recipe.cost },
+      odds: forgeOddsOf(recipe.quality, Math.max(input.workshopLevel, recipe.workshopLevel)),
     })),
     slots: EQUIPMENT_SLOTS.map((slot) => ({
       id: slot.id,

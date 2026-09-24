@@ -32,6 +32,10 @@ import {
   type EquipmentAttr,
   type EquipmentQuality,
   bossXuantieFor,
+  forgeFailRefund,
+  forgeOddsOf,
+  lowerQuality,
+  rollForgeResult,
   forgeRecipeOf,
   forgeWorkshopUpgradeFrom,
   realmXuantieDrop,
@@ -260,5 +264,29 @@ describe('装备二期：玄铁 · 炼器坊', () => {
     expect(forgeRecipeOf('immortal')).toMatchObject({ workshopLevel: 4, cost: { xuantie: '30000' } });
     expect(salvageXuantieUnits('common')).toBe(0);
     expect(salvageXuantieUnits('immortal')).toBe(8000);
+  });
+});
+
+describe('装备二期：炼器成功率', () => {
+  it('基础概率与炼器坊加成（先抵失败、再抵降级）', () => {
+    expect(forgeOddsOf('common', 1)).toEqual({ success: 1, downgrade: 0, fail: 0 });
+    expect(forgeOddsOf('spirit', 2)).toEqual({ success: 0.7, downgrade: 0.2, fail: 0.1 });
+    expect(forgeOddsOf('spirit', 4)).toEqual({ success: 0.9, downgrade: 0.1, fail: 0 });
+    expect(forgeOddsOf('treasure', 3)).toEqual({ success: 0.65, downgrade: 0.25, fail: 0.1 });
+    expect(forgeOddsOf('treasure', 4)).toEqual({ success: 0.75, downgrade: 0.25, fail: 0 });
+    expect(forgeOddsOf('immortal', 4)).toEqual({ success: 0.5, downgrade: 0.3, fail: 0.2 });
+  });
+
+  it('判定、降一档与失败返还', () => {
+    const odds = { success: 0.7, downgrade: 0.2, fail: 0.1 };
+    expect(rollForgeResult(odds, () => 0.05)).toBe('fail');
+    expect(rollForgeResult(odds, () => 0.2)).toBe('downgrade');
+    expect(rollForgeResult(odds, () => 0.3)).toBe('success');
+    expect(lowerQuality('immortal')).toBe('treasure');
+    expect(lowerQuality('common')).toBe('common');
+    expect(forgeFailRefund({ spiritStone: '250000', ore: '400000', xuantie: '3000' })).toEqual({
+      spiritStone: 125000,
+      ore: 200000,
+    });
   });
 });

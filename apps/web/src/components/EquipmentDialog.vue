@@ -85,6 +85,14 @@ const currentOption = computed(
 
 const currentCost = computed<Record<string, string>>(() => currentOption.value?.cost ?? props.equipment.forgeCost);
 
+/** 成功率文案：凡品必定成功；其余显示三种结果的概率。 */
+const oddsText = computed(() => {
+  const odds = currentOption.value?.odds;
+  if (odds === undefined || odds.success >= 1) return '必定成功';
+  const pct = (value: number) => `${String(Math.round(value * 100))}%`;
+  return `成功 ${pct(odds.success)} · 降级 ${pct(odds.downgrade)} · 失败 ${pct(odds.fail)}`;
+});
+
 /** 单次消耗（最小单位 → 展示单位）。 */
 const forgeCostText = computed(() =>
   Object.entries(currentCost.value)
@@ -192,6 +200,10 @@ function onForge(): void {
       </template>
 
       <dl class="equipment-facts">
+        <div>
+          <dt>成功率</dt>
+          <dd>{{ oddsText }}</dd>
+        </div>
         <div>
           <dt>单次消耗</dt>
           <dd>{{ forgeCostText }}</dd>

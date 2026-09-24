@@ -1739,6 +1739,8 @@ export interface EquipmentView {
     workshopLevel: number;
     unlocked: boolean;
     cost: Record<string, string>;
+    /** 成功 / 降级 / 失败概率（0~1）。 */
+    odds: { success: number; downgrade: number; fail: number };
   }[];
   slots: EquipmentSlotView[];
   /** 品质 id → 分解返还的矿石（**展示单位**，直接显示数字即可）。 */
@@ -1749,12 +1751,14 @@ export interface EquipmentView {
 
 /** 炼器回执（POST /game/forge-equipment 的 outcome）。 */
 export interface ForgeEquipmentOutcome {
-  equipmentId: string;
-  name: string;
-  slot: EquipmentSlotId;
+  /** success = 所选品质；downgrade = 低一档；fail = 没出装备（refund 为返还的灵石 / 矿石）。 */
+  result: 'success' | 'downgrade' | 'fail';
+  equipmentId: string | null;
+  name: string | null;
+  slot: string;
   slotName: string;
-  quality: string;
-  /** 本次实际消耗（最小单位）。 */
+  quality: string | null;
+  refund: Record<string, number>;
   cost: Record<string, string>;
 }
 

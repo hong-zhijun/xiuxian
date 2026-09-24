@@ -106,6 +106,61 @@ export function forgeRecipeOf(quality: string) {
   return FORGE_RECIPES.find((recipe) => recipe.quality === quality);
 }
 
+/** 炼器结果：成功 = 所选品质；降级 = 低一档；失败 = 不出装备（返还一半灵石矿石，玄铁全损）。永远不会高于所选品质。 */
+export type ForgeResult = 'success' | 'downgrade' | 'fail';
+export interface ForgeOdds {
+  success: number;
+  downgrade: number;
+  fail: number;
+}
+
+const FORGE_BASE_ODDS: Readonly<Record<EquipmentQuality, ForgeOdds>> = {
+  common: { success: 1, downgrade: 0, fail: 0 },
+  spirit: { success: 0.7, downgrade: 0.2, fail: 0.1 },
+  treasure: { success: 0.65, downgrade: 0.25, fail: 0.1 },
+  immortal: { success: 0.5, downgrade: 0.3, fail: 0.2 },
+};
+
+/** 炼器坊每比该品质的要求高 1 级，成功率 +10%（先抵消失败率，再抵消降级率）。 */
+export const FORGE_SURPLUS_BONUS = 0.1;
+/** 失败时返还灵石、矿石的比例（玄铁不返还）。 */
+export const FORGE_FAIL_REFUND_RATIO = 0.5;
+
+const round2 = (value: number): number => Math.round(value * 100) / 100;
+
+export function forgeOddsOf(quality: EquipmentQuality, workshopLevel: number): ForgeOdds {
+  const base = FORGE_BASE_ODDS[quality];
+  let bonus = FORGE_SURPLUS_BONUS * Math.max(0, workshopLevel - (forgeRecipeOf(quality)?.workshopLevel ?? 1));
+  const fail = round2(Math.max(0, base.fail - bonus));
+  bonus -= base.fail - fail;
+  const downgrade = round2(Math.max(0, base.downgrade - bonus));
+  return { success: round2(1 - fail - downgrade), downgrade, fail };
+}
+
+/** 按概率判定炼器结果；random 注入便于测试。 */
+export function rollForgeResult(odds: ForgeOdds, random: () => number): ForgeResult {
+  const roll = random();
+  if (roll < odds.fail) return 'fail';
+  if (roll < round2(odds.fail + odds.downgrade)) return 'downgrade';
+  return 'success';
+}
+
+/** 低一档品质（凡品已是最低，保持凡品）。 */
+export function lowerQuality(quality: EquipmentQuality): EquipmentQuality {
+  const index = EQUIPMENT_QUALITIES.findIndex((item) => item.id === quality);
+  return EQUIPMENT_QUALITIES[Math.max(0, index - 1)]!.id;
+}
+
+/** 失败返还（最小单位）：只返还灵石与矿石的一半，玄铁不返还。 */
+export function forgeFailRefund(cost: Readonly<Record<string, string>>): Record<string, number> {
+  const refund: Record<string, number> = {};
+  for (const resourceId of ['spiritStone', 'ore']) {
+    const amount = Math.floor(Number(cost[resourceId] ?? 0) * FORGE_FAIL_REFUND_RATIO);
+    if (amount > 0) refund[resourceId] = amount;
+  }
+  return refund;
+}
+
 /** 炼器坊升级表：升到 level 需要的宗门等级与消耗（最小单位）。1 级随宗门 2 级自动获得。 */
 export const FORGE_WORKSHOP_UPGRADES: readonly { level: number; sectLevel: number; cost: Readonly<Record<string, string>> }[] = [
   { level: 2, sectLevel: 3, cost: { spiritStone: '2000000', ore: '3000000', xuantie: '15000' } },

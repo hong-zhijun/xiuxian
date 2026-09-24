@@ -158,6 +158,10 @@ import {
   forgeRecipeOf,
   forgeWorkshopUpgradeFrom,
   qualityNameOf,
+  forgeFailRefund,
+  forgeOddsOf,
+  lowerQuality,
+  rollForgeResult,
   realmXuantieDrop,
   salvageXuantieUnits,
   bagFullReason,
@@ -4658,11 +4662,16 @@ export async function healDisciplesBatch(
 
 /** 炼器回执（纯命令结果）；不属于任何公开视图。 */
 export interface ForgeEquipmentOutcome {
-  equipmentId: string;
-  name: string;
+  /** 装备二期：success = 所选品质；downgrade = 低一档；fail = 没出装备（refund 为返还）。 */
+  result: 'success' | 'downgrade' | 'fail';
+  /** 失败时为 null。 */
+  equipmentId: string | null;
+  name: string | null;
   slot: string;
   slotName: string;
-  quality: string;
+  quality: string | null;
+  /** 失败返还（最小单位）；成功 / 降级为空对象。 */
+  refund: Record<string, number>;
   /** 本次消耗（最小单位），与 equipment.ts 的 FORGE_COST 同一份。 */
   cost: Record<string, string>;
 }
@@ -4788,9 +4797,32 @@ export async function forgeEquipment(
     draft.requireResource(resourceId, Number(amount));
   }
 
+  // 装备二期：先判定成功 / 降级 / 失败（永远不会高于所选品质）。
+  const result = rollForgeResult(forgeOddsOf(recipe.quality, workshopLevel), Math.random);
+  if (result === 'fail') {
+    const refund = forgeFailRefund(recipe.cost);
+    for (const [resourceId, amount] of Object.entries(refund)) {
+      draft.addResource(resourceId, amount);
+    }
+    await draft.commit();
+    return {
+      state: draft.view(),
+      outcome: {
+        result,
+        equipmentId: null,
+        name: null,
+        slot,
+        slotName: slotNameOf(slot),
+        quality: null,
+        refund,
+        cost: { ...recipe.cost },
+      },
+    };
+  }
+
   const generated = generateEquipment({
     slot,
-    quality: recipe.quality,
+    quality: result === 'downgrade' ? lowerQuality(recipe.quality) : recipe.quality,
     mainAttr: resolvedMainAttr,
     random: Math.random,
   });
@@ -4811,14 +4843,19 @@ export async function forgeEquipment(
     }),
   );
   await draft.commit();
+  if (generated.quality === 'immortal') {
+    await broadcastWorldBoss(db, `【炼器】${draft.sect.name}炼成 ${generated.name}！`, now);
+  }
   return {
     state: draft.view(),
     outcome: {
+      result,
       equipmentId,
       name: generated.name,
       slot: generated.slot,
       slotName: slotNameOf(generated.slot),
       quality: generated.quality,
+      refund: {},
       cost: { ...recipe.cost },
     },
   };

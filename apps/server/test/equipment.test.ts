@@ -1173,12 +1173,33 @@ describe('装备二期：炼器坊 · 玄铁', () => {
     await upgradeBuilding(env.DB, fixture.userId, 'forgeWorkshop', now);
     expect(await balanceOf(fixture.sectId, 'xuantie')).toBe(35_000);
 
+    // 固定随机数：0.99 → 判定为成功（失败 / 降级都在低区间）
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0.99);
     const forged = await forgeEquipment(env.DB, fixture.userId, 'weapon', undefined, now, 'spirit');
+    random.mockRestore();
+    expect(forged.outcome.result).toBe('success');
     expect(forged.outcome.quality).toBe('spirit');
     expect(await balanceOf(fixture.sectId, 'xuantie')).toBe(32_000);
     const panel = await getEquipment(env.DB, fixture.userId, now);
     expect(panel.equipment.workshopLevel).toBe(2);
     expect(panel.equipment.forgeOptions.map((option) => option.unlocked)).toEqual([true, true, false, false]);
+  });
+
+  it('炼器失败：不出装备，返还一半灵石与矿石，玄铁全损', async () => {
+    const { fixture, now } = await frozenSect('eq-v2-fail');
+    await addWorkshop(fixture.sectId, 2);
+    await setBalance(fixture.sectId, 'xuantie', 10_000);
+    const stoneBefore = await balanceOf(fixture.sectId, 'spiritStone');
+    const oreBefore = await balanceOf(fixture.sectId, 'ore');
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0);
+    const result = await forgeEquipment(env.DB, fixture.userId, 'armor', undefined, now, 'spirit');
+    random.mockRestore();
+    expect(result.outcome.result).toBe('fail');
+    expect(result.outcome.equipmentId).toBeNull();
+    expect(await bagCountOf(fixture.sectId)).toBe(0);
+    expect(await balanceOf(fixture.sectId, 'spiritStone')).toBe(stoneBefore - 125_000);
+    expect(await balanceOf(fixture.sectId, 'ore')).toBe(oreBefore - 200_000);
+    expect(await balanceOf(fixture.sectId, 'xuantie')).toBe(7_000);
   });
 
   it('分解灵品返还玄铁', async () => {
