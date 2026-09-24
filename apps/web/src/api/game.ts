@@ -348,6 +348,17 @@ export async function logout(): Promise<void> {
   setCsrfToken(null);
 }
 
+/** 修改密码：成功后本账号其他设备的会话全部失效，当前会话保留（revokedSessions = 下线的设备数）。 */
+export async function changePassword(
+  oldPassword: string,
+  newPassword: string,
+): Promise<{ revokedSessions: number }> {
+  return apiRequest<{ changed: boolean; revokedSessions: number }>('/api/v1/auth/change-password', {
+    method: 'POST',
+    body: { oldPassword, newPassword },
+  });
+}
+
 export async function syncSect(): Promise<SectStateView | null> {
   const data = await apiRequest<{ state: SectStateView | null }>('/api/v1/game/sync');
   return data.state;
@@ -415,6 +426,13 @@ export interface BreakthroughBatchOutcome {
   energySpent: string;
 }
 
+/** 批量疗伤结果（POST /game/heal-batch 的 outcome）。 */
+export interface HealBatchOutcome {
+  healed: { discipleId: string; discipleName: string }[];
+  skipped: BatchSkippedDisciple[];
+  pillsUsed: number;
+}
+
 /** 批量换岗：按数组顺序逐个转，不符合条件的由服务端跳过并列出原因。 */
 export async function assignBatch(
   discipleIds: string[],
@@ -434,6 +452,16 @@ export async function breakthroughBatch(
     '/api/v1/game/breakthrough-batch',
     { method: 'POST', body: { discipleIds } },
   );
+}
+
+/** 批量疗伤（回春丹一人一颗）：无伤 / 重伤 / 在外的跳过；库存须够全部伤员，否则整批拒绝。 */
+export async function healBatch(
+  discipleIds: string[],
+): Promise<{ state: SectStateView; outcome: HealBatchOutcome }> {
+  return apiRequest<{ state: SectStateView; outcome: HealBatchOutcome }>('/api/v1/game/heal-batch', {
+    method: 'POST',
+    body: { discipleIds },
+  });
 }
 
 /** 事件历史（GET /game/events，最近 20 条）。 */

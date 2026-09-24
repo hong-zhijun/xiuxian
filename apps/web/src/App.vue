@@ -17,6 +17,7 @@ import {
   expelDisciple,
   explore,
   fetchMe,
+  healBatch,
   logout as apiLogout,
   recruit,
   refreshRecruitPreview,
@@ -47,6 +48,7 @@ import type {
   ExpelDiscipleOutcome,
   ExploreChoiceResult,
   ExploreOutcome,
+  HealBatchOutcome,
   InsightAllocateOutcome,
   JourneyClaimOutcomeView,
   JourneyDirection,
@@ -670,6 +672,23 @@ function onBatchBreakthrough(discipleIds: string[]): void {
   );
 }
 
+/** 名册多选：批量疗伤（确认弹窗里已核对人数与库存；库存不够时服务端整批拒绝）。 */
+function onBatchHeal(discipleIds: string[]): void {
+  void runAction(
+    () => healBatch(discipleIds),
+    (data) => {
+      const outcome = data.outcome as HealBatchOutcome | undefined;
+      const healed = (outcome?.healed ?? []).map((item) => item.discipleName);
+      const skipped = outcome?.skipped ?? [];
+      return {
+        tone: skipped.length > 0 ? 'info' : 'success',
+        title: `批量疗伤 · 服用回春丹 × ${String(outcome?.pillsUsed ?? healed.length)}`,
+        message: `${nameList(healed)} 伤势尽复${skippedSummary(skipped)}。`,
+      };
+    },
+  );
+}
+
 const PILL_ATTRIBUTE_NAMES: Record<string, string> = { attack: '攻击', defense: '防御', speed: '身法' };
 
 /** 炼丹：数量由炼丹面板选好（1~5），服务端整单校验并扣资源，返回完整 state。 */
@@ -963,6 +982,7 @@ onUnmounted(() => {
       @breakthrough="onBreakthrough"
       @batch-assign="onBatchAssign"
       @batch-breakthrough="onBatchBreakthrough"
+      @batch-heal="onBatchHeal"
       @craft-pill="onCraftPill"
       @use-pill="onUsePill"
       @save-note="onSaveNote"

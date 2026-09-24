@@ -1155,10 +1155,11 @@ export function alchemySnapshotGuardStatement(
     buildings: readonly BuildingRow[];
     pillId: string;
     pillQuantity: number;
-    disciple?: DiscipleRow;
+    /** 服药目标（批量疗伤时是多人）：每人的修为 / 属性 / 伤势 / 岗位都要仍与快照一致。 */
+    disciples?: readonly DiscipleRow[];
   },
 ): ParameterizedQuery {
-  const { sect, balances, buildings, pillId, pillQuantity, disciple } = snapshot;
+  const { sect, balances, buildings, pillId, pillQuantity, disciples = [] } = snapshot;
   const checks = [
     'EXISTS (SELECT 1 FROM sects WHERE id = ? AND level = ? AND last_settled_at = ?)',
     'COALESCE((SELECT quantity FROM pill_inventories WHERE sect_id = ? AND pill_id = ?), 0) = ?',
@@ -1177,7 +1178,7 @@ export function alchemySnapshotGuardStatement(
     checks.push('EXISTS (SELECT 1 FROM buildings WHERE id = ? AND sect_id = ? AND level = ?)');
     params.push(row.id, sect.id, row.level);
   }
-  if (disciple !== undefined) {
+  for (const disciple of disciples) {
     checks.push(`EXISTS (SELECT 1 FROM disciples WHERE id = ? AND sect_id = ?
       AND realm_id = ? AND stage = ? AND cultivation = ? AND cultivation_remainder = ?
       AND attack = ? AND defense = ? AND speed = ? AND body_tempering_count = ?

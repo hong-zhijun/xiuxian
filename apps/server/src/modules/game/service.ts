@@ -1008,18 +1008,19 @@ class SectDraft {
     }
   }
 
-  async commitAlchemy(pillId: string, discipleId?: string): Promise<void> {
+  async commitAlchemy(pillId: string, discipleIds: readonly string[] = []): Promise<void> {
     const commandId = crypto.randomUUID();
-    const disciple = discipleId === undefined
-      ? undefined
-      : this.base.disciples.find((row) => row.id === discipleId);
+    const disciples = discipleIds.flatMap((id) => {
+      const row = this.base.disciples.find((item) => item.id === id);
+      return row === undefined ? [] : [row];
+    });
     const guard = alchemySnapshotGuardStatement(commandId, {
       sect: this.base.sect,
       balances: this.base.balances,
       buildings: this.base.buildings,
       pillId,
       pillQuantity: this.base.pillInventories.find((row) => row.pill_id === pillId)?.quantity ?? 0,
-      ...(disciple === undefined ? {} : { disciple }),
+      disciples,
     });
     try {
       await this.db.batch(prepareStatements(this.db, [
@@ -4302,7 +4303,7 @@ export async function usePill(
     draft.requirePill(recipe.id);
     draft.addStatement(updateDiscipleInjuryStatement(disciple.id, null));
     disciple.injured_until = null;
-    await draft.commitAlchemy(recipe.id, disciple.id);
+    await draft.commitAlchemy(recipe.id, [disciple.id]);
     return {
       state: draft.view(),
       outcome: {
@@ -4339,7 +4340,7 @@ export async function usePill(
       updateDiscipleCultivationStatement(disciple.id, cultivation, Number(disciple.cultivation_remainder)),
     );
     disciple.cultivation = cultivation;
-    await draft.commitAlchemy(recipe.id, disciple.id);
+    await draft.commitAlchemy(recipe.id, [disciple.id]);
     return {
       state: draft.view(),
       outcome: {
@@ -4387,7 +4388,7 @@ export async function usePill(
       updateDiscipleBodyTemperingStatement(disciple.id, attribute, nextValue, nextUses),
     );
   }
-  await draft.commitAlchemy(recipe.id, disciple.id);
+  await draft.commitAlchemy(recipe.id, [disciple.id]);
   return {
     state: draft.view(),
     outcome: {
@@ -4402,6 +4403,82 @@ export async function usePill(
         attribute: first.attribute,
         gains,
       },
+    },
+  };
+}
+
+/** 批量疗伤结果（POST /game/heal-batch 的 outcome）。 */
+export interface HealBatchOutcome {
+  /** 治好的弟子（按请求顺序）。 */
+  healed: { discipleId: string; discipleName: string }[];
+  skipped: BatchSkippedDisciple[];
+  /** 本次消耗的回春丹颗数（= healed.length）。 */
+  pillsUsed: number;
+}
+
+/**
+ * 批量疗伤（回春丹，一人一颗）：结算 → 解锁检查 → 逐个校验（重伤 / 在外 / 无伤的跳过并记原因）
+ * → 库存须够全部伤员，不够就整批拒绝（不替玩家挑人）→ 扣库存 + 清伤势，一次 `commitAlchemy`。
+ * 一个需要治的都没有时报 INVALID_STATUS，不写库。
+ */
+export async function healDisciplesBatch(
+  db: D1Database,
+  userId: string,
+  discipleIds: readonly string[],
+  now: number,
+): Promise<{ state: SectStateView; outcome: HealBatchOutcome }> {
+  const draft = await draftFor(db, userId, now);
+  requireAlchemyUnlocked(draft);
+  const recipe = requirePillRecipe('healingPill');
+
+  const eligible: DiscipleRow[] = [];
+  const skipped: BatchSkippedDisciple[] = [];
+  for (const discipleId of discipleIds) {
+    const disciple = discipleOrSkip(draft, discipleId, skipped);
+    if (disciple === undefined) continue;
+    // 与单个服用同一口径：重伤先于在外（回春丹对重伤无效）。
+    let reason: string | null = null;
+    if (severeInjuryBlocker(draft, disciple) !== null) {
+      reason = '重伤卧床，丹药无效';
+    } else {
+      reason = awayBlocker(draft, disciple, '服药')?.reason ?? null;
+    }
+    if (reason === null && (disciple.injured_until === null || Number(disciple.injured_until) <= now)) {
+      reason = '没有伤势';
+    }
+    if (reason !== null) {
+      skipped.push({ discipleId, discipleName: disciple.name, reason });
+      continue;
+    }
+    eligible.push(disciple);
+  }
+
+  if (eligible.length === 0) {
+    throw new AppError('INVALID_STATUS', allSkippedMessage('所选弟子都不需要疗伤', skipped), { skipped });
+  }
+
+  const owned = draft.pillQuantity(recipe.id);
+  if (owned < eligible.length) {
+    throw new AppError(
+      'INVALID_STATUS',
+      `${recipe.name}不足：${String(eligible.length)} 名弟子疗伤共需 ${String(eligible.length)} 颗，当前库存 ${String(owned)} 颗，请减少人数或先炼制`,
+      { required: eligible.length, owned },
+    );
+  }
+  draft.removePill(recipe.id, eligible.length);
+
+  for (const disciple of eligible) {
+    draft.addStatement(updateDiscipleInjuryStatement(disciple.id, null));
+    disciple.injured_until = null;
+  }
+
+  await draft.commitAlchemy(recipe.id, eligible.map((row) => row.id));
+  return {
+    state: draft.view(),
+    outcome: {
+      healed: eligible.map((row) => ({ discipleId: row.id, discipleName: row.name })),
+      skipped,
+      pillsUsed: eligible.length,
     },
   };
 }

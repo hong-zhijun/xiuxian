@@ -20,6 +20,7 @@ import {
   discipleStatus,
   filterDisciples,
   isFilterActive,
+  isInjured,
   journeyBadge,
   realmOptions,
   severeInjuryStatusLabel,
@@ -65,6 +66,10 @@ const emit = defineEmits<{
   requestBatchBreakthrough: [discipleIds: string[]];
   /** 多选底栏「批量换岗」：直接提交，不符合条件的由服务端跳过并说明原因。 */
   batchAssign: [discipleIds: string[], assignment: string];
+  /** 点「疗伤中」标签：直接服一颗回春丹（库存 / 解锁由上层先判，最终裁决在服务端）。 */
+  quickHeal: [discipleId: string];
+  /** 多选底栏「批量疗伤」：只请求打开确认弹窗（按勾选顺序）。 */
+  requestBatchHeal: [discipleIds: string[]];
 }>();
 
 function loadSavedFilter(): DiscipleFilter {
@@ -266,6 +271,21 @@ function onBatchAssignChange(event: Event): void {
 function onBatchBreakthrough(): void {
   if (selectedIds.value.length === 0 || props.busy) return;
   emit('requestBatchBreakthrough', [...selectedIds.value]);
+}
+
+/** 勾选的人里有没有回春丹能治的伤员（疗伤中且未重伤）：有才显示「批量疗伤」。 */
+const selectionHasHealable = computed(() =>
+  props.disciples.some(
+    (disciple) =>
+      selectedSet.value.has(disciple.id) &&
+      isInjured(disciple, props.serverNowMs) &&
+      severeInjuryStatusLabel(disciple, props.serverNowMs) === null,
+  ),
+);
+
+function onBatchHeal(): void {
+  if (selectedIds.value.length === 0 || props.busy) return;
+  emit('requestBatchHeal', [...selectedIds.value]);
 }
 
 function ringClass(row: RosterRow): string {
@@ -541,7 +561,19 @@ watch(
         <!-- 状态单独占一行：不再和境界标签挤在同一行里抢宽度。
              历练标记（在外 / 待领取）也在这里，玩家一眼能看出这名弟子不在宗门正常当值。 -->
         <div class="disciple-card-status">
-          <span class="disciple-status" :class="`is-${row.displayStatus.key}`">
+          <!-- 「疗伤中」本身就是回春丹入口：样式不变，点一下直接服丹（多选模式下仍按勾选处理）。 -->
+          <button
+            v-if="row.displayStatus.key === 'injured' && !selecting"
+            class="disciple-status is-injured disciple-status-button"
+            type="button"
+            :disabled="busy"
+            :title="`服用回春丹，治好${row.disciple.name}的伤势`"
+            :aria-label="`${row.disciple.name}疗伤中，服用回春丹`"
+            @click="emit('quickHeal', row.disciple.id)"
+          >
+            {{ row.displayStatus.label }}
+          </button>
+          <span v-else class="disciple-status" :class="`is-${row.displayStatus.key}`">
             {{ row.displayStatus.label }}
           </span>
         </div>
@@ -591,7 +623,7 @@ watch(
       <button class="quiet-button" type="button" @click="resetFilter">重置筛选</button>
     </div>
 
-    <!-- 多选底栏：吸附在名册底部；换岗下拉即选即提交，突破先开确认弹窗。 -->
+    <!-- 多选底栏：吸附在名册底部；换岗下拉即选即提交，突破 / 疗伤先开确认弹窗。 -->
     <div v-if="selecting" class="disciple-batch-bar" role="toolbar" aria-label="批量操作">
       <span class="disciple-batch-count">已选 <strong>{{ selectedIds.length }}</strong> 人</span>
       <button
@@ -626,6 +658,15 @@ watch(
           @click="onBatchBreakthrough"
         >
           批量突破
+        </button>
+        <button
+          v-if="selectionHasHealable"
+          class="action-button disciple-batch-heal"
+          type="button"
+          :disabled="busy"
+          @click="onBatchHeal"
+        >
+          批量疗伤
         </button>
       </span>
     </div>

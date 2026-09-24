@@ -275,7 +275,7 @@ describe('丹药系统：并发快照守卫', () => {
       buildings: await new BuildingRepository(env.DB).findBySectId(sect.sectId),
       pillId: 'healingPill',
       pillQuantity: 1,
-      disciple: disciple!,
+      disciples: [disciple!],
     });
 
     await env.DB.prepare('UPDATE pill_inventories SET quantity = 0 WHERE sect_id = ? AND pill_id = ?')
@@ -918,5 +918,113 @@ describe('丹药系统：契约与中间件', () => {
     );
     expect(errorOf(crossOrigin).code).toBe('CSRF_INVALID');
     expect(await pillRowCount(sect.sectId)).toBe(0);
+  });
+});
+
+describe('丹药系统：批量疗伤', () => {
+  async function injure(discipleId: string, until = Date.now() + 10 * 60 * 1000): Promise<void> {
+    await env.DB.prepare('UPDATE disciples SET injured_until = ? WHERE id = ?').bind(until, discipleId).run();
+  }
+
+  async function injuredUntilOf(discipleId: string): Promise<number | null> {
+    const row = await env.DB.prepare('SELECT injured_until FROM disciples WHERE id = ?')
+      .bind(discipleId)
+      .first<{ injured_until: number | null }>();
+    return row?.injured_until ?? null;
+  }
+
+  it('治好所有伤员（一人一颗），重伤的跳过并说明原因', async () => {
+    const sect = await makeSect();
+    await unlockAlchemy(sect.sectId);
+    await freezeSettlement(sect.sectId);
+    await setPillStock(sect.sectId, 'healingPill', 5);
+    const [a, b, c] = sect.discipleIds as [string, string, string];
+    await injure(a);
+    await injure(b);
+    // c：重伤卧床（同时带普通伤势，回春丹也不能治）
+    await injure(c);
+    await env.DB.prepare('UPDATE disciples SET severe_injured_until = ? WHERE id = ?')
+      .bind(Date.now() + 86_400_000, c)
+      .run();
+
+    const result = await sect.api.post('/api/v1/game/heal-batch', { discipleIds: [a, b, c] });
+    expect(result.status).toBe(200);
+    const outcome = (dataOf(result) as Record<string, any>).outcome;
+    expect(outcome.pillsUsed).toBe(2);
+    expect(outcome.healed.map((item: { discipleId: string }) => item.discipleId)).toEqual([a, b]);
+    expect(outcome.skipped).toEqual([
+      expect.objectContaining({ discipleId: c, reason: '重伤卧床，丹药无效' }),
+    ]);
+    expect(await pillQuantity(sect.sectId, 'healingPill')).toBe(3);
+    expect(await injuredUntilOf(a)).toBeNull();
+    expect(await injuredUntilOf(b)).toBeNull();
+    expect(await injuredUntilOf(c)).not.toBeNull();
+  });
+
+  it('库存不够全部伤员：整批拒绝，一个都不治、库存不动', async () => {
+    const sect = await makeSect();
+    await unlockAlchemy(sect.sectId);
+    await freezeSettlement(sect.sectId);
+    await setPillStock(sect.sectId, 'healingPill', 1);
+    const [a, b] = sect.discipleIds as [string, string];
+    await injure(a);
+    await injure(b);
+
+    const result = await sect.api.post('/api/v1/game/heal-batch', { discipleIds: [a, b] });
+    expect(errorOf(result).code).toBe('INVALID_STATUS');
+    expect(errorOf(result).message).toContain('回春丹不足');
+    expect(await pillQuantity(sect.sectId, 'healingPill')).toBe(1);
+    expect(await injuredUntilOf(a)).not.toBeNull();
+    expect(await injuredUntilOf(b)).not.toBeNull();
+  });
+
+  it('所选弟子都无伤：INVALID_STATUS，不扣库存', async () => {
+    const sect = await makeSect();
+    await unlockAlchemy(sect.sectId);
+    await freezeSettlement(sect.sectId);
+    await setPillStock(sect.sectId, 'healingPill', 2);
+    const [a] = sect.discipleIds as [string];
+    // 伤势已过期也算无伤
+    await injure(a, Date.now() - 1000);
+
+    const result = await sect.api.post('/api/v1/game/heal-batch', { discipleIds: [a] });
+    expect(errorOf(result).code).toBe('INVALID_STATUS');
+    expect(errorOf(result).message).toContain('所选弟子都不需要疗伤');
+    expect(await pillQuantity(sect.sectId, 'healingPill')).toBe(2);
+  });
+
+  it('他宗弟子记为跳过（不能替别人疗伤）；炼丹未解锁时整批拒绝', async () => {
+    const mine = await makeSect();
+    const other = await makeSect();
+    await unlockAlchemy(mine.sectId);
+    await freezeSettlement(mine.sectId);
+    await setPillStock(mine.sectId, 'healingPill', 2);
+    const foreign = other.discipleIds[0] as string;
+    const own = mine.discipleIds[0] as string;
+    await injure(foreign);
+    await injure(own);
+
+    const result = await mine.api.post('/api/v1/game/heal-batch', { discipleIds: [foreign, own] });
+    expect(result.status).toBe(200);
+    const outcome = (dataOf(result) as Record<string, any>).outcome;
+    expect(outcome.pillsUsed).toBe(1);
+    expect(outcome.skipped).toEqual([expect.objectContaining({ discipleId: foreign, reason: '已不在本宗' })]);
+    expect(await injuredUntilOf(foreign)).not.toBeNull();
+
+    // other 未解锁炼丹
+    await setPillStock(other.sectId, 'healingPill', 2);
+    const locked = await other.api.post('/api/v1/game/heal-batch', { discipleIds: [foreign] });
+    expect(errorOf(locked).code).toBe('INVALID_STATUS');
+    expect(await pillQuantity(other.sectId, 'healingPill')).toBe(2);
+  });
+
+  it('严格输入：空数组 / 重复 id / 未声明字段都返回 400', async () => {
+    const sect = await makeSect();
+    const id = sect.discipleIds[0] as string;
+    expect((await sect.api.post('/api/v1/game/heal-batch', { discipleIds: [] })).status).toBe(400);
+    expect((await sect.api.post('/api/v1/game/heal-batch', { discipleIds: [id, id] })).status).toBe(400);
+    expect(
+      (await sect.api.post('/api/v1/game/heal-batch', { discipleIds: [id], pillId: 'cultivationPill' })).status,
+    ).toBe(400);
   });
 });

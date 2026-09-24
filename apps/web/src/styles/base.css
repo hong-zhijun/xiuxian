@@ -1222,6 +1222,7 @@ ul {
 }
 
 .icon-action {
+  position: relative;
   display: flex;
   min-width: 67px;
   min-height: 47px;
@@ -1242,6 +1243,67 @@ ul {
 .icon-action svg {
   width: 19px;
   height: 19px;
+}
+
+/* 「更新」有未读条目时的小红点（用 <i> 而不是 span：窄屏会隐藏按钮里的 span 文字）。 */
+.icon-action-dot {
+  position: absolute;
+  top: 5px;
+  right: 6px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--red-bright);
+  box-shadow: 0 0 0 2px rgba(8, 20, 17, 0.9);
+}
+
+/* 更新说明弹窗：按版本分组的条目，最新在上。 */
+.changelog-list {
+  display: flex;
+  max-height: min(60vh, 520px);
+  flex-direction: column;
+  gap: 16px;
+  margin-top: 12px;
+  overflow-y: auto;
+}
+
+.changelog-entry {
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.changelog-entry:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.changelog-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  margin-bottom: 8px;
+}
+
+.changelog-meta time {
+  color: #7f948a;
+  font-size: 12px;
+}
+
+.changelog-meta strong {
+  color: var(--gold-bright);
+  font-size: 14px;
+}
+
+.changelog-entry ul {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-left: 16px;
+  list-style: disc;
+  color: #c3d1c9;
+  font-size: 13px;
+  line-height: 1.6;
 }
 
 .icon-action:not(:disabled):hover {
@@ -1850,7 +1912,8 @@ ul {
   min-width: 132px;
 }
 
-.disciple-batch-breakthrough {
+.disciple-batch-breakthrough,
+.disciple-batch-heal {
   min-height: 36px;
   padding: 0 14px;
   white-space: nowrap;
@@ -2030,6 +2093,41 @@ ul {
   border-color: rgba(224, 123, 104, 0.45);
   color: var(--red-bright);
   background: rgba(184, 81, 66, 0.12);
+}
+
+/* 账号弹窗：信息卡 + 改密码表单（输入框沿用登录页的 field-control）。 */
+.account-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-top: 18px;
+}
+
+.account-username {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* 「疗伤中」同时是回春丹入口：外观与普通标签一致，只多一个手型与悬停提亮。 */
+.disciple-status-button {
+  font: inherit;
+  font-size: 11px;
+  line-height: inherit;
+  cursor: pointer;
+}
+
+.disciple-status-button:hover:not(:disabled),
+.disciple-status-button:focus-visible {
+  border-color: rgba(224, 123, 104, 0.75);
+  background: rgba(184, 81, 66, 0.2);
+}
+
+.disciple-status-button:disabled {
+  cursor: default;
 }
 
 /* 重伤卧床：与疗伤同一红色系，但标签上带剩余静养时间。 */
