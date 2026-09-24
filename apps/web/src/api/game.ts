@@ -206,6 +206,8 @@ export interface SectStateView {
   journey: JourneyView;
   /** V6 进行中的交互式秘境探索；null = 当前没有（刷新后据此恢复断点）。 */
   activeExploration: ActiveExplorationView | null;
+  /** 0025 世界 Boss（讨伐）：是否可出手（按钮角标；只有 sync 会给真值）。 */
+  worldBoss: { attackable: boolean };
   /**
    * 坊市面板：材料买卖价 + 可回收的丹药（价格单位都是最小单位灵石，前端只展示、不复算规则）。
    * 买入价 / 卖出价按「1 展示单位材料」计价，买入会被服务端再按材料容量上限挡一次。
@@ -1427,4 +1429,95 @@ export async function shopSellPill(
     '/api/v1/game/shop-sell-pill',
     { method: 'POST', body: { pillId, quantity } },
   );
+}
+
+/* ---------- 0025 世界 Boss（讨伐） ---------- */
+
+export interface WorldBossDefView {
+  index: number;
+  name: string;
+  /** 带阶数的显示名（如「黑风妖王 · 二阶」）。 */
+  displayName: string;
+  sealCharacter: string;
+  color: string;
+  description: string;
+}
+
+export interface WorldBossRankView {
+  sectId: string;
+  sectName: string;
+  damage: number;
+  attempts: number;
+  isTopDamage: boolean;
+  isLastHit: boolean;
+  isMe: boolean;
+}
+
+export interface WorldBossHitView {
+  sectId: string;
+  sectName: string;
+  discipleNames: string[];
+  damage: number;
+  isCrit: boolean;
+  isLastHit: boolean;
+  createdAt: number;
+}
+
+/** 未出现 / 讨伐中 / 力竭中 / 已结束（UTC+8 时间段）。 */
+export type WorldBossPhase = 'before' | 'open' | 'frenzy' | 'closed';
+
+export interface WorldBossCurrentView {
+  id: string;
+  dayKey: string;
+  level: number;
+  def: WorldBossDefView;
+  maxHp: number;
+  hp: number;
+  status: 'active' | 'killed' | 'fled';
+  phase: WorldBossPhase;
+  killerSectName: string | null;
+  fledOutcome: 'repelled' | 'escaped' | null;
+  endedAt: number | null;
+}
+
+export interface WorldBossView {
+  boss: WorldBossCurrentView | null;
+  phase: WorldBossPhase;
+  /** 今天的出现时间（毫秒），未出现时用于「12:00 降临」提示。 */
+  opensAt: number;
+  remainingSeconds: number;
+  dailyLimit: number;
+  usedToday: number;
+  remaining: number;
+  attackable: boolean;
+  ranks: WorldBossRankView[];
+  hits: WorldBossHitView[];
+  topHit: WorldBossHitView | null;
+}
+
+export interface WorldBossAttackResultView {
+  damage: number;
+  actualDamage: number;
+  crit: boolean;
+  frenzy: boolean;
+  lastHit: boolean;
+  bossHp: number;
+  bossMaxHp: number;
+  participationReward: string;
+}
+
+export async function fetchWorldBoss(): Promise<{ state: SectStateView; boss: WorldBossView }> {
+  return apiRequest<{ state: SectStateView; boss: WorldBossView }>('/api/v1/game/world-boss');
+}
+
+export async function attackWorldBoss(discipleIds: string[]): Promise<{
+  state: SectStateView;
+  result: WorldBossAttackResultView;
+  boss: WorldBossView;
+}> {
+  return apiRequest<{
+    state: SectStateView;
+    result: WorldBossAttackResultView;
+    boss: WorldBossView;
+  }>('/api/v1/game/world-boss/attack', { method: 'POST', body: { discipleIds } });
 }
