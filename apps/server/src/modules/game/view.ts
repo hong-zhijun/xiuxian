@@ -50,6 +50,7 @@ import {
   findTalent,
   nextSectLevel,
   realmIndex,
+  isSeverelyInjured,
 } from './constants';
 import { RECENT_EVENTS_IN_SYNC, eventNameOf, type TriggeredEvent } from './events';
 import {
@@ -156,6 +157,8 @@ export interface DiscipleView {
   assignment: string;
   assignmentName: string;
   injuredUntil: string | null;
+  /** 二期阶段一：重伤到期时间（ISO 字符串）；null = 未重伤。 */
+  severeInjuredUntil: string | null;
   canBreakthrough: boolean;
   /**
    * 除灵气外的破境条件都已满足（未在外、未到版本上限、未疗伤、修为到门槛）。
@@ -1263,12 +1266,15 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
   );
   const libraryLevel = buildingLevels[SCRIPTURE_LIBRARY_BUILDING_ID] ?? 0;
   const awayIds = journeyAwayIds(journeys, now);
-  const rateDisciples = disciples.filter((disciple) => !awayIds.has(disciple.id));
+  // 二期阶段一：重伤卧床期间不产出、不修炼 —— 与在外历练同一口径（速率按 0 显示）。
+  const isUnavailable = (disciple: (typeof disciples)[number]): boolean =>
+    awayIds.has(disciple.id) || isSeverelyInjured(disciple.severe_injured_until, now);
+  const rateDisciples = disciples.filter((disciple) => !isUnavailable(disciple));
   const resourceRatesNow = resourceRates(config, rateDisciples.map(toDiscipleState), buildingLevels);
   const ratesByDisciple = new Map(
     disciples.map((disciple) => [
       disciple.id,
-      awayIds.has(disciple.id)
+      isUnavailable(disciple)
         ? 0
         : cultivationRatePerHour(config, toDiscipleState(disciple), libraryLevel),
     ]),
@@ -1397,6 +1403,10 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
       assignment: disciple.assignment,
       assignmentName: assignmentNames.get(disciple.assignment) ?? disciple.assignment,
       injuredUntil: disciple.injured_until === null ? null : new Date(disciple.injured_until).toISOString(),
+      severeInjuredUntil:
+        disciple.severe_injured_until === null
+          ? null
+          : new Date(disciple.severe_injured_until).toISOString(),
       canBreakthrough: blockedReason === null,
       breakthroughReadyExceptEnergy: blockedReason === null || blockedOnlyByEnergy,
       blockedReason,

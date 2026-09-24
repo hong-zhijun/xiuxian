@@ -1072,6 +1072,8 @@ describe('0018 迁移：disciples 重建后结构与约束完好', () => {
       // 0019 赌坊：0019 在 0018 重建之后追加的悟道值两列。
       'dao_insight',
       'dao_insight_used',
+      // 0026 世界 Boss 二期：0018 重建之后由 0026 追加的重伤列。
+      'severe_injured_until',
     ]);
   });
 
@@ -1119,6 +1121,8 @@ describe('0018 迁移：disciples 重建后结构与约束完好', () => {
       // 0019 赌坊：悟道值两列在 0018 重建之后由 0019 追加（列定义见 0019 迁移）。
       'dao_insight|INTEGER|1|0',
       'dao_insight_used|INTEGER|1|0',
+      // 0026 世界 Boss 二期：重伤列在 0018 重建之后追加，可空（NULL = 未重伤）、无 DEFAULT。
+      'severe_injured_until|INTEGER|0|',
     ]);
   });
 

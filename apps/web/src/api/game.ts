@@ -48,6 +48,8 @@ export interface DiscipleView {
   assignment: string;
   assignmentName: string;
   injuredUntil: string | null;
+  /** 重伤卧床（世界 Boss 造成，3 天）：ISO 字符串，格式与 injuredUntil 相同；null = 未重伤。 */
+  severeInjuredUntil: string | null;
   canBreakthrough: boolean;
   /** 除灵气外的破境条件都已满足（批量破境按这个挑人，灵气整批合计后再判断）。 */
   breakthroughReadyExceptEnergy: boolean;

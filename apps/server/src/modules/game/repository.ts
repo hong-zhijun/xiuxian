@@ -65,6 +65,8 @@ export interface DiscipleRow {
   cultivation_remainder: number;
   assignment: string;
   injured_until: number | null;
+  /** 二期阶段一：重伤到期时间（UTC 毫秒）；null = 未重伤。 */
+  severe_injured_until: number | null;
   /** 已服用淬体丹次数（上限 BODY_TEMPERING_MAX_USES，见 alchemy.ts）。 */
   body_tempering_count: number;
   /** 0013 掌门私有备注（单行纯文本，≤60 字；只进登录玩家自己的视图）。 */
@@ -233,7 +235,7 @@ export class DiscipleRepository extends ParamRepository {
     return this.all<DiscipleRow>({
       sql: `SELECT id, sect_id, name, gender, aptitude, attack, defense, speed, luck, physique, talent,
                    realm_id, stage, cultivation, cultivation_remainder,
-                   assignment, injured_until, body_tempering_count, note, avatar_frame_id, dao_insight, dao_insight_used, created_at
+                   assignment, injured_until, severe_injured_until, body_tempering_count, note, avatar_frame_id, dao_insight, dao_insight_used, created_at
             FROM disciples WHERE sect_id = ? ORDER BY created_at ASC, id ASC`,
       params: [sectId],
     });
@@ -243,7 +245,7 @@ export class DiscipleRepository extends ParamRepository {
     return this.one<DiscipleRow>({
       sql: `SELECT id, sect_id, name, gender, aptitude, attack, defense, speed, luck, physique, talent,
                    realm_id, stage, cultivation, cultivation_remainder,
-                   assignment, injured_until, body_tempering_count, note, avatar_frame_id, dao_insight, dao_insight_used, created_at
+                   assignment, injured_until, severe_injured_until, body_tempering_count, note, avatar_frame_id, dao_insight, dao_insight_used, created_at
             FROM disciples WHERE id = ?`,
       params: [discipleId],
     });
@@ -529,8 +531,8 @@ export function insertDiscipleStatement(row: NewDisciple): ParameterizedQuery {
     sql: `INSERT INTO disciples
             (id, sect_id, name, gender, aptitude, attack, defense, speed, luck, physique, talent,
              realm_id, stage, cultivation, cultivation_remainder, assignment, injured_until,
-             body_tempering_count, created_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, NULL, ?, ?)`,
+             severe_injured_until, body_tempering_count, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, NULL, NULL, ?, ?)`,
     params: [
       row.id,
       row.sectId,
@@ -788,6 +790,17 @@ export function updateDiscipleInjuryStatement(
   return {
     sql: 'UPDATE disciples SET injured_until = ? WHERE id = ?',
     params: [injuredUntil, discipleId],
+  };
+}
+
+/** 二期阶段一：重伤到期时间写回（世界 Boss 把弟子打成重伤时调用）。 */
+export function setDiscipleSevereInjuryStatement(
+  discipleId: string,
+  severeInjuredUntil: number | null,
+): ParameterizedQuery {
+  return {
+    sql: 'UPDATE disciples SET severe_injured_until = ? WHERE id = ?',
+    params: [severeInjuredUntil, discipleId],
   };
 }
 
@@ -1218,10 +1231,17 @@ export function discipleSnapshotGuardStatement(
      * 保存私有备注按计划必须在外期间也能用，所以那条路径传 false。
      */
     rejectAwayMembers?: boolean;
+    /**
+     * 二期阶段一：是否要求每名成员在此刻都没有「重伤卧床」。
+     * 与 rejectAwayMembers 同一口径 —— 改名 / 备注 / 头像框 / 驱逐，以及晋升的资格判定
+     * （重伤弟子仍是本宗门的、境界不变）传 false，其余路径一律 true。
+     */
+    rejectSevereMembers?: boolean;
     defenseLineup?: string | null;
   },
 ): ParameterizedQuery {
-  const { sect, balances, members, now, rejectAwayMembers, defenseLineup } = snapshot;
+  const { sect, balances, members, now, rejectAwayMembers, rejectSevereMembers, defenseLineup } =
+    snapshot;
   const checks = [
     'EXISTS (SELECT 1 FROM sects WHERE id = ? AND level = ? AND last_settled_at = ?)',
   ];
@@ -1233,7 +1253,7 @@ export function discipleSnapshotGuardStatement(
     );
     params.push(row.id, sect.id, row.balance, row.remainder);
   }
-  pushMemberChecks(checks, params, sect.id, members, now, rejectAwayMembers === true);
+  pushMemberChecks(checks, params, sect.id, members, now, rejectAwayMembers === true, rejectSevereMembers === true);
   if (defenseLineup !== undefined) {
     checks.push('EXISTS (SELECT 1 FROM sects WHERE id = ? AND defense_lineup IS ?)');
     params.push(sect.id, defenseLineup);
@@ -1257,6 +1277,7 @@ function pushMemberChecks(
   members: readonly { id: string }[],
   now: number,
   rejectAwayMembers: boolean,
+  rejectSevereMembers: boolean,
 ): void {
   for (const member of members) {
     checks.push('EXISTS (SELECT 1 FROM disciples WHERE id = ? AND sect_id = ?)');
@@ -1275,6 +1296,17 @@ function pushMemberChecks(
       );
       params.push(member.id, now);
     }
+    if (rejectSevereMembers) {
+      /**
+       * 二期阶段一：目标弟子在此刻也不得重伤卧床。
+       * 与上面那条同理，只是批内复核：与讨伐（一次出手可能把弟子打成重伤）并发时，
+       * 晚提交的一方整批回滚，不会出现「弟子刚被打成重伤，却还是被派了工 / 破了境」。
+       */
+      checks.push(
+        'NOT EXISTS (SELECT 1 FROM disciples WHERE id = ? AND sect_id = ? AND severe_injured_until IS NOT NULL AND severe_injured_until > ?)',
+      );
+      params.push(member.id, sectId, now);
+    }
   }
 }
 
@@ -1288,17 +1320,25 @@ export function discipleMembersGuardStatement(
   members: readonly { id: string }[],
   now: number,
   rejectAwayMembers: boolean,
+  rejectSevereMembers: boolean,
 ): ParameterizedQuery {
   const checks: string[] = [];
   const params: (string | number | null)[] = [guardId];
-  pushMemberChecks(checks, params, sectId, members, now, rejectAwayMembers);
+  pushMemberChecks(
+    checks,
+    params,
+    sectId,
+    members,
+    now,
+    rejectAwayMembers,
+    rejectSevereMembers,
+  );
   return {
     sql: `INSERT INTO mutation_guards (command_id, valid)
           SELECT ?, CASE WHEN ${checks.join(' AND ')} THEN 1 ELSE 0 END`,
     params,
   };
 }
-
 export function deleteDiscipleSnapshotGuardStatement(commandId: string): ParameterizedQuery {
   return {
     sql: 'DELETE FROM mutation_guards WHERE command_id = ?',

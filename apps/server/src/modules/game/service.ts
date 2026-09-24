@@ -116,6 +116,9 @@ import {
   nextSectLevel,
   nextStageOf,
   realmIndex,
+  isSeverelyInjured,
+  severeInjuryLeftText,
+  SEVERE_INJURY_MS,
 } from './constants';
 import { drawEncounters, type EncounterDef } from './encounters';
 import { EVENT_HISTORY_LIMIT, RECENT_EVENTS_IN_SYNC } from './events';
@@ -665,11 +668,20 @@ class SectDraft {
     const lastSettledAt = Number(base.sect.last_settled_at);
     // 0014：未领取的历练就是「在外区间」；结算只屏蔽这些区间内的岗位产出与静修，
     // 结算窗口（含唯一的 12 小时上限）与随机事件判定仍然各只有一份。
+    // 0014：未领取的历练就是「在外区间」；结算只屏蔽这些区间内的岗位产出与静修，
+    // 结算窗口（含唯一的 12 小时上限）与随机事件判定仍然各只有一份。
+    // 二期阶段一：重伤同样按「不在岗区间」追加 —— 重伤期间不产出、不修炼
+    // （settleEconomy 自己按结算窗口裁剪这段区间）。
     const absences = this.journeys.map((row) => ({
       discipleId: row.disciple_id,
       startMs: Number(row.started_at),
       endMs: Number(row.ends_at),
     }));
+    for (const row of base.disciples) {
+      const until = row.severe_injured_until === null ? null : Number(row.severe_injured_until);
+      if (until === null) continue;
+      absences.push({ discipleId: row.id, startMs: until - SEVERE_INJURY_MS, endMs: until });
+    }
     this.settleResult = settleEconomy({
       config: this.config,
       lastSettledAt,
@@ -1027,10 +1039,17 @@ class SectDraft {
        * 只有保存私有备注是 true（计划 2.3 明确允许在外保存备注），其余一律 false。
        */
       allowActiveJourney?: boolean;
+      /**
+       * 二期阶段一：是否允许成员此刻仍「重伤卧床」。
+       * 与 allowActiveJourney 同一口径：改名 / 备注 / 头像框 / 驱逐，以及晋升的资格判定传 true
+       * （重伤弟子仍是本宗门人、境界不变），其余路径一律 false（默认拒绝）。
+       */
+      allowSevereInjury?: boolean;
     },
   ): Promise<void> {
     const commandId = crypto.randomUUID();
     const rejectAwayMembers = options?.allowActiveJourney !== true;
+    const rejectSevereMembers = options?.allowSevereInjury !== true;
     // D1 单条语句最多 100 个绑定参数：首条守卫只带前 MEMBERS_PER_GUARD 名成员，其余按片另起守卫行。
     const MEMBERS_PER_GUARD = 10;
     const guard = discipleSnapshotGuardStatement(commandId, {
@@ -1039,6 +1058,7 @@ class SectDraft {
       members: members.slice(0, MEMBERS_PER_GUARD),
       now: this.now,
       rejectAwayMembers,
+      rejectSevereMembers,
       ...(defenseLineup === undefined ? {} : { defenseLineup }),
     });
     const guardIds = [commandId];
@@ -1052,6 +1072,7 @@ class SectDraft {
         members.slice(start, start + MEMBERS_PER_GUARD),
         this.now,
         rejectAwayMembers,
+        rejectSevereMembers,
       ));
     }
     try {
@@ -1600,6 +1621,7 @@ export async function createSect(
       cultivation_remainder: 0,
       assignment: template.assignment,
       injured_until: null,
+      severe_injured_until: null,
       body_tempering_count: 0,
       note: '',
       // 0019：初始弟子悟道值为 0（只能通过赌坊获得）。
@@ -1935,6 +1957,7 @@ export async function recruitDisciple(
     cultivation_remainder: 0,
     assignment: IDLE_ASSIGNMENT,
     injured_until: null,
+    severe_injured_until: null,
     body_tempering_count: 0,
     note: '',
     avatar_frame_id: 'classic',
@@ -2094,7 +2117,7 @@ function assignmentBlocker(
   assignment: string,
 ): DiscipleBlocker | null {
   // 0014：在外弟子不能转岗（原岗位名额仍为他保留，归队后自动恢复产出）。
-  const away = awayBlocker(draft, disciple, '转岗');
+  const away = unavailableBlocker(draft, disciple, '转岗');
   if (away !== null) return away;
 
   // V5.1 改动三：采灵岗位有人数上限（宗门 6 级前 1 人、6 级起 2 人）。
@@ -2244,7 +2267,7 @@ export interface BreakthroughOutcome {
 /** 破境资格（单个与批量共用，不含灵气）：可以破境返回 null。 */
 function breakthroughBlocker(draft: SectDraft, disciple: DiscipleRow): DiscipleBlocker | null {
   // 0014：在外弟子不能破境（服务端裁决）。
-  const away = awayBlocker(draft, disciple, '破境');
+  const away = unavailableBlocker(draft, disciple, '破境');
   if (away !== null) return away;
 
   const stage = findStage(disciple.realm_id, disciple.stage);
@@ -2482,7 +2505,10 @@ export async function setDiscipleNote(
   disciple.note = normalized;
 
   // 计划 2.3：在外期间**可以**继续保存私有备注，所以这条路径不要求成员「不在外」。
-  await draft.commitDisciple([{ id: disciple.id }], undefined, { allowActiveJourney: true });
+  await draft.commitDisciple([{ id: disciple.id }], undefined, {
+    allowActiveJourney: true,
+    allowSevereInjury: true,
+  });
   return draft.view();
 }
 
@@ -2513,7 +2539,10 @@ export async function setDiscipleAvatarFrame(
   disciple.avatar_frame_id = frameId;
 
   // 头像框是纯外观，与私有备注一样允许在外历练期间更改（不要求成员「不在外」）。
-  await draft.commitDisciple([{ id: disciple.id }], undefined, { allowActiveJourney: true });
+  await draft.commitDisciple([{ id: disciple.id }], undefined, {
+    allowActiveJourney: true,
+    allowSevereInjury: true,
+  });
   return draft.view();
 }
 
@@ -2648,7 +2677,10 @@ export async function renameDisciple(
   draft.addStatement(updateDiscipleNameStatement(disciple.id, draft.sect.id, normalized));
   disciple.name = normalized;
 
-  await draft.commitDisciple([{ id: disciple.id }], undefined, { allowActiveJourney: true });
+  await draft.commitDisciple([{ id: disciple.id }], undefined, {
+    allowActiveJourney: true,
+    allowSevereInjury: true,
+  });
   return draft.view();
 }
 
@@ -2705,7 +2737,7 @@ export async function expelDisciple(
     draft.sect.defense_lineup = null;
   }
 
-  await draft.commitDisciple([{ id: disciple.id }], lineupSnapshot);
+  await draft.commitDisciple([{ id: disciple.id }], lineupSnapshot, { allowSevereInjury: true });
   return {
     state: draft.view(),
     outcome: {
@@ -2800,6 +2832,7 @@ export async function upgradeSect(
 
   await draft.commitDisciple([...requiredDisciples].map((id) => ({ id })), undefined, {
     allowActiveJourney: true,
+    allowSevereInjury: true,
   });
   return draft.view();
 }
@@ -3271,13 +3304,20 @@ export async function getPublicSect(
   const config = gameConfig();
 
   // 0014：守方实时在外状态参与裁决（跨宗读取只用于能否应战的安全判断，不公开他人结果）。
+  // 二期阶段一：重伤卧床的守方弟子同样按空位处理（不上场）。
   const defenderAwayIds = journeyAwayIds(
     await new DiscipleJourneyRepository(db).findOpenBySectId(sectId),
     now,
   );
+  const unavailableDefenderIds = new Set([
+    ...defenderAwayIds,
+    ...disciples
+      .filter((row) => isSeverelyInjured(row.severe_injured_until, now))
+      .map((row) => row.id),
+  ]);
   const plan = planDefenseLineup(
     sect.defense_lineup,
-    availableDefenders(disciples, defenderAwayIds),
+    availableDefenders(disciples, unavailableDefenderIds),
   );
   let challenge: PublicSectChallengeView | null = null;
   if (viewerSect !== null) {
@@ -3887,8 +3927,15 @@ export async function challengeSect(
     await new DiscipleJourneyRepository(db).findOpenBySectId(targetSect.id),
     now,
   );
-  // 候选池 = 不在外的守方弟子；手动阵容与自动守擂都只看这一份名单。
-  const defenders = availableDefenders(defenderDisciples, defenderAwayIds);
+  // 候选池 = 既不在外、也不重伤卧床的守方弟子（二期阶段一：重伤按空位处理）；
+  // 手动阵容与自动守擂都只看这一份名单。
+  const unavailableDefenderIds = new Set([
+    ...defenderAwayIds,
+    ...defenderDisciples
+      .filter((row) => isSeverelyInjured(row.severe_injured_until, now))
+      .map((row) => row.id),
+  ]);
+  const defenders = availableDefenders(defenderDisciples, unavailableDefenderIds);
   const plan = planDefenseLineup(targetSect.defense_lineup, defenders);
   if (!plan.canDefend) {
     throw new AppError('INVALID_STATUS', '对方门下弟子不足 3 人，暂时无法应战');
@@ -4230,6 +4277,10 @@ export async function usePill(
   const recipe = requirePillRecipe(pillId);
   const disciple = draft.discipleById(discipleId);
 
+  // 二期阶段一：重伤卧床时服丹一律无效；回春丹另外给「伤势过重」的专门文案。
+  if (recipe.id === 'healingPill' && isSeverelyInjured(disciple.severe_injured_until, now)) {
+    throw new AppError('INVALID_STATUS', '伤势过重，丹药无效');
+  }
   // 0014：在外 / 有待领取记录的弟子不能服药（服务端裁决，不只禁用按钮）。
   requireNotAway(draft, disciple, '服药');
 
@@ -4353,10 +4404,12 @@ export async function usePill(
  * 进守擂阵容 / 驱逐都不能做。已归队待领取（status = 'ready'）的弟子已在外归来，
  * 可以正常工作与操作，只是不能再次出发、也不能被驱逐（见 requireJourneySettled）。
  *
+ * 二期阶段一：重伤卧床（severe_injured_until > now）与在外历练同样被挡住。
+ *
  * 保存私有备注不在限制之列（计划 2.3 明确允许）。
  */
 function requireNotAway(draft: SectDraft, disciple: DiscipleRow, action: string): void {
-  const blocker = awayBlocker(draft, disciple, action);
+  const blocker = unavailableBlocker(draft, disciple, action);
   if (blocker !== null) throw blocker.error;
 }
 
@@ -4370,6 +4423,32 @@ function awayBlocker(draft: SectDraft, disciple: DiscipleRow, action: string): D
     error: new AppError('INVALID_STATUS', `${disciple.name}正在外历练，尚未归队，无法${action}`),
     reason: '外出历练中',
   };
+}
+
+/** 二期阶段一：重伤卧床的弟子做不了任何要亲自出手的事。 */
+function severeInjuryBlocker(draft: SectDraft, disciple: DiscipleRow): DiscipleBlocker | null {
+  const until = disciple.severe_injured_until === null ? null : Number(disciple.severe_injured_until);
+  if (!isSeverelyInjured(until, draft.now)) {
+    return null;
+  }
+  return {
+    error: new AppError(
+      'INVALID_STATUS',
+      `${disciple.name}重伤卧床，还需静养${severeInjuryLeftText(until ?? 0, draft.now)}`,
+    ),
+    reason: '重伤卧床',
+  };
+}
+
+/** 统一的「不能出战」拦截：先看在野、再看重伤（单个命令抛错，批量命令据此把弟子记为跳过）。 */
+function unavailableBlocker(
+  draft: SectDraft,
+  disciple: DiscipleRow,
+  action: string,
+): DiscipleBlocker | null {
+  const away = awayBlocker(draft, disciple, action);
+  if (away !== null) return away;
+  return severeInjuryBlocker(draft, disciple);
 }
 
 /**
@@ -4401,6 +4480,13 @@ function journeyEligibilityOf(input: {
   now: number;
 }): JourneyBlock | null {
   const awayIds = journeyAwayIds(input.journeys, input.now);
+  // 二期阶段一：重伤卧床期间不能外出历练（比疗伤更重：整个静养期都动不了）。
+  if (isSeverelyInjured(input.disciple.severe_injured_until, input.now)) {
+    return {
+      code: 'INVALID_STATUS',
+      message: `${input.disciple.name}重伤卧床，还需静养${severeInjuryLeftText(Number(input.disciple.severe_injured_until), input.now)}`,
+    };
+  }
   // 0015：秘境探索中的弟子不能被派出去历练 —— 否则这支探索队伍会被抽走一个成员。
   if (explorationPartyIds(input.activeExploration).includes(input.disciple.id)) {
     return {
