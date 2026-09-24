@@ -9,8 +9,8 @@
 export interface ChangelogEntry {
   /** 唯一标识（建议「日期 + 序号」），写入浏览器本地用来判断是否已读。 */
   id: string;
-  /** 展示用日期（YYYY-MM-DD）。 */
-  date: string;
+  /** 更新时间（UTC+8，YYYY-MM-DD HH:mm）。 */
+  time: string;
   title: string;
   items: string[];
 }
@@ -20,7 +20,7 @@ export const MAX_ENTRIES = 5;
 export const CHANGELOG: readonly ChangelogEntry[] = [
   {
     id: '2026-09-24-5',
-    date: '2026-09-24',
+    time: '2026-09-24 17:45',
     title: '装备加强',
     items: [
       '装备属性大幅提升：凡品主属性 +8、灵品 +16、宝品 +20、仙品 +24。',
@@ -30,7 +30,7 @@ export const CHANGELOG: readonly ChangelogEntry[] = [
   },
   {
     id: '2026-09-24-4',
-    date: '2026-09-24',
+    time: '2026-09-24 17:04',
     title: '装备系统上线',
     items: [
       '新增「炼器」：宗门 2 级解锁，可炼制凡品兵器、护甲、法器。',
@@ -41,7 +41,7 @@ export const CHANGELOG: readonly ChangelogEntry[] = [
   },
   {
     id: '2026-09-24-3',
-    date: '2026-09-24',
+    time: '2026-09-24 16:40',
     title: '疗伤更顺手 · 账号管理',
     items: [
       '弟子列表点「疗伤中」可直接服用回春丹。',
@@ -51,7 +51,7 @@ export const CHANGELOG: readonly ChangelogEntry[] = [
   },
   {
     id: '2026-09-24-2',
-    date: '2026-09-24',
+    time: '2026-09-24 15:18',
     title: '世界Boss 调整',
     items: [
       '讨伐奖励提高，受伤概率降低，重伤改为静养 1 天。',
@@ -60,7 +60,7 @@ export const CHANGELOG: readonly ChangelogEntry[] = [
   },
   {
     id: '2026-09-24-1',
-    date: '2026-09-24',
+    time: '2026-09-24 11:02',
     title: '世界Boss 上线',
     items: [
       '世界Boss 每天 08:00 出现，全服共同讨伐。',
@@ -70,7 +70,7 @@ export const CHANGELOG: readonly ChangelogEntry[] = [
   },
   {
     id: '2026-09-23-1',
-    date: '2026-09-23',
+    time: '2026-09-23 14:19',
     title: '灵兽竞逐',
     items: [
       '赌坊新玩法「灵兽竞逐」。',

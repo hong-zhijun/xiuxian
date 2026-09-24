@@ -14,7 +14,7 @@ const entries = CHANGELOG.slice(0, MAX_ENTRIES);
 </script>
 
 <template>
-  <ModalShell narrow label="更新说明" @close="emit('close')">
+  <ModalShell label="更新说明" @close="emit('close')">
     <section class="changelog" aria-labelledby="changelog-title">
       <header class="section-heading panel-heading compact-heading">
         <div>
@@ -26,7 +26,7 @@ const entries = CHANGELOG.slice(0, MAX_ENTRIES);
       <ol class="changelog-list">
         <li v-for="entry in entries" :key="entry.id" class="changelog-entry">
           <p class="changelog-meta">
-            <time :datetime="entry.date">{{ entry.date }}</time>
+            <time :datetime="entry.time.replace(' ', 'T')">{{ entry.time }}</time>
             <strong>{{ entry.title }}</strong>
           </p>
           <ul>

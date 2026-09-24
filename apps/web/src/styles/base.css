@@ -1263,8 +1263,15 @@ ul {
   max-height: min(60vh, 520px);
   flex-direction: column;
   gap: 16px;
-  margin-top: 12px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
   overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.changelog-list::-webkit-scrollbar {
+  display: none;
 }
 
 .changelog-entry {
