@@ -8097,6 +8097,17 @@ async function rewardWorldBoss(
     (a, b) => b[1].damage - a[1].damage || a[1].firstAt - b[1].firstAt,
   );
 
+  // 讨伐奖励记录的账本：宗门 → 名次、实际入账的资源（最小单位）、获得的物品、是否最后一击。
+  const rewardLedger = new Map<
+    string,
+    { rank: number; effects: Record<string, number>; items: string[]; lastHit: boolean }
+  >();
+  const creditLedger = (sectId: string, resourceId: string, amount: number): void => {
+    const entry = rewardLedger.get(sectId);
+    if (entry === undefined || amount <= 0) return;
+    entry.effects[resourceId] = (entry.effects[resourceId] ?? 0) + amount;
+  };
+
   // 0028 装备：本关击杀掉落的装备（发奖成功后用它广播仙品）。
   const bossDrops: { sectId: string; name: string; quality: string }[] = [];
 
@@ -8119,6 +8130,7 @@ async function rewardWorldBoss(
 
     const totalDamage = participants.reduce((sum, [, info]) => sum + info.damage, 0);
     participants.forEach(([sectId, info], index) => {
+      rewardLedger.set(sectId, { rank: index + 1, effects: {}, items: [], lastHit: false });
       // 装备二期：玄铁只给对本关伤害占比 ≥15% 的宗门（蹭一刀拿不到）；第 1 名更多，击退减半。
       const xuantie = bossXuantieFor({
         stage,
@@ -8128,6 +8140,7 @@ async function rewardWorldBoss(
       });
       if (xuantie > 0) {
         statements.push(resourceDeltaStatement(sectId, XUANTIE_RESOURCE_ID, xuantie * 1000, now));
+        creditLedger(sectId, XUANTIE_RESOURCE_ID, xuantie * 1000);
       }
       const rewards = stageResourceRewards({
         rates: ratesRecordOf(ratesById.get(sectId) ?? new Map()),
@@ -8139,6 +8152,7 @@ async function rewardWorldBoss(
       for (const [resourceId, amount] of Object.entries(rewards)) {
         if (amount > 0) {
           statements.push(resourceDeltaStatement(sectId, resourceId, amount, now));
+          creditLedger(sectId, resourceId, amount);
         }
       }
     });
@@ -8149,12 +8163,14 @@ async function rewardWorldBoss(
         statements.push(
           incrementPillInventoryStatement(sectId, WORLD_BOSS_KILL_PILL_ID, 1, now),
         );
+        rewardLedger.get(sectId)?.items.push('聚气丹');
       }
       const topSectId = participants[0]?.[0];
       if (topSectId !== undefined) {
         statements.push(
           incrementPillInventoryStatement(topSectId, WORLD_BOSS_TOP_DAMAGE_PILL_ID, 1, now),
         );
+        rewardLedger.get(topSectId)?.items.push('淬体丹');
       }
       const killerSectId = boss.killer_sect_id;
       if (killerSectId !== null) {
@@ -8167,7 +8183,10 @@ async function rewardWorldBoss(
           );
           if (amount > 0) {
             statements.push(resourceDeltaStatement(killerSectId, 'spiritStone', amount, now));
+            creditLedger(killerSectId, 'spiritStone', amount);
           }
+          const killerEntry = rewardLedger.get(killerSectId);
+          if (killerEntry !== undefined) killerEntry.lastHit = true;
         }
       }
 
@@ -8201,9 +8220,12 @@ async function rewardWorldBoss(
         }
         if (bagUsed >= BAG_CAPACITY) {
           statements.push(resourceDeltaStatement(sectId, 'ore', salvageOreUnits(quality), now));
+          creditLedger(sectId, 'ore', salvageOreUnits(quality));
           if (salvageXuantieUnits(quality) > 0) {
             statements.push(resourceDeltaStatement(sectId, XUANTIE_RESOURCE_ID, salvageXuantieUnits(quality), now));
+            creditLedger(sectId, XUANTIE_RESOURCE_ID, salvageXuantieUnits(quality));
           }
+          rewardLedger.get(sectId)?.items.push(`${generated.name}（背包已满，已分解）`);
           continue;
         }
         bagUsedBySect.set(sectId, bagUsed + 1);
@@ -8223,8 +8245,28 @@ async function rewardWorldBoss(
           }),
         );
         bossDrops.push({ sectId, name: generated.name, quality: generated.quality });
+        rewardLedger.get(sectId)?.items.push(generated.name);
       }
     }
+  }
+
+  // 讨伐奖励记录：每个参与宗门一条天机录（和发奖同一个 batch；同步时会弹出「奖励到账」提示）。
+  const bossLabel = bossDisplayName(Number(boss.boss_index), stage);
+  for (const [sectId, entry] of rewardLedger) {
+    const honors = [`伤害第 ${String(entry.rank)} 名`, ...(entry.lastHit ? ['最后一击'] : [])].join('、');
+    const itemsText = entry.items.length > 0 ? `，获得 ${entry.items.join('、')}` : '';
+    statements.push(
+      insertEventLogStatement({
+        id: crypto.randomUUID(),
+        sectId,
+        eventId: 'worldBossReward',
+        description: `讨伐${bossLabel}${killed ? '' : '（击退）'}：${honors}${itemsText}`,
+        effects: JSON.stringify(
+          Object.fromEntries(Object.entries(entry.effects).map(([resourceId, amount]) => [resourceId, String(amount)])),
+        ),
+        now,
+      }),
+    );
   }
 
   // 发奖与「标记已发」同一个 batch：整批成功执行过，就不会再发第二次。

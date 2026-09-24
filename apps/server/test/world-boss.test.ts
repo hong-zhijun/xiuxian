@@ -647,6 +647,15 @@ describe('世界 Boss 二期：Cron 逃走与发奖', () => {
     const noticesAfterReward = await countMessages((text) => text.includes('讨伐奖励已发放'));
     expect(noticesAfterReward).toBeGreaterThan(rewardNotices);
 
+    // 讨伐奖励记录：该宗门天机录里有一条，写明名次，资源增减与实际入账一致。
+    const rewardLogs = await env.DB.prepare("SELECT description, effects FROM event_log WHERE sect_id = ? AND event_id = 'worldBossReward'")
+      .bind(fixture.sectId)
+      .all<{ description: string; effects: string }>();
+    expect(rewardLogs.results).toHaveLength(1);
+    expect(rewardLogs.results[0]!.description).toContain('伤害第 1 名');
+    expect(rewardLogs.results[0]!.description).toContain('聚气丹');
+    expect(Number(JSON.parse(rewardLogs.results[0]!.effects).spiritStone)).toBeGreaterThan(0);
+
     // 只有一个参与宗门 → 排名 1（×1.5），第 2 关（×1.2）：factor = 1.8
     const factor = stageRewardMultiplier(2) * rankRewardMultiplier(1);
     const share = (rate: number): number =>
@@ -668,6 +677,10 @@ describe('世界 Boss 二期：Cron 逃走与发奖', () => {
     await processWorldBoss(env.DB, dayAt(20, 15));
     await processWorldBoss(env.DB, dayAt(20, 16));
     expect(await countMessages((text) => text.includes('讨伐奖励已发放'))).toBe(noticesAfterReward);
+    const rewardLogsAgain = await env.DB.prepare("SELECT COUNT(*) AS n FROM event_log WHERE sect_id = ? AND event_id = 'worldBossReward'")
+      .bind(fixture.sectId)
+      .first<{ n: number }>();
+    expect(Number(rewardLogsAgain?.n)).toBe(1);
     expect(await pillCount(fixture.sectId, 'cultivationPill')).toBe(before.cultivationPill + 1);
     expect(await balanceOf(fixture.sectId, 'herb')).toBe(before.herb + share(rates.herb ?? 0));
   });
