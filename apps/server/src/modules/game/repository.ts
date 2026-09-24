@@ -2880,9 +2880,24 @@ export function updateEquipmentHolderStatement(
 }
 
 /** 分解（只对背包里的行生效：穿在身上的删不掉）。 */
-export function deleteEquipmentStatement(equipmentId: string, sectId: string): ParameterizedQuery {
+export function deleteBagEquipmentStatement(
+  equipmentId: string,
+  sectId: string,
+): ParameterizedQuery {
   return {
     sql: 'DELETE FROM equipment WHERE id = ? AND sect_id = ? AND disciple_id IS NULL',
+    params: [equipmentId, sectId],
+  };
+}
+
+/**
+ * 驱逐弟子时把背包放不下的那几件直接删掉（计划 1.5）。
+ * 这里**不能**用上面的「只删背包行」：此刻它仍登记在被驱逐的弟子名下
+ * （归属人是在同一批里被删掉的行，D1 的 batch 按数组顺序执行）。
+ */
+export function deleteEquipmentStatement(equipmentId: string, sectId: string): ParameterizedQuery {
+  return {
+    sql: 'DELETE FROM equipment WHERE id = ? AND sect_id = ?',
     params: [equipmentId, sectId],
   };
 }
