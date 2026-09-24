@@ -7269,15 +7269,22 @@ async function spawnWorldBoss(db: D1Database, now: number): Promise<void> {
 
   const repo = new WorldBossRepository(db);
   const dayKey = dateKeyUtc8(now);
-  if ((await repo.findByDayKeyAndStage(dayKey, 1)) !== null) return;
+  const latest = await repo.findLatestByDayKey(dayKey);
+  // 今天已有进行中的关卡，或最新一关已逃走：不生成。
+  if (latest !== null && latest.status !== 'killed') return;
 
-  const roundDamage = await worldBossRoundDamage(db, repo, now);
-  const created = await spawnWorldBossStage({ repo, now, dayKey, stage: 1, roundDamage });
+  // 补位：最新一关已被击杀却没有下一关（正常由击杀那次出手就地生成；
+  // 那条路径失败、或是一期规则下打死的旧 Boss 时，由 Cron 兜底补上）。
+  const stage = latest === null ? 1 : Number(latest.stage) + 1;
+  // 一期迁移过来的旧行 round_damage = 0，不能拿来算血量，重新计算。
+  const storedRound = latest === null ? 0 : Number(latest.round_damage);
+  const roundDamage = storedRound > 0 ? storedRound : await worldBossRoundDamage(db, repo, now);
+  const created = await spawnWorldBossStage({ repo, now, dayKey, stage, roundDamage });
   if (created === null) return;
 
   await broadcastWorldBoss(
     db,
-    `【讨伐】${bossDisplayName(created.boss_index, 1)}（${affixNameOf(created.affix)}）降临！全服共讨，每宗门每 10 秒可出手一次`,
+    `【讨伐】${bossDisplayName(created.boss_index, stage)}（${affixNameOf(created.affix)}）降临！全服共讨，每宗门每 10 秒可出手一次`,
     now,
   );
 }

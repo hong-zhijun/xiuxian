@@ -104,9 +104,12 @@ function applyPanel(data: WorldBossView): void {
 }
 
 function formatCountdown(seconds: number): string {
-  const m = Math.floor(seconds / 60);
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
   const s = seconds % 60;
-  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  const mmss = `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  // 开放时段长达 15 小时，超过 1 小时要显示成 8:37:50，而不是 517:50。
+  return h > 0 ? `${String(h)}:${mmss}` : mmss;
 }
 
 /* ---------- 展示 ---------- */

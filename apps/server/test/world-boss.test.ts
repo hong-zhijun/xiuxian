@@ -288,6 +288,25 @@ describe('世界 Boss 二期：出现（Cron）', () => {
     expect(await countBossRows(dayKey)).toBe(1);
     expect(await countMessages((text) => text.includes('降临'))).toBe(spawns + 1);
   });
+
+  it('补位：最新一关已击杀却没有下一关（如一期旧 Boss，round_damage = 0）→ Cron 生成下一关并重算一轮伤害', async () => {
+    const fixture = await makeSect('catchup');
+    await freezeDay(fixture.sectId, 60);
+    const now = dayAt(60, 10);
+    const dayKey = dateKeyUtc8(now);
+    await insertBoss({ dayKey, now: dayAt(60, 9), status: 'killed', hp: 0, roundDamage: 0, rewardedAt: dayAt(60, 9) });
+
+    await processWorldBoss(env.DB, now);
+    const next = (await bossRow(dayKey, 2))!;
+    expect(next.status).toBe('active');
+    const roundDamage = Number(next.round_damage);
+    expect(roundDamage).toBeGreaterThan(0);
+    expect(Number(next.max_hp)).toBe(Math.max(WORLD_BOSS_MIN_HP, roundDamage * WORLD_BOSS_ROUNDS_PER_STAGE * 2));
+
+    // 有进行中的关卡时不再补位
+    await processWorldBoss(env.DB, dayAt(60, 11));
+    expect(await countBossRows(dayKey)).toBe(2);
+  });
 });
 
 describe('世界 Boss 二期：面板', () => {
