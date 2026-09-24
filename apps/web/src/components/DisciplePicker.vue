@@ -44,6 +44,8 @@ const props = withDefaults(
      * 只有讨伐会传；传了才在卡片状态栏显示「本小时 n/3」/「冒进 xx%」/「必重伤」。
      */
     fatigue?: Record<string, number>;
+    /** 讨伐：每个弟子最近 60 分钟内每次出战的时间（毫秒，升序），速览卡片据此显示「冒进冷却」。 */
+    fatigueTimes?: Record<string, number[]>;
     /** 当前关卡是「狂暴」词缀：冒进概率 ×2（只有讨伐会传）。 */
     berserk?: boolean;
     /**
@@ -336,6 +338,21 @@ const popoverStatus = computed(() => {
   return '正常';
 });
 
+/**
+ * 冒进冷却：本小时已出战 ≥3 次时，再等多久才能回到 2 次以内（不会冒进）。
+ * 疲劳按滑动 60 分钟计：倒数第 3 次那条记录满一小时后，次数就降到 2。随 nowTick 每秒刷新。
+ */
+const FATIGUE_WINDOW_MS = 60 * 60 * 1000;
+const popoverRushCooldown = computed<string | null>(() => {
+  const disciple = popoverDisciple.value;
+  const times = disciple === null ? undefined : props.fatigueTimes?.[disciple.id];
+  if (times === undefined) return null;
+  const live = times.filter((time) => time + FATIGUE_WINDOW_MS > nowTick.value);
+  if (live.length < 3) return null;
+  const seconds = Math.max(0, Math.ceil((live[live.length - 3]! + FATIGUE_WINDOW_MS - nowTick.value) / 1000));
+  return `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
+});
+
 /** 小卡片里的「本小时 n/3」（只在传了 fatigue 时展示）。 */
 const popoverFatigueCount = computed(() => {
   const disciple = popoverDisciple.value;
@@ -610,6 +627,9 @@ onUnmounted(() => {
       <p v-if="fatigue !== undefined" class="dp-popover-line">
         本小时 {{ popoverFatigueCount }}/3
       </p>
+      <p v-if="fatigueTimes !== undefined" class="dp-popover-line" :class="{ 'is-danger': popoverRushCooldown !== null }">
+        {{ popoverRushCooldown === null ? '可安全出战' : `冒进冷却 ${popoverRushCooldown}` }}
+      </p>
     </div>
   </div>
 </template>
@@ -660,6 +680,10 @@ onUnmounted(() => {
 .dp-popover-line {
   margin: 0;
   color: #93a99e;
+}
+
+.dp-popover-line.is-danger {
+  color: #e8664e;
 }
 
 .dp-popover-attrs {

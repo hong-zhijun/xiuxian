@@ -542,6 +542,7 @@ const RULES_TEXT = `讨伐 · 玩法说明
         sort="power"
         title="选择出战弟子"
         :fatigue="panel?.fatigue"
+        :fatigue-times="panel?.fatigueTimes"
         :extra-sort="boss?.affix.sortAttribute"
         :berserk="isBerserk"
       >

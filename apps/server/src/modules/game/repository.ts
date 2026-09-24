@@ -2453,6 +2453,8 @@ export interface WorldBossTopHitRow extends WorldBossHitRow {
 export interface DiscipleBattleCountRow {
   disciple_id: string;
   cnt: number;
+  /** 窗口内每次出战的时间（逗号分隔的毫秒数），给前端算「冒进冷却」。 */
+  times: string | null;
 }
 
 export class WorldBossRepository extends ParamRepository {
@@ -2603,7 +2605,7 @@ export class WorldBossRepository extends ParamRepository {
   /** 疲劳：本宗门每名弟子在窗口内的出战次数。 */
   async fatigueCountsBySect(sectId: string, sinceMs: number): Promise<DiscipleBattleCountRow[]> {
     return this.all<DiscipleBattleCountRow>({
-      sql: `SELECT disciple_id, COUNT(*) AS cnt
+      sql: `SELECT disciple_id, COUNT(*) AS cnt, GROUP_CONCAT(created_at) AS times
               FROM disciple_boss_battles
              WHERE sect_id = ? AND created_at >= ?
              GROUP BY disciple_id`,

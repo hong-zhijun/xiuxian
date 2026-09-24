@@ -7474,8 +7474,15 @@ async function buildWorldBossView(input: {
   // 疲劳表：本宗门弟子最近 60 分钟内的出战次数。
   const fatigueRows = await repo.fatigueCountsBySect(input.sectId, now - WORLD_BOSS_FATIGUE_WINDOW_MS);
   const fatigue: Record<string, number> = {};
+  // 每次出战的时间（升序）：前端据此算「冒进冷却」—— 同一次查询顺带取出，不多查。
+  const fatigueTimes: Record<string, number[]> = {};
   for (const row of fatigueRows) {
     fatigue[row.disciple_id] = Number(row.cnt);
+    fatigueTimes[row.disciple_id] = (row.times ?? '')
+      .split(',')
+      .map(Number)
+      .filter((value) => Number.isFinite(value) && value > 0)
+      .sort((a, b) => a - b);
   }
 
   const attackable = boss !== null && boss.status === 'active' && isWorldBossAttackable(phase);
@@ -7536,6 +7543,7 @@ async function buildWorldBossView(input: {
     bestStage,
     cooldownSeconds,
     fatigue,
+    fatigueTimes,
     attackable,
     ranks,
     hits: hitRows.map(toWorldBossHitView),

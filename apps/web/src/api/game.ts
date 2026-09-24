@@ -1624,6 +1624,8 @@ export interface WorldBossView {
   cooldownSeconds: number;
   /** 本宗门弟子疲劳表：弟子 id → 最近 60 分钟的出战次数。 */
   fatigue: Record<string, number>;
+  /** 最近 60 分钟内每次出战讨伐的时间（毫秒，升序），用于「冒进冷却」倒计时。 */
+  fatigueTimes: Record<string, number[]>;
   attackable: boolean;
   ranks: WorldBossRankView[];
   hits: WorldBossHitView[];
