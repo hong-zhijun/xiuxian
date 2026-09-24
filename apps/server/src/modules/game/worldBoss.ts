@@ -1,19 +1,23 @@
 import { ARENA_COMBAT_BONUS_BP_PER_LEVEL } from './realms';
 
 /**
- * 世界 Boss（讨伐）的纯规则（docs/世界Boss开发计划.md 第 1、3.1 节）。
+ * 世界 Boss（讨伐）二期纯规则（docs/世界Boss二期开发计划.md 2.2~2.9）。
  *
- * 与 gambling.ts / journey.ts 同一做法：这里只有常量与纯函数 —— 不读库、不取时间、
- * 不调用 Math.random（随机源通过参数注入），定义硬编码在代码里、不进 game-config。
+ * 与一期同一做法：这里只有常量与纯函数 —— 不读库、不取时间、不调用 Math.random
+ * （随机源通过参数注入），定义硬编码在代码里、不进 game-config。
  *
- * 金额一律是**最小单位**（1 展示单位 = 1000 最小单位）。
+ * 二期的三处结构性变化：
+ * - **连战**：一天从第 1 关开始，打死一关立刻出下一关；血量按关卡翻倍。
+ * - **随机词缀**：每关生成时随机一个，整关不变，给弟子属性加成与额外风险。
+ * - **不限出手次数**：靠「冷却 10 秒 + 弟子疲劳/受伤/重伤」自然约束。
+ *   一期的「阶（level）」「每日 3 次」「参与奖」「打破奖池按伤害占比分」全部去掉。
+ *
+ * 金额一律是最小单位（1 展示单位 = 1000 最小单位）。
  */
-export const WORLD_BOSS_DAILY_ATTACKS = 3;
-/** 每次出手派出的弟子人数。 */
 export const WORLD_BOSS_MIN_PARTY = 1;
 export const WORLD_BOSS_MAX_PARTY = 3;
 
-/** 时间线（UTC+8 小时）：08:00 出现、22:00 力竭、23:00 逃走。 */
+/** 时间线（UTC+8 小时）：08:00 开放、22:00 力竭、23:00 逃走。 */
 export const WORLD_BOSS_OPEN_HOUR = 8;
 export const WORLD_BOSS_FRENZY_HOUR = 22;
 export const WORLD_BOSS_CLOSE_HOUR = 23;
@@ -35,27 +39,50 @@ export const WORLD_BOSS_DAMAGE_SCALE = 100;
 /** 血量下限。 */
 export const WORLD_BOSS_MIN_HP = 10_000;
 
+/** 第 1 关的血量 = 一轮伤害 × 这个倍数；每往下一关再翻倍（3、6、12、24… 轮）。 */
+export const WORLD_BOSS_ROUNDS_PER_STAGE = 3;
+
 /** 打掉这个比例以上算「击退」（而不是单纯逃走）。 */
 export const WORLD_BOSS_FLED_THRESHOLD = 0.7;
-
-/** 击退时奖池减半。 */
+/** 击退时奖励 ×0.5。 */
 export const WORLD_BOSS_FLED_POOL_FACTOR = 0.5;
 
-/** 参与奖 / 保底份的产量系数（相对该宗门的每小时产出）。 */
-export const WORLD_BOSS_PARTICIPATION_RATE_FACTOR = 0.25;
-export const WORLD_BOSS_KILL_POOL_RATE_FACTOR = 1.5;
-export const WORLD_BOSS_LAST_HIT_RATE_FACTOR = 0.5;
+/** 同一宗门的出手冷却（不限次数之后的唯一节奏约束）。 */
+export const WORLD_BOSS_COOLDOWN_MS = 10_000;
+
+/** 疲劳统计窗口：最近 60 分钟内已出战讨伐的次数。 */
+export const WORLD_BOSS_FATIGUE_WINDOW_MS = 60 * 60 * 1000;
+
+/** 普通受伤持续 30 分钟（沿用 disciples.injured_until）。 */
+export const WORLD_BOSS_INJURY_DURATION_MS = 30 * 60 * 1000;
+
+/** 普通受伤概率 = 15% − (体魄 − 50)/10 × 1.5%，夹在 5%~25%。 */
+export const WORLD_BOSS_INJURY_BASE_RATE = 0.15;
+export const WORLD_BOSS_INJURY_RATE_MIN = 0.05;
+export const WORLD_BOSS_INJURY_RATE_MAX = 0.25;
+export const WORLD_BOSS_INJURY_PHYSIQUE_STEP = 0.015;
+
+/** 重伤概率表：本次是这一小时第 n+1 次出手。 */
+export const WORLD_BOSS_SEVERE_RATE_AT_3 = 0.3;
+export const WORLD_BOSS_SEVERE_RATE_AT_4 = 0.7;
+/** 体魄每高 10 点，30% / 70% 两档下调 3 个百分点。 */
+export const WORLD_BOSS_SEVERE_PHYSIQUE_STEP = 0.03;
 
 /** 保底 = 10 × 宗门等级 × 1000（最小单位）。 */
 export const WORLD_BOSS_REWARD_FLOOR_UNIT = 10 * 1000;
-
-/** 击杀奖池涉及的资源（按资源分别求和，与配置里的资源 id 对应）。 */
+/** 奖励涉及的资源（按资源分别算）。 */
 export const WORLD_BOSS_POOL_RESOURCES = ['spiritStone', 'herb', 'ore'] as const;
-
+/** 基础份的产量系数。 */
+export const WORLD_BOSS_KILL_POOL_RATE_FACTOR = 1.0;
+/** 最后一击奖的产量系数。 */
+export const WORLD_BOSS_LAST_HIT_RATE_FACTOR = 0.5;
 /** 击杀时必发的丹药（每参与宗门）。 */
 export const WORLD_BOSS_KILL_PILL_ID = 'cultivationPill';
-/** 当日伤害最高者的额外丹药。 */
+/** 伤害第 1 名的额外丹药。 */
 export const WORLD_BOSS_TOP_DAMAGE_PILL_ID = 'bodyTemperingPill';
+
+/** 排名倍数：第 1/2/3 名，其余 ×1.0。 */
+const RANK_MULTIPLIERS: readonly number[] = [1.5, 1.25, 1.1];
 
 export interface WorldBossDef {
   index: number;
@@ -67,7 +94,7 @@ export interface WorldBossDef {
   description: string;
 }
 
-/** 五只轮换 Boss，按 dayIndex % 5 取用。 */
+/** 五只轮换 Boss，按 (dayIndex + stage − 1) % 5 取用。 */
 export const WORLD_BOSSES: readonly WorldBossDef[] = [
   {
     index: 0,
@@ -106,14 +133,96 @@ export const WORLD_BOSSES: readonly WorldBossDef[] = [
   },
 ];
 
-/** 等级 1~5 对应的血量系数（1.4 节的表）。 */
-const LEVEL_HP_COEFFICIENTS: readonly number[] = [0.8, 0.9, 1.0, 1.1, 1.2];
+/* ---------- 随机词缀（2.7） ---------- */
 
-/** 中文阶数，与 REALMS 的写法一致（一~五）。 */
-const LEVEL_NAMES: readonly string[] = ['一', '二', '三', '四', '五'];
+export interface WorldBossAffixDef {
+  id: string;
+  name: string;
+  /** 界面文案（保持这么短，不要加长）。 */
+  effect: string;
+  /** 配队提示。 */
+  tip: string;
+  /** 前端「推荐排序属性」。 */
+  sortAttribute: 'attack' | 'defense' | 'speed' | 'luck' | 'physique';
+  /** 提供属性加成的弟子属性列；null = 不给加成（只改概率）。 */
+  attribute: 'attack' | 'defense' | 'speed' | null;
+}
 
-export const WORLD_BOSS_MIN_LEVEL = 1;
-export const WORLD_BOSS_MAX_LEVEL = LEVEL_HP_COEFFICIENTS.length;
+/** 词缀 id 白名单（含「无词缀」，迁移过来的旧行是 'none'）。 */
+export const WORLD_BOSS_AFFIX_NONE = 'none';
+
+export const WORLD_BOSS_AFFIXES: readonly WorldBossAffixDef[] = [
+  {
+    id: 'ironclad',
+    name: '铁甲',
+    effect: '防御越高，伤害越高',
+    tip: '派防御高的弟子',
+    sortAttribute: 'defense',
+    attribute: 'defense',
+  },
+  {
+    id: 'swift',
+    name: '迅捷',
+    effect: '身法越高，伤害越高',
+    tip: '派身法高的弟子',
+    sortAttribute: 'speed',
+    attribute: 'speed',
+  },
+  {
+    id: 'brute',
+    name: '蛮力',
+    effect: '攻击越高，伤害越高',
+    tip: '派攻击高的弟子',
+    sortAttribute: 'attack',
+    attribute: 'attack',
+  },
+  {
+    id: 'eerie',
+    name: '邪祟',
+    effect: '暴击率翻倍',
+    tip: '派幸运高的弟子',
+    sortAttribute: 'luck',
+    attribute: null,
+  },
+  {
+    id: 'berserk',
+    name: '狂暴',
+    effect: '受伤、重伤概率翻倍',
+    tip: '派体魄高的弟子，别贪刀',
+    sortAttribute: 'physique',
+    attribute: null,
+  },
+];
+
+/** 找一个词缀定义；'none' / 脏 id 都返回 undefined（视作无词缀）。 */
+export function findAffix(affixId: string): WorldBossAffixDef | undefined {
+  return WORLD_BOSS_AFFIXES.find((affix) => affix.id === affixId);
+}
+
+/** 词缀显示名（'none' → 「无」）。 */
+export function affixNameOf(affixId: string): string {
+  return findAffix(affixId)?.name ?? '无';
+}
+
+/** 生成关卡时抽一个词缀（随机源注入）。 */
+export function rollAffix(random: () => number): string {
+  const index = Math.min(
+    WORLD_BOSS_AFFIXES.length - 1,
+    Math.max(0, Math.floor(random() * WORLD_BOSS_AFFIXES.length)),
+  );
+  return WORLD_BOSS_AFFIXES[index]!.id;
+}
+
+/** 词缀属性加成：1 + 属性 / 10 × 0.05（属性 100 → ×1.5）；无加成词缀返回 1。 */
+export function affixAttributeMultiplier(
+  affix: WorldBossAffixDef | undefined,
+  attributes: { attack: number; defense: number; speed: number },
+): number {
+  if (affix === undefined || affix.attribute === null) return 1;
+  return 1 + (attributes[affix.attribute] / 10) * 0.05;
+}
+
+/* ---------- 阶段与关卡（2.1、2.2） ---------- */
 
 /** Boss 阶段：未出现 / 讨伐中 / 力竭中 / 已结束。 */
 export type WorldBossPhase = 'before' | 'open' | 'frenzy' | 'closed';
@@ -130,7 +239,7 @@ export function worldBossPhaseOf(now: number): WorldBossPhase {
   return 'open';
 }
 
-/** 可以出手的阶段（力竭期仍能出手，只是伤害更高）。 */
+/** 能不能出手（力竭期仍能出手，只是伤害更高）。 */
 export function isWorldBossAttackable(phase: WorldBossPhase): boolean {
   return phase === 'open' || phase === 'frenzy';
 }
@@ -140,71 +249,34 @@ export function dayIndexUtc8(now: number): number {
   return Math.floor((now + 8 * 3_600_000) / 86_400_000);
 }
 
-/** 当天出现的 Boss 下标。 */
-export function worldBossIndexFor(now: number): number {
-  const index = dayIndexUtc8(now) % WORLD_BOSSES.length;
-  return index < 0 ? index + WORLD_BOSSES.length : index;
+/** 第 stage 关用哪只 Boss：WORLD_BOSSES[(dayIndex + stage − 1) % 5]。 */
+export function bossIndexFor(dayIndex: number, stage: number): number {
+  const raw = (dayIndex + stage - 1) % WORLD_BOSSES.length;
+  return raw < 0 ? raw + WORLD_BOSSES.length : raw;
 }
 
-export function worldBossDefAt(index: number): WorldBossDef {
-  const normalized =
-    ((index % WORLD_BOSSES.length) + WORLD_BOSSES.length) % WORLD_BOSSES.length;
+export function bossDefAt(index: number): WorldBossDef {
+  const normalized = ((index % WORLD_BOSSES.length) + WORLD_BOSSES.length) % WORLD_BOSSES.length;
   return WORLD_BOSSES[normalized]!;
 }
 
-/** 等级夹取到 1~5（脏数据退化为 1）。 */
-export function clampBossLevel(level: number): number {
-  if (!Number.isFinite(level)) return WORLD_BOSS_MIN_LEVEL;
-  return Math.min(WORLD_BOSS_MAX_LEVEL, Math.max(WORLD_BOSS_MIN_LEVEL, Math.floor(level)));
+/** 关卡名（第 3 关）。 */
+export function stageName(stage: number): string {
+  return `第 ${String(stage)} 关`;
 }
 
-/**
- * 当天等级：前一天被击杀则 +1，否则 −1，夹取 1~5；没有前一天记录则为 1。
- */
-export function nextBossLevel(prevLevel: number | null, prevKilled: boolean): number {
-  if (prevLevel === null) return WORLD_BOSS_MIN_LEVEL;
-  return clampBossLevel(clampBossLevel(prevLevel) + (prevKilled ? 1 : -1));
+/** 显示名：第 2 关 · 赤炎火蛟。 */
+export function bossDisplayName(bossIndex: number, stage: number): string {
+  return `${stageName(stage)} · ${bossDefAt(bossIndex).name}`;
 }
 
-/** 血量系数。 */
-export function bossHpCoefficient(level: number): number {
-  return LEVEL_HP_COEFFICIENTS[clampBossLevel(level) - 1]!;
+/** 第 n 关最大血量 = max(10000, 一轮伤害 × 3 × 2^(n−1))。 */
+export function stageMaxHp(roundDamage: number, stage: number): number {
+  const rounds = WORLD_BOSS_ROUNDS_PER_STAGE * 2 ** Math.max(0, stage - 1);
+  return Math.max(WORLD_BOSS_MIN_HP, Math.floor(Math.max(0, roundDamage) * rounds));
 }
 
-/** 奖励加成 = 1 + 0.1 ×（Boss 等级 − 1）。 */
-export function bossRewardMultiplier(level: number): number {
-  return 1 + 0.1 * (clampBossLevel(level) - 1);
-}
-
-/** 显示名带等级：黑风妖王 · 三阶。 */
-export function bossDisplayName(index: number, level: number): string {
-  const def = worldBossDefAt(index);
-  const name = LEVEL_NAMES[clampBossLevel(level) - 1]!;
-  return `${def.name} · ${name}阶`;
-}
-
-/**
- * Boss 血量 = max(10000, floor(Σ 各活跃宗门的理论日伤害 × 血量系数))。
- * `sectTheoreticals` 是**已经算好**的每宗门理论日伤害（不含浮动/暴击/力竭的期望值）。
- */
-export function computeMaxHp(sectTheoreticals: readonly number[], level: number): number {
-  const total = sectTheoreticals.reduce((sum, value) => sum + Math.max(0, value), 0);
-  return Math.max(WORLD_BOSS_MIN_HP, Math.floor(total * bossHpCoefficient(level)));
-}
-
-/** 单宗门理论日伤害（期望值：不计浮动/暴击/力竭，按 1.0 算）。 */
-export function theoreticalDailyDamage(input: {
-  /** 该宗门战力最高的 3 名弟子的 partyCombatPower 之和。 */
-  topPartyPower: number;
-  /** 演武场等级。 */
-  arenaLevel: number;
-  /** 每日出手次数。 */
-  dailyAttacks?: number;
-}): number {
-  const attacks = input.dailyAttacks ?? WORLD_BOSS_DAILY_ATTACKS;
-  const arenaMultiplier = arenaCombatMultiplier(input.arenaLevel);
-  return Math.floor(input.topPartyPower * arenaMultiplier * attacks * WORLD_BOSS_DAMAGE_SCALE);
-}
+/* ---------- 伤害（2.5） ---------- */
 
 /** 演武场加成 = 1 + 演武场等级 × 0.1（复用每级 1000 基点）。 */
 export function arenaCombatMultiplier(arenaLevel: number): number {
@@ -212,29 +284,60 @@ export function arenaCombatMultiplier(arenaLevel: number): number {
 }
 
 /**
+ * 一名弟子的贡献 = 他的战力 × 词缀属性加成。
+ * （战力本身由 realms.ts 的 discipleCombatPower 算好，这里只乘词缀。）
+ */
+export function discipleContribution(
+  power: number,
+  affix: WorldBossAffixDef | undefined,
+  attributes: { attack: number; defense: number; speed: number },
+): number {
+  return power * affixAttributeMultiplier(affix, attributes);
+}
+
+/**
+ * 「一轮伤害」里单个宗门的期望伤害：
+ * 队伍战力 × 演武场加成 × DAMAGE_SCALE（无浮动、无暴击、无词缀、无力竭）。
+ */
+export function expectedPartyDamage(input: {
+  topPartyPower: number;
+  arenaLevel: number;
+}): number {
+  return Math.floor(
+    Math.max(0, input.topPartyPower) * arenaCombatMultiplier(input.arenaLevel) * WORLD_BOSS_DAMAGE_SCALE,
+  );
+}
+
+/**
  * 一次出手的伤害与是否暴击。
  *
- * 伤害 = floor(队伍战力 × 演武场加成 × 浮动 × 暴击倍率 × 力竭倍率 × DAMAGE_SCALE)
- * 浮动 = 0.8~1.2 均匀随机；暴击率 = luck 平均值 / 100 × 20%，暴击倍率 1.5。
+ * 伤害 = floor(队伍基础 × 演武场加成 × 浮动 × 暴击倍率 × 力竭倍率 × DAMAGE_SCALE)
+ * 暴击率 = 出战弟子 luck 平均值 / 100 × 20% ×（「邪祟」词缀时 ×2），最高 100%。
  *
  * 随机源按固定顺序取用：先浮动、后暴击判定（测试可据此注入固定序列）。
  */
 export function rollDamage(input: {
-  partyPower: number;
+  /** 未重伤成员的贡献之和（已含词缀属性加成）。 */
+  partyBase: number;
   arenaLevel: number;
-  /** 出战弟子的 luck 平均值。 */
+  /** 出战弟子（本次派出的全部成员）的 luck 平均值。 */
   avgLuck: number;
   /** 是否处于力竭期（22:00~23:00）。 */
   frenzy: boolean;
+  /** 「邪祟」词缀时传 2（暴击率翻倍）。 */
+  critRateMultiplier?: number;
   random: () => number;
 }): { damage: number; crit: boolean } {
   const fluctuation =
     WORLD_BOSS_FLUCTUATION_MIN +
     input.random() * (WORLD_BOSS_FLUCTUATION_MAX - WORLD_BOSS_FLUCTUATION_MIN);
-  const critRate = (input.avgLuck / 100) * WORLD_BOSS_CRIT_RATE_MAX;
+  const critRate = Math.min(
+    1,
+    (input.avgLuck / 100) * WORLD_BOSS_CRIT_RATE_MAX * (input.critRateMultiplier ?? 1),
+  );
   const crit = input.random() < critRate;
   const damage = Math.floor(
-    input.partyPower *
+    Math.max(0, input.partyBase) *
       arenaCombatMultiplier(input.arenaLevel) *
       fluctuation *
       (crit ? WORLD_BOSS_CRIT_MULTIPLIER : 1) *
@@ -244,63 +347,112 @@ export function rollDamage(input: {
   return { damage, crit };
 }
 
+/* ---------- 疲劳 · 受伤 · 重伤（2.6） ---------- */
+
+/**
+ * 本次出手的重伤概率：按「这一小时第几次出手」取基础概率，
+ * 30% / 70% 两档再按体魄下调，最后「狂暴」词缀 ×2（封顶 100%）。
+ */
+export function severeInjuryChance(
+  fatigueCount: number,
+  physique: number,
+  berserk: boolean,
+): number {
+  if (fatigueCount <= 2) return 0;
+  let rate: number;
+  if (fatigueCount === 3) {
+    rate = WORLD_BOSS_SEVERE_RATE_AT_3;
+  } else if (fatigueCount === 4) {
+    rate = WORLD_BOSS_SEVERE_RATE_AT_4;
+  } else {
+    rate = 1;
+  }
+  // 体魄修正只作用在 30% 与 70% 两档（100% 那档没有下调空间）。
+  if (rate < 1) {
+    rate = Math.max(0, rate - (Math.max(0, physique - 50) / 10) * WORLD_BOSS_SEVERE_PHYSIQUE_STEP);
+  }
+  return berserk ? Math.min(1, rate * 2) : rate;
+}
+
+/** 普通受伤概率：15% − (体魄 − 50)/10 × 1.5%，夹在 5%~25%；「狂暴」×2。 */
+export function normalInjuryChance(physique: number, berserk: boolean): number {
+  const raw =
+    WORLD_BOSS_INJURY_BASE_RATE - ((physique - 50) / 10) * WORLD_BOSS_INJURY_PHYSIQUE_STEP;
+  const clamped = Math.min(
+    WORLD_BOSS_INJURY_RATE_MAX,
+    Math.max(WORLD_BOSS_INJURY_RATE_MIN, raw),
+  );
+  return berserk ? Math.min(1, clamped * 2) : clamped;
+}
+
+/**
+ * 单名弟子的判定结果：先判重伤，未重伤再判受伤。
+ * 随机源按固定顺序取用：先重伤、再受伤（重伤时不会取第二个随机数）。
+ */
+export function rollOutcome(input: {
+  /** 该弟子最近 60 分钟内已出战讨伐的次数（不含本次）。 */
+  fatigueCount: number;
+  physique: number;
+  /** 当前关卡词缀是否「狂暴」。 */
+  berserk: boolean;
+  random: () => number;
+}): { severe: boolean; injured: boolean } {
+  const severeRate = severeInjuryChance(input.fatigueCount, input.physique, input.berserk);
+  if (input.random() < severeRate) {
+    return { severe: true, injured: false };
+  }
+  const injured = input.random() < normalInjuryChance(input.physique, input.berserk);
+  return { severe: false, injured };
+}
+
+/* ---------- 奖励（2.8） ---------- */
+
 /** 保底(L) = 10 × 宗门等级 × 1000（最小单位）。 */
 export function rewardFloor(sectLevel: number): number {
   return WORLD_BOSS_REWARD_FLOOR_UNIT * Math.max(1, Math.floor(sectLevel));
 }
 
-/** 参与奖（每次出手立即发）：灵石 max(rate×0.25, 保底) × 加成。 */
-export function participationReward(
-  rateStone: number,
-  sectLevel: number,
-  bossLevel: number,
-): number {
-  const base = Math.max(
-    rateStone * WORLD_BOSS_PARTICIPATION_RATE_FACTOR,
-    rewardFloor(sectLevel),
-  );
-  return Math.floor(base * bossRewardMultiplier(bossLevel));
+/** 关卡系数 = 1 + 0.2 × (关卡 − 1)。 */
+export function stageRewardMultiplier(stage: number): number {
+  return 1 + 0.2 * (Math.max(1, Math.floor(stage)) - 1);
 }
 
-/** 最后一击奖：灵石 max(rate×0.5, 保底) × 加成。 */
-export function lastHitReward(rateStone: number, sectLevel: number, bossLevel: number): number {
-  const base = Math.max(rateStone * WORLD_BOSS_LAST_HIT_RATE_FACTOR, rewardFloor(sectLevel));
-  return Math.floor(base * bossRewardMultiplier(bossLevel));
+/** 排名倍数：第 1 名 1.5、第 2 名 1.25、第 3 名 1.1，其余 1.0。 */
+export function rankRewardMultiplier(rank: number): number {
+  return RANK_MULTIPLIERS[Math.floor(rank) - 1] ?? 1;
 }
 
 /**
- * 击杀奖池里某宗门的「基础份」：灵石/药材/矿石各 max(rate(r)×1.5, 保底) × 加成。
- * `rates` 缺项按 0 算（该宗门没有这项产出时只吃保底）。
+ * 一个参与宗门在该关的基础资源奖励（灵石 / 药材 / 矿石分别算）：
+ *   max(该宗门产出(r) × 1.0, 保底(L)) × 关卡系数 × 排名倍数 ×（击退时 ×0.5）
+ * 「击退」= 23:00 逃走时血量已被打掉 ≥70%。
  */
-export function killPoolBaseShare(
-  rates: Readonly<Record<string, number>>,
-  sectLevel: number,
-  bossLevel: number,
-): Record<string, number> {
-  const share: Record<string, number> = {};
+export function stageResourceRewards(input: {
+  rates: Readonly<Record<string, number>>;
+  sectLevel: number;
+  stage: number;
+  /** 1 = 伤害最高的宗门（并列取先达到者）。 */
+  rank: number;
+  /** 击退（而不是单纯逃走）。 */
+  repelled?: boolean;
+}): Record<string, number> {
+  const factor =
+    stageRewardMultiplier(input.stage) *
+    rankRewardMultiplier(input.rank) *
+    (input.repelled === true ? WORLD_BOSS_FLED_POOL_FACTOR : 1);
+  const rewards: Record<string, number> = {};
   for (const resourceId of WORLD_BOSS_POOL_RESOURCES) {
-    const rate = rates[resourceId] ?? 0;
-    const base = Math.max(rate * WORLD_BOSS_KILL_POOL_RATE_FACTOR, rewardFloor(sectLevel));
-    share[resourceId] = Math.floor(base * bossRewardMultiplier(bossLevel));
+    const rate = input.rates[resourceId] ?? 0;
+    const base = Math.max(rate * WORLD_BOSS_KILL_POOL_RATE_FACTOR, rewardFloor(input.sectLevel));
+    rewards[resourceId] = Math.floor(base * factor);
   }
-  return share;
+  return rewards;
 }
 
-/** 击退时奖池减半。 */
-export function halvePool(pool: number): number {
-  return Math.floor(pool * WORLD_BOSS_FLED_POOL_FACTOR);
-}
-
-/**
- * 按伤害占比分奖池（向下取整）：
- * 每个宗门分得 floor(奖池 × 该宗门伤害 / 总伤害)，总和天然不超过奖池。
- */
-export function splitPool(pool: number, damages: readonly number[]): number[] {
-  const total = damages.reduce((sum, damage) => sum + Math.max(0, damage), 0);
-  if (total <= 0 || pool <= 0) {
-    return damages.map(() => 0);
-  }
-  return damages.map((damage) => Math.floor((pool * Math.max(0, damage)) / total));
+/** 最后一击奖（灵石）：max(产出(灵石) × 0.5, 保底(L)) × 关卡系数。 */
+export function lastHitReward(rateStone: number, sectLevel: number, stage: number): number {
+  const base = Math.max(rateStone * WORLD_BOSS_LAST_HIT_RATE_FACTOR, rewardFloor(sectLevel));
+  return Math.floor(base * stageRewardMultiplier(stage));
 }
 
 /** 已击退？打掉的血量比例达到阈值（含）。 */

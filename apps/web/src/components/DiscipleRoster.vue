@@ -22,6 +22,7 @@ import {
   isFilterActive,
   journeyBadge,
   realmOptions,
+  severeInjuryStatusLabel,
   stageOptions,
 } from '../utils/discipleFilter';
 import DiscipleAvatar from './DiscipleAvatar.vue';
@@ -86,7 +87,7 @@ const activeMoreCount = computed(() =>
 );
 
 /**
- * 行内状态标签：历练状态优先（在外 / 待领取），其次疗伤，最后当前岗位。
+ * 行内状态标签：历练状态优先（在外 / 待领取），其次重伤 / 疗伤，最后当前岗位。
  * key 直接进 `status-*` / `is-*` 类名，所以历练用 `journey` / `journey-ready` 两个新类。
  */
 interface RosterStatus {
@@ -120,10 +121,13 @@ const rows = computed<RosterRow[]>(() =>
     const status = discipleStatus(disciple, props.serverNowMs);
     const badge = journeyBadge(disciple.journey, props.serverNowMs);
     const journeyReady = disciple.journey.status === 'ready';
-    // 卡片只显示当前状态：疗伤优先，其余统一显示当前岗位。
+    // 卡片只显示当前状态：重伤 > 疗伤 > 当前岗位（卧床期间什么都不产出，要最先被看到）。
     // 可破境由满环与头像按钮表达，不再重复占用状态标签。
-    const rosterStatus: RosterStatus =
-      status.key === 'injured' ? status : { key: 'assignment', label: disciple.assignmentName };
+    let rosterStatus: RosterStatus = { key: 'assignment', label: disciple.assignmentName };
+    if (status.key === 'injured') rosterStatus = status;
+    // 重伤剩余时间按 props.serverNowMs（服务器时间口径）倒算；key 会进 `is-severeInjured` 类名。
+    const severeLabel = severeInjuryStatusLabel(disciple, props.serverNowMs);
+    if (severeLabel !== null) rosterStatus = { key: 'severeInjured', label: severeLabel };
     return {
       disciple,
       status,

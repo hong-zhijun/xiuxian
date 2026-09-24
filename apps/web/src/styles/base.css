@@ -1947,9 +1947,13 @@ ul {
   background: rgba(6, 20, 16, 0.43);
 }
 
-/* 行左侧窄边只用于疗伤警示；可破境由满修为环表达。 */
+/* 行左侧窄边用于疗伤 / 重伤警示；可破境由满修为环表达。重伤（世界 Boss 打伤）边更实一点。 */
 .disciple-row.status-injured {
   border-left: 2px solid rgba(184, 81, 66, 0.55);
+}
+
+.disciple-row.status-severeInjured {
+  border-left: 2px solid rgba(184, 81, 66, 0.85);
 }
 
 @keyframes disciple-row-in {
@@ -2026,6 +2030,13 @@ ul {
   border-color: rgba(224, 123, 104, 0.45);
   color: var(--red-bright);
   background: rgba(184, 81, 66, 0.12);
+}
+
+/* 重伤卧床：与疗伤同一红色系，但标签上带剩余静养时间。 */
+.disciple-status.is-severeInjured {
+  border-color: rgba(224, 123, 104, 0.6);
+  color: var(--red-bright);
+  background: rgba(184, 81, 66, 0.16);
 }
 
 .disciple-status.is-capped {

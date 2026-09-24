@@ -48,6 +48,8 @@ export interface DiscipleView {
   assignment: string;
   assignmentName: string;
   injuredUntil: string | null;
+  /** 重伤卧床（世界 Boss 造成，3 天）：ISO 字符串，格式与 injuredUntil 相同；null = 未重伤。 */
+  severeInjuredUntil: string | null;
   canBreakthrough: boolean;
   /** 除灵气外的破境条件都已满足（批量破境按这个挑人，灵气整批合计后再判断）。 */
   breakthroughReadyExceptEnergy: boolean;
@@ -1492,16 +1494,31 @@ export async function shopSellPill(
   );
 }
 
-/* ---------- 0025 世界 Boss（讨伐） ---------- */
+/* ---------- 0025/0027 世界 Boss（讨伐，二期） ---------- */
 
 export interface WorldBossDefView {
   index: number;
   name: string;
-  /** 带阶数的显示名（如「黑风妖王 · 二阶」）。 */
+  /** 带关卡的显示名（如「第 2 关 · 赤炎火蛟」）。 */
   displayName: string;
   sealCharacter: string;
   color: string;
   description: string;
+}
+
+/** 词缀推荐排序属性（与 DisciplePicker 的 extraSort 同一个联合类型）。 */
+export type WorldBossSortAttribute = 'attack' | 'defense' | 'speed' | 'luck' | 'physique';
+
+/** 本关随机词缀。 */
+export interface WorldBossAffixView {
+  id: string;
+  name: string;
+  /** 效果文案（一行，保持简短）。 */
+  effect: string;
+  /** 配队提示。 */
+  tip: string;
+  /** 推荐排序属性（追加到选人组件的排序按钮里）。 */
+  sortAttribute: WorldBossSortAttribute;
 }
 
 export interface WorldBossRankView {
@@ -1518,6 +1535,10 @@ export interface WorldBossHitView {
   sectId: string;
   sectName: string;
   discipleNames: string[];
+  /** 本次受伤（普通受伤，30 分钟）的弟子名。 */
+  injuredNames: string[];
+  /** 本次被打成重伤（静养 3 天）的弟子名。 */
+  severeNames: string[];
   damage: number;
   isCrit: boolean;
   isLastHit: boolean;
@@ -1530,8 +1551,10 @@ export type WorldBossPhase = 'before' | 'open' | 'frenzy' | 'closed';
 export interface WorldBossCurrentView {
   id: string;
   dayKey: string;
-  level: number;
+  /** 第几关（每天从 1 开始，连战递增）。 */
+  stage: number;
   def: WorldBossDefView;
+  affix: WorldBossAffixView;
   maxHp: number;
   hp: number;
   status: 'active' | 'killed' | 'fled';
@@ -1541,15 +1564,27 @@ export interface WorldBossCurrentView {
   endedAt: number | null;
 }
 
+/** 一次出手里某名弟子的判定结果。 */
+export interface WorldBossMemberOutcomeView {
+  discipleId: string;
+  discipleName: string;
+  outcome: 'normal' | 'injured' | 'severe';
+}
+
 export interface WorldBossView {
   boss: WorldBossCurrentView | null;
   phase: WorldBossPhase;
-  /** 今天的出现时间（毫秒），未出现时用于「12:00 降临」提示。 */
+  /** 今天的出现时间（毫秒），未出现时用于「08:00 降临」提示。 */
   opensAt: number;
   remainingSeconds: number;
-  dailyLimit: number;
-  usedToday: number;
-  remaining: number;
+  /** 今日已连斩 N 只。 */
+  killedToday: number;
+  /** 史上最高「一天连斩 M 只」。 */
+  bestStage: number;
+  /** 出手冷却剩余秒数（0 = 可以出手）。 */
+  cooldownSeconds: number;
+  /** 本宗门弟子疲劳表：弟子 id → 最近 60 分钟的出战次数。 */
+  fatigue: Record<string, number>;
   attackable: boolean;
   ranks: WorldBossRankView[];
   hits: WorldBossHitView[];
@@ -1564,7 +1599,10 @@ export interface WorldBossAttackResultView {
   lastHit: boolean;
   bossHp: number;
   bossMaxHp: number;
-  participationReward: string;
+  /** 击杀后立刻开出的下一关关卡号；没击杀为 null。 */
+  nextStage: number | null;
+  /** 本次每名弟子的判定结果（正常 / 受伤 / 重伤）。 */
+  members: WorldBossMemberOutcomeView[];
 }
 
 export async function fetchWorldBoss(): Promise<{ state: SectStateView; boss: WorldBossView }> {

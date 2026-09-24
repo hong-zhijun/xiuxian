@@ -2,16 +2,20 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue';
 import type { CSSProperties } from 'vue';
 
-import type { SectStateView, WorldBossHitView, WorldBossView } from '../api/game';
+import type {
+  SectStateView,
+  WorldBossHitView,
+  WorldBossMemberOutcomeView,
+  WorldBossView,
+} from '../api/game';
 import { attackWorldBoss, fetchWorldBoss } from '../api/game';
-import { formatAmount } from '../utils/format';
 import DisciplePicker from './DisciplePicker.vue';
 
 /**
- * 0025 世界 Boss（讨伐）面板（计划 4.3）。
+ * 0027 世界 Boss（讨伐，二期）面板（计划 §阶段三）。
  *
- * 只在「打开时 / 出手后 / 点刷新」请求接口，**不做定时轮询**（D1 免费额度很紧）；
- * 出手成功后就地播放抖动与飘字动画，并把新的 state 交给上层（与灵兽竞逐同一走向）。
+ * 只在「打开时 / 出手后 / 点刷新」请求接口，**不做定时轮询**；
+ * 「距结束」与「出手冷却」都是拿到数据后由前端计时器自己走（每秒递减，不再发请求）。
  */
 const props = defineProps<{
   state: SectStateView;
@@ -28,13 +32,20 @@ const loading = ref(false);
 const submitting = ref(false);
 const selected = ref<string[]>([]);
 const showRules = ref(false);
-/** 伤害榜默认只露前 3 名，其余点「显示全部」展开。 */
-const RANK_PREVIEW_COUNT = 3;
+/** 词缀气泡：点标签展开「一行效果 + 一行配队提示」。 */
+const showAffixTip = ref(false);
+/** 伤害榜：默认只显示前 3 名。 */
 const showAllRanks = ref(false);
-const visibleRanks = computed(() => {
-  const ranks = panel.value?.ranks ?? [];
-  return showAllRanks.value ? ranks : ranks.slice(0, RANK_PREVIEW_COUNT);
-});
+/** 出手记录：默认折叠。 */
+const showHits = ref(false);
+/** 最近一次出手的逐人判定（结果区常驻到下次出手 / 刷新）。 */
+const lastOutcomes = ref<WorldBossMemberOutcomeView[]>([]);
+const lastAttack = ref<{
+  actualDamage: number;
+  crit: boolean;
+  lastHit: boolean;
+  nextStage: number | null;
+} | null>(null);
 
 /** 被击中：`hitKey` 每次 +1 让抖动的 CSS 动画重新播放，飘字 0.9 秒后消失。 */
 const hitKey = ref(0);
@@ -54,34 +65,25 @@ const sealStyle = computed<CSSProperties>(() => ({
   '--boss-color': boss.value?.def.color ?? '#7a8c6e',
 }));
 
-/**
- * 「距结束」倒计时：打开面板 / 出手后拿到剩余秒数，之后由前端计时器自己走，
- * **不再发任何请求**（倒计时不是轮询）。
- *
- * 与 SpiritBeastRaceDialog.vue 的 startCountdown / stopCountdown 同一写法；
- * 唯一区别是把「剩余秒数」换算成绝对截止时刻再每秒回算 —— 后台标签页的 setInterval
- * 会被节流，纯递减会越走越慢，回算则回到前台立刻就是正确值。
- */
+/* ---------- 两个本地倒计时（距结束 / 出手冷却） ---------- */
+
 const remaining = ref(0);
-let countdownDeadlineMs = 0;
+const cooldown = ref(0);
+let closesAtMs = 0;
+let cooldownAtMs = 0;
 let countdownTimer: number | undefined;
 
-/** 拿到新的剩余秒数：以此为截止点重启倒计时。 */
-function applyRemainingSeconds(seconds: number): void {
-  remaining.value = Math.max(0, Math.floor(seconds));
-  countdownDeadlineMs = Date.now() + remaining.value * 1000;
-  startCountdown();
-}
-
 function tickCountdown(): void {
-  remaining.value = Math.max(0, Math.ceil((countdownDeadlineMs - Date.now()) / 1000));
-  if (remaining.value <= 0) stopCountdown();
+  const now = Date.now();
+  remaining.value = Math.max(0, Math.ceil((closesAtMs - now) / 1000));
+  cooldown.value = Math.max(0, Math.ceil((cooldownAtMs - now) / 1000));
+  if (remaining.value <= 0 && cooldown.value <= 0) stopCountdown();
 }
 
 function startCountdown(): void {
   stopCountdown();
   tickCountdown();
-  if (remaining.value <= 0) return;
+  if (remaining.value <= 0 && cooldown.value <= 0) return;
   countdownTimer = window.setInterval(tickCountdown, 1000);
 }
 
@@ -92,11 +94,33 @@ function stopCountdown(): void {
   }
 }
 
+/** 拿到面板数据：把「剩余秒数 / 冷却秒数」换算成绝对截止时刻再每秒回算（后台标签页节流也不会走偏）。 */
+function applyPanel(data: WorldBossView): void {
+  panel.value = data;
+  const now = Date.now();
+  closesAtMs = now + data.remainingSeconds * 1000;
+  cooldownAtMs = now + data.cooldownSeconds * 1000;
+  startCountdown();
+}
+
 function formatCountdown(seconds: number): string {
   const m = Math.floor(seconds / 60);
   const s = seconds % 60;
   return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
 }
+
+/* ---------- 展示 ---------- */
+
+/** 词缀标签颜色（狂暴用醒目的红）。 */
+const AFFIX_COLORS: Record<string, string> = {
+  ironclad: '#8fa79b',
+  swift: '#6fb6d9',
+  brute: '#d98a4a',
+  eerie: '#a98ad9',
+  berserk: '#d9534f',
+};
+
+const affixColor = computed(() => AFFIX_COLORS[boss.value?.affix.id ?? ''] ?? '#8fa79b');
 
 const statusText = computed(() => {
   const current = boss.value;
@@ -105,12 +129,12 @@ const statusText = computed(() => {
       ? '今日已结束，明日 08:00 再临'
       : '未出现：08:00 降临';
   }
-  if (current.status === 'killed') return '已击杀';
+  if (current.status === 'killed') {
+    return current.killerSectName === null ? '已击杀' : `已击杀（${current.killerSectName} 最后一击）`;
+  }
   if (current.status === 'fled') {
     return current.fledOutcome === 'repelled' ? '已击退' : '已逃走';
   }
-  // 本地倒计时归零 = 讨伐时段已过（23:00）：服务端的下一次 Cron 已经收口，
-  // 让玩家点刷新取最新状态，而不是继续显示「讨伐中」。
   if (current.phase === 'closed' || remaining.value <= 0) return '已结束，点击刷新';
   return current.phase === 'frenzy' ? '力竭中 ×1.5' : '讨伐中';
 });
@@ -119,10 +143,16 @@ const canAttack = computed(
   () =>
     (panel.value?.attackable ?? false) &&
     remaining.value > 0 &&
+    cooldown.value === 0 &&
     selected.value.length > 0 &&
     !submitting.value &&
     props.busy !== true,
 );
+
+const attackButtonText = computed(() => {
+  if (cooldown.value > 0) return `冷却 ${String(cooldown.value)}s`;
+  return `出手讨伐（已选 ${String(selected.value.length)} 人）`;
+});
 
 /** 伤害是换算前的原始数字（不走 formatAmount 的千分位换算）。 */
 function formatDamage(value: number): string {
@@ -130,7 +160,7 @@ function formatDamage(value: number): string {
 }
 
 /**
- * 时刻一律按 **UTC+8** 渲染（业务日就是 UTC+8，见 constants.dateKeyUtc8）：
+ * 时刻一律按 **UTC+8** 渲染（业务日就是 UTC+8）：
  * 不用浏览器本地时区，否则跨时区的玩家看到的出手时刻会与业务日对不上。
  */
 function timeUtc8(ms: number): string {
@@ -140,22 +170,29 @@ function timeUtc8(ms: number): string {
   return `${hh}:${mm}`;
 }
 
-/** 出手记录一行：`21:32  乾坤门 · 白折月、墨明烛 联手打出 9,870 【暴击】【最后一击】`。 */
+/** 出手记录一行：`21:32  乾坤门 · 白折月、墨明烛 联手打出 9,870 【暴击】【受伤：墨明烛】`。 */
 function hitLine(entry: WorldBossHitView): string {
   const names = entry.discipleNames.join('、');
   const verb = entry.discipleNames.length > 1 ? '联手打出' : '打出';
+  const allSevere = entry.damage === 0 && entry.severeNames.length === entry.discipleNames.length;
+  const body = allSevere ? '全员重伤，未造成伤害' : `${verb} ${formatDamage(entry.damage)}`;
   const tags = `${entry.isCrit ? '【暴击】' : ''}${entry.isLastHit ? '【最后一击】' : ''}`;
-  return `${timeUtc8(entry.createdAt)}  ${entry.sectName} · ${names} ${verb} ${formatDamage(entry.damage)} ${tags}`.trim();
+  const harm = `${entry.injuredNames.length > 0 ? `【受伤：${entry.injuredNames.join('、')}】` : ''}${entry.severeNames.length > 0 ? `【重伤：${entry.severeNames.join('、')}】` : ''}`;
+  return `${timeUtc8(entry.createdAt)}  ${entry.sectName} · ${names} ${body} ${tags}${harm}`.trim();
 }
+
+const visibleRanks = computed(() => {
+  const ranks = panel.value?.ranks ?? [];
+  return showAllRanks.value ? ranks : ranks.slice(0, 3);
+});
 
 async function refresh(): Promise<void> {
   if (loading.value) return;
   loading.value = true;
   try {
     const data = await fetchWorldBoss();
-    panel.value = data.boss;
     emit('state-update', data.state);
-    applyRemainingSeconds(data.boss.remainingSeconds);
+    applyPanel(data.boss);
   } catch (error) {
     emit('notify', 'warning', '讨伐', error instanceof Error ? error.message : '面板加载失败');
   } finally {
@@ -168,9 +205,8 @@ async function submit(): Promise<void> {
   submitting.value = true;
   try {
     const data = await attackWorldBoss(selected.value);
-    panel.value = data.boss;
     emit('state-update', data.state);
-    applyRemainingSeconds(data.boss.remainingSeconds);
+    applyPanel(data.boss);
 
     hitKey.value += 1;
     hit.value = { damage: data.result.actualDamage, crit: data.result.crit };
@@ -178,14 +214,26 @@ async function submit(): Promise<void> {
     hitTimer = window.setTimeout(() => {
       hit.value = null;
     }, 900);
+
+    lastOutcomes.value = data.result.members;
+    lastAttack.value = {
+      actualDamage: data.result.actualDamage,
+      crit: data.result.crit,
+      lastHit: data.result.lastHit,
+      nextStage: data.result.nextStage,
+    };
     selected.value = [];
 
     const parts = [`造成 ${formatDamage(data.result.actualDamage)} 伤害`];
     if (data.result.crit) parts.push('暴击');
     if (data.result.frenzy) parts.push('力竭 ×1.5');
     if (data.result.lastHit) parts.push('最后一击');
-    parts.push(`参与奖 灵石 ${formatAmount(data.result.participationReward)}`);
-    emit('notify', 'success', '讨伐', parts.join(' · '));
+    const harmed = data.result.members.filter((member) => member.outcome !== 'normal');
+    for (const member of harmed) {
+      parts.push(`${member.discipleName}${member.outcome === 'severe' ? '重伤' : '受伤'}`);
+    }
+    if (data.result.nextStage !== null) parts.push(`第 ${String(data.result.nextStage)} 关已降临`);
+    emit('notify', data.result.members.every((member) => member.outcome === 'severe') ? 'warning' : 'success', '讨伐', parts.join(' · '));
   } catch (error) {
     emit('notify', 'warning', '讨伐', error instanceof Error ? error.message : '出手失败，请稍后再试');
   } finally {
@@ -193,43 +241,50 @@ async function submit(): Promise<void> {
   }
 }
 
+/** 点了别处就收掉词缀气泡。 */
+function onDocumentClick(): void {
+  showAffixTip.value = false;
+}
+
 onMounted(() => {
-  // 打开面板取一次数（剩余秒数由 applyRemainingSeconds 启动本地倒计时）。
   void refresh();
+  document.addEventListener('click', onDocumentClick);
 });
 
 onUnmounted(() => {
   stopCountdown();
+  document.removeEventListener('click', onDocumentClick);
   if (hitTimer !== null) window.clearTimeout(hitTimer);
 });
 
 const RULES_TEXT = `讨伐 · 玩法说明
 
-时间：每日 08:00 妖王降临，08:00–23:00 可出手，23:00 未击杀即逃走。
-力竭：22:00–23:00 妖王力竭，受到的伤害 ×1.5。
-次数：每个宗门每日 3 次（不占赌坊次数），每次派 1~3 名弟子。
-弟子：在外历练或正在疗伤的弟子不能出战；出手不会让弟子受伤，也不占用弟子。
-伤害：队伍战力 × 演武场加成 × 0.8~1.2 浮动 × 暴击（1.5 倍）× 力竭（1.5 倍）。
-奖励：
-· 参与奖：每次出手立即发放灵石（按本宗产出计算，带保底）。
-· 击杀：全服伤害榜上的每个参与宗门按伤害占比分奖池（灵石/药材/矿石），
-  并各得聚气丹 ×1；伤害最高的宗门额外得淬体丹 ×1；最后一击的宗门另有灵石。
-· 击退：23:00 逃走时血量已被打掉 70% 以上 —— 奖池规则相同但减半，无丹药。
-· 单纯逃走（不足 70%）：只保留已经发过的参与奖。`;
-
-const levelName = (level: number): string =>
-  ['一', '二', '三', '四', '五'][level - 1] ?? String(level);
-
-const dayKeyText = computed(() => boss.value?.dayKey ?? '');
+连战：每天 08:00 第 1 关降临，打死立刻出下一关（第 n 关血量 = 一轮伤害 × 3 × 2 的 n−1 次方）；
+      23:00 当前关逃走，血量被打掉 70% 以上记为「击退」。
+出手：不限次数，但同一宗门每 10 秒只能出手一次；每次派 1~3 名弟子。
+弟子：在外历练 / 疗伤中 / 重伤卧床的弟子不能出战。
+受伤：概率 = 15% −（体魄 − 50）/10 × 1.5%，夹在 5%~25%；受伤后疗伤 30 分钟，回春丹可治。
+重伤：本小时第 4 次出手 30%、第 5 次 70%、第 6 次起必定重伤（体魄每高 10 点让前两档下调 3 个百分点）；
+      被打成重伤要静养 3 天 —— 期间不产出、不修炼，转岗/破境/服丹/历练/秘境/挑战/论道/讨伐全都不行，丹药无效；
+      被判重伤的那一刀不计伤害。
+词缀：每关随机一个 ——
+      铁甲：防御越高，伤害越高（派防御高的弟子）
+      迅捷：身法越高，伤害越高（派身法高的弟子）
+      蛮力：攻击越高，伤害越高（派攻击高的弟子）
+      邪祟：暴击率翻倍（派幸运高的弟子）
+      狂暴：受伤、重伤概率翻倍（派体魄高的弟子，别贪刀）
+奖励：每关单独结算 —— 参与宗门各按自己的产出拿 灵石/药材/矿石（伤害第 1/2/3 名额外 ×1.5/1.25/1.1），
+      关卡越高系数越高（第 n 关 ×(1 + 0.2 × (n−1))）；
+      击杀时每个参与宗门再得聚气丹 ×1、伤害第 1 名得淬体丹 ×1、最后一击另有灵石；
+      击退时资源减半、没有丹药与最后一击；不足 70% 逃走则什么也不发。`;
 </script>
 
 <template>
   <section class="boss-panel" aria-labelledby="world-boss-title">
     <div class="boss-head">
       <h3 id="world-boss-title" class="boss-title">
-        讨伐
-        <span v-if="dayKeyText" class="boss-day">{{ dayKeyText }}</span>
-        <span v-if="boss" class="boss-level">{{ levelName(boss.level) }}阶</span>
+        <span>{{ boss?.def.displayName ?? '讨伐' }}</span>
+        <span v-if="panel" class="boss-day">{{ panel.boss?.dayKey ?? '' }}</span>
       </h3>
       <div class="boss-head-actions">
         <span v-if="panel && remaining > 0" class="boss-countdown">
@@ -249,22 +304,32 @@ const dayKeyText = computed(() => boss.value?.dayKey ?? '');
     </div>
 
     <template v-else>
-      <!-- 史上最强一击（常驻） -->
+      <!-- 连战战绩 + 史上最强一击（常驻） -->
       <p class="boss-record">
-        <span class="boss-record-label">史上最强一击</span>
+        <span class="boss-record-label">今日已连斩</span>
+        <strong class="boss-record-who">{{ panel?.killedToday ?? 0 }} 只</strong>
+        <span class="boss-record-label">史上最高</span>
+        <strong class="boss-record-who">{{ panel?.bestStage ?? 0 }} 只 / 天</strong>
+        <span class="boss-record-label boss-record-sep">史上最强一击</span>
         <template v-if="panel?.topHit">
           <strong class="boss-record-who">
             {{ panel.topHit.sectName }} · {{ panel.topHit.discipleNames.join('、') }}
           </strong>
           <span class="boss-record-damage">{{ formatDamage(panel.topHit.damage) }}</span>
         </template>
-        <span v-else class="boss-record-empty">暂无记录</span>
+        <span v-else class="boss-record-empty">暂无</span>
       </p>
 
       <!-- Boss 区 -->
       <div class="boss-stage">
         <div class="boss-seal-wrap">
-          <svg class="boss-seal" :class="{ 'is-hit': hit !== null }" :style="sealStyle" viewBox="0 0 120 120" aria-hidden="true">
+          <svg
+            class="boss-seal"
+            :class="{ 'is-hit': hit !== null }"
+            :style="sealStyle"
+            viewBox="0 0 120 120"
+            aria-hidden="true"
+          >
             <circle class="boss-seal-ring" cx="60" cy="60" r="54" />
             <circle class="boss-seal-face" cx="60" cy="60" r="44" />
             <text class="boss-seal-text" x="60" y="62" text-anchor="middle" dominant-baseline="middle">
@@ -277,9 +342,28 @@ const dayKeyText = computed(() => boss.value?.dayKey ?? '');
         </div>
 
         <div class="boss-info">
-          <p class="boss-name">{{ boss?.def.displayName ?? '妖王未现' }}</p>
+          <p class="boss-name">
+            <span>{{ boss?.def.displayName ?? '妖王未现' }}</span>
+            <span
+              v-if="boss && boss.affix.id !== 'none'"
+              class="boss-affix"
+              :style="{ borderColor: affixColor, color: affixColor }"
+              role="button"
+              tabindex="0"
+              :aria-expanded="showAffixTip"
+              @click.stop="showAffixTip = !showAffixTip"
+              @keydown.enter.stop="showAffixTip = !showAffixTip"
+            >
+              {{ boss.affix.name }}
+            </span>
+          </p>
+          <p v-if="boss && showAffixTip" class="boss-affix-tip" :style="{ borderColor: affixColor }">
+            {{ boss.affix.effect }}
+            <br />
+            {{ boss.affix.tip }}
+          </p>
           <p class="boss-desc">
-            {{ boss?.def.description ?? '每日 08:00 妖王降临黑风岭外，全服共讨之。' }}
+            {{ boss?.def.description ?? '每日 08:00 妖王降临，全服共讨之。' }}
           </p>
           <p class="boss-status" :class="{ 'is-down': boss !== null && boss.status !== 'active' }">
             {{ statusText }}
@@ -302,71 +386,97 @@ const dayKeyText = computed(() => boss.value?.dayKey ?? '');
         </div>
       </div>
 
+      <!-- 出手结果：本次受伤 / 重伤名单 -->
+      <div v-if="lastAttack !== null" class="boss-outcome">
+        <p class="boss-outcome-line">
+          本次出手：{{ formatDamage(lastAttack.actualDamage) }} 伤害
+          <span v-if="lastAttack.crit">· 暴击</span>
+          <span v-if="lastAttack.lastHit">· 最后一击</span>
+          <span v-if="lastAttack.nextStage !== null">· 第 {{ lastAttack.nextStage }} 关已降临</span>
+        </p>
+        <p v-if="lastOutcomes.some((member) => member.outcome !== 'normal')" class="boss-outcome-line">
+          <span
+            v-for="member in lastOutcomes.filter((item) => item.outcome !== 'normal')"
+            :key="member.discipleId"
+            class="boss-outcome-member"
+            :class="{ 'is-severe': member.outcome === 'severe' }"
+          >
+            {{ member.discipleName }}{{ member.outcome === 'severe' ? '重伤' : '受伤' }}
+          </span>
+        </p>
+        <p v-else class="boss-outcome-line is-quiet">门下弟子均无大碍。</p>
+      </div>
+
       <!-- 出手区 -->
       <DisciplePicker
         v-model:selected="selected"
         :disciples="state.disciples"
         :min="1"
         :max="3"
-        sort="power"
         :busy="submitting || busy === true"
+        sort="power"
         title="选择出战弟子"
+        :fatigue="panel?.fatigue"
+        :extra-sort="boss?.affix.sortAttribute"
       />
 
       <button class="boss-attack-button" type="button" :disabled="!canAttack" @click="submit">
         <span v-if="submitting">讨伐中…</span>
-        <span v-else>
-          出手讨伐（今日剩余 {{ panel?.remaining ?? 0 }}/{{ panel?.dailyLimit ?? 3 }} 次）
-        </span>
+        <span v-else>{{ attackButtonText }}</span>
       </button>
 
-      <!-- 今日伤害榜 -->
+      <!-- 本关伤害榜 -->
       <section class="boss-section">
-        <h4 class="boss-section-title">今日伤害榜</h4>
-        <p v-if="panel === null || panel.ranks.length === 0" class="boss-empty">今日还没有人出手。</p>
-        <ul v-else class="boss-ranks">
-          <li
-            v-for="(rank, index) in visibleRanks"
-            :key="rank.sectId"
-            class="boss-rank"
-            :class="{ 'is-me': rank.isMe }"
+        <h4 class="boss-section-title">本关伤害榜</h4>
+        <p v-if="panel === null || panel.ranks.length === 0" class="boss-empty">还没有人出手。</p>
+        <template v-else>
+          <ul class="boss-ranks">
+            <li
+              v-for="(rank, index) in visibleRanks"
+              :key="rank.sectId"
+              class="boss-rank"
+              :class="{ 'is-me': rank.isMe }"
+            >
+              <span class="boss-rank-no">{{ index + 1 }}</span>
+              <strong class="boss-rank-name">{{ rank.sectName }}</strong>
+              <span class="boss-rank-damage">{{ formatDamage(rank.damage) }}</span>
+              <span class="boss-rank-attempts">{{ rank.attempts }} 次</span>
+              <span v-if="rank.isTopDamage" class="boss-tag">最高伤害</span>
+              <span v-if="rank.isLastHit" class="boss-tag">最后一击</span>
+            </li>
+          </ul>
+          <button
+            v-if="panel.ranks.length > 3"
+            class="boss-quiet-button boss-more-button"
+            type="button"
+            @click="showAllRanks = !showAllRanks"
           >
-            <span class="boss-rank-no">{{ index + 1 }}</span>
-            <strong class="boss-rank-name">{{ rank.sectName }}</strong>
-            <span class="boss-rank-damage">{{ formatDamage(rank.damage) }}</span>
-            <span class="boss-rank-attempts">{{ rank.attempts }} 次</span>
-            <span v-if="rank.isTopDamage" class="boss-tag">最高伤害</span>
-            <span v-if="rank.isLastHit" class="boss-tag">最后一击</span>
-          </li>
-        </ul>
-        <button
-          v-if="panel !== null && panel.ranks.length > RANK_PREVIEW_COUNT"
-          class="boss-more"
-          type="button"
-          @click="showAllRanks = !showAllRanks"
-        >
-          {{ showAllRanks ? '收起' : `显示全部（共 ${panel.ranks.length} 家）` }}
-        </button>
+            {{ showAllRanks ? '只看前 3 名' : `显示全部 ${panel.ranks.length} 个宗门` }}
+          </button>
+        </template>
       </section>
 
       <!-- 出手记录（默认折叠） -->
       <section class="boss-section">
-        <template v-if="panel === null || panel.hits.length === 0">
-          <h4 class="boss-section-title">出手记录</h4>
-          <p class="boss-empty">还没有出手记录。</p>
-        </template>
-        <details v-else class="boss-hits-details">
-          <summary class="boss-section-title boss-hits-summary">出手记录（{{ panel.hits.length }} 条）</summary>
-          <ul class="boss-hits">
-          <li
-            v-for="entry in panel.hits"
-            :key="`${entry.createdAt}-${entry.sectId}-${entry.damage}-${entry.discipleNames.join()}`"
-            class="boss-hit"
-          >
-            {{ hitLine(entry) }}
-          </li>
+        <button
+          class="boss-quiet-button boss-more-button"
+          type="button"
+          @click="showHits = !showHits"
+        >
+          {{ showHits ? '收起出手记录' : `展开出手记录（${panel?.hits.length ?? 0} 条）` }}
+        </button>
+        <template v-if="showHits">
+          <p v-if="panel === null || panel.hits.length === 0" class="boss-empty">还没有出手记录。</p>
+          <ul v-else class="boss-hits">
+            <li
+              v-for="entry in panel.hits"
+              :key="`${entry.createdAt}-${entry.sectId}-${entry.damage}-${entry.discipleNames.join()}`"
+              class="boss-hit"
+            >
+              {{ hitLine(entry) }}
+            </li>
           </ul>
-        </details>
+        </template>
       </section>
     </template>
   </section>
@@ -396,8 +506,7 @@ const dayKeyText = computed(() => boss.value?.dayKey ?? '');
   font-weight: 600;
 }
 
-.boss-day,
-.boss-level {
+.boss-day {
   color: #8fa79b;
   font-size: 12px;
   font-weight: 400;
@@ -433,6 +542,10 @@ const dayKeyText = computed(() => boss.value?.dayKey ?? '');
   cursor: not-allowed;
 }
 
+.boss-more-button {
+  align-self: flex-start;
+}
+
 .boss-rules-text {
   margin: 0;
   color: #c8d6ce;
@@ -444,8 +557,9 @@ const dayKeyText = computed(() => boss.value?.dayKey ?? '');
 
 .boss-record {
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
-  gap: 8px;
+  gap: 6px;
   margin: 0;
   padding: 6px 10px;
   border: 1px solid var(--line, rgba(202, 169, 106, 0.2));
@@ -457,6 +571,10 @@ const dayKeyText = computed(() => boss.value?.dayKey ?? '');
 .boss-record-label {
   flex: 0 0 auto;
   color: #8fa79b;
+}
+
+.boss-record-sep {
+  margin-left: 6px;
 }
 
 .boss-record-who {
@@ -568,10 +686,35 @@ const dayKeyText = computed(() => boss.value?.dayKey ?? '');
 }
 
 .boss-name {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
   margin: 0;
   color: var(--gold-bright, #ead19a);
   font-size: 15px;
   font-weight: 600;
+}
+
+.boss-affix {
+  padding: 1px 8px;
+  border: 1px solid currentColor;
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.03);
+  font-size: 11px;
+  font-weight: 400;
+  cursor: pointer;
+}
+
+.boss-affix-tip {
+  margin: 0;
+  padding: 4px 8px;
+  border: 1px solid var(--line, rgba(202, 169, 106, 0.2));
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.02);
+  color: #9fb2a8;
+  font-size: 11px;
+  line-height: 1.6;
 }
 
 .boss-desc {
@@ -616,6 +759,36 @@ const dayKeyText = computed(() => boss.value?.dayKey ?? '');
   font-size: 11px;
 }
 
+.boss-outcome {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 10px;
+  border: 1px solid rgba(119, 184, 154, 0.28);
+  border-radius: 3px;
+  background: rgba(119, 184, 154, 0.06);
+}
+
+.boss-outcome-line {
+  margin: 0;
+  color: #cbd8d0;
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.boss-outcome-line.is-quiet {
+  color: #7d8f86;
+}
+
+.boss-outcome-member {
+  margin-right: 8px;
+  color: #d9b06a;
+}
+
+.boss-outcome-member.is-severe {
+  color: #e06a5f;
+}
+
 .boss-attack-button {
   display: flex;
   align-items: center;
@@ -654,30 +827,6 @@ const dayKeyText = computed(() => boss.value?.dayKey ?? '');
   font-size: 12px;
   font-weight: 600;
   letter-spacing: 0.06em;
-}
-
-.boss-more {
-  align-self: flex-start;
-  padding: 2px 0;
-  border: none;
-  background: none;
-  color: #8fa79b;
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.boss-more:hover,
-.boss-hits-summary:hover {
-  color: var(--gold, #caa96a);
-}
-
-.boss-hits-summary {
-  cursor: pointer;
-  user-select: none;
-}
-
-.boss-hits-details[open] .boss-hits-summary {
-  margin-bottom: 6px;
 }
 
 .boss-empty {

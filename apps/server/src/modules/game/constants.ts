@@ -373,3 +373,33 @@ export const DEFENSE_LINEUP_SIZE = 3;
  * 刷新免费（不消耗资源，也不消耗每日招募次数），只换一批候选人。
  */
 export const RECRUIT_REFRESH_PER_LEVEL = 3;
+
+/* ---------- 世界 Boss 二期 · 阶段一：重伤 ---------- */
+
+/** 重伤持续时间：3 天（被世界 Boss 打成重伤后要静养这么久）。 */
+export const SEVERE_INJURY_MS = 3 * 86_400_000;
+
+/** 该弟子此刻是否重伤卧床（未填 / 已过期都算未重伤）。 */
+export function isSeverelyInjured(severeInjuredUntil: number | null, now: number): boolean {
+  return severeInjuredUntil !== null && Number(severeInjuredUntil) > now;
+}
+
+/**
+ * 重伤剩余时间的短文案（服务端错误信息用）：
+ * 满 1 天 → 「2天5时」；满 1 小时 → 「5时20分」；否则 → 「18分」。
+ * 前端的 apps/web/src/utils/format.ts 里 severeInjuryLeftText 保持同一格式。
+ */
+export function severeInjuryLeftText(until: number, now: number): string {
+  const minutes = Math.ceil(Math.max(0, until - now) / 60_000);
+  if (minutes >= 60 * 24) {
+    const days = Math.floor(minutes / (60 * 24));
+    const hours = Math.floor((minutes % (60 * 24)) / 60);
+    return `${String(days)}天${String(hours)}时`;
+  }
+  if (minutes >= 60) {
+    const hours = Math.floor(minutes / 60);
+    const rest = minutes % 60;
+    return `${String(hours)}时${String(rest)}分`;
+  }
+  return `${String(Math.max(1, minutes))}分`;
+}

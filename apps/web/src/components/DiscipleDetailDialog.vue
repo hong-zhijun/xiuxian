@@ -16,7 +16,15 @@ import type {
 } from '../api/game';
 import type { ToastTone } from '../types/ui';
 import { formatAmount, formatBp, formatTime } from '../utils/format';
-import { NOTE_MAX_LENGTH, cultivationProgress, discipleStatus, isInjured, journeyBadge } from '../utils/discipleFilter';
+import {
+  NOTE_MAX_LENGTH,
+  cultivationProgress,
+  discipleStatus,
+  isInjured,
+  isSeverelyInjured,
+  journeyBadge,
+  severeInjuryStatusLabel,
+} from '../utils/discipleFilter';
 import {
   AVATAR_FRAME_OPTIONS,
   avatarFrameOption,
@@ -86,6 +94,13 @@ const emit = defineEmits<{
 const serverNowMs = computed(() => Date.parse(props.state.serverNow));
 const injured = computed(() => isInjured(props.disciple, serverNowMs.value));
 
+/** 重伤卧床中（世界 Boss 打伤，静养 3 天）：期间不产出、不修炼，写操作一律被服务端拒绝。 */
+const severeInjured = computed(() => isSeverelyInjured(props.disciple, serverNowMs.value));
+/** 重伤状态文案：`重伤 · 剩 2天5时`（按服务器时间口径倒算）；未重伤为 null。 */
+const severeLabel = computed(() => severeInjuryStatusLabel(props.disciple, serverNowMs.value));
+/** 重伤时转岗 / 破境 / 服丹 / 出发共用的原因（与服务端返回的措辞一致）。 */
+const severeHint = computed<string | null>(() => (severeInjured.value ? '重伤卧床' : null));
+
 const progress = computed(() =>
   cultivationProgress(
     props.liveCultivation ?? props.disciple.cultivation,
@@ -145,10 +160,13 @@ function onTabKeydown(event: KeyboardEvent, current: TabId): void {
 
 /* ---------- 头部：姓名 / 境界 / 头像框 / 状态 ---------- */
 
-/** 头部状态：在外或待领取时优先显示历练状态（含剩余时间），否则用现有状态优先级。 */
+/** 头部状态：重伤卧床优先（带剩余静养时间），其次在外 / 待领取，最后现有状态优先级。 */
 const headerStatus = computed(() => journeyBadge(props.disciple.journey, serverNowMs.value));
 const headerStatusLabel = computed(
-  () => headerStatus.value ?? discipleStatus(props.disciple, serverNowMs.value).label,
+  () =>
+    severeLabel.value ??
+    headerStatus.value ??
+    discipleStatus(props.disciple, serverNowMs.value).label,
 );
 
 /* ---------- 私有备注：单行 input，保存时 trim，空串 = 清空 ---------- */
@@ -336,6 +354,9 @@ function requestBreakthrough(): void {
 const journey = computed<DiscipleJourneyView>(() => props.disciple.journey);
 const outcome = computed<JourneyOutcomeView | null>(() => props.disciple.journey.outcome);
 
+/** 能否出发历练：服务端给的 canStart 之外，重伤卧床期间一律挡住（服务端同样会拒绝）。 */
+const journeyStartable = computed(() => journey.value.canStart && !severeInjured.value);
+
 /** 资源 id → 名字（名字只在服务端的资源表里，前端不硬编码）。 */
 const resourceNames = computed<Record<string, string>>(() =>
   Object.fromEntries(props.state.resources.map((resource) => [resource.id, resource.name])),
@@ -486,6 +507,9 @@ const outcomeLines = computed<ResourceLine[]>(() => resourceLines(outcome.value?
 const awayHint = computed<string | null>(() =>
   journey.value.status === 'active' ? '在外历练期间不能转岗、破境、服药或再次出发。' : null,
 );
+
+/** 转岗 / 破境 / 服丹 / 出发被挡住的共用原因：重伤卧床优先于在外历练（同一处提示位）。 */
+const actionBlockHint = computed<string | null>(() => severeHint.value ?? awayHint.value);
 
 /** 驱逐被历练挡住时的原因：在外与待领取措辞分开，玩家才知道下一步该做什么。 */
 const expelBlockedHint = computed<string | null>(() => {
@@ -674,6 +698,11 @@ const pillOptions = computed<PillOption[]>(() => {
 
 function usePill(option: PillOption): void {
   if (props.busy) return;
+  // 重伤卧床期间服务端会拒绝服药（回春丹也无效），这里同步挡住（按钮已禁用，兜底键盘/程序化触发）。
+  if (severeInjured.value) {
+    emit('notify', 'warning', `${props.disciple.name}重伤卧床`, '重伤期间不能服药。');
+    return;
+  }
   // 在外历练期间服务端会拒绝服药，这里同步挡住（按钮已禁用，兜底键盘/程序化触发）。
   if (journey.value.status === 'active') {
     emit('notify', 'warning', `${props.disciple.name}正在外历练`, awayHint.value ?? '在外历练期间不能服药。');
@@ -701,6 +730,11 @@ function askUsePillToFull(option: PillOption): void {
 
 function confirmUsePillToFull(option: PillOption): void {
   if (props.busy) return;
+  // 重伤卧床期间服务端会拒绝服药（回春丹也无效），这里同步挡住。
+  if (severeInjured.value) {
+    emit('notify', 'warning', `${props.disciple.name}重伤卧床`, '重伤期间不能服药。');
+    return;
+  }
   if (journey.value.status === 'active') {
     emit('notify', 'warning', `${props.disciple.name}正在外历练`, awayHint.value ?? '在外历练期间不能服药。');
     return;
@@ -765,7 +799,7 @@ function confirmExpel(): void {
         <p class="disciple-detail-headline-meta">
           <span class="realm-tag">{{ disciple.stageName }}</span>
           <span class="disciple-detail-headline-realm">{{ disciple.realmName }}</span>
-          <span class="disciple-status">{{ headerStatusLabel }}</span>
+          <span class="disciple-status" :class="{ 'is-severeInjured': severeInjured }">{{ headerStatusLabel }}</span>
         </p>
       </div>
       <span class="disciple-detail-headline-frame">{{ avatarFrameOption(disciple.avatarFrameId).label }}</span>
@@ -979,16 +1013,17 @@ function confirmExpel(): void {
           <AssignmentSelect
             :model-value="disciple.assignment"
             :options="state.assignments"
-            :disabled="busy || journey.status === 'active'"
+            :disabled="busy || journey.status === 'active' || severeInjured"
             :label="disciple.name"
             @change="emit('assign', disciple.id, $event)"
           />
-          <p v-if="awayHint" class="blocked-hint">{{ awayHint }}</p>
+          <p v-if="actionBlockHint" class="blocked-hint">{{ actionBlockHint }}</p>
         </section>
 
         <section class="disciple-detail-section" aria-labelledby="disciple-injury-title">
           <h3 id="disciple-injury-title" class="disciple-detail-title">伤势</h3>
-          <p v-if="injured" class="disciple-detail-injury">
+          <p v-if="severeLabel !== null" class="disciple-detail-injury">{{ severeLabel }}</p>
+          <p v-else-if="injured" class="disciple-detail-injury">
             疗伤中 · 预计 {{ formatTime(disciple.injuredUntil) }} 复原
           </p>
           <p v-else class="disciple-detail-hint">无恙，可以出战、探索与破境。</p>
@@ -1008,13 +1043,13 @@ function confirmExpel(): void {
           </dl>
           <p v-if="disciple.blockedReason" class="blocked-hint">{{ disciple.blockedReason }}</p>
           <!-- 在外时即便服务端还没把 canBreakthrough 打成 false，也一律挡住破境。 -->
-          <p v-if="awayHint" class="blocked-hint">{{ awayHint }}</p>
+          <p v-if="actionBlockHint" class="blocked-hint">{{ actionBlockHint }}</p>
           <button
             class="action-button primary-action disciple-break-button"
-            :class="{ 'is-disabled': !disciple.canBreakthrough || journey.status === 'active' }"
+            :class="{ 'is-disabled': !disciple.canBreakthrough || journey.status === 'active' || severeInjured }"
             type="button"
-            :disabled="busy || journey.status === 'active'"
-            :aria-disabled="!disciple.canBreakthrough || journey.status === 'active'"
+            :disabled="busy || journey.status === 'active' || severeInjured"
+            :aria-disabled="!disciple.canBreakthrough || journey.status === 'active' || severeInjured"
             @click="requestBreakthrough"
           >
             <span>破境</span>
@@ -1029,12 +1064,12 @@ function confirmExpel(): void {
           <button
             class="action-button primary-action disciple-pill-launch"
             type="button"
-            :disabled="busy || !state.alchemy.unlocked || journey.status === 'active'"
+            :disabled="busy || !state.alchemy.unlocked || journey.status === 'active' || severeInjured"
             @click="showPillPicker = true"
           >
             服用丹药
           </button>
-          <p v-if="awayHint" class="blocked-hint">{{ awayHint }}</p>
+          <p v-if="actionBlockHint" class="blocked-hint">{{ actionBlockHint }}</p>
           <p class="disciple-detail-hint">点击后选择丹药；配方炼制仍在「炼丹」面板。</p>
         </section>
       </div>
@@ -1056,16 +1091,16 @@ function confirmExpel(): void {
           </p>
 
           <template v-if="journey.status === 'none'">
-            <!-- 不可出发时只显示服务端的原因（筑基门槛 / 疗伤中 / 名额已满 / 在守擂阵容中）。 -->
-            <template v-if="!journey.canStart">
-              <p class="blocked-hint">{{ journey.blockedReason ?? '当前不可出发' }}</p>
+            <!-- 不可出发时只显示原因：重伤卧床优先，其余用服务端的原因（筑基门槛 / 疗伤中 / 名额已满 / 在守擂阵容中）。 -->
+            <template v-if="!journeyStartable">
+              <p class="blocked-hint">{{ severeHint ?? (journey.blockedReason ?? '当前不可出发') }}</p>
               <button class="action-button primary-action disciple-journey-start" type="button" disabled>
                 <span>确认出发</span>
               </button>
             </template>
 
             <button
-              v-if="journey.canStart && planner === null && !journeyPreviewLoading"
+              v-if="journeyStartable && planner === null && !journeyPreviewLoading"
               class="action-button primary-action disciple-journey-launch"
               type="button"
               :disabled="busy"
@@ -1081,7 +1116,7 @@ function confirmExpel(): void {
               detail="正在计算各方向的奖励、修为与风险。"
             />
 
-            <div v-if="journey.canStart && planner !== null" class="disciple-journey-planner">
+            <div v-if="journeyStartable && planner !== null" class="disciple-journey-planner">
               <p class="disciple-detail-hint">
                 {{ planner.discipleName }} 可出发 · 宗门在外 {{ planner.activeCount }}/{{ planner.maxConcurrent }} 人
               </p>

@@ -50,6 +50,7 @@ import {
   findTalent,
   nextSectLevel,
   realmIndex,
+  isSeverelyInjured,
 } from './constants';
 import { RECENT_EVENTS_IN_SYNC, eventNameOf, type TriggeredEvent } from './events';
 import {
@@ -156,6 +157,8 @@ export interface DiscipleView {
   assignment: string;
   assignmentName: string;
   injuredUntil: string | null;
+  /** 二期阶段一：重伤到期时间（ISO 字符串）；null = 未重伤。 */
+  severeInjuredUntil: string | null;
   canBreakthrough: boolean;
   /**
    * 除灵气外的破境条件都已满足（未在外、未到版本上限、未疗伤、修为到门槛）。
@@ -749,14 +752,14 @@ export interface RenameView {
   discipleNameMaxChars: number;
 }
 
-/* ---------- 0025 世界 Boss（讨伐） ---------- */
+/* ---------- 0025/0027 世界 Boss（讨伐，二期） ---------- */
 
 /** Boss 的展示定义（名字、印章字、主色都由服务端给，前端不复制常量）。 */
 export interface WorldBossDefView {
   index: number;
   /** 基础名（如「黑风妖王」）。 */
   name: string;
-  /** 带阶数的显示名（如「黑风妖王 · 二阶」）。 */
+  /** 带关卡的显示名（如「第 2 关 · 赤炎火蛟」）。 */
   displayName: string;
   /** 圆形印章中间的字。 */
   sealCharacter: string;
@@ -765,15 +768,27 @@ export interface WorldBossDefView {
   description: string;
 }
 
-/** 今日伤害榜的一行（按宗门汇总）。 */
+/** 本关随机词缀（前端据此显示标签与气泡）。 */
+export interface WorldBossAffixView {
+  id: string;
+  name: string;
+  /** 效果文案（保持简短）。 */
+  effect: string;
+  /** 配队提示。 */
+  tip: string;
+  /** 推荐排序属性（前端在选人组件里追加一个排序按钮）。 */
+  sortAttribute: 'attack' | 'defense' | 'speed' | 'luck' | 'physique';
+}
+
+/** 本关伤害榜的一行（按宗门汇总）。 */
 export interface WorldBossRankView {
   sectId: string;
   sectName: string;
-  /** 今日总伤害。 */
+  /** 本关总伤害。 */
   damage: number;
   /** 出手次数。 */
   attempts: number;
-  /** 当日伤害总和最高的宗门（并列取先达到者）。 */
+  /** 本关伤害最高的宗门（并列取先达到者）。 */
   isTopDamage: boolean;
   /** 打出最后一击。 */
   isLastHit: boolean;
@@ -786,19 +801,25 @@ export interface WorldBossHitView {
   sectId: string;
   sectName: string;
   discipleNames: string[];
+  /** 本次受伤（普通受伤，30 分钟）的弟子名。 */
+  injuredNames: string[];
+  /** 本次被打成重伤（静养 3 天）的弟子名。 */
+  severeNames: string[];
   damage: number;
   isCrit: boolean;
   isLastHit: boolean;
   createdAt: number;
 }
 
-/** 今天的 Boss（还没出现时为 null）。 */
+/** 当前关卡（今天还没有 Boss 时为 null）。 */
 export interface WorldBossCurrentView {
   id: string;
   /** UTC+8 日期键。 */
   dayKey: string;
-  level: number;
+  /** 第几关（每天从 1 开始，连战递增）。 */
+  stage: number;
   def: WorldBossDefView;
+  affix: WorldBossAffixView;
   maxHp: number;
   hp: number;
   status: 'active' | 'killed' | 'fled';
@@ -811,22 +832,35 @@ export interface WorldBossCurrentView {
   endedAt: number | null;
 }
 
+/** 一次出手里某名弟子的判定结果。 */
+export interface WorldBossMemberOutcomeView {
+  discipleId: string;
+  discipleName: string;
+  /** normal = 正常；injured = 普通受伤（30 分钟）；severe = 重伤（静养 3 天）。 */
+  outcome: 'normal' | 'injured' | 'severe';
+}
+
 /** 讨伐面板（GET /game/world-boss 的返回值）。 */
 export interface WorldBossView {
-  /** 今天的 Boss；null = 还没出现（用 opensAt 提示）。 */
+  /** 当前关卡；null = 今天还没出现。 */
   boss: WorldBossCurrentView | null;
   /** 今天的阶段（boss 为 null 时同样给出）。 */
   phase: WorldBossPhase;
-  /** 今天的 Boss 出现时间点（毫秒），用于「12:00 降临」提示。 */
+  /** 今天的 Boss 出现时间点（毫秒），用于「08:00 降临」提示。 */
   opensAt: number;
   /** 距离 23:00 结束的秒数（已结束为 0）。 */
   remainingSeconds: number;
-  dailyLimit: number;
-  usedToday: number;
-  remaining: number;
-  /** 此刻能否出手：Boss 仍在讨伐中 + 在开放时段 + 还有剩余次数。 */
+  /** 今日已连斩 N 只。 */
+  killedToday: number;
+  /** 史上最高「一天连斩 M 只」。 */
+  bestStage: number;
+  /** 出手冷却剩余秒数（0 = 现在就能出手）。 */
+  cooldownSeconds: number;
+  /** 本宗门弟子的疲劳表：弟子 id → 最近 60 分钟内已出战讨伐的次数。 */
+  fatigue: Record<string, number>;
+  /** 此刻能否出手：Boss 仍在讨伐中 + 在开放时段（二期不限次数，不看次数）。 */
   attackable: boolean;
-  /** 今日伤害榜（伤害高的在前）。 */
+  /** 本关伤害榜（伤害高的在前）。 */
   ranks: WorldBossRankView[];
   /** 出手记录（新的在前，最多 20 条）。 */
   hits: WorldBossHitView[];
@@ -847,9 +881,12 @@ export interface WorldBossAttackResultView {
   lastHit: boolean;
   bossHp: number;
   bossMaxHp: number;
-  /** 本次出手立即到账的参与奖（灵石，最小单位）。 */
-  participationReward: string;
+  /** 击杀后立刻生成的下一关关卡号；没击杀为 null。 */
+  nextStage: number | null;
+  /** 本次每名弟子的判定结果（正常 / 受伤 / 重伤）。 */
+  members: WorldBossMemberOutcomeView[];
 }
+
 export interface SectStateView {
   sect: {
     id: string;
@@ -1263,12 +1300,15 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
   );
   const libraryLevel = buildingLevels[SCRIPTURE_LIBRARY_BUILDING_ID] ?? 0;
   const awayIds = journeyAwayIds(journeys, now);
-  const rateDisciples = disciples.filter((disciple) => !awayIds.has(disciple.id));
+  // 二期阶段一：重伤卧床期间不产出、不修炼 —— 与在外历练同一口径（速率按 0 显示）。
+  const isUnavailable = (disciple: (typeof disciples)[number]): boolean =>
+    awayIds.has(disciple.id) || isSeverelyInjured(disciple.severe_injured_until, now);
+  const rateDisciples = disciples.filter((disciple) => !isUnavailable(disciple));
   const resourceRatesNow = resourceRates(config, rateDisciples.map(toDiscipleState), buildingLevels);
   const ratesByDisciple = new Map(
     disciples.map((disciple) => [
       disciple.id,
-      awayIds.has(disciple.id)
+      isUnavailable(disciple)
         ? 0
         : cultivationRatePerHour(config, toDiscipleState(disciple), libraryLevel),
     ]),
@@ -1397,6 +1437,10 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
       assignment: disciple.assignment,
       assignmentName: assignmentNames.get(disciple.assignment) ?? disciple.assignment,
       injuredUntil: disciple.injured_until === null ? null : new Date(disciple.injured_until).toISOString(),
+      severeInjuredUntil:
+        disciple.severe_injured_until === null
+          ? null
+          : new Date(disciple.severe_injured_until).toISOString(),
       canBreakthrough: blockedReason === null,
       breakthroughReadyExceptEnergy: blockedReason === null || blockedOnlyByEnergy,
       blockedReason,
