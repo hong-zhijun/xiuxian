@@ -68,6 +68,17 @@ export interface DiscipleView {
   /** 当前战力（服务端按 realms.ts 公式算好）。 */
   combatPower: number;
   /**
+   * 0028 装备加成（该弟子已穿装备的 5 项属性之和；没有装备时全 0）。
+   * 战力已经计入这份加成，前端不要自己再加；上面的 attack/defense/… 仍是**基础属性**（最高 100）。
+   */
+  gear: {
+    attack: number;
+    defense: number;
+    speed: number;
+    luck: number;
+    physique: number;
+  };
+  /**
    * 0016 综合评分：**当前**六项属性等权现算，固定一位小数（服务端 names.ts 的
    * attributeScore）。不是战力：境界、修为、天赋都不参与；服务端不落库，
    * 淬体丹改完攻/防/速之后随下一次 sync 自动更新。
@@ -1589,11 +1600,15 @@ export interface WorldBossView {
   ranks: WorldBossRankView[];
   hits: WorldBossHitView[];
   topHit: WorldBossHitView | null;
-  /** 奖励预览：当前关卡、按本宗门此刻产出算的各名次奖励；rank 4 = 第 4 名及以后；资源为最小单位。 */
+  /**
+   * 奖励预览：当前关卡、按本宗门此刻产出算的各名次奖励；rank 4 = 第 4 名及以后；资源为最小单位。
+   * dropDescription 是 0028 的装备掉落说明（服务端拼好，前端直接渲染）。
+   */
   rewardPreview: {
     stage: number;
     tiers: { rank: number; multiplier: number; resources: Record<string, number>; topDamagePill: boolean }[];
     lastHitStone: number;
+    dropDescription: string;
   } | null;
 }
 
@@ -1625,4 +1640,152 @@ export async function attackWorldBoss(discipleIds: string[]): Promise<{
     result: WorldBossAttackResultView;
     boss: WorldBossView;
   }>('/api/v1/game/world-boss/attack', { method: 'POST', body: { discipleIds } });
+}
+
+/* ---------- 0028 装备（炼器 / 背包 / 穿戴 / 分解） ---------- */
+
+/** 装备部位（与后端 equipment.ts 的 EQUIPMENT_SLOTS 同口径）。 */
+export type EquipmentSlotId = 'weapon' | 'armor' | 'artifact';
+
+/** 法器可选的主属性（只有法器需要玩家选，其余部位由服务端按规则固定）。 */
+export type EquipmentMainAttr = 'speed' | 'luck';
+
+/**
+ * 单件装备视图（背包卡片与弟子装备格共用）。
+ * 品质名 / 颜色、部位名与属性名都由服务端下发，前端只渲染，不复制一份规则表。
+ */
+export interface EquipmentItemView {
+  id: string;
+  /** weapon | armor | artifact。 */
+  slot: EquipmentSlotId;
+  slotName: string;
+  /** common | spirit | treasure | immortal。 */
+  quality: string;
+  qualityName: string;
+  /** 品质色（卡片边框用），如 `#fbbf24`。 */
+  color: string;
+  /** `{品质名}·{部位名}`，如「仙品·紫金葫芦」。 */
+  name: string;
+  mainAttr: string;
+  mainAttrName: string;
+  mainValue: number;
+  subAttr: string;
+  subAttrName: string;
+  subValue: number;
+  source: 'forge' | 'boss';
+  /** 穿在谁身上；null = 在背包里（背包 = 本宗未穿戴的装备）。 */
+  discipleId: string | null;
+  discipleName: string | null;
+  createdAt: string;
+}
+
+/** 一个可炼部位；法器的 mainAttrChoices 非空（玩家必须选身法或幸运）。 */
+export interface EquipmentSlotView {
+  id: EquipmentSlotId;
+  name: string;
+  mainAttrChoices: { id: string; name: string }[];
+}
+
+/**
+ * 装备面板视图（GET /game/equipment）。
+ * 解锁判断、背包计数、炼器价格、可选部位与主属性候选、分解返还都由服务端算好。
+ */
+export interface EquipmentView {
+  unlocked: boolean;
+  blockedReason: string | null;
+  /** 背包已用件数（穿在身上的不占背包）。 */
+  bagCount: number;
+  bagCapacity: number;
+  /** 单次炼器消耗（最小单位）。 */
+  forgeCost: Record<string, string>;
+  /** 一期只能炼的品质（凡品）。 */
+  forgeQuality: string;
+  forgeQualityName: string;
+  slots: EquipmentSlotView[];
+  /** 品质 id → 分解返还的矿石（**展示单位**，直接显示数字即可）。 */
+  salvageOre: Record<string, number>;
+  /** 本宗全部装备（背包 + 已穿戴），新的在前。 */
+  items: EquipmentItemView[];
+}
+
+/** 炼器回执（POST /game/forge-equipment 的 outcome）。 */
+export interface ForgeEquipmentOutcome {
+  equipmentId: string;
+  name: string;
+  slot: EquipmentSlotId;
+  slotName: string;
+  quality: string;
+  /** 本次实际消耗（最小单位）。 */
+  cost: Record<string, string>;
+}
+
+/** 穿戴 / 卸下回执（POST /game/equip、/game/unequip 的 outcome）。 */
+export interface EquipChangeOutcome {
+  equipmentId: string;
+  name: string;
+  slot: EquipmentSlotId;
+  slotName: string;
+  /** 现在穿在谁身上；卸下后为 null（已回背包）。 */
+  discipleId: string | null;
+  discipleName: string | null;
+  /** 换装时被顶替回背包的那件装备名；没有为 null。 */
+  replacedName: string | null;
+}
+
+/** 分解回执（POST /game/salvage-equipment 的 outcome）。 */
+export interface SalvageEquipmentOutcome {
+  /** 实际分解的件数（已去重）。 */
+  count: number;
+  /** 返还的矿石（**最小单位**，用 formatAmount 显示）。 */
+  ore: number;
+}
+
+/** 0028 读取装备面板（GET /game/equipment）：只读，不结算；装备明细不放进 /game/sync。 */
+export async function fetchEquipment(): Promise<{
+  state: SectStateView;
+  equipment: EquipmentView;
+}> {
+  return apiRequest<{ state: SectStateView; equipment: EquipmentView }>('/api/v1/game/equipment');
+}
+
+/** 0028 炼器（POST /game/forge-equipment）：法器必须给 mainAttr（speed / luck），其他部位不能给。 */
+export async function forgeEquipment(
+  slot: EquipmentSlotId,
+  mainAttr?: EquipmentMainAttr,
+): Promise<{ state: SectStateView; outcome: ForgeEquipmentOutcome }> {
+  return apiRequest<{ state: SectStateView; outcome: ForgeEquipmentOutcome }>(
+    '/api/v1/game/forge-equipment',
+    { method: 'POST', body: mainAttr === undefined ? { slot } : { slot, mainAttr } },
+  );
+}
+
+/** 0028 穿戴（POST /game/equip）：目标弟子与装备归属、在外 / 重伤都由服务端校验。 */
+export async function equipItem(
+  equipmentId: string,
+  discipleId: string,
+): Promise<{ state: SectStateView; outcome: EquipChangeOutcome }> {
+  return apiRequest<{ state: SectStateView; outcome: EquipChangeOutcome }>('/api/v1/game/equip', {
+    method: 'POST',
+    body: { equipmentId, discipleId },
+  });
+}
+
+/** 0028 卸下（POST /game/unequip）：装备回背包；背包满时服务端会拒绝。 */
+export async function unequipItem(
+  equipmentId: string,
+): Promise<{ state: SectStateView; outcome: EquipChangeOutcome }> {
+  return apiRequest<{ state: SectStateView; outcome: EquipChangeOutcome }>(
+    '/api/v1/game/unequip',
+    { method: 'POST', body: { equipmentId } },
+  );
+}
+
+/** 0028 分解（POST /game/salvage-equipment）：1~50 件（重复 id 由服务端去重），只能分解背包里的。 */
+export async function salvageEquipment(
+  equipmentIds: string[],
+): Promise<{ state: SectStateView; outcome: SalvageEquipmentOutcome }> {
+  return apiRequest<{ state: SectStateView; outcome: SalvageEquipmentOutcome }>(
+    '/api/v1/game/salvage-equipment',
+    { method: 'POST', body: { equipmentIds } },
+  );
 }

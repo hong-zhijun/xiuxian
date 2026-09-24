@@ -3240,6 +3240,12 @@ ul {
   font-size: 14px;
 }
 
+/* 0028 装备加成：属性显示成 `攻击 60 (+12)` 时的括号部分（加成为 0 时不渲染这个 span）。 */
+.gear-bonus {
+  color: var(--jade-bright);
+  font-size: 11px;
+}
+
 .radar-value-track {
   display: block;
   height: 4px;
@@ -4597,7 +4603,7 @@ ul {
 /* ---------- Action bar (single row) ---------- */
 .action-bar {
   display: grid;
-  grid-template-columns: repeat(7, minmax(0, 1fr));
+  grid-template-columns: repeat(8, minmax(0, 1fr));
   gap: 7px;
   margin-top: 14px;
 }
@@ -6806,6 +6812,125 @@ h2.public-sect-name {
 
 .disciple-break-confirm-actions .action-button {
   flex: 1 1 0;
+}
+
+/* ---------- 0028 装备（弟子详情「装备」Tab + 二级选择面板） ---------- */
+
+.gear-slots {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 8px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.gear-slot {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid rgba(119, 184, 154, 0.16);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.016);
+}
+
+.gear-slot-body {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  padding: 4px;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.gear-slot-body:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.gear-slot-body:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(202, 169, 106, 0.3);
+}
+
+.gear-slot-label {
+  color: #7d9186;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+}
+
+.gear-slot-name {
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+}
+
+.gear-slot-attrs {
+  color: #9db3a8;
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.gear-slot-empty {
+  color: #63756c;
+  font-size: 12px;
+}
+
+.gear-unequip {
+  align-self: flex-start;
+  padding: 4px 10px;
+  font-size: 11px;
+}
+
+.gear-picker {
+  min-width: 0;
+}
+
+.gear-picker-list {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.gear-picker-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.016);
+}
+
+.gear-picker-copy {
+  min-width: 0;
+}
+
+.gear-picker-copy strong {
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+}
+
+.gear-picker-copy p {
+  margin: 3px 0 0;
+  color: #9db3a8;
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.gear-picker-button {
+  white-space: nowrap;
 }
 
 @media (max-width: 560px) {
