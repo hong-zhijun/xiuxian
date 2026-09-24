@@ -52,6 +52,7 @@ import ChallengeHistoryPanel from './ChallengeHistoryPanel.vue';
 import DefenseLineupPanel from './DefenseLineupPanel.vue';
 import DiscipleDetailDialog from './DiscipleDetailDialog.vue';
 import DiscipleRoster from './DiscipleRoster.vue';
+import BagDialog from './BagDialog.vue';
 import EquipmentDialog from './EquipmentDialog.vue';
 import EventLogPanel from './EventLogPanel.vue';
 import ExplorePanel from './ExplorePanel.vue';
@@ -152,6 +153,7 @@ const openPanel = ref<
   | 'challenge-history'
   | 'alchemy'
   | 'equipment'
+  | 'bag'
   | 'gambling'
   | 'shop'
   | 'world-boss'
@@ -1030,6 +1032,17 @@ function openEquipment(): void {
   void loadEquipment();
 }
 
+/** 打开背包（资源栏最右侧的「背包」格）。 */
+function openBag(): void {
+  openPanel.value = 'bag';
+  void loadEquipment();
+}
+
+// 资源栏的「背包 x/50」需要装备视图：进页面时取一次（之后炼器 / 分解 / 穿卸 / 打开面板时刷新；不做轮询）。
+onMounted(() => {
+  void loadEquipment();
+});
+
 /** 炼器（POST /game/forge-equipment）：法器必须带主属性；成功后刷新背包与余额。 */
 async function onForgeEquipment(slot: EquipmentSlotId, mainAttr: EquipmentMainAttr | undefined): Promise<void> {
   if (props.busy || equipmentSubmitting.value) return;
@@ -1608,6 +1621,15 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
               <span :style="{ width: `${resourcePercent(resource.id, resource.capacity)}%` }" />
             </div>
           </li>
+          <li class="resource-card bag-card">
+            <button class="bag-card-button" type="button" aria-label="打开背包" @click="openBag">
+              <div class="resource-glyph" aria-hidden="true">囊</div>
+              <div class="resource-main">
+                <span class="resource-name">背包</span>
+                <strong>{{ equipment ? equipment.bagCount : '—' }}<small> / {{ equipment ? equipment.bagCapacity : 50 }}</small></strong>
+              </div>
+            </button>
+          </li>
         </ul>
       </section>
 
@@ -1879,6 +1901,22 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
         :equipment="equipment"
         :busy="busy || equipmentSubmitting"
         @forge="onForgeEquipment"
+      />
+      <LoadingState v-else label="正在清点宗门装备" />
+    </ModalShell>
+
+    <ModalShell
+      v-if="openPanel === 'bag'"
+      label="背包"
+      :loading="equipmentSubmitting"
+      loading-text="正在分解装备"
+      @close="openPanel = null"
+    >
+      <BagDialog
+        v-if="equipment"
+        :state="state"
+        :equipment="equipment"
+        :busy="busy || equipmentSubmitting"
         @salvage="onSalvageEquipment"
       />
       <LoadingState v-else label="正在清点宗门装备" />

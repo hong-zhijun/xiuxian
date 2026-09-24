@@ -1408,9 +1408,40 @@ ul {
 
 .resource-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  /* 四种资源 + 最右侧较窄的「背包」格 */
+  grid-template-columns: repeat(4, minmax(0, 1fr)) minmax(96px, 0.6fr);
   border-top: 1px solid var(--line);
   border-bottom: 1px solid var(--line);
+}
+
+.bag-card {
+  padding: 0;
+}
+
+.bag-card-button {
+  display: grid;
+  width: 100%;
+  height: 100%;
+  grid-template-columns: 32px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px 11px;
+  border: none;
+  background: none;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.bag-card-button:hover .resource-name,
+.bag-card-button:focus-visible .resource-name {
+  color: var(--gold, #caa96a);
+}
+
+.bag-card-button strong small {
+  color: #7d9186;
+  font-size: 12px;
+  font-weight: 400;
 }
 
 .resource-card {
@@ -5913,6 +5944,11 @@ h2.public-sect-name {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  /* 窄屏两列时「背包」格独占最后一行 */
+  .bag-card {
+    grid-column: 1 / -1;
+  }
+
   .resource-card:nth-child(odd) {
     border-left: 0;
   }
@@ -6214,6 +6250,11 @@ h2.public-sect-name {
 
   .resource-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  /* 窄屏两列时「背包」格独占最后一行 */
+  .bag-card {
+    grid-column: 1 / -1;
   }
 
   .resource-card {
