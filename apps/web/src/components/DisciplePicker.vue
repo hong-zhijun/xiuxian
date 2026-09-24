@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onUnmounted, ref, watch } from 'vue';
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 
 import type { DiscipleView } from '../api/game';
 import { isInjured, selectionBlockReason } from '../utils/discipleFilter';
@@ -153,8 +153,50 @@ const ordered = computed(() => {
     // 大境界从高到低，同境界再比阶段（与 utils/discipleFilter 的 sortDisciples 同口径）。
     list.sort((a, b) => b.realmOrder - a.realmOrder || b.stage - a.stage);
   }
-  return list;
+  // 选不了的（疗伤 / 在外）沉到最后：折叠时第一排都是能直接出战的人（sort 是稳定的，组内顺序不变）。
+  const blocked = blockedIds.value;
+  return [...list.filter((d) => !blocked.has(d.id)), ...list.filter((d) => blocked.has(d.id))];
 });
+
+/*
+ * 默认只显示第一排：多数时候是「排好序直接点前几个出手」，不必把整个名册铺开。
+ * 网格是 auto-fill，一排几张取决于弹窗宽度，所以实测 grid-template-columns 的列数，宽度变化时重算。
+ * 已选中但排在第一排之后的弟子仍然显示出来，免得「选了却看不见」。
+ */
+const gridEl = ref<HTMLElement | null>(null);
+const columns = ref(0); // 0 = 尚未测量 → 先全部显示
+const expanded = ref(false);
+let resizeObserver: ResizeObserver | undefined;
+
+function measureColumns(): void {
+  const el = gridEl.value;
+  if (el === null) return;
+  const template = getComputedStyle(el).gridTemplateColumns;
+  columns.value = template && template !== 'none' ? template.split(' ').filter(Boolean).length : 0;
+}
+
+onMounted(() => {
+  measureColumns();
+  if (typeof ResizeObserver !== 'undefined' && gridEl.value !== null) {
+    resizeObserver = new ResizeObserver(measureColumns);
+    resizeObserver.observe(gridEl.value);
+  }
+});
+
+onUnmounted(() => {
+  resizeObserver?.disconnect();
+});
+
+const collapsible = computed(() => columns.value > 0 && ordered.value.length > columns.value);
+
+const visible = computed(() => {
+  if (!collapsible.value || expanded.value) return ordered.value;
+  const firstRow = ordered.value.slice(0, columns.value);
+  const pickedBeyond = ordered.value.slice(columns.value).filter((d) => isPicked(d.id));
+  return [...firstRow, ...pickedBeyond];
+});
+
+const hiddenCount = computed(() => ordered.value.length - visible.value.length);
 
 /** 人数提示：固定人数的玩法说「请选 3 名」，区间玩法说「至少…最多…」。 */
 const countHint = computed(() =>
@@ -217,8 +259,8 @@ watch(
       </button>
     </div>
 
-    <ul class="disciple-picker-grid">
-      <li v-for="disciple in ordered" :key="disciple.id">
+    <ul ref="gridEl" class="disciple-picker-grid">
+      <li v-for="disciple in visible" :key="disciple.id">
         <label
           class="dp-card"
           :class="{
@@ -260,10 +302,20 @@ watch(
             >
               {{ statusById.get(disciple.id)?.text }}
             </span>
+            <span v-else class="dp-luck">幸运 {{ disciple.luck }}</span>
           </span>
         </label>
       </li>
     </ul>
+
+    <button
+      v-if="collapsible && (expanded || hiddenCount > 0)"
+      class="dp-more"
+      type="button"
+      @click="expanded = !expanded"
+    >
+      {{ expanded ? '收起' : `查看更多（还有 ${hiddenCount} 名）` }}
+    </button>
 
     <p v-if="disciples.length === 0" class="blocked-hint">{{ emptyText }}</p>
     <p v-else-if="blockedIds.size === disciples.length" class="blocked-hint">{{ allBlockedText }}</p>

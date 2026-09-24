@@ -28,6 +28,13 @@ const loading = ref(false);
 const submitting = ref(false);
 const selected = ref<string[]>([]);
 const showRules = ref(false);
+/** 伤害榜默认只露前 3 名，其余点「显示全部」展开。 */
+const RANK_PREVIEW_COUNT = 3;
+const showAllRanks = ref(false);
+const visibleRanks = computed(() => {
+  const ranks = panel.value?.ranks ?? [];
+  return showAllRanks.value ? ranks : ranks.slice(0, RANK_PREVIEW_COUNT);
+});
 
 /** 被击中：`hitKey` 每次 +1 让抖动的 CSS 动画重新播放，飘字 0.9 秒后消失。 */
 const hitKey = ref(0);
@@ -301,6 +308,7 @@ const dayKeyText = computed(() => boss.value?.dayKey ?? '');
         :disciples="state.disciples"
         :min="1"
         :max="3"
+        sort="power"
         :busy="submitting || busy === true"
         title="选择出战弟子"
       />
@@ -318,7 +326,7 @@ const dayKeyText = computed(() => boss.value?.dayKey ?? '');
         <p v-if="panel === null || panel.ranks.length === 0" class="boss-empty">今日还没有人出手。</p>
         <ul v-else class="boss-ranks">
           <li
-            v-for="(rank, index) in panel.ranks"
+            v-for="(rank, index) in visibleRanks"
             :key="rank.sectId"
             class="boss-rank"
             :class="{ 'is-me': rank.isMe }"
@@ -331,13 +339,25 @@ const dayKeyText = computed(() => boss.value?.dayKey ?? '');
             <span v-if="rank.isLastHit" class="boss-tag">最后一击</span>
           </li>
         </ul>
+        <button
+          v-if="panel !== null && panel.ranks.length > RANK_PREVIEW_COUNT"
+          class="boss-more"
+          type="button"
+          @click="showAllRanks = !showAllRanks"
+        >
+          {{ showAllRanks ? '收起' : `显示全部（共 ${panel.ranks.length} 家）` }}
+        </button>
       </section>
 
-      <!-- 出手记录 -->
+      <!-- 出手记录（默认折叠） -->
       <section class="boss-section">
-        <h4 class="boss-section-title">出手记录</h4>
-        <p v-if="panel === null || panel.hits.length === 0" class="boss-empty">还没有出手记录。</p>
-        <ul v-else class="boss-hits">
+        <template v-if="panel === null || panel.hits.length === 0">
+          <h4 class="boss-section-title">出手记录</h4>
+          <p class="boss-empty">还没有出手记录。</p>
+        </template>
+        <details v-else class="boss-hits-details">
+          <summary class="boss-section-title boss-hits-summary">出手记录（{{ panel.hits.length }} 条）</summary>
+          <ul class="boss-hits">
           <li
             v-for="entry in panel.hits"
             :key="`${entry.createdAt}-${entry.sectId}-${entry.damage}-${entry.discipleNames.join()}`"
@@ -345,7 +365,8 @@ const dayKeyText = computed(() => boss.value?.dayKey ?? '');
           >
             {{ hitLine(entry) }}
           </li>
-        </ul>
+          </ul>
+        </details>
       </section>
     </template>
   </section>
@@ -633,6 +654,30 @@ const dayKeyText = computed(() => boss.value?.dayKey ?? '');
   font-size: 12px;
   font-weight: 600;
   letter-spacing: 0.06em;
+}
+
+.boss-more {
+  align-self: flex-start;
+  padding: 2px 0;
+  border: none;
+  background: none;
+  color: #8fa79b;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.boss-more:hover,
+.boss-hits-summary:hover {
+  color: var(--gold, #caa96a);
+}
+
+.boss-hits-summary {
+  cursor: pointer;
+  user-select: none;
+}
+
+.boss-hits-details[open] .boss-hits-summary {
+  margin-bottom: 6px;
 }
 
 .boss-empty {
