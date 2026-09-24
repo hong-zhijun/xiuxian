@@ -33,7 +33,11 @@ import {
   shopSell,
   shopSellPill,
 } from '../api/game';
+import { isInjured, severeInjuryStatusLabel } from '../utils/discipleFilter';
 import { resourceGlyph } from '../utils/glyph';
+import { CHANGELOG } from '../data/changelog';
+import AccountDialog from './AccountDialog.vue';
+import ChangelogDialog from './ChangelogDialog.vue';
 import AlchemyPanel from './AlchemyPanel.vue';
 import ChallengeDialog from './ChallengeDialog.vue';
 import ChallengeHistoryPanel from './ChallengeHistoryPanel.vue';
@@ -99,6 +103,8 @@ const emit = defineEmits<{
   /** 名册多选底栏：批量换岗 / 批量破境（请求与提示都在 App.vue）。 */
   'batch-assign': [discipleIds: string[], assignment: string];
   'batch-breakthrough': [discipleIds: string[]];
+  /** 名册「疗伤中」标签单个服丹走 use-pill；多选底栏的批量疗伤走这个（请求与提示都在 App.vue）。 */
+  'batch-heal': [discipleIds: string[]];
   'craft-pill': [pillId: string, quantity: number];
   'use-pill': [pillId: string, discipleId: string, count: number];
   notify: [tone: ToastTone, title: string, message: string];
@@ -1197,6 +1203,134 @@ watch(
   },
 );
 
+/* ---------- 回春丹：名册「疗伤中」一点即服 / 多选批量疗伤 ---------- */
+
+const HEALING_PILL_ID = 'healingPill';
+
+const healingPillRecipe = computed(() =>
+  props.state.alchemy.recipes.find((recipe) => recipe.id === HEALING_PILL_ID),
+);
+const healingPillName = computed(() => healingPillRecipe.value?.name ?? '回春丹');
+const healingPillOwned = computed(() => healingPillRecipe.value?.owned ?? 0);
+
+/** 炼丹未开启时的原因；已开启返回 null。 */
+function alchemyLockedReason(): string | null {
+  return props.state.alchemy.unlocked ? null : (props.state.alchemy.blockedReason ?? '炼丹尚未开启');
+}
+
+/** 名册里点「疗伤中」：不弹确认，直接服一颗；用不了（未开启 / 没库存）就只提示原因。最终裁决仍在服务端。 */
+function onQuickHeal(discipleId: string): void {
+  if (props.busy) return;
+  let reason = alchemyLockedReason();
+  if (reason === null && healingPillOwned.value < 1) {
+    reason = `${healingPillName.value}库存不足，请先在炼丹房炼制。`;
+  }
+  if (reason !== null) {
+    emit('notify', 'warning', `暂不可服用${healingPillName.value}`, reason);
+    return;
+  }
+  emit('use-pill', HEALING_PILL_ID, discipleId, 1);
+}
+
+/** 批量疗伤确认弹窗对应的已选弟子（null = 未打开）。 */
+const batchHealIds = ref<string[] | null>(null);
+/** 本弹窗已提交过：等这次请求结束（busy 回落）就关弹窗，结果由 App.vue 的提示展示。 */
+let batchHealSubmitted = false;
+
+/** 不能用回春丹治的原因（与服务端同一口径：重伤 > 在外 > 无伤）；能治返回 null。 */
+function healSkipReason(disciple: DiscipleView): string | null {
+  if (severeInjuryStatusLabel(disciple, serverNowMs.value) !== null) return '重伤卧床，丹药无效';
+  if (disciple.journey.status === 'active') return '外出历练中';
+  if (!isInjured(disciple, serverNowMs.value)) return '没有伤势';
+  return null;
+}
+
+interface BatchHealSkipped {
+  disciple: DiscipleView;
+  reason: string;
+}
+
+const batchHealRows = computed(() => {
+  const healable: DiscipleView[] = [];
+  const skipped: BatchHealSkipped[] = [];
+  const byId = new Map(props.state.disciples.map((disciple) => [disciple.id, disciple]));
+  for (const id of batchHealIds.value ?? []) {
+    const disciple = byId.get(id);
+    if (disciple === undefined) continue;
+    const reason = healSkipReason(disciple);
+    if (reason === null) healable.push(disciple);
+    else skipped.push({ disciple, reason });
+  }
+  return { healable, skipped };
+});
+const batchHealAffordable = computed(
+  () => healingPillOwned.value >= batchHealRows.value.healable.length,
+);
+
+function openBatchHeal(discipleIds: string[]): void {
+  if (props.busy || discipleIds.length === 0) return;
+  const reason = alchemyLockedReason();
+  if (reason !== null) {
+    emit('notify', 'warning', `暂不可服用${healingPillName.value}`, reason);
+    return;
+  }
+  batchHealSubmitted = false;
+  batchHealIds.value = discipleIds;
+}
+
+function closeBatchHeal(): void {
+  batchHealIds.value = null;
+}
+
+function confirmBatchHeal(): void {
+  const ids = batchHealIds.value;
+  if (props.busy || ids === null) return;
+  if (batchHealRows.value.healable.length === 0 || !batchHealAffordable.value) return;
+  batchHealSubmitted = true;
+  // 整份已选名单交给服务端：不需要 / 不能治的由服务端跳过并在结果里列出原因。
+  emit('batch-heal', ids);
+}
+
+watch(
+  () => props.busy,
+  (busy) => {
+    if (!busy && batchHealSubmitted) {
+      batchHealSubmitted = false;
+      closeBatchHeal();
+    }
+  },
+);
+
+/* ---------- 账号：查看账号信息 / 修改密码（弹窗自己调 auth 接口） ---------- */
+
+const showAccountDialog = ref(false);
+
+/* ---------- 更新说明：有没看过的新条目时「更新」按钮亮红点，打开即记为已读 ---------- */
+
+const CHANGELOG_SEEN_KEY = 'changelog-seen';
+const latestChangelogId = CHANGELOG[0]?.id ?? '';
+
+function readSeenChangelog(): string {
+  try {
+    return localStorage.getItem(CHANGELOG_SEEN_KEY) ?? '';
+  } catch {
+    return '';
+  }
+}
+
+const showChangelog = ref(false);
+const changelogUnread = ref(latestChangelogId !== '' && readSeenChangelog() !== latestChangelogId);
+
+function openChangelog(): void {
+  showChangelog.value = true;
+  changelogUnread.value = false;
+  try {
+    localStorage.setItem(CHANGELOG_SEEN_KEY, latestChangelogId);
+  } catch {
+    /* 存不下只是下次还会亮红点 */
+  }
+}
+
 /** 头像点击：只开确认弹窗，不发请求（胜算、消耗与阻止原因都用服务端字段）。 */
 function onRequestBreakthrough(discipleId: string): void {
   if (props.busy) return;
@@ -1283,6 +1417,24 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
             <path d="M20 7v5h-5M4 17v-5h5M6.1 8.4A7 7 0 0 1 18.5 7M17.9 15.6A7 7 0 0 1 5.5 17" />
           </svg>
           <span>同步</span>
+        </button>
+        <button
+          class="icon-action"
+          type="button"
+          :aria-label="changelogUnread ? '更新说明（有新内容）' : '更新说明'"
+          @click="openChangelog"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M6 3h9l3 3v15H6V3Zm3 6h6m-6 4h6m-6 4h4" />
+          </svg>
+          <span>更新</span>
+          <i v-if="changelogUnread" class="icon-action-dot" aria-hidden="true" />
+        </button>
+        <button class="icon-action" type="button" aria-label="账号与密码" @click="showAccountDialog = true">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm-7 8a7 7 0 0 1 14 0" />
+          </svg>
+          <span>账号</span>
         </button>
         <button class="icon-action" type="button" :disabled="busy" aria-label="退出登录" @click="emit('logout')">
           <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -1451,6 +1603,8 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
           @request-breakthrough="onRequestBreakthrough"
           @request-batch-breakthrough="openBatchBreakthrough"
           @batch-assign="onBatchAssign"
+          @quick-heal="onQuickHeal"
+          @request-batch-heal="openBatchHeal"
         />
       </section>
 
@@ -1914,6 +2068,79 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
         </div>
       </section>
     </ModalShell>
+
+    <!-- 名册多选 · 批量疗伤确认：列出要治的伤员与将被跳过的弟子、回春丹消耗；库存不够时整批不能提交。 -->
+    <ModalShell
+      v-if="batchHealIds !== null"
+      narrow
+      :loading="busy"
+      loading-text="正在服用回春丹"
+      label="批量疗伤确认"
+      @close="closeBatchHeal"
+    >
+      <section class="disciple-break-confirm" aria-labelledby="batch-heal-confirm-title">
+        <header class="section-heading panel-heading compact-heading">
+          <div>
+            <p class="eyebrow">批量疗伤</p>
+            <h2 id="batch-heal-confirm-title">{{ batchHealRows.healable.length }} 名弟子待疗伤</h2>
+          </div>
+          <span class="count-badge">已选 {{ batchHealIds.length }} 人</span>
+        </header>
+
+        <dl v-if="batchHealRows.healable.length > 0" class="disciple-facts">
+          <div>
+            <dt>{{ healingPillName }}消耗</dt>
+            <dd>
+              {{ batchHealRows.healable.length }} 颗
+              <span class="batch-break-balance">/ 库存 {{ healingPillOwned }} 颗</span>
+            </dd>
+          </div>
+        </dl>
+
+        <ul v-if="batchHealRows.healable.length > 0" class="batch-break-list">
+          <li v-for="disciple in batchHealRows.healable" :key="disciple.id">
+            <span class="batch-break-name">{{ disciple.name }}</span>
+            <span class="realm-tag">{{ disciple.stageName }}</span>
+            <span class="batch-break-cost">疗伤至 {{ formatTime(disciple.injuredUntil) }}</span>
+          </li>
+        </ul>
+
+        <div v-if="batchHealRows.skipped.length > 0" class="batch-break-skipped">
+          <p class="eyebrow">以下 {{ batchHealRows.skipped.length }} 人不需要或不能服用，将被跳过</p>
+          <ul>
+            <li v-for="item in batchHealRows.skipped" :key="item.disciple.id">
+              {{ item.disciple.name }}：{{ item.reason }}
+            </li>
+          </ul>
+        </div>
+
+        <p v-if="batchHealRows.healable.length === 0" class="blocked-hint">所选弟子都不需要疗伤。</p>
+        <p v-else-if="!batchHealAffordable" class="blocked-hint">
+          {{ healingPillName }}不足：需要 {{ batchHealRows.healable.length }} 颗，库存 {{ healingPillOwned }} 颗，请减少人数或先炼制。
+        </p>
+
+        <div class="disciple-break-confirm-actions">
+          <button class="action-button" type="button" :disabled="busy" @click="closeBatchHeal">取消</button>
+          <button
+            class="action-button primary-action"
+            type="button"
+            :disabled="busy || batchHealRows.healable.length === 0 || !batchHealAffordable"
+            @click="confirmBatchHeal"
+          >
+            <span>{{ busy ? '服丹中…' : `确认疗伤（${batchHealRows.healable.length} 人）` }}</span>
+          </button>
+        </div>
+      </section>
+    </ModalShell>
+
+    <ChangelogDialog v-if="showChangelog" @close="showChangelog = false" />
+
+    <AccountDialog
+      v-if="showAccountDialog"
+      :sect-name="state.sect.name"
+      @close="showAccountDialog = false"
+      @notify="(tone, title, message) => emit('notify', tone, title, message)"
+    />
 
     <!--
       0021 宗门改名：二级弹窗（不做底栏）。价格与长度规则来自 state.rename；

@@ -19,6 +19,7 @@ import {
   daoDebateRequestSchema,
   expelDiscipleRequestSchema,
   exploreRequestSchema,
+  healBatchRequestSchema,
   raceBetRequestSchema,
   journeyPreviewQuerySchema,
   recruitRequestSchema,
@@ -58,6 +59,7 @@ import {
   getActiveExploration,
   getPublicSect,
   getSectState,
+  healDisciplesBatch,
   attackWorldBoss,
   getRaceHistory,
   getRaceState,
@@ -296,6 +298,14 @@ export function createGameRoutes(): Hono<AppEnv> {
     const userId = requireUserId(c);
     const body = await parseStrictJson(usePillRequestSchema, c);
     const result = await usePill(getDb(c.env), userId, body.pillId, body.discipleId, body.count ?? 1, Date.now());
+    return respondOk(c, { state: result.state, outcome: result.outcome });
+  });
+
+  // 批量疗伤（结算 → 逐个校验，不符合条件的跳过 → 回春丹须够全部伤员 → 一次受保护 batch）。
+  routes.post('/game/heal-batch', async (c) => {
+    const userId = requireUserId(c);
+    const body = await parseStrictJson(healBatchRequestSchema, c);
+    const result = await healDisciplesBatch(getDb(c.env), userId, body.discipleIds, Date.now());
     return respondOk(c, { state: result.state, outcome: result.outcome });
   });
 

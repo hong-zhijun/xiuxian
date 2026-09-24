@@ -58,6 +58,11 @@ export const breakthroughBatchRequestSchema = z.strictObject({
   discipleIds: batchDiscipleIdsSchema,
 });
 
+/** 批量疗伤（回春丹一人一颗）：无伤 / 重伤 / 在外的跳过；库存须够全部伤员。 */
+export const healBatchRequestSchema = z.strictObject({
+  discipleIds: batchDiscipleIdsSchema,
+});
+
 export const upgradeBuildingRequestSchema = z.strictObject({
   defId: z.string().min(1).max(64),
 });
