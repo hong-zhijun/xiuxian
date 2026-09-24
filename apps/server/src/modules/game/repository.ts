@@ -2948,3 +2948,37 @@ export function equipmentGuardStatement(
     params,
   };
 }
+
+/**
+ * 每片装备守卫最多几件：D1 单条语句最多 100 个绑定参数，每件占 3 个（id / sect_id / 归属人），
+ * 加 guardId 本身 1 个 → 30 件 91 个参数，留出余量（与 MEMBERS_PER_GUARD 同一口径）。
+ *
+ * 为什么必须切分：分解接口一次最多 50 件（背包容量），34 件就是 103 个参数，
+ * 单条守卫会被 D1 直接拒绝（本地 miniflare 不一定拦，生产会）。
+ */
+export const EQUIPMENT_PER_GUARD = 30;
+
+/**
+ * 装备行守卫（按 EQUIPMENT_PER_GUARD 切片）；返回守卫语句与它们的 guardId，
+ * 调用方必须把每个 guardId 的清理语句也放进同一批（见 deleteDiscipleSnapshotGuardStatement）。
+ */
+export function equipmentGuardStatements(
+  commandId: string,
+  sectId: string,
+  items: readonly { id: string; discipleId: string | null }[],
+): { guards: ParameterizedQuery[]; guardIds: string[] } {
+  const guards: ParameterizedQuery[] = [];
+  const guardIds: string[] = [];
+  for (let start = 0; start < items.length; start += EQUIPMENT_PER_GUARD) {
+    const guardId = `${commandId}:equipment:${String(start)}`;
+    guardIds.push(guardId);
+    guards.push(
+      equipmentGuardStatement(
+        guardId,
+        sectId,
+        items.slice(start, start + EQUIPMENT_PER_GUARD),
+      ),
+    );
+  }
+  return { guards, guardIds };
+}

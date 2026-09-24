@@ -8,12 +8,14 @@ import {
   attackWorldBoss,
   equipItem,
   expelDisciple,
+  exploreSectRealm,
   forgeEquipment,
   getEquipment,
   listDiscipleLeaderboard,
   previewJourney,
   processWorldBoss,
   salvageEquipment,
+  sparWithSect,
   unequipItem,
 } from '../src/modules/game/service';
 import { dataOf, TestClient } from './support/authClient';
@@ -1037,6 +1039,109 @@ describe('世界 Boss 掉落：仙品广播与背包已满', () => {
     expect((await balanceOf(sect.sectId, 'ore')) - oreBefore).toBeGreaterThanOrEqual(250_000);
     expect((await systemMessages()).filter((text) => text.includes('获得 ')).length).toBe(
       gainsBefore,
+    );
+  });
+});
+
+describe('复核修复回归：守卫分片 / 内存回写 / 秘境与切磋战力', () => {
+  it('分解 50 件（= 背包满的主动线）不再撞 D1 单条语句参数上限，且入账的矿石立刻出现在返回的 state 里', async () => {
+    const { fixture, now } = await frozenSect('eq-salvage50');
+    const ids: string[] = [];
+    for (let i = 0; i < 50; i += 1) {
+      ids.push(await insertEquipment(fixture.sectId));
+    }
+    const oreBefore = await balanceOf(fixture.sectId, 'ore');
+    const salvaged = await salvageEquipment(env.DB, fixture.userId, ids, now);
+
+    expect(salvaged.outcome.count).toBe(50);
+    expect(salvaged.outcome.ore).toBe(50_000 * 50);
+    expect(await equipmentRows(fixture.sectId)).toHaveLength(0);
+    expect(await balanceOf(fixture.sectId, 'ore')).toBe(oreBefore + 2_500_000);
+    // 返回的 state 立刻带上入账后的矿石（内存余额与写库语句同批更新）。
+    const oreView = (salvaged.state.resources as { id: string; balance: string }[]).find(
+      (resource) => resource.id === 'ore',
+    );
+    expect(Number(oreView?.balance)).toBe(oreBefore + 2_500_000);
+  });
+
+  it('穿戴 / 卸下返回的 state 立刻是新加成与新战力（不用等下一次 sync）', async () => {
+    const { fixture, now } = await frozenSect('eq-inview');
+    const discipleId = fixture.discipleIds[0]!;
+    const before = discipleOf(await fixture.state(), discipleId);
+    const item = await insertEquipment(fixture.sectId, {
+      mainValue: 12,
+      subAttr: 'speed',
+      subValue: 5,
+    });
+
+    const equipped = await equipItem(env.DB, fixture.userId, item, discipleId, now);
+    const after = discipleOf(equipped.state, discipleId);
+    expect(after.gear).toEqual({ attack: 12, defense: 0, speed: 5, luck: 0, physique: 0 });
+    expect(after.combatPower).toBe(
+      discipleCombatPower(
+        before.realmId,
+        Number(before.stage),
+        Number(before.attack) + 12,
+        Number(before.defense),
+        Number(before.speed) + 5,
+        before.talent,
+      ),
+    );
+
+    const off = await unequipItem(env.DB, fixture.userId, item, now);
+    const unloaded = discipleOf(off.state, discipleId);
+    expect(unloaded.gear).toEqual({ attack: 0, defense: 0, speed: 0, luck: 0, physique: 0 });
+    expect(unloaded.combatPower).toBe(before.combatPower);
+  });
+
+  it('秘境速通（/game/explore）的成功率计入装备', async () => {
+    const { fixture, now } = await frozenSect('eq-explore', 1);
+    const discipleId = fixture.discipleIds[0]!;
+    const plain = await exploreSectRealm(env.DB, fixture.userId, 'mistyForest', [discipleId], now);
+
+    // 速通有受伤判定（本地随机），先清掉再测第二次，免得「正在疗伤」把用例变脆。
+    await env.DB.prepare(
+      `UPDATE disciples SET gear_attack = 4000, gear_defense = 4000, gear_speed = 4000,
+                           injured_until = NULL
+        WHERE id = ?`,
+    )
+      .bind(discipleId)
+      .run();
+    const geared = await exploreSectRealm(env.DB, fixture.userId, 'mistyForest', [discipleId], now);
+    expect(geared.result.chanceBp).toBeGreaterThan(plain.result.chanceBp);
+    expect(geared.result.chanceBp).toBeGreaterThan(plain.result.chanceBp);
+  });
+
+  it('切磋（/game/parry）的双方战力计入装备', async () => {
+    const { fixture, now } = await frozenSect('eq-spar');
+    const mine = fixture.discipleIds[0]!;
+    const other = await makeSect('eq-spar-b');
+    const view = discipleOf(await fixture.state(), mine);
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    await env.DB.prepare(
+      `UPDATE disciples SET gear_attack = 300, gear_defense = 40, gear_speed = 60 WHERE id = ?`,
+    )
+      .bind(mine)
+      .run();
+
+    const spar = await sparWithSect(
+      env.DB,
+      fixture.userId,
+      other.sectId,
+      mine,
+      other.discipleIds[0]!,
+      now,
+    );
+    // Math.random = 0.5 → 浮动系数 1.0，账面战力就是战报里的战力。
+    expect(spar.result.myPower).toBe(
+      discipleCombatPower(
+        view.realmId,
+        Number(view.stage),
+        Number(view.attack) + 300,
+        Number(view.defense) + 40,
+        Number(view.speed) + 60,
+        view.talent,
+      ),
     );
   });
 });

@@ -148,14 +148,15 @@ import {
   partyCombatPower,
 } from './realms';
 import {
-  BOSS_DROP_CHANCE_OTHERS,
   BAG_CAPACITY,
+  BOSS_DROP_CHANCE_OTHERS,
   EQUIPMENT_SLOTS,
   FORGE_COST,
   FORGE_QUALITY,
-  bossDropQualities,
   bagFullReason,
+  bossDropQualities,
   forgeUnlockBlockedReason,
+  gearBonusOf,
   gearBonusOfDisciple,
   generateEquipment,
   isEquipmentQuality,
@@ -187,7 +188,7 @@ import {
   deleteEquipmentStatement,
   discipleMembersGuardStatement,
   discipleSnapshotGuardStatement,
-  equipmentGuardStatement,
+  equipmentGuardStatements,
   insertBuildingStatement,
   insertChallengeLogStatement,
   insertDiscipleStatement,
@@ -861,6 +862,20 @@ class SectDraft {
     this.addStatement(resourceDeltaStatement(this.sect.id, resourceId, -amount, this.now));
   }
 
+  /**
+   * 加资源（正 delta，不检查容量）：写库语句与**内存余额**一起更新。
+   * 0028 装备（分解 / 驱逐超额分解 / Boss 掉落的矿石返还）用这条，
+   * 这样随命令返回的 state.resources 立刻就是入账后的新值（与探索奖励同一做法）。
+   */
+  addResource(resourceId: string, amount: number): void {
+    this.balances = this.balances.map((row) =>
+      row.resource_id === resourceId
+        ? { ...row, balance: Number(row.balance) + amount, updated_at: this.now }
+        : row,
+    );
+    this.addStatement(resourceDeltaStatement(this.sect.id, resourceId, amount, this.now));
+  }
+
   addStatement(statement: ParameterizedQuery): void {
     this.statements.push(statement);
   }
@@ -1023,11 +1038,16 @@ class SectDraft {
         : { pill: { pillId: options.pillId, quantity: this.basePillQuantity(options.pillId) } }),
     });
     if (options.equipmentItems !== undefined && options.equipmentItems.length > 0) {
-      const equipmentGuardId = `${commandId}:equipment`;
-      guard.guards.push(
-        equipmentGuardStatement(equipmentGuardId, this.base.sect.id, options.equipmentItems),
+      // 一次最多 50 件 → 守卫按 EQUIPMENT_PER_GUARD 切片（D1 单条语句 100 个参数上限）。
+      const equipment = equipmentGuardStatements(
+        commandId,
+        this.base.sect.id,
+        options.equipmentItems,
       );
-      guard.cleanup.push(deleteDiscipleSnapshotGuardStatement(equipmentGuardId));
+      guard.guards.push(...equipment.guards);
+      guard.cleanup.push(
+        ...equipment.guardIds.map((id) => deleteDiscipleSnapshotGuardStatement(id)),
+      );
     }
     try {
       await this.db.batch(prepareStatements(this.db, [
@@ -1130,11 +1150,14 @@ class SectDraft {
       ));
     }
     if (options?.equipmentItems !== undefined && options.equipmentItems.length > 0) {
-      const equipmentGuardId = `${commandId}:equipment`;
-      guardIds.push(equipmentGuardId);
-      memberGuards.push(
-        equipmentGuardStatement(equipmentGuardId, this.base.sect.id, options.equipmentItems),
+      // 守卫按 EQUIPMENT_PER_GUARD 切片（D1 单条语句 100 个参数上限）。
+      const equipment = equipmentGuardStatements(
+        commandId,
+        this.base.sect.id,
+        options.equipmentItems,
       );
+      guardIds.push(...equipment.guardIds);
+      memberGuards.push(...equipment.guards);
     }
     try {
       await this.db.batch(prepareStatements(this.db, [
@@ -1146,6 +1169,11 @@ class SectDraft {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (/CHECK constraint failed: (?:valid = 1|mutation_guards)/i.test(message)) {
+        throw new AppError('INVALID_STATUS', '宗门状态已变化，请刷新后重试');
+      }
+      // 0028 装备：同一件装备 / 同一个部位被并发改动时，装备表的唯一索引会失败。
+      // 数据本身是安全的（整批回滚），这里把它映射成和其它并发冲突一样的业务错误。
+      if (/UNIQUE constraint failed: equipment/i.test(message)) {
         throw new AppError('INVALID_STATUS', '宗门状态已变化，请刷新后重试');
       }
       throw error;
@@ -2828,7 +2856,7 @@ export async function expelDisciple(
     salvagedOre += isEquipmentQuality(item.quality) ? salvageOreUnits(item.quality) : 0;
   }
   if (salvagedOre > 0) {
-    draft.addStatement(resourceDeltaStatement(draft.sect.id, 'ore', salvagedOre, now));
+    draft.addResource('ore', salvagedOre);
   }
 
   // 阵容守卫必须用「读到的库值」：守卫是本批第一条语句，此时本批写入还没执行。
@@ -4573,6 +4601,31 @@ async function loadEquipment(
 }
 
 /**
+ * 穿戴 / 卸下 / 转移后的收尾：写回库里的 5 个冗余列，**同时把内存行也改成新值**。
+ *
+ * 库侧用 refreshDiscipleGearStatement 按装备表 SUM（计划 2.2：不在内存里做加减）；
+ * 内存侧用调用方算好的「改动后的装备行」算同一个和 —— 只为让随命令返回的 state 立刻带上
+ * 新加成与新战力，否则前端拿到的 state 会滞回旧值，弟子详情里的 (+x) 要等下一次 sync 才对。
+ */
+function applyGearRefresh(
+  draft: SectDraft,
+  discipleId: string,
+  items: readonly EquipmentRow[],
+): void {
+  draft.addStatement(refreshDiscipleGearStatement(discipleId));
+  const row = draft.disciples.find((item) => item.id === discipleId);
+  if (row === undefined) {
+    return;
+  }
+  const gear = gearBonusOf(items.filter((item) => item.disciple_id === discipleId));
+  row.gear_attack = gear.attack;
+  row.gear_defense = gear.defense;
+  row.gear_speed = gear.speed;
+  row.gear_luck = gear.luck;
+  row.gear_physique = gear.physique;
+}
+
+/**
  * 炼器（POST /game/forge-equipment，计划 1.3）：结算 → 解锁 / 部位 / 主属性 / 背包 / 资源校验
  * → 扣资源 + 往背包里加一件**凡品**装备，只做**一次**受保护 batch。
  *
@@ -4683,13 +4736,19 @@ export async function equipItem(
   const replaced =
     items.find((row) => row.disciple_id === target.id && row.slot === item.slot) ?? null;
 
+  // 内存里同步改归属：随命令返回的 state 立刻带上新加成（库里的 SUM 在同一批写回）。
+  const nextItems = items.map((row) => {
+    if (row.id === item.id) return { ...row, disciple_id: target.id };
+    if (replaced !== null && row.id === replaced.id) return { ...row, disciple_id: null };
+    return row;
+  });
   if (replaced !== null) {
     draft.addStatement(updateEquipmentHolderStatement(replaced.id, draft.sect.id, null));
   }
   draft.addStatement(updateEquipmentHolderStatement(item.id, draft.sect.id, target.id));
-  draft.addStatement(refreshDiscipleGearStatement(target.id));
+  applyGearRefresh(draft, target.id, nextItems);
   if (previousHolder !== null) {
-    draft.addStatement(refreshDiscipleGearStatement(previousHolder.id));
+    applyGearRefresh(draft, previousHolder.id, nextItems);
   }
 
   await draft.commitDisciple(
@@ -4743,8 +4802,12 @@ export async function unequipItem(
     throw new AppError('INVALID_STATUS', bagFullReason(bagCount));
   }
 
+  // 内存里同步改归属：随命令返回的 state 立刻是不含这件装备的加成。
+  const nextItems = items.map((row) =>
+    row.id === item.id ? { ...row, disciple_id: null } : row,
+  );
   draft.addStatement(updateEquipmentHolderStatement(item.id, draft.sect.id, null));
-  draft.addStatement(refreshDiscipleGearStatement(holder.id));
+  applyGearRefresh(draft, holder.id, nextItems);
   await draft.commitDisciple([{ id: holder.id }], undefined, {
     equipmentItems: [{ id: item.id, discipleId: item.disciple_id }],
   });
@@ -4795,7 +4858,7 @@ export async function salvageEquipment(
     ore += isEquipmentQuality(row.quality) ? salvageOreUnits(row.quality) : 0;
   }
   if (ore > 0) {
-    draft.addStatement(resourceDeltaStatement(draft.sect.id, 'ore', ore, now));
+    draft.addResource('ore', ore);
   }
   await draft.commit({
     equipmentItems: chosen.map((row) => ({ id: row.id, discipleId: row.disciple_id })),
