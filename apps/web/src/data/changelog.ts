@@ -20,7 +20,7 @@ export const MAX_ENTRIES = 5;
 export const CHANGELOG: readonly ChangelogEntry[] = [
   {
     id: '2026-09-24-6',
-    time: '2026-09-24 12:56',
+    time: '2026-09-24 20:56',
     title: '装备二期：炼器坊 · 玄铁',
     items: [
       '新建筑「炼器坊」（宗门 2 级获得）：升级后可炼灵品、宝品、仙品。',
