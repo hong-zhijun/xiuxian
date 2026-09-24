@@ -6,6 +6,9 @@ import type {
   DaoAttribute,
   DiscipleJourneyView,
   DiscipleView,
+  EquipmentItemView,
+  EquipmentSlotId,
+  EquipmentView,
   JourneyDirection,
   JourneyDirectionPreviewView,
   JourneyDurationPreviewView,
@@ -36,12 +39,12 @@ import AssignmentSelect from './AssignmentSelect.vue';
 import DiscipleAvatar from './DiscipleAvatar.vue';
 import DiscipleRadarChart from './DiscipleRadarChart.vue';
 import LoadingState from './LoadingState.vue';
-import ModalShell from './ModalShell.vue';
-
 /**
- * 弟子详情（弹窗内容）：固定紧凑头部 + 四个 Tab（概览 / 修行 / 历练 / 档案）。
+ * 弟子详情（弹窗内容）：固定紧凑头部 + 五个 Tab（概览 / 修行 / 装备 / 历练 / 档案）。
  *
- * - 概览：六轴雷达图 + 当前属性与综合评分 + 简短修为摘要（雷达图必须在首 Tab）。
+ * - 概览：六轴雷达图 + 当前属性（带装备加成 `(+n)`）与综合评分 + 简短修为摘要（雷达图必须在首 Tab）。
+ * - 修行：修为、伤势、岗位、破境（胜算 / 消耗 / 原因）与丹药入口。
+ * - 装备：三个装备格（兵器 / 护甲 / 法器）；点格子从背包里挑同部位的装备穿上，已穿的可卸下。
  * - 修行：修为、伤势、岗位、破境（胜算 / 消耗 / 原因）与丹药入口。
  * - 历练：出发预览、在外倒计时、领取归队收获，以及**此弟子**的近期历练记录。
  * - 档案：头像框选取、私有备注、驱逐与二次确认。
@@ -69,6 +72,11 @@ const props = defineProps<{
   journeyRecent: JourneyRecordView[];
   /** 本地推进的服务端时钟（归队倒计时只读它，绝不读 Date.now()）。 */
   localNowMs: number;
+  /**
+   * 0028 装备视图（GET /game/equipment 的只读结果，由 SectScreen 拉取与刷新，本组件只渲染）。
+   * null = 还没取到（「装备」Tab 显示读取中），失败时保留上一次的快照。
+   */
+  equipment: EquipmentView | null;
 }>();
 
 const emit = defineEmits<{
@@ -88,6 +96,10 @@ const emit = defineEmits<{
   requestJourneyPreview: [discipleId: string];
   startJourney: [discipleId: string, direction: JourneyDirection, durationSeconds: number];
   claimJourney: [journeyId: string];
+  /** 0028 穿戴：把背包里的这件装备穿给本弟子（该部位原有的那件自动回背包）。 */
+  equip: [equipmentId: string, discipleId: string];
+  /** 0028 卸下：本弟子身上的这件装备回背包（背包满时服务端会拒绝）。 */
+  unequip: [equipmentId: string];
   notify: [tone: ToastTone, title: string, message: string];
 }>();
 
@@ -117,6 +129,7 @@ const energyName = computed(
 const TABS = [
   { id: 'overview', label: '概览' },
   { id: 'training', label: '修行' },
+  { id: 'gear', label: '装备' },
   { id: 'journey', label: '历练' },
   { id: 'archive', label: '档案' },
 ] as const;
@@ -139,7 +152,7 @@ function setTabButton(id: TabId, element: Element | null): void {
   else delete tabButtons.value[id];
 }
 
-/** 方向键 / Home / End 在四个 Tab 之间移动（自动激活，焦点跟着走）。 */
+/** 方向键 / Home / End 在五个 Tab 之间移动（自动激活，焦点跟着走）。 */
 function onTabKeydown(event: KeyboardEvent, current: TabId): void {
   const index = TABS.findIndex((tab) => tab.id === current);
   if (index < 0) return;
@@ -778,6 +791,86 @@ function confirmExpel(): void {
   expelSubmitted.value = true;
   emit('expel', props.disciple.id);
 }
+
+/* ---------- 0028 装备：「装备」Tab（装备视图由 SectScreen 拉取，这里只渲染与派发） ---------- */
+
+type GearAttribute = keyof DiscipleView['gear'];
+
+function isGearAttribute(attribute: string): attribute is GearAttribute {
+  return (
+    attribute === 'attack' ||
+    attribute === 'defense' ||
+    attribute === 'speed' ||
+    attribute === 'luck' ||
+    attribute === 'physique'
+  );
+}
+
+/** 该属性的装备加成；资质这类没有装备加成的属性按 0 处理。 */
+function gearBonusOf(attribute: string): number {
+  return isGearAttribute(attribute) ? props.disciple.gear[attribute] : 0;
+}
+
+/**
+ * 属性展示：`攻击 60 (+12)`：括号里是该弟子的装备加成（DiscipleView.gear），为 0 时不显示。
+ * 基础属性仍是服务端给的 attack/defense/...（最高 100）；战力已由服务端计入装备，前端不自己加。
+ */
+function attributeWithGear(label: string, attribute: string, value: number): string {
+  const bonus = gearBonusOf(attribute);
+  return bonus > 0 ? `${label} ${String(value)} (+${String(bonus)})` : `${label} ${String(value)}`;
+}
+
+/** 只要数值：`60 (+12)`（「当前 xx」这一类文案用）。 */
+function valueWithGear(attribute: string, value: number): string {
+  const bonus = gearBonusOf(attribute);
+  return bonus > 0 ? `${String(value)} (+${String(bonus)})` : String(value);
+}
+
+/** 三个装备格：部位顺序由服务端给；worn 是该弟子在此部位已穿的那件（没有则 null）。 */
+const gearSlots = computed(() =>
+  (props.equipment?.slots ?? []).map((slot) => ({
+    id: slot.id,
+    name: slot.name,
+    worn:
+      props.equipment?.items.find(
+        (item) => item.slot === slot.id && item.discipleId === props.disciple.id,
+      ) ?? null,
+  })),
+);
+
+/** 在外历练 / 重伤卧床：穿、卸都会被服务端拒绝（requireNotAway），这里同步置灰并说明原因。 */
+const gearBlocked = computed(() => severeInjured.value || journey.value.status === 'active');
+
+/** 正在选装备的部位（null = 没有打开二级面板）。 */
+const gearPickerSlot = ref<EquipmentSlotId | null>(null);
+
+const gearPickerSlotName = computed(
+  () => props.equipment?.slots.find((slot) => slot.id === gearPickerSlot.value)?.name ?? '装备',
+);
+
+/** 该部位的背包装备（只列未穿戴的：跨弟子转移要先从那件装备的主人身上卸下）。 */
+const gearPickerOptions = computed<EquipmentItemView[]>(() => {
+  if (props.equipment === null || gearPickerSlot.value === null) return [];
+  const slot = gearPickerSlot.value;
+  return props.equipment.items.filter((item) => item.slot === slot && item.discipleId === null);
+});
+
+function openGearPicker(slotId: EquipmentSlotId): void {
+  if (props.busy || gearBlocked.value) return;
+  gearPickerSlot.value = slotId;
+}
+
+/** 点选即穿戴：先关掉二级面板，请求由 SectScreen 发出（成功后 state 与装备视图一起回填）。 */
+function chooseGear(item: EquipmentItemView): void {
+  if (props.busy || gearBlocked.value) return;
+  gearPickerSlot.value = null;
+  emit('equip', item.id, props.disciple.id);
+}
+
+function unequipGear(item: EquipmentItemView | null): void {
+  if (item === null || props.busy || gearBlocked.value) return;
+  emit('unequip', item.id);
+}
 </script>
 
 <template>
@@ -844,7 +937,10 @@ function confirmExpel(): void {
             <span class="disciple-score-note">当前六项属性的等权平均，随淬体等属性变化更新；不含境界、修为、天赋与战力。</span>
           </div>
 
-          <!-- 雷达图与精确数值并排（窄屏自动单列）：六轴都按服务端原值绘制。 -->
+          <!--
+            雷达图与精确数值并排（窄屏自动单列）：六轴都按服务端原值绘制（基础属性，最高 100），
+            装备加成只在右侧数值列表里以 `(+n)` 标出，不参与绘图比例尺。
+          -->
           <DiscipleRadarChart
             :name="disciple.name"
             :aptitude="disciple.aptitude"
@@ -853,6 +949,7 @@ function confirmExpel(): void {
             :speed="disciple.speed"
             :luck="disciple.luck"
             :physique="disciple.physique"
+            :gear="disciple.gear"
           />
 
           <div class="disciple-stats">
@@ -860,14 +957,17 @@ function confirmExpel(): void {
             <span class="stat-tag stat-power">战力 {{ disciple.combatPower }}</span>
           </div>
 
-          <!-- 幸运 / 体魄只作用于单人定时历练，这里把「实际作用」写在数值旁边，避免被当成战力属性。 -->
+          <!--
+            幸运 / 体魄只作用于单人定时历练，这里把「实际作用」写在数值旁边，避免被当成战力属性；
+            属性一律按 `名称 基础 (+装备)` 显示（装备加成为 0 时不显示括号）。
+          -->
           <dl class="disciple-attribute-effects">
             <div>
-              <dt>幸运 {{ disciple.luck }}</dt>
+              <dt>{{ attributeWithGear('幸运', 'luck', disciple.luck) }}</dt>
               <dd>只作用于单人定时历练：影响该次历练的额外收获概率。</dd>
             </div>
             <div>
-              <dt>体魄 {{ disciple.physique }}</dt>
+              <dt>{{ attributeWithGear('体魄', 'physique', disciple.physique) }}</dt>
               <dd>只作用于单人定时历练：影响该次历练的受伤概率。</dd>
             </div>
           </dl>
@@ -902,7 +1002,7 @@ function confirmExpel(): void {
                   @click="daoAttribute = option.value"
                 >
                   <strong>{{ option.label }}</strong>
-                  <small>当前 {{ disciple[option.value] }}</small>
+                  <small>当前 {{ valueWithGear(option.value, disciple[option.value]) }}</small>
                 </button>
               </li>
             </ul>
@@ -1071,6 +1171,72 @@ function confirmExpel(): void {
           </button>
           <p v-if="actionBlockHint" class="blocked-hint">{{ actionBlockHint }}</p>
           <p class="disciple-detail-hint">点击后选择丹药；配方炼制仍在「炼丹」面板。</p>
+        </section>
+      </div>
+
+      <!-- ---------- 装备 ---------- -->
+      <div
+        v-show="activeTab === 'gear'"
+        :id="tabPanelId('gear')"
+        class="disciple-tab-panel"
+        role="tabpanel"
+        :aria-labelledby="tabButtonId('gear')"
+        tabindex="0"
+      >
+        <section class="disciple-detail-section disciple-gear" aria-labelledby="disciple-gear-title">
+          <h3 id="disciple-gear-title" class="disciple-detail-title">装备</h3>
+
+          <p v-if="equipment === null" class="disciple-detail-hint">正在清点宗门装备…</p>
+
+          <template v-else>
+            <p v-if="gearBlocked" class="blocked-hint">
+              {{ actionBlockHint ?? '在外历练或重伤卧床期间不能穿、卸装备。' }}
+            </p>
+
+            <ul class="gear-slots">
+              <li
+                v-for="slot in gearSlots"
+                :key="slot.id"
+                class="gear-slot"
+                :style="slot.worn === null ? undefined : { borderColor: slot.worn.color }"
+              >
+                <button
+                  class="gear-slot-body"
+                  type="button"
+                  :disabled="busy || gearBlocked"
+                  :aria-disabled="busy || gearBlocked"
+                  :aria-label="`${slot.name}：${slot.worn === null ? '未装备' : slot.worn.name}，点击选择装备`"
+                  @click="openGearPicker(slot.id)"
+                >
+                  <span class="gear-slot-label">{{ slot.name }}</span>
+                  <template v-if="slot.worn !== null">
+                    <strong class="gear-slot-name" :style="{ color: slot.worn.color }">{{ slot.worn.name }}</strong>
+                    <span class="gear-slot-attrs">
+                      主属性 {{ slot.worn.mainAttrName }} +{{ slot.worn.mainValue }} · 副属性
+                      {{ slot.worn.subAttrName }} +{{ slot.worn.subValue }}
+                    </span>
+                  </template>
+                  <span v-else class="gear-slot-empty">未装备</span>
+                </button>
+
+                <button
+                  v-if="slot.worn !== null"
+                  class="quiet-button gear-unequip"
+                  type="button"
+                  :disabled="busy || gearBlocked"
+                  :aria-disabled="busy || gearBlocked"
+                  :aria-label="`卸下 ${slot.worn.name}`"
+                  @click="unequipGear(slot.worn)"
+                >
+                  卸下
+                </button>
+              </li>
+            </ul>
+
+            <p class="disciple-detail-hint">
+              点格子从背包里挑一件同部位的装备穿上；换下来的那件自动回背包（穿在身上的不占背包）。
+            </p>
+          </template>
         </section>
       </div>
 
@@ -1521,6 +1687,56 @@ function confirmExpel(): void {
             </div>
           </li>
         </ul>
+      </section>
+    </ModalShell>
+
+    <!-- 二级弹窗：该部位的背包装备，点选即穿戴（Esc / 点遮罩只关这一层）。 -->
+    <ModalShell
+      v-if="gearPickerSlot !== null"
+      narrow
+      :label="`选择${gearPickerSlotName} · ${disciple.name}`"
+      @close="gearPickerSlot = null"
+    >
+      <section class="gear-picker" aria-labelledby="gear-picker-title">
+        <header class="section-heading panel-heading compact-heading">
+          <div>
+            <p class="eyebrow">兵甲库</p>
+            <h2 id="gear-picker-title">选择{{ gearPickerSlotName }}</h2>
+          </div>
+          <span v-if="equipment" class="count-badge">
+            背包 {{ equipment.bagCount }}/{{ equipment.bagCapacity }}
+          </span>
+        </header>
+
+        <p v-if="gearBlocked" class="blocked-hint">
+          {{ actionBlockHint ?? '在外历练或重伤卧床期间不能更换装备。' }}
+        </p>
+
+        <ul v-if="gearPickerOptions.length > 0" class="gear-picker-list">
+          <li
+            v-for="item in gearPickerOptions"
+            :key="item.id"
+            class="gear-picker-item"
+            :style="{ borderColor: item.color }"
+          >
+            <div class="gear-picker-copy">
+              <strong :style="{ color: item.color }">{{ item.name }}</strong>
+              <p>
+                主属性 {{ item.mainAttrName }} +{{ item.mainValue }} · 副属性 {{ item.subAttrName }} +{{ item.subValue }}
+              </p>
+            </div>
+            <button
+              class="upgrade-button gear-picker-button"
+              type="button"
+              :disabled="busy || gearBlocked"
+              :aria-disabled="busy || gearBlocked"
+              @click="chooseGear(item)"
+            >
+              <span>穿戴</span>
+            </button>
+          </li>
+        </ul>
+        <p v-else class="blocked-hint">背包里没有这个部位的装备：先去「炼器」打造，或等妖王掉落。</p>
       </section>
     </ModalShell>
   </section>

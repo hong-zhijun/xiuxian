@@ -148,9 +148,30 @@ import {
   partyCombatPower,
 } from './realms';
 import {
+  BAG_CAPACITY,
+  BOSS_DROP_CHANCE_OTHERS,
+  EQUIPMENT_SLOTS,
+  FORGE_COST,
+  FORGE_QUALITY,
+  bagFullReason,
+  bossDropQualities,
+  forgeUnlockBlockedReason,
+  gearBonusOf,
+  gearBonusOfDisciple,
+  generateEquipment,
+  isEquipmentQuality,
+  isEquipmentSlot,
+  resolveMainAttr,
+  salvageOreUnits,
+  slotNameOf,
+  withGear,
+  type AttrSet,
+} from './equipment';
+import {
   BuildingRepository,
   ChallengeRepository,
   DiscipleRepository,
+  EquipmentRepository,
   EventLogRepository,
   ExplorationRepository,
   PillInventoryRepository,
@@ -161,13 +182,17 @@ import {
   challengeSnapshotGuardStatement,
   deleteAlchemySnapshotGuardStatement,
   deleteChallengeSnapshotGuardStatement,
+  deleteBagEquipmentStatement,
   deleteDiscipleSnapshotGuardStatement,
   deleteDiscipleStatement,
+  deleteEquipmentStatement,
   discipleMembersGuardStatement,
   discipleSnapshotGuardStatement,
+  equipmentGuardStatements,
   insertBuildingStatement,
   insertChallengeLogStatement,
   insertDiscipleStatement,
+  insertEquipmentStatement,
   insertEventLogStatement,
   insertExplorationStatement,
   insertResourceBalanceStatement,
@@ -184,7 +209,9 @@ import {
   updateDiscipleNoteStatement,
   updateDiscipleProgressStatement,
   updatePillInventoryQuantityStatement,
+  refreshDiscipleGearStatement,
   updateResourceSettledStatement,
+  updateEquipmentHolderStatement,
   updateSectChallengeCounterStatement,
   updateSectDefenseLineupStatement,
   updateSectLevelStatement,
@@ -198,6 +225,7 @@ import {
   type DiscipleRow,
   type EventLogRow,
   type PillInventoryRow,
+  type EquipmentRow,
   type ResourceBalanceRow,
   type SectRow,
 } from './repository';
@@ -319,6 +347,7 @@ import {
 import {
   breakthroughChanceBp,
   buildSectStateView,
+  buildEquipmentView,
   eventLogViewFromRow,
   upgradeCost,
   type ChallengeBlockedReason,
@@ -371,8 +400,8 @@ import {
   type WorldBossDefView,
   type WorldBossAffixView,
   type WorldBossMemberOutcomeView,
+  type EquipmentView,
 } from './view';
-
 /**
  * 游戏服务（一次性可玩版本）。
  *
@@ -833,6 +862,20 @@ class SectDraft {
     this.addStatement(resourceDeltaStatement(this.sect.id, resourceId, -amount, this.now));
   }
 
+  /**
+   * 加资源（正 delta，不检查容量）：写库语句与**内存余额**一起更新。
+   * 0028 装备（分解 / 驱逐超额分解 / Boss 掉落的矿石返还）用这条，
+   * 这样随命令返回的 state.resources 立刻就是入账后的新值（与探索奖励同一做法）。
+   */
+  addResource(resourceId: string, amount: number): void {
+    this.balances = this.balances.map((row) =>
+      row.resource_id === resourceId
+        ? { ...row, balance: Number(row.balance) + amount, updated_at: this.now }
+        : row,
+    );
+    this.addStatement(resourceDeltaStatement(this.sect.id, resourceId, amount, this.now));
+  }
+
   addStatement(statement: ParameterizedQuery): void {
     this.statements.push(statement);
   }
@@ -973,6 +1016,12 @@ class SectDraft {
      * 传了就进守卫 —— 这条库存必须仍是读快照时的数量，否则整批回滚。
      */
     pillId?: string;
+    /**
+     * 0028 装备：本次写入涉及的装备行（快照时的归属人必须没变）。
+     * 炼器 / 卸下 / 分解 / 驱逐都传它 —— 少了这条会出现「装备表归属是 B，
+     * 但 A 的 gear 列还算着这件装备」（见 equipmentGuardStatement 注释）。
+     */
+    equipmentItems?: readonly { id: string; discipleId: string | null }[];
   } = {}): Promise<void> {
     if (this.statements.length === 0) {
       return;
@@ -988,6 +1037,18 @@ class SectDraft {
         ? {}
         : { pill: { pillId: options.pillId, quantity: this.basePillQuantity(options.pillId) } }),
     });
+    if (options.equipmentItems !== undefined && options.equipmentItems.length > 0) {
+      // 一次最多 50 件 → 守卫按 EQUIPMENT_PER_GUARD 切片（D1 单条语句 100 个参数上限）。
+      const equipment = equipmentGuardStatements(
+        commandId,
+        this.base.sect.id,
+        options.equipmentItems,
+      );
+      guard.guards.push(...equipment.guards);
+      guard.cleanup.push(
+        ...equipment.guardIds.map((id) => deleteDiscipleSnapshotGuardStatement(id)),
+      );
+    }
     try {
       await this.db.batch(prepareStatements(this.db, [
         ...guard.guards,
@@ -1057,6 +1118,8 @@ class SectDraft {
        * （重伤弟子仍是本宗门人、境界不变），其余路径一律 false（默认拒绝）。
        */
       allowSevereInjury?: boolean;
+      /** 0028 装备：本次写入涉及的装备行（快照时的归属人必须没变）。 */
+      equipmentItems?: readonly { id: string; discipleId: string | null }[];
     },
   ): Promise<void> {
     const commandId = crypto.randomUUID();
@@ -1087,6 +1150,16 @@ class SectDraft {
         rejectSevereMembers,
       ));
     }
+    if (options?.equipmentItems !== undefined && options.equipmentItems.length > 0) {
+      // 守卫按 EQUIPMENT_PER_GUARD 切片（D1 单条语句 100 个参数上限）。
+      const equipment = equipmentGuardStatements(
+        commandId,
+        this.base.sect.id,
+        options.equipmentItems,
+      );
+      guardIds.push(...equipment.guardIds);
+      memberGuards.push(...equipment.guards);
+    }
     try {
       await this.db.batch(prepareStatements(this.db, [
         guard,
@@ -1097,6 +1170,11 @@ class SectDraft {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (/CHECK constraint failed: (?:valid = 1|mutation_guards)/i.test(message)) {
+        throw new AppError('INVALID_STATUS', '宗门状态已变化，请刷新后重试');
+      }
+      // 0028 装备：同一件装备 / 同一个部位被并发改动时，装备表的唯一索引会失败。
+      // 数据本身是安全的（整批回滚），这里把它映射成和其它并发冲突一样的业务错误。
+      if (/UNIQUE constraint failed: equipment/i.test(message)) {
         throw new AppError('INVALID_STATUS', '宗门状态已变化，请刷新后重试');
       }
       throw error;
@@ -1626,6 +1704,12 @@ export async function createSect(
       name: randomDiscipleName(),
       gender: randomGender(),
       ...attributes,
+      // 0028 装备：新弟子还没有装备，5 个冗余列都是 0。
+      gear_attack: 0,
+      gear_defense: 0,
+      gear_speed: 0,
+      gear_luck: 0,
+      gear_physique: 0,
       talent: generateTalent(Math.random),
       realm_id: template.realm,
       stage: template.stage,
@@ -1962,6 +2046,12 @@ export async function recruitDisciple(
     speed: candidate.speed,
     luck: candidate.luck,
     physique: candidate.physique,
+    // 0028 装备：新招募的弟子还没有装备，5 个冗余列都是 0。
+    gear_attack: 0,
+    gear_defense: 0,
+    gear_speed: 0,
+    gear_luck: 0,
+    gear_physique: 0,
     talent: candidate.talent,
     realm_id: 'qiRefining',
     stage: 1,
@@ -2704,6 +2794,10 @@ export interface ExpelDiscipleOutcome {
   lineupCleared: boolean;
   /** 驱逐后宗门剩余弟子数（< 3 时无法组成主动挑战阵容、也不能被挑战）。 */
   remainingDisciples: number;
+  /** 0028 装备：回到背包的件数（背包放不下的部分不会计入这里）。 */
+  equipmentReturned: number;
+  /** 0028 装备：因背包已满而自动分解返还的矿石（最小单位；没触发为 0）。 */
+  salvagedOre: number;
 }
 
 /**
@@ -2716,6 +2810,9 @@ export interface ExpelDiscipleOutcome {
  *   不在阵容内时阵容一个字都不改；
  * - 历史快照（challenge_log / sparring_log / explorations）与公开档案不回写；返回的 state 里
  *   人数相关视图（招募容量、宗门升级要求、守擂）已经是新人数。
+ * - 0028 装备：他身上的装备全部回到背包（同一 batch）；背包已满时装不下的那几件
+ *   自动分解成矿石入账（计划 1.5）。装备行也进守卫（归属人必须仍是读到的快照）。
+ *
  *
  * 并发（计划 2.5 末条）：commitDisciple 的首条快照守卫在 batch 执行时重新核对宗门行、资源
  * 余额、被驱逐弟子仍属本宗，以及阵容仍与读到的快照一致；任一冲突整批回滚并映射成
@@ -2738,6 +2835,31 @@ export async function expelDisciple(
     throw new AppError('INVALID_STATUS', `${disciple.name}正在秘境探索中，探索结束后才能驱逐`);
   }
 
+  // 0028 装备：他身上的装备全部回到背包；背包装不下的部分自动分解为矿石。
+  // 顺序固定为（部位表顺序 → id），保证同一堆装备每次自动分解的都是同一批。
+  const sectEquipment = await new EquipmentRepository(db).findBySectId(draft.sect.id);
+  const slotOrder = (slot: string): number =>
+    EQUIPMENT_SLOTS.findIndex((item) => item.id === slot);
+  const wornItems = sectEquipment
+    .filter((row) => row.disciple_id === disciple.id)
+    .sort((a, b) => slotOrder(a.slot) - slotOrder(b.slot) || a.id.localeCompare(b.id));
+  let bagCount = sectEquipment.filter((row) => row.disciple_id === null).length;
+  let equipmentReturned = 0;
+  let salvagedOre = 0;
+  for (const item of wornItems) {
+    if (bagCount < BAG_CAPACITY) {
+      draft.addStatement(updateEquipmentHolderStatement(item.id, draft.sect.id, null));
+      bagCount += 1;
+      equipmentReturned += 1;
+      continue;
+    }
+    draft.addStatement(deleteEquipmentStatement(item.id, draft.sect.id));
+    salvagedOre += isEquipmentQuality(item.quality) ? salvageOreUnits(item.quality) : 0;
+  }
+  if (salvagedOre > 0) {
+    draft.addResource('ore', salvagedOre);
+  }
+
   // 阵容守卫必须用「读到的库值」：守卫是本批第一条语句，此时本批写入还没执行。
   const lineupSnapshot = draft.sect.defense_lineup;
   const lineupCleared = lineupContainsDisciple(lineupSnapshot, disciple.id);
@@ -2749,7 +2871,10 @@ export async function expelDisciple(
     draft.sect.defense_lineup = null;
   }
 
-  await draft.commitDisciple([{ id: disciple.id }], lineupSnapshot, { allowSevereInjury: true });
+  await draft.commitDisciple([{ id: disciple.id }], lineupSnapshot, {
+    allowSevereInjury: true,
+    equipmentItems: wornItems.map((row) => ({ id: row.id, discipleId: row.disciple_id })),
+  });
   return {
     state: draft.view(),
     outcome: {
@@ -2757,6 +2882,8 @@ export async function expelDisciple(
       discipleName: disciple.name,
       lineupCleared,
       remainingDisciples: draft.disciples.length,
+      equipmentReturned,
+      salvagedOre,
     },
   };
 }
@@ -2980,12 +3107,14 @@ export async function exploreSectRealm(
     if (disciple.injured_until !== null && Number(disciple.injured_until) > now) {
       throw new AppError('INVALID_STATUS', `${disciple.name}正在疗伤，无法出战`);
     }
+    // 0028 装备：秘境速通（/game/explore）计入装备 —— 战力用「基础属性 + 装备加成」。
+    const attrs = battleAttrsOf(disciple);
     members.push({
       realmId: disciple.realm_id,
       stage: Number(disciple.stage),
-      attack: Number(disciple.attack),
-      defense: Number(disciple.defense),
-      speed: Number(disciple.speed),
+      attack: attrs.attack,
+      defense: attrs.defense,
+      speed: attrs.speed,
       talent: disciple.talent,
       name: disciple.name,
     });
@@ -3138,6 +3267,41 @@ function fluctuatedPower(basePower: number): number {
   return Math.floor(basePower * (0.85 + Math.random() * 0.3));
 }
 
+/**
+ * 0028 装备：一名弟子的**战斗属性** = 基础属性 + 装备加成（只读弟子表上 5 个冗余列）。
+ *
+ * 计划 1.2 的计入口径（每个调用点都另有一段说明）：
+ *   计入：挑战（攻方与守擂）、秘境探索（速通 / 交互式）、世界 Boss、弟子视图战力、
+ *         天骄榜战力、切磋；
+ *   不计入：弟子历练、论道赌局、综合评分、悟道值加点上限。
+ * 加法由 equipment.ts 的 withGear 实现：加成后可以超过 100，基础属性本身仍最高 100。
+ */
+function battleAttrsOf(disciple: DiscipleRow): AttrSet {
+  return withGear(
+    {
+      attack: Number(disciple.attack),
+      defense: Number(disciple.defense),
+      speed: Number(disciple.speed),
+      luck: Number(disciple.luck),
+      physique: Number(disciple.physique),
+    },
+    gearBonusOfDisciple(disciple),
+  );
+}
+
+/** 0028：弟子战力（**计入装备**）——把「基础属性 + 装备加成」传给 realms.ts 的战力函数。 */
+function gearedCombatPower(disciple: DiscipleRow): number {
+  const attrs = battleAttrsOf(disciple);
+  return discipleCombatPower(
+    disciple.realm_id,
+    Number(disciple.stage),
+    attrs.attack,
+    attrs.defense,
+    attrs.speed,
+    disciple.talent,
+  );
+}
+
 /** 镇派弟子：境界（realmIndex）→ 阶段 → 资质逐级比较取最高；没有弟子返回 null。 */
 function topDiscipleOf(disciples: readonly DiscipleRow[]): LeaderboardEntryView['topDisciple'] {
   let best: DiscipleRow | null = null;
@@ -3229,14 +3393,11 @@ export async function listDiscipleLeaderboard(
   for (const sect of sects) {
     const disciples = await discipleRepository.findBySectId(sect.id);
     for (const d of disciples) {
+      // 0028 装备：天骄榜的「战力」计入装备；「综合评分」不计入（计划 1.2 明列）。
       all.push({
         row: d,
         sectId: sect.id,
-        combatPower: discipleCombatPower(
-          d.realm_id, Number(d.stage),
-          Number(d.attack), Number(d.defense), Number(d.speed),
-          d.talent,
-        ),
+        combatPower: gearedCombatPower(d),
         score: attributeScore({
           aptitude: Number(d.aptitude),
           attack: Number(d.attack),
@@ -3400,14 +3561,8 @@ export async function getPublicSect(
       realmOrder: realmIndex(disciple.realm_id),
       stage: Number(disciple.stage),
       stageName: findStage(disciple.realm_id, Number(disciple.stage)).name,
-      combatPower: discipleCombatPower(
-        disciple.realm_id,
-        Number(disciple.stage),
-        Number(disciple.attack),
-        Number(disciple.defense),
-        Number(disciple.speed),
-        disciple.talent,
-      ),
+      // 0028 装备：公开档案的「战力」计入装备（这里展示的攻/防/身法仍是基础属性）。
+      combatPower: gearedCombatPower(disciple),
     })),
     buildings: buildings.map((building) => ({
       name: config.buildings.find((item) => item.id === building.def_id)?.name ?? building.def_id,
@@ -3473,26 +3628,9 @@ export async function sparWithSect(
     throw new AppError('NOT_FOUND', '对方弟子不存在');
   }
 
-  const myPower = fluctuatedPower(
-    discipleCombatPower(
-      myDisciple.realm_id,
-      Number(myDisciple.stage),
-      Number(myDisciple.attack),
-      Number(myDisciple.defense),
-      Number(myDisciple.speed),
-      myDisciple.talent,
-    ),
-  );
-  const targetPower = fluctuatedPower(
-    discipleCombatPower(
-      targetDisciple.realm_id,
-      Number(targetDisciple.stage),
-      Number(targetDisciple.attack),
-      Number(targetDisciple.defense),
-      Number(targetDisciple.speed),
-      targetDisciple.talent,
-    ),
-  );
+  // 0028 装备：切磋是「战斗」（不是历练 / 论道 / 综合评分），双方战力都计入装备。
+  const myPower = fluctuatedPower(gearedCombatPower(myDisciple));
+  const targetPower = fluctuatedPower(gearedCombatPower(targetDisciple));
   const result: SparResultView['result'] =
     myPower > targetPower ? 'win' : myPower < targetPower ? 'lose' : 'draw';
 
@@ -3910,22 +4048,23 @@ export async function challengeSect(
     if (disciple.injured_until !== null && Number(disciple.injured_until) > now) {
       throw new AppError('INVALID_STATUS', `${disciple.name}正在疗伤，无法出战`);
     }
+    // 0028 装备：挑战（攻方）计入装备 —— 战力与上下文属性都用「基础 + 装备加成」。
+    const attrs = battleAttrsOf(disciple);
     const stage = Number(disciple.stage);
-    const attack = Number(disciple.attack);
-    const defense = Number(disciple.defense);
-    const speed = Number(disciple.speed);
     attackerRichMembers.push({
       discipleId: disciple.id,
       name: disciple.name,
-      power: discipleCombatPower(disciple.realm_id, stage, attack, defense, speed, disciple.talent),
+      power: discipleCombatPower(
+        disciple.realm_id, stage, attrs.attack, attrs.defense, attrs.speed, disciple.talent,
+      ),
       realmName: findStage(disciple.realm_id, stage).name,
       stage,
-      attack,
-      defense,
-      speed,
+      attack: attrs.attack,
+      defense: attrs.defense,
+      speed: attrs.speed,
       aptitude: Number(disciple.aptitude),
-      luck: Number(disciple.luck),
-      physique: Number(disciple.physique),
+      luck: attrs.luck,
+      physique: attrs.physique,
       talent: disciple.talent,
     });
   }
@@ -3954,22 +4093,23 @@ export async function challengeSect(
   }
   const defenseMode: DefenseMode = plan.mode;
   const toRichMember = (disciple: (typeof defenders)[number]): ChallengeRichMember => {
+    // 0028 装备：挑战（守擂方）同上 —— 守方弟子身上的装备同样计入。
+    const attrs = battleAttrsOf(disciple);
     const stage = Number(disciple.stage);
-    const attack = Number(disciple.attack);
-    const defense = Number(disciple.defense);
-    const speed = Number(disciple.speed);
     return {
       discipleId: disciple.id,
       name: disciple.name,
-      power: discipleCombatPower(disciple.realm_id, stage, attack, defense, speed, disciple.talent),
+      power: discipleCombatPower(
+        disciple.realm_id, stage, attrs.attack, attrs.defense, attrs.speed, disciple.talent,
+      ),
       realmName: findStage(disciple.realm_id, stage).name,
       stage,
-      attack,
-      defense,
-      speed,
+      attack: attrs.attack,
+      defense: attrs.defense,
+      speed: attrs.speed,
       aptitude: Number(disciple.aptitude),
-      luck: Number(disciple.luck),
-      physique: Number(disciple.physique),
+      luck: attrs.luck,
+      physique: attrs.physique,
       talent: disciple.talent,
     };
   };
@@ -4483,6 +4623,349 @@ export async function healDisciplesBatch(
   };
 }
 
+/* ---------- 装备（0028 迁移：炼器 / 背包 / 穿戴 / 分解；规则见 equipment.ts） ---------- */
+
+/** 炼器回执（纯命令结果）；不属于任何公开视图。 */
+export interface ForgeEquipmentOutcome {
+  equipmentId: string;
+  name: string;
+  slot: string;
+  slotName: string;
+  quality: string;
+  /** 本次消耗（最小单位），与 equipment.ts 的 FORGE_COST 同一份。 */
+  cost: Record<string, string>;
+}
+
+/** 穿戴 / 卸下回执。 */
+export interface EquipChangeOutcome {
+  equipmentId: string;
+  name: string;
+  slot: string;
+  slotName: string;
+  /** 现在穿在谁身上；卸下后为 null（已回背包）。 */
+  discipleId: string | null;
+  discipleName: string | null;
+  /** 该部位被换回背包的那件旧装备名；没有换下任何东西时为 null。 */
+  replacedName: string | null;
+}
+
+/** 分解回执。 */
+export interface SalvageEquipmentOutcome {
+  count: number;
+  /** 返还的矿石（最小单位）。 */
+  ore: number;
+}
+
+/** 炼器解锁检查（只在服务端实现；未解锁时 forge 一律 INVALID_STATUS）。 */
+function requireForgeUnlocked(draft: SectDraft): void {
+  const reason = forgeUnlockBlockedReason(Number(draft.sect.level));
+  if (reason !== null) {
+    throw new AppError('INVALID_STATUS', reason);
+  }
+}
+
+/** 本宗全部装备（背包 + 已穿戴）与背包件数；背包 = disciple_id IS NULL。 */
+async function loadEquipment(
+  db: D1Database,
+  sectId: string,
+): Promise<{ items: EquipmentRow[]; bagCount: number }> {
+  const repo = new EquipmentRepository(db);
+  const [items, bagCount] = await Promise.all([
+    repo.findBySectId(sectId),
+    repo.countBagBySectId(sectId),
+  ]);
+  return { items, bagCount };
+}
+
+/**
+ * 穿戴 / 卸下 / 转移后的收尾：写回库里的 5 个冗余列，**同时把内存行也改成新值**。
+ *
+ * 库侧用 refreshDiscipleGearStatement 按装备表 SUM（计划 2.2：不在内存里做加减）；
+ * 内存侧用调用方算好的「改动后的装备行」算同一个和 —— 只为让随命令返回的 state 立刻带上
+ * 新加成与新战力，否则前端拿到的 state 会滞回旧值，弟子详情里的 (+x) 要等下一次 sync 才对。
+ */
+function applyGearRefresh(
+  draft: SectDraft,
+  discipleId: string,
+  items: readonly EquipmentRow[],
+): void {
+  draft.addStatement(refreshDiscipleGearStatement(discipleId));
+  const row = draft.disciples.find((item) => item.id === discipleId);
+  if (row === undefined) {
+    return;
+  }
+  const gear = gearBonusOf(items.filter((item) => item.disciple_id === discipleId));
+  row.gear_attack = gear.attack;
+  row.gear_defense = gear.defense;
+  row.gear_speed = gear.speed;
+  row.gear_luck = gear.luck;
+  row.gear_physique = gear.physique;
+}
+
+/**
+ * 炼器（POST /game/forge-equipment，计划 1.3）：结算 → 解锁 / 部位 / 主属性 / 背包 / 资源校验
+ * → 扣资源 + 往背包里加一件**凡品**装备，只做**一次**受保护 batch。
+ *
+ * 一期只能炼凡品且必定成功（品质不随机）；法器必须给身法 / 幸运，其它部位不许给主属性；
+ * 背包满（50 件，见 1.5）时不能炼器。
+ */
+export async function forgeEquipment(
+  db: D1Database,
+  userId: string,
+  slot: string,
+  mainAttr: string | undefined,
+  now: number,
+): Promise<{ state: SectStateView; outcome: ForgeEquipmentOutcome }> {
+  const draft = await draftFor(db, userId, now);
+  requireForgeUnlocked(draft);
+  if (!isEquipmentSlot(slot)) {
+    throw new AppError('VALIDATION_ERROR', '未知装备部位');
+  }
+  // 计划 1.3：部位由玩家选；法器**必须**选身法 / 幸运，其它部位**不许**给主属性。
+  if (slot === 'artifact') {
+    if (mainAttr !== 'speed' && mainAttr !== 'luck') {
+      throw new AppError('VALIDATION_ERROR', '法器需要选择身法或幸运');
+    }
+  } else if (mainAttr !== undefined) {
+    throw new AppError('VALIDATION_ERROR', '该部位不需要选择主属性');
+  }
+  const resolvedMainAttr = resolveMainAttr(slot, mainAttr, Math.random);
+  if (resolvedMainAttr === null) {
+    // 上面的校验已经覆盖了所有非法组合，这里只是给类型收窄兜底。
+    throw new AppError('VALIDATION_ERROR', '主属性无效');
+  }
+  const { bagCount } = await loadEquipment(db, draft.sect.id);
+  if (bagCount >= BAG_CAPACITY) {
+    throw new AppError('INVALID_STATUS', bagFullReason(bagCount));
+  }
+  for (const [resourceId, amount] of Object.entries(FORGE_COST)) {
+    draft.requireResource(resourceId, Number(amount));
+  }
+
+  const generated = generateEquipment({
+    slot,
+    quality: FORGE_QUALITY,
+    mainAttr: resolvedMainAttr,
+    random: Math.random,
+  });
+  const equipmentId = crypto.randomUUID();
+  draft.addStatement(
+    insertEquipmentStatement({
+      id: equipmentId,
+      sectId: draft.sect.id,
+      slot: generated.slot,
+      quality: generated.quality,
+      name: generated.name,
+      mainAttr: generated.mainAttr,
+      mainValue: generated.mainValue,
+      subAttr: generated.subAttr,
+      subValue: generated.subValue,
+      source: 'forge',
+      now,
+    }),
+  );
+  await draft.commit();
+  return {
+    state: draft.view(),
+    outcome: {
+      equipmentId,
+      name: generated.name,
+      slot: generated.slot,
+      slotName: slotNameOf(generated.slot),
+      quality: generated.quality,
+      cost: { ...FORGE_COST },
+    },
+  };
+}
+
+/**
+ * 穿戴（POST /game/equip，计划 1.5）。
+ *
+ * - 把一件装备穿到某弟子对应部位，该部位原有装备自动放回背包（一换一 → 背包满也能换装）；
+ * - 可以直接把 A 弟子身上的装备穿给 B 弟子（先卸下再穿上，A 的该部位变空）；
+ * - 目标弟子与（装备原本穿在别人身上时的）原归属弟子都要通过 requireNotAway：
+ *   在外历练 / 重伤卧床期间既不能穿、也不能把身上的装备给别人；
+ * - 装备行改动与两名弟子的 gear 列写回在**同一个 batch**，且先改归属、再按装备表重新求和。
+ */
+export async function equipItem(
+  db: D1Database,
+  userId: string,
+  equipmentId: string,
+  discipleId: string,
+  now: number,
+): Promise<{ state: SectStateView; outcome: EquipChangeOutcome }> {
+  const draft = await draftFor(db, userId, now);
+  const target = draft.discipleById(discipleId);
+  requireNotAway(draft, target, '穿戴装备');
+
+  const { items } = await loadEquipment(db, draft.sect.id);
+  const item = items.find((row) => row.id === equipmentId);
+  if (item === undefined) {
+    throw new AppError('NOT_FOUND', '装备不存在');
+  }
+  if (item.disciple_id === target.id) {
+    throw new AppError('INVALID_STATUS', `${target.name}已经穿着这件装备`);
+  }
+  const previousHolder = item.disciple_id === null ? null : draft.discipleById(item.disciple_id);
+  if (previousHolder !== null) {
+    requireNotAway(draft, previousHolder, '取下装备');
+  }
+  const replaced =
+    items.find((row) => row.disciple_id === target.id && row.slot === item.slot) ?? null;
+
+  // 内存里同步改归属：随命令返回的 state 立刻带上新加成（库里的 SUM 在同一批写回）。
+  const nextItems = items.map((row) => {
+    if (row.id === item.id) return { ...row, disciple_id: target.id };
+    if (replaced !== null && row.id === replaced.id) return { ...row, disciple_id: null };
+    return row;
+  });
+  if (replaced !== null) {
+    draft.addStatement(updateEquipmentHolderStatement(replaced.id, draft.sect.id, null));
+  }
+  draft.addStatement(updateEquipmentHolderStatement(item.id, draft.sect.id, target.id));
+  applyGearRefresh(draft, target.id, nextItems);
+  if (previousHolder !== null) {
+    applyGearRefresh(draft, previousHolder.id, nextItems);
+  }
+
+  await draft.commitDisciple(
+    previousHolder === null ? [{ id: target.id }] : [{ id: target.id }, { id: previousHolder.id }],
+    undefined,
+    {
+      equipmentItems: [
+        { id: item.id, discipleId: item.disciple_id },
+        ...(replaced === null
+          ? []
+          : [{ id: replaced.id, discipleId: replaced.disciple_id }]),
+      ],
+    },
+  );
+  return {
+    state: draft.view(),
+    outcome: {
+      equipmentId: item.id,
+      name: item.name,
+      slot: item.slot,
+      slotName: slotNameOf(item.slot),
+      discipleId: target.id,
+      discipleName: target.name,
+      replacedName: replaced?.name ?? null,
+    },
+  };
+}
+
+/**
+ * 卸下（POST /game/unequip，计划 1.5）：放回背包；**背包已满时拒绝**（提示先分解）。
+ * 在外历练 / 重伤卧床的弟子不能卸下（沿用 requireNotAway）。
+ */
+export async function unequipItem(
+  db: D1Database,
+  userId: string,
+  equipmentId: string,
+  now: number,
+): Promise<{ state: SectStateView; outcome: EquipChangeOutcome }> {
+  const draft = await draftFor(db, userId, now);
+  const { items, bagCount } = await loadEquipment(db, draft.sect.id);
+  const item = items.find((row) => row.id === equipmentId);
+  if (item === undefined) {
+    throw new AppError('NOT_FOUND', '装备不存在');
+  }
+  if (item.disciple_id === null) {
+    throw new AppError('INVALID_STATUS', '这件装备本来就在背包里');
+  }
+  const holder = draft.discipleById(item.disciple_id);
+  requireNotAway(draft, holder, '卸下装备');
+  if (bagCount >= BAG_CAPACITY) {
+    throw new AppError('INVALID_STATUS', bagFullReason(bagCount));
+  }
+
+  // 内存里同步改归属：随命令返回的 state 立刻是不含这件装备的加成。
+  const nextItems = items.map((row) =>
+    row.id === item.id ? { ...row, disciple_id: null } : row,
+  );
+  draft.addStatement(updateEquipmentHolderStatement(item.id, draft.sect.id, null));
+  applyGearRefresh(draft, holder.id, nextItems);
+  await draft.commitDisciple([{ id: holder.id }], undefined, {
+    equipmentItems: [{ id: item.id, discipleId: item.disciple_id }],
+  });
+  return {
+    state: draft.view(),
+    outcome: {
+      equipmentId: item.id,
+      name: item.name,
+      slot: item.slot,
+      slotName: slotNameOf(item.slot),
+      discipleId: null,
+      discipleName: null,
+      replacedName: null,
+    },
+  };
+}
+
+/**
+ * 分解（POST /game/salvage-equipment，计划 1.5）：只能分解**背包里**的装备
+ * （穿在身上的不能分解，提示先卸下），按品质表返还矿石；一次 1~50 件，服务端去重。
+ * 删除语句与返还的矿石在同一 batch，装备行也进守卫。
+ */
+export async function salvageEquipment(
+  db: D1Database,
+  userId: string,
+  equipmentIds: readonly string[],
+  now: number,
+): Promise<{ state: SectStateView; outcome: SalvageEquipmentOutcome }> {
+  const draft = await draftFor(db, userId, now);
+  const ids = [...new Set(equipmentIds)];
+  const { items } = await loadEquipment(db, draft.sect.id);
+  const byId = new Map(items.map((row) => [row.id, row]));
+  const chosen: EquipmentRow[] = [];
+  for (const id of ids) {
+    const row = byId.get(id);
+    if (row === undefined) {
+      throw new AppError('NOT_FOUND', '装备不存在');
+    }
+    if (row.disciple_id !== null) {
+      throw new AppError('INVALID_STATUS', `${row.name}穿在身上，请先卸下再分解`);
+    }
+    chosen.push(row);
+  }
+
+  let ore = 0;
+  for (const row of chosen) {
+    draft.addStatement(deleteBagEquipmentStatement(row.id, draft.sect.id));
+    ore += isEquipmentQuality(row.quality) ? salvageOreUnits(row.quality) : 0;
+  }
+  if (ore > 0) {
+    draft.addResource('ore', ore);
+  }
+  await draft.commit({
+    equipmentItems: chosen.map((row) => ({ id: row.id, discipleId: row.disciple_id })),
+  });
+  return { state: draft.view(), outcome: { count: chosen.length, ore } };
+}
+
+/**
+ * GET /game/equipment：装备面板（顺带结算并返回 state）。
+ * 装备明细**不进** /game/sync（额度考虑），只有这个接口返回。
+ */
+export async function getEquipment(
+  db: D1Database,
+  userId: string,
+  now: number,
+): Promise<{ state: SectStateView; equipment: EquipmentView }> {
+  const draft = await draftFor(db, userId, now);
+  const { items, bagCount } = await loadEquipment(db, draft.sect.id);
+  const discipleNames = new Map(draft.disciples.map((row) => [row.id, row.name]));
+  return {
+    state: draft.view(),
+    equipment: buildEquipmentView({
+      sectLevel: Number(draft.sect.level),
+      items,
+      bagCount,
+      discipleNames,
+    }),
+  };
+}
+
 /* ---------- 弟子历练（0014 迁移：预览 / 出发 / 领取） ---------- */
 /**
  * 0014：任何会读取或改变弟子出战资格的命令都复用同一「在外」判定
@@ -4608,6 +5091,9 @@ function journeyEligibilityOf(input: {
 /**
  * 计算奖励快照所需的弟子属性子集（出发时一次性快照，之后不再重算）。
  * luck / physique 是 0016 新增的两项：预览与出发读同一份值，出发之后改属性也不影响已锁定的结果。
+ *
+ * 0028 装备：这里给的是**基础属性**（弟子表上的原始值），历练不计入装备（计划 1.2 明列）；
+ * 也正因为是出发时的快照，途中换装不会改变已出发那一趟的结果。
  */
 function journeyRewardInputOf(disciple: DiscipleRow): {
   realmId: string;
@@ -5492,15 +5978,19 @@ export async function chooseRealmExplore(
   }
   const partyIds = explorationPartyIds(row);
   const party = preflight.disciples.filter((disciple) => partyIds.includes(disciple.id));
+  // 0028 装备：交互式秘境（realm-explore/choose）计入装备 —— 判定用的战力含装备加成。
   const power = partyCombatPower(
-    party.map((disciple) => ({
-      realmId: disciple.realm_id,
-      stage: Number(disciple.stage),
-      attack: Number(disciple.attack),
-      defense: Number(disciple.defense),
-      speed: Number(disciple.speed),
-      talent: disciple.talent,
-    })),
+    party.map((disciple) => {
+      const attrs = battleAttrsOf(disciple);
+      return {
+        realmId: disciple.realm_id,
+        stage: Number(disciple.stage),
+        attack: attrs.attack,
+        defense: attrs.defense,
+        speed: attrs.speed,
+        talent: disciple.talent,
+      };
+    }),
   );
   const arenaLevel =
     preflight.buildings.find((building) => building.def_id === ARENA_BUILDING_ID)?.level ?? 0;
@@ -5711,7 +6201,11 @@ function attributeFloorOf(attribute: BettableAttribute): number {
   return attribute === 'luck' || attribute === 'physique' ? 1 : 0;
 }
 
-/** 弟子六项属性快照（jev 状态文本与侦查文案共用）。 */
+/**
+ * 弟子六项属性快照（jev 状态文本与侦查文案共用）。
+ *
+ * 0028 装备：论道赌局**不计入装备**（计划 1.2 明列）—— 这里给的是基础属性。
+ */
 function debateAttributesOf(disciple: DiscipleRow): Record<BettableAttribute, number> {
   return {
     attack: Number(disciple.attack),
@@ -7059,6 +7553,9 @@ async function worldBossRoundDamage(
     const awayIds = journeyAwayIds(journeys, now);
     const arenaLevel =
       buildings.find((building) => building.def_id === ARENA_BUILDING_ID)?.level ?? 0;
+    // 0028 装备：这里是**关卡血量预估**（全服口径的基准值），**不计入装备** ——
+    // 计划 1.2 的「世界 Boss 计入装备」列的是战斗本身（一轮伤害 / 出手伤害 / 词缀属性 /
+    // 暴击幸运 / 受伤体魄）；血量预估含装备只会让 Boss 血量跟着涨、抵消装备收益。
     const top3 = disciples
       .filter(
         (disciple) =>
@@ -7157,16 +7654,19 @@ export async function attackWorldBoss(
   const fatigueByDisciple = new Map(fatigueRows.map((row) => [row.disciple_id, Number(row.cnt)]));
 
   // 逐人判定：先判重伤，未重伤再判受伤；被判重伤的那一刀不计入队伍伤害。
+  // 0028 装备：讨伐**计入装备** —— 伤害（战力 + 词缀属性加成）、暴击率用的幸运、
+  // 受伤 / 重伤判定用的体魄，全部用「基础属性 + 装备加成」（计划 1.2）。
   const outcomes: WorldBossMemberOutcomeView[] = [];
   const severeMembers: DiscipleRow[] = [];
   const injuredMembers: DiscipleRow[] = [];
   let partyBase = 0;
   let luckSum = 0;
   for (const member of members) {
-    luckSum += Number(member.luck);
+    const attrs = battleAttrsOf(member);
+    luckSum += attrs.luck;
     const verdict = rollOutcome({
       fatigueCount: fatigueByDisciple.get(member.id) ?? 0,
-      physique: Number(member.physique),
+      physique: attrs.physique,
       berserk,
       random: Math.random,
     });
@@ -7185,16 +7685,16 @@ export async function attackWorldBoss(
       discipleCombatPower(
         member.realm_id,
         Number(member.stage),
-        Number(member.attack),
-        Number(member.defense),
-        Number(member.speed),
+        attrs.attack,
+        attrs.defense,
+        attrs.speed,
         member.talent,
       ),
       affix,
       {
-        attack: Number(member.attack),
-        defense: Number(member.defense),
-        speed: Number(member.speed),
+        attack: attrs.attack,
+        defense: attrs.defense,
+        speed: attrs.speed,
       },
     );
   }
@@ -7472,6 +7972,9 @@ async function rewardWorldBoss(
     (a, b) => b[1].damage - a[1].damage || a[1].firstAt - b[1].firstAt,
   );
 
+  // 0028 装备：本关击杀掉落的装备（发奖成功后用它广播仙品）。
+  const bossDrops: { sectId: string; name: string; quality: string }[] = [];
+
   // 击杀与击退才发资源；单纯逃走（<70%）什么也不发。
   if (participants.length > 0 && (killed || repelled)) {
     const sectRows = await repo.sectsByIds(participants.map(([sectId]) => sectId));
@@ -7531,6 +8034,57 @@ async function rewardWorldBoss(
           }
         }
       }
+
+      // 0028 装备掉落（计划 1.4）：只有**击杀**才掉，按该关的伤害排名给品质 ——
+      // 伤害第 1 名必掉 1 件，其他参与者 40% 概率掉 1 件；部位随机、法器主属性随机。
+      // 该宗门背包已满时这一件**自动分解**成对应品质的矿石入账（东西不会丢）。
+      const dropQualities = bossDropQualities(stage);
+      const equipmentRepo = new EquipmentRepository(db);
+      const bagUsedBySect = new Map<string, number>();
+      for (const [index, [sectId]] of participants.entries()) {
+        const isTop = index === 0;
+        if (!isTop && Math.random() >= BOSS_DROP_CHANCE_OTHERS) {
+          continue;
+        }
+        const quality = isTop ? dropQualities.top : dropQualities.others;
+        const slotIndex = Math.min(
+          EQUIPMENT_SLOTS.length - 1,
+          Math.max(0, Math.floor(Math.random() * EQUIPMENT_SLOTS.length)),
+        );
+        const slot = EQUIPMENT_SLOTS[slotIndex]!.id;
+        // 掉落时不给主属性 → 法器在身法 / 幸运之间随机（兵器固定攻击、护甲固定防御）。
+        const mainAttr = resolveMainAttr(slot, undefined, Math.random);
+        if (mainAttr === null) {
+          continue;
+        }
+        const generated = generateEquipment({ slot, quality, mainAttr, random: Math.random });
+
+        let bagUsed = bagUsedBySect.get(sectId);
+        if (bagUsed === undefined) {
+          bagUsed = await equipmentRepo.countBagBySectId(sectId);
+        }
+        if (bagUsed >= BAG_CAPACITY) {
+          statements.push(resourceDeltaStatement(sectId, 'ore', salvageOreUnits(quality), now));
+          continue;
+        }
+        bagUsedBySect.set(sectId, bagUsed + 1);
+        statements.push(
+          insertEquipmentStatement({
+            id: crypto.randomUUID(),
+            sectId,
+            slot: generated.slot,
+            quality: generated.quality,
+            name: generated.name,
+            mainAttr: generated.mainAttr,
+            mainValue: generated.mainValue,
+            subAttr: generated.subAttr,
+            subValue: generated.subValue,
+            source: 'boss',
+            now,
+          }),
+        );
+        bossDrops.push({ sectId, name: generated.name, quality: generated.quality });
+      }
     }
   }
 
@@ -7547,6 +8101,15 @@ async function rewardWorldBoss(
       `【讨伐】${bossDisplayName(Number(boss.boss_index), stage)} ${killed ? '讨伐' : '击退'}奖励已发放（${String(participants.length)} 个宗门参与，伤害第一：${topName}）`,
       now,
     );
+  }
+
+  // 0028 装备：掉到**仙品**时额外广播一条（其他品质静默入背包，计划 1.4）。
+  for (const drop of bossDrops) {
+    if (drop.quality !== 'immortal') {
+      continue;
+    }
+    const sectName = hits.find((hit) => hit.sect_id === drop.sectId)?.sect_name ?? '';
+    await broadcastWorldBoss(db, `【讨伐】${sectName}获得 ${drop.name}！`, now);
   }
 }
 

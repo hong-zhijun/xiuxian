@@ -343,6 +343,24 @@ const popoverFatigueCount = computed(() => {
   return props.fatigue?.[disciple.id] ?? 0;
 });
 
+/**
+ * 小卡片里的五行属性（0028：`攻击 60 (+12)`；括号是装备加成，为 0 时不显示）。
+ * 排序仍按基础属性（不因为装备改变候选顺序）。
+ */
+const popoverAttributes = computed<
+  { key: 'attack' | 'defense' | 'speed' | 'luck' | 'physique'; label: string; value: number; bonus: number }[]
+>(() => {
+  const disciple = popoverDisciple.value;
+  if (disciple === null) return [];
+  return [
+    { key: 'attack', label: '攻击', value: disciple.attack, bonus: disciple.gear.attack },
+    { key: 'defense', label: '防御', value: disciple.defense, bonus: disciple.gear.defense },
+    { key: 'speed', label: '身法', value: disciple.speed, bonus: disciple.gear.speed },
+    { key: 'luck', label: '幸运', value: disciple.luck, bonus: disciple.gear.luck },
+    { key: 'physique', label: '体魄', value: disciple.physique, bonus: disciple.gear.physique },
+  ];
+});
+
 function cancelLongPress(): void {
   if (longPressTimer !== undefined) {
     window.clearTimeout(longPressTimer);
@@ -581,11 +599,11 @@ onUnmounted(() => {
       <p class="dp-popover-line">天赋：{{ popoverDisciple.talentName }}</p>
       <p class="dp-popover-line">战力：{{ popoverDisciple.combatPower }}</p>
       <ul class="dp-popover-attrs">
-        <li>攻击 {{ popoverDisciple.attack }}</li>
-        <li>防御 {{ popoverDisciple.defense }}</li>
-        <li>身法 {{ popoverDisciple.speed }}</li>
-        <li>幸运 {{ popoverDisciple.luck }}</li>
-        <li>体魄 {{ popoverDisciple.physique }}</li>
+        <!-- 0028：五行属性带上装备加成 `攻击 60 (+12)`（为 0 时不显示括号）。 -->
+        <li v-for="attribute in popoverAttributes" :key="attribute.key">
+          {{ attribute.label }} {{ attribute.value }}
+          <span v-if="attribute.bonus > 0" class="gear-bonus">(+{{ attribute.bonus }})</span>
+        </li>
         <li>资质 {{ popoverDisciple.aptitude }}</li>
       </ul>
       <p class="dp-popover-line">状态：{{ popoverStatus }}</p>

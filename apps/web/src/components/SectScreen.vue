@@ -9,6 +9,9 @@ import type {
   DaoDebateResult,
   ChallengeResultView,
   DiscipleView,
+  EquipmentMainAttr,
+  EquipmentSlotId,
+  EquipmentView,
   ExploreChoiceResult,
   GameActionData,
   JourneyDirection,
@@ -26,12 +29,17 @@ import type { AvatarFrameId } from '../utils/avatarFrames';
 import { ApiError } from '../api/client';
 import { formatAmount, formatBp, formatRate, formatTime } from '../utils/format';
 import {
+  equipItem,
+  fetchEquipment,
   fetchJourneyPreview,
   fetchRecruitPreview,
   fetchSecretRealms,
+  forgeEquipment,
+  salvageEquipment,
   shopBuy,
   shopSell,
   shopSellPill,
+  unequipItem,
 } from '../api/game';
 import { isInjured, severeInjuryStatusLabel } from '../utils/discipleFilter';
 import { resourceGlyph } from '../utils/glyph';
@@ -44,10 +52,12 @@ import ChallengeHistoryPanel from './ChallengeHistoryPanel.vue';
 import DefenseLineupPanel from './DefenseLineupPanel.vue';
 import DiscipleDetailDialog from './DiscipleDetailDialog.vue';
 import DiscipleRoster from './DiscipleRoster.vue';
+import EquipmentDialog from './EquipmentDialog.vue';
 import EventLogPanel from './EventLogPanel.vue';
 import ExplorePanel from './ExplorePanel.vue';
 import ExplorePartyDialog from './ExplorePartyDialog.vue';
 import GamblingHouseDialog from './GamblingHouseDialog.vue';
+import LoadingState from './LoadingState.vue';
 import RealmExploreDialog from './RealmExploreDialog.vue';
 import ChatPanel from './ChatPanel.vue';
 import DiscipleLeaderboardPanel from './DiscipleLeaderboardPanel.vue';
@@ -132,7 +142,7 @@ const emit = defineEmits<{
   wheelReset: [];
 }>();
 
-/** 操作条里的弹窗开关：天机录 / 秘境探索 / 讨伐 / 江湖榜 / 守擂阵容 / 演武录 / 炼丹 / 赌坊 / 坊市（宗门晋升与建筑仍在右栏常驻）。 */
+/** 操作条里的弹窗开关：天机录 / 秘境探索 / 讨伐 / 江湖榜 / 守擂阵容 / 演武录 / 炼丹 / 炼器 / 赌坊 / 坊市（宗门晋升与建筑仍在右栏常驻）。 */
 const openPanel = ref<
   | 'events'
   | 'explore'
@@ -141,6 +151,7 @@ const openPanel = ref<
   | 'defense-lineup'
   | 'challenge-history'
   | 'alchemy'
+  | 'equipment'
   | 'gambling'
   | 'shop'
   | 'world-boss'
@@ -984,6 +995,118 @@ async function onShopSellPill(pillId: string, quantity: number): Promise<void> {
     shopSubmitting.value = false;
   }
 }
+
+/* ---------- 0028 装备（炼器 / 背包 / 穿戴 / 卸下 / 分解） ---------- */
+
+/**
+ * 装备视图（GET /game/equipment 的只读结果）：打开炼器面板或弟子详情时拉一次，
+ * 每次写操作成功后再拉一次（不做定时轮询）。
+ */
+const equipment = ref<EquipmentView | null>(null);
+/** 装备写请求在途：与 props.busy 分开，只锁装备相关的按钮（避免连点重复炼器 / 分解）。 */
+const equipmentSubmitting = ref(false);
+
+/**
+ * 装备回执里的 state：与坊市同一处理 —— App.vue 上「SectScreen 自己拿到新 state」的入口只有
+ * @recruited / @recruit-refreshed（都指向同一个 onRecruitRefreshed），复用同一个入口，不新增绑定。
+ */
+function handOffEquipmentState(next: SectStateView): void {
+  emit('recruited', next);
+}
+
+/** 拉取装备视图：失败只提示，不动已有数据（面板继续显示上一次的快照，可重试）。 */
+async function loadEquipment(): Promise<void> {
+  try {
+    const data = await fetchEquipment();
+    equipment.value = data.equipment;
+  } catch (caught) {
+    emit('notify', 'error', '装备未取到', caught instanceof Error ? caught.message : '装备信息获取失败');
+  }
+}
+
+/** 打开炼器面板：先亮出上一次的快照，再拉一份最新的。 */
+function openEquipment(): void {
+  openPanel.value = 'equipment';
+  void loadEquipment();
+}
+
+/** 炼器（POST /game/forge-equipment）：法器必须带主属性；成功后刷新背包与余额。 */
+async function onForgeEquipment(slot: EquipmentSlotId, mainAttr: EquipmentMainAttr | undefined): Promise<void> {
+  if (props.busy || equipmentSubmitting.value) return;
+  equipmentSubmitting.value = true;
+  try {
+    const { state: next, outcome } = await forgeEquipment(slot, mainAttr);
+    handOffEquipmentState(next);
+    await loadEquipment();
+    emit('notify', 'success', `炼得 ${outcome.name}`, `${outcome.slotName} · 已放入背包。`);
+  } catch (caught) {
+    emit('notify', 'error', '炼器未成', caught instanceof Error ? caught.message : '炉火不济，请稍后重试。');
+  } finally {
+    equipmentSubmitting.value = false;
+  }
+}
+
+/** 分解（POST /game/salvage-equipment）：件数与返还矿石都由服务端复核，这里按回执提示。 */
+async function onSalvageEquipment(equipmentIds: string[]): Promise<void> {
+  if (props.busy || equipmentSubmitting.value || equipmentIds.length === 0) return;
+  equipmentSubmitting.value = true;
+  try {
+    const { state: next, outcome } = await salvageEquipment(equipmentIds);
+    handOffEquipmentState(next);
+    await loadEquipment();
+    emit(
+      'notify',
+      'success',
+      `分解 ${String(outcome.count)} 件装备`,
+      `返还矿石 ${formatAmount(outcome.ore)}。`,
+    );
+  } catch (caught) {
+    emit('notify', 'error', '分解未成', caught instanceof Error ? caught.message : '无法分解，请稍后重试。');
+  } finally {
+    equipmentSubmitting.value = false;
+  }
+}
+
+/** 穿戴（弟子详情「装备」Tab 里点选背包里的同部位装备）：替换下来的那件自动回背包。 */
+async function equipToDisciple(equipmentId: string, discipleId: string): Promise<void> {
+  if (props.busy || equipmentSubmitting.value) return;
+  equipmentSubmitting.value = true;
+  try {
+    const { state: next, outcome } = await equipItem(equipmentId, discipleId);
+    handOffEquipmentState(next);
+    await loadEquipment();
+    const replaced = outcome.replacedName === null ? '' : `（${outcome.replacedName} 已换回背包）`;
+    emit('notify', 'success', `${outcome.name} 已上身`, `${outcome.discipleName ?? '弟子'}·${outcome.slotName}${replaced}`);
+  } catch (caught) {
+    emit('notify', 'error', '穿戴未成', caught instanceof Error ? caught.message : '无法穿戴，请稍后重试。');
+  } finally {
+    equipmentSubmitting.value = false;
+  }
+}
+
+/** 卸下（POST /game/unequip）：装备回背包；背包满时服务端会拒绝并给出原因。 */
+async function unequipFromDisciple(equipmentId: string): Promise<void> {
+  if (props.busy || equipmentSubmitting.value) return;
+  equipmentSubmitting.value = true;
+  try {
+    const { state: next, outcome } = await unequipItem(equipmentId);
+    handOffEquipmentState(next);
+    await loadEquipment();
+    emit('notify', 'success', `已卸下 ${outcome.name}`, '装备已放回背包。');
+  } catch (caught) {
+    emit('notify', 'error', '卸下未成', caught instanceof Error ? caught.message : '无法卸下，请稍后重试。');
+  } finally {
+    equipmentSubmitting.value = false;
+  }
+}
+
+function onDetailEquip(equipmentId: string, discipleId: string): void {
+  void equipToDisciple(equipmentId, discipleId);
+}
+
+function onDetailUnequip(equipmentId: string): void {
+  void unequipFromDisciple(equipmentId);
+}
 function onDetailAllocateDaoInsight(
   discipleId: string,
   attribute: DaoAttribute,
@@ -1048,8 +1171,10 @@ watch(detailDisciple, (disciple) => {
   if (detailId.value !== null && disciple === null) detailId.value = null;
 });
 
+/** 打开详情时顺带拉一份最新的装备视图（「装备」Tab 与穿戴入口都读它；失败不影响其他 Tab）。 */
 function openDetail(discipleId: string): void {
   detailId.value = discipleId;
+  void loadEquipment();
 }
 
 function closeDetail(): void {
@@ -1545,6 +1670,12 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
         </svg>
         <span>炼丹</span>
       </button>
+      <button class="action-chip" type="button" @click="openEquipment">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M4 4h9l7 7-6 6-7-7V4Zm3 3h.01M15 18l2.5 2.5M18 15l2.5 2.5" />
+        </svg>
+        <span>炼器</span>
+      </button>
       <button class="action-chip" type="button" @click="openPanel = 'defense-lineup'">
         <svg viewBox="0 0 24 24" aria-hidden="true">
           <path d="M12 3.2 5 6.3v5.2c0 4.1 2.9 7.8 7 9.3 4.1-1.5 7-5.2 7-9.3V6.3L12 3.2Zm-3 8.6h6" />
@@ -1731,6 +1862,28 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
       />
     </ModalShell>
 
+    <!--
+      炼器 / 背包：装备视图只在打开时拉一次（GET /game/equipment，不做定时轮询），
+      炼器与分解由本组件调接口，回执里的 state 交给 App 统一赋值（见 handOffEquipmentState）。
+    -->
+    <ModalShell
+      v-if="openPanel === 'equipment'"
+      label="炼器"
+      :loading="equipmentSubmitting"
+      loading-text="正在开炉炼器"
+      @close="openPanel = null"
+    >
+      <EquipmentDialog
+        v-if="equipment"
+        :state="state"
+        :equipment="equipment"
+        :busy="busy || equipmentSubmitting"
+        @forge="onForgeEquipment"
+        @salvage="onSalvageEquipment"
+      />
+      <LoadingState v-else label="正在清点宗门装备" />
+    </ModalShell>
+
     <!-- 选人出征：叠在秘境列表之上，Esc / 点遮罩只关这一层。 -->
     <ModalShell
       v-if="exploreRealm"
@@ -1905,7 +2058,7 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
     <ModalShell
       v-if="detailDisciple"
       fixed-height
-      :loading="busy"
+      :loading="busy || equipmentSubmitting"
       loading-text="正在处理弟子事务"
       :label="`弟子详情 · ${detailDisciple.name}`"
       @close="closeDetail"
@@ -1914,12 +2067,13 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
         :key="detailDisciple.id"
         :state="state"
         :disciple="detailDisciple"
-        :busy="busy"
+        :busy="busy || equipmentSubmitting"
         :live-cultivation="liveCultivation[detailDisciple.id] ?? null"
         :journey-preview="journeyPreview"
         :journey-preview-loading="journeyPreviewLoading"
         :journey-recent="state.journey.recent"
         :local-now-ms="localNowMs"
+        :equipment="equipment"
         @assign="onDetailAssign"
         @breakthrough="onDetailBreakthrough"
         @use-pill="onUsePill"
@@ -1932,6 +2086,8 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
         @set-avatar-frame="onDetailSetAvatarFrame"
         @allocate-dao-insight="onDetailAllocateDaoInsight"
         @rename-disciple="onDetailRenameDisciple"
+        @equip="onDetailEquip"
+        @unequip="onDetailUnequip"
       />
     </ModalShell>
 

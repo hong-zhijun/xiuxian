@@ -62,10 +62,27 @@ import {
   SECT_RENAME_COST,
   attributeScore,
 } from './names';
+import {
+  ARTIFACT_MAIN_ATTRS,
+  BAG_CAPACITY,
+  EQUIPMENT_QUALITIES,
+  EQUIPMENT_SLOTS,
+  FORGE_COST,
+  FORGE_QUALITY,
+  attrNameOf,
+  forgeUnlockBlockedReason,
+  gearBonusOfDisciple,
+  qualityColorOf,
+  qualityNameOf,
+  slotNameOf,
+  withGear,
+  type AttrSet,
+} from './equipment';
 import { discipleCombatPower } from './realms';
 import type {
   BuildingRow,
   DiscipleRow,
+  EquipmentRow,
   EventLogRow,
   PillInventoryRow,
   ResourceBalanceRow,
@@ -133,8 +150,13 @@ export interface DiscipleView {
   /** 天赋 id 与展示名（无/未知天赋时 talentName 为「无」）。 */
   talent: string;
   talentName: string;
-  /** 当前战力（展示用，由 realms.ts 的 discipleCombatPower 现算）。 */
+  /**
+   * 当前战力（展示用，由 realms.ts 的 discipleCombatPower 现算）。
+   * 0028 起**计入装备**：属性用的是「基础属性 + 装备加成」（见下面的 gear）。
+   */
   combatPower: number;
+  /** 0028 装备加成（5 项属性各自一件件加起来的和）；没有装备时全 0。 */
+  gear: AttrSet;
   /**
    * 0016 综合评分：**当前**六项属性等权现算，固定一位小数（names.ts 的 attributeScore）。
    * 不是战力、也不是岗位效率：境界、修为、天赋、战力都不参与；不落库，
@@ -272,6 +294,122 @@ export interface AlchemyView {
   cultivationPillGain: number;
   /** 单次炼制的数量上限（= alchemy.ts 的 MAX_CRAFT_QUANTITY），前端步进器据此封顶。 */
   maxCraftQuantity: number;
+}
+
+/* ---------- 0028 装备（一期的装备面板视图；明细不进 /game/sync） ---------- */
+
+/**
+ * 单件装备视图（背包卡片与弟子装备格共用）。
+ * 品质名 / 颜色、部位名、属性名都由服务端下发，前端只渲染，不复制一份规则表。
+ */
+export interface EquipmentItemView {
+  id: string;
+  /** weapon | armor | artifact。 */
+  slot: string;
+  slotName: string;
+  /** common | spirit | treasure | immortal。 */
+  quality: string;
+  qualityName: string;
+  /** 面板边框颜色（品质色）。 */
+  color: string;
+  /** `{品质名}·{部位名}`。 */
+  name: string;
+  mainAttr: string;
+  mainAttrName: string;
+  mainValue: number;
+  subAttr: string;
+  subAttrName: string;
+  subValue: number;
+  /** forge | boss。 */
+  source: string;
+  /** 穿在谁身上；null = 在背包里（背包 = 本宗门未穿戴的装备）。 */
+  discipleId: string | null;
+  discipleName: string | null;
+  createdAt: string;
+}
+
+/**
+ * 装备面板视图（GET /game/equipment）。
+ * 解锁判断、背包计数、炼器价格、可选部位与主属性候选、分解返还都由服务端算好。
+ */
+export interface EquipmentView {
+  unlocked: boolean;
+  blockedReason: string | null;
+  /** 背包已用件数（穿在身上的不占背包）。 */
+  bagCount: number;
+  bagCapacity: number;
+  /** 单次炼器消耗（最小单位）。 */
+  forgeCost: Record<string, string>;
+  /** 一期只能炼的品质（凡品）。 */
+  forgeQuality: string;
+  forgeQualityName: string;
+  /** 可炼部位；法器的 mainAttrChoices 非空（玩家必须选身法或幸运）。 */
+  slots: {
+    id: string;
+    name: string;
+    mainAttrChoices: { id: string; name: string }[];
+  }[];
+  /** 分解返还的矿石（展示单位），按品质 id 给：前端在二次确认里直接显示。 */
+  salvageOre: Record<string, number>;
+  /** 本宗全部装备（背包 + 已穿戴），新的在前。 */
+  items: EquipmentItemView[];
+}
+
+/** 装备行 → 视图（纯映射；discipleName 由调用方按本宗弟子表查好）。 */
+export function equipmentItemViewOf(row: EquipmentRow, discipleName: string | null): EquipmentItemView {
+  return {
+    id: row.id,
+    slot: row.slot,
+    slotName: slotNameOf(row.slot),
+    quality: row.quality,
+    qualityName: qualityNameOf(row.quality),
+    color: qualityColorOf(row.quality),
+    name: row.name,
+    mainAttr: row.main_attr,
+    mainAttrName: attrNameOf(row.main_attr),
+    mainValue: Number(row.main_value),
+    subAttr: row.sub_attr,
+    subAttrName: attrNameOf(row.sub_attr),
+    subValue: Number(row.sub_value),
+    source: row.source,
+    discipleId: row.disciple_id,
+    discipleName: row.disciple_id === null ? null : discipleName,
+    createdAt: new Date(Number(row.created_at)).toISOString(),
+  };
+}
+
+export function buildEquipmentView(input: {
+  sectLevel: number;
+  items: readonly EquipmentRow[];
+  bagCount: number;
+  discipleNames: ReadonlyMap<string, string>;
+}): EquipmentView {
+  return {
+    unlocked: forgeUnlockBlockedReason(input.sectLevel) === null,
+    blockedReason: forgeUnlockBlockedReason(input.sectLevel),
+    bagCount: input.bagCount,
+    bagCapacity: BAG_CAPACITY,
+    forgeCost: { ...FORGE_COST },
+    forgeQuality: FORGE_QUALITY,
+    forgeQualityName: qualityNameOf(FORGE_QUALITY),
+    slots: EQUIPMENT_SLOTS.map((slot) => ({
+      id: slot.id,
+      name: slot.name,
+      mainAttrChoices:
+        slot.id === 'artifact'
+          ? ARTIFACT_MAIN_ATTRS.map((attr) => ({ id: attr, name: attrNameOf(attr) }))
+          : [],
+    })),
+    salvageOre: Object.fromEntries(
+      EQUIPMENT_QUALITIES.map((quality) => [quality.id, quality.salvageOre]),
+    ),
+    items: input.items.map((row) =>
+      equipmentItemViewOf(
+        row,
+        row.disciple_id === null ? null : (input.discipleNames.get(row.disciple_id) ?? null),
+      ),
+    ),
+  };
 }
 
 /**
@@ -874,6 +1012,8 @@ export interface WorldBossView {
 export interface WorldBossRewardPreviewView {
   stage: number;
   tiers: { rank: number; multiplier: number; resources: Record<string, number>; topDamagePill: boolean }[];
+  /** 0028：当前关卡的装备掉落说明（服务端按 equipment.ts 的品质表拼好，前端只渲染）。 */
+  dropDescription: string;
   lastHitStone: number;
 }
 
@@ -1405,6 +1545,19 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
           )
         : null;
 
+    // 0028 装备：战斗属性 = 基础属性 + 装备加成（加成后可以超过 100；基础属性本身仍最高 100）。
+    const gear = gearBonusOfDisciple(disciple);
+    const battleAttrs = withGear(
+      {
+        attack: Number(disciple.attack),
+        defense: Number(disciple.defense),
+        speed: Number(disciple.speed),
+        luck: Number(disciple.luck),
+        physique: Number(disciple.physique),
+      },
+      gear,
+    );
+
     return {
       id: disciple.id,
       name: disciple.name,
@@ -1420,11 +1573,12 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
       combatPower: discipleCombatPower(
         disciple.realm_id,
         Number(disciple.stage),
-        Number(disciple.attack),
-        Number(disciple.defense),
-        Number(disciple.speed),
+        battleAttrs.attack,
+        battleAttrs.defense,
+        battleAttrs.speed,
         disciple.talent,
       ),
+      gear,
       // 六项属性等权现算：与招贤卡共用 names.ts 的同一个纯函数（服务端唯一评分口径）。
       attributeScore: attributeScore({
         aptitude: Number(disciple.aptitude),

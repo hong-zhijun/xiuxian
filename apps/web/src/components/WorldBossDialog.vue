@@ -381,6 +381,10 @@ const RULES_TEXT = `讨伐 · 玩法说明
           <li>最后一击：另得灵石 {{ formatAmount(String(panel.rewardPreview.lastHitStone)) }}</li>
           <li>每往后一关，奖励 +50%</li>
           <li>击退（打掉 70% 以上没打死）：资源减半，无丹药；不足 70% 逃走：无奖励</li>
+          <!-- 0028 装备掉落说明：文案由服务端按当前关卡的品质表拼好，前端直接渲染。 -->
+          <li v-if="panel.rewardPreview.dropDescription" class="boss-reward-drop">
+            掉落：{{ panel.rewardPreview.dropDescription }}
+          </li>
         </ul>
       </template>
       <p v-else class="boss-empty">奖励信息加载中…</p>
@@ -740,6 +744,11 @@ const RULES_TEXT = `讨伐 · 玩法说明
   color: #8fa79b;
   font-size: 12px;
   line-height: 1.7;
+}
+
+/* 0028 装备掉落说明：与资源奖励区分开（掉落不是资源结算）。 */
+.boss-reward-drop {
+  color: var(--gold-bright, #e0cd97);
 }
 
 .boss-rules-text {

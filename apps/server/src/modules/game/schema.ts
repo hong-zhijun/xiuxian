@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 import { MAX_CRAFT_QUANTITY, MAX_PILL_USE_COUNT } from './alchemy';
 import { BETTABLE_ATTRIBUTES, RACE_BEAST_COUNT, RACE_BET_MAX, RACE_BET_MIN } from './gambling';
+import { BAG_CAPACITY } from './equipment';
 import { SHOP_MAX_PILL_QUANTITY, SHOP_MAX_TRADE_AMOUNT, SHOP_TRADABLE_RESOURCES } from './shop';
 
 /**
@@ -112,6 +113,31 @@ export const usePillRequestSchema = z.strictObject({
   pillId: z.string().min(1).max(64),
   discipleId: z.string().min(1).max(64),
   count: z.number().int().min(1).max(MAX_PILL_USE_COUNT).optional(),
+});
+
+/**
+ * 0028 装备：炼器。部位与主属性的合法性由服务端按 EQUIPMENT_SLOTS / 法器候选校验
+ * （法器必须给 speed / luck，其它部位不许给），这里只做「类型 + 长度」的第一道防线。
+ */
+export const forgeEquipmentRequestSchema = z.strictObject({
+  slot: z.string().min(1).max(16),
+  mainAttr: z.string().min(1).max(16).optional(),
+});
+
+/** 0028 装备：穿戴（归属与状态由 service 校验）。 */
+export const equipRequestSchema = z.strictObject({
+  equipmentId: z.string().min(1).max(64),
+  discipleId: z.string().min(1).max(64),
+});
+
+/** 0028 装备：卸下（只带装备 id）。 */
+export const unequipRequestSchema = z.strictObject({
+  equipmentId: z.string().min(1).max(64),
+});
+
+/** 0028 装备：分解。1~50 件（上限 = 背包容量），重复 id 由服务端去重。 */
+export const salvageEquipmentRequestSchema = z.strictObject({
+  equipmentIds: z.array(z.string().min(1).max(64)).min(1).max(BAG_CAPACITY),
 });
 
 /**
