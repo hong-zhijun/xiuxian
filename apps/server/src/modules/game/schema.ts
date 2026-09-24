@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import { MAX_CRAFT_QUANTITY } from './alchemy';
 import { BETTABLE_ATTRIBUTES, RACE_BEAST_COUNT, RACE_BET_MAX, RACE_BET_MIN } from './gambling';
 import { SHOP_MAX_PILL_QUANTITY, SHOP_MAX_TRADE_AMOUNT, SHOP_TRADABLE_RESOURCES } from './shop';
 
@@ -71,10 +72,10 @@ export const challengeRequestSchema = z.strictObject({
   discipleIds: z.array(z.string().min(1)).length(3),
 });
 
-/** 丹药炼制：quantity 是 1~5 的整数；pill id 的合法性由服务端按 PILL_RECIPES 校验。 */
+/** 丹药炼制：quantity 是 1~MAX_CRAFT_QUANTITY 的整数；pill id 的合法性由服务端按 PILL_RECIPES 校验。 */
 export const craftPillRequestSchema = z.strictObject({
   pillId: z.string().min(1).max(64),
-  quantity: z.number().int().min(1).max(5),
+  quantity: z.number().int().min(1).max(MAX_CRAFT_QUANTITY),
 });
 
 /** 丹药服用：目标弟子必须属于当前宗门（服务端用 draft.discipleById 判定归属）。 */

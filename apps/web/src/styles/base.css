@@ -6165,7 +6165,7 @@ h2.public-sect-name {
   gap: 8px;
 }
 
-/* 数量步进（1~5）：− n + */
+/* 数量步进（1~上限）：− n + */
 .alchemy-stepper {
   display: flex;
   align-items: center;
@@ -6176,12 +6176,46 @@ h2.public-sect-name {
   padding: 2px 4px;
 }
 
-.alchemy-stepper span {
-  min-width: 26px;
-  text-align: center;
+.alchemy-quantity-input {
+  width: 34px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
   color: #dce6e0;
+  background: transparent;
+  font: inherit;
   font-size: 13px;
   font-weight: 600;
+  text-align: center;
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+.alchemy-quantity-input::-webkit-outer-spin-button,
+.alchemy-quantity-input::-webkit-inner-spin-button {
+  margin: 0;
+  -webkit-appearance: none;
+}
+
+.alchemy-quantity-input:focus {
+  outline: 1px solid rgba(202, 169, 106, 0.5);
+  border-radius: 4px;
+}
+
+/* 「最大」：选到当前资源能炼的最多颗数。 */
+.alchemy-max-button {
+  padding: 3px 10px;
+  border: 1px solid rgba(202, 169, 106, 0.28);
+  border-radius: 999px;
+  color: var(--gold-bright);
+  background: transparent;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.alchemy-max-button:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
 }
 
 .alchemy-stepper button {

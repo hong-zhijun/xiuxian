@@ -241,6 +241,8 @@ export interface AlchemyView {
   recipes: AlchemyRecipeView[];
   /** 聚气丹单次修为增益（服务端下发，前端只渲染，不复制丹药常量）。 */
   cultivationPillGain: number;
+  /** 单次炼制的数量上限（服务端下发）。 */
+  maxCraftQuantity: number;
 }
 
 export interface BreakthroughOutcome {

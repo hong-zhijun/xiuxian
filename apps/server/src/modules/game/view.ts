@@ -7,6 +7,7 @@ import {
   BODY_TEMPERING_MAX_USES,
   PILL_RECIPES,
   CULTIVATION_PILL_GAIN,
+  MAX_CRAFT_QUANTITY,
 } from './alchemy';
 import {
   CHALLENGE_DAILY_LIMIT,
@@ -253,6 +254,8 @@ export interface AlchemyView {
    * 由服务端下发，前端只渲染，避免在 UI 里复制一份丹药常量（计划 2.3「不复制判定公式」）。
    */
   cultivationPillGain: number;
+  /** 单次炼制的数量上限（= alchemy.ts 的 MAX_CRAFT_QUANTITY），前端步进器据此封顶。 */
+  maxCraftQuantity: number;
 }
 
 /**
@@ -1360,6 +1363,7 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
   const alchemyView: AlchemyView = {
     unlocked: alchemyLockedReason === null,
     cultivationPillGain: CULTIVATION_PILL_GAIN,
+    maxCraftQuantity: MAX_CRAFT_QUANTITY,
     blockedReason: alchemyLockedReason,
     recipes: PILL_RECIPES.map((recipe) => {
       const ownedRow = pillInventories.find((row) => row.pill_id === recipe.id);

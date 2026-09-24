@@ -407,7 +407,7 @@ describe('丹药系统：炼制', () => {
     expect(guardRows?.total).toBe(0);
   });
 
-  it('炼制数量 1~5 生效；0、负数、小数、超过 5 被 VALIDATION_ERROR 拒绝', async () => {
+  it('炼制数量 1~99 生效；0、负数、小数、超过 99 被 VALIDATION_ERROR 拒绝', async () => {
     const sect = await makeSect();
     await unlockAlchemy(sect.sectId);
     await freezeSettlement(sect.sectId);
@@ -429,7 +429,7 @@ describe('丹药系统：炼制', () => {
     expect(recipeOf(data.state, 'cultivationPill').owned).toBe(3);
     expect(await pillQuantity(sect.sectId, 'cultivationPill')).toBe(3);
 
-    for (const quantity of [0, -1, 1.5, 6]) {
+    for (const quantity of [0, -1, 1.5, 100]) {
       const rejected = await sect.api.post('/api/v1/game/craft-pill', {
         pillId: 'cultivationPill',
         quantity,
@@ -438,6 +438,22 @@ describe('丹药系统：炼制', () => {
       expect(errorOf(rejected).code).toBe('VALIDATION_ERROR');
     }
     expect(await pillQuantity(sect.sectId, 'cultivationPill')).toBe(3);
+
+    // 上限 99：成本按数量线性相乘。
+    await setBalance(sect.sectId, 'herb', 3_000_000);
+    await setBalance(sect.sectId, 'spiritualEnergy', 3_000_000);
+    await setBalance(sect.sectId, 'spiritStone', 3_000_000);
+    const max = await sect.api.post('/api/v1/game/craft-pill', {
+      pillId: 'cultivationPill',
+      quantity: 99,
+    });
+    expect(max.status).toBe(200);
+    expect((dataOf(max) as Record<string, any>).outcome.cost).toEqual({
+      herb: '2475000',
+      spiritualEnergy: '1485000',
+      spiritStone: '990000',
+    });
+    expect(await pillQuantity(sect.sectId, 'cultivationPill')).toBe(102);
   });
 
   it('资源不足整次失败：不扣资源、不增加库存', async () => {
