@@ -361,6 +361,7 @@ import {
   breakthroughChanceBp,
   buildSectStateView,
   buildEquipmentView,
+  equipmentItemViewOf,
   eventLogViewFromRow,
   upgradeCost,
   type ChallengeBlockedReason,
@@ -414,6 +415,7 @@ import {
   type WorldBossAffixView,
   type WorldBossMemberOutcomeView,
   type EquipmentView,
+  type DiscipleProfileView,
 } from './view';
 /**
  * 游戏服务（一次性可玩版本）。
@@ -3483,6 +3485,69 @@ export async function listDiscipleLeaderboard(
     .map((item, i) => toEntry(item, i + 1));
 
   return { byCombatPower, byAttributeScore };
+}
+
+/** 天骄榜点开的弟子公开档案（只读、不结算、不写库；任何登录玩家都能看，弟子不存在 404）。 */
+export async function getDiscipleProfile(
+  db: D1Database,
+  userId: string,
+  discipleId: string,
+  now: number,
+): Promise<DiscipleProfileView> {
+  const sectRepository = new SectRepository(db);
+  const disciple = await new DiscipleRepository(db).findById(discipleId);
+  if (disciple === null) {
+    throw new AppError('NOT_FOUND', '弟子不存在');
+  }
+  const [sect, mySect, items] = await Promise.all([
+    sectRepository.findById(disciple.sect_id),
+    sectRepository.findByUserId(userId),
+    new EquipmentRepository(db).findByDiscipleId(discipleId),
+  ]);
+  const talent = findTalent(disciple.talent);
+  const severeUntil = disciple.severe_injured_until === null ? 0 : Number(disciple.severe_injured_until);
+  const injuredUntil = disciple.injured_until === null ? 0 : Number(disciple.injured_until);
+  return {
+    discipleId: disciple.id,
+    name: disciple.name,
+    gender: disciple.gender,
+    realmId: disciple.realm_id,
+    frameId: disciple.avatar_frame_id,
+    sectId: disciple.sect_id,
+    sectName: sect?.name ?? '',
+    isMe: mySect?.id === disciple.sect_id,
+    realmName: findRealm(disciple.realm_id).name,
+    stageName: findStage(disciple.realm_id, Number(disciple.stage)).name,
+    talent: disciple.talent,
+    talentName: talent?.name ?? '无',
+    talentDescription: talent?.description ?? '',
+    aptitude: Number(disciple.aptitude),
+    attack: Number(disciple.attack),
+    defense: Number(disciple.defense),
+    speed: Number(disciple.speed),
+    luck: Number(disciple.luck),
+    physique: Number(disciple.physique),
+    gear: {
+      attack: Number(disciple.gear_attack) || 0,
+      defense: Number(disciple.gear_defense) || 0,
+      speed: Number(disciple.gear_speed) || 0,
+      luck: Number(disciple.gear_luck) || 0,
+      physique: Number(disciple.gear_physique) || 0,
+    },
+    combatPower: gearedCombatPower(disciple),
+    attributeScore: attributeScore({
+      aptitude: Number(disciple.aptitude),
+      attack: Number(disciple.attack),
+      defense: Number(disciple.defense),
+      speed: Number(disciple.speed),
+      luck: Number(disciple.luck),
+      physique: Number(disciple.physique),
+    }),
+    bodyTemperingUses: Number(disciple.body_tempering_count) || 0,
+    daoInsightUsed: Number(disciple.dao_insight_used) || 0,
+    injury: severeUntil > now ? 'severe' : injuredUntil > now ? 'injured' : null,
+    equipment: items.map((row) => equipmentItemViewOf(row, disciple.name)),
+  };
 }
 
 /**

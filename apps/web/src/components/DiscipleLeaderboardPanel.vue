@@ -4,6 +4,7 @@ import { ref } from 'vue';
 import type { DiscipleLeaderboardEntryView, DiscipleLeaderboardView } from '../api/game';
 import { fetchDiscipleLeaderboard } from '../api/game';
 import DiscipleAvatar from './DiscipleAvatar.vue';
+import DiscipleProfileDialog from './DiscipleProfileDialog.vue';
 import LoadingState from './LoadingState.vue';
 
 const props = defineProps<{ busy: boolean }>();
@@ -14,6 +15,8 @@ const activeTab = ref<Tab>('combatPower');
 const data = ref<DiscipleLeaderboardView | null>(null);
 const loading = ref(true);
 const loadError = ref<string | null>(null);
+/** 正在查看公开档案的弟子（null = 没打开）。 */
+const profileId = ref<string | null>(null);
 
 let loadSeq = 0;
 
@@ -85,7 +88,12 @@ function valueLabel(entry: DiscipleLeaderboardEntryView): string {
         class="rank-row"
         :class="{ 'is-me': entry.isMe }"
       >
-        <div class="rank-open dlb-row">
+        <button
+          class="rank-open dlb-row"
+          type="button"
+          :aria-label="`查看 ${entry.discipleName} 的档案`"
+          @click="profileId = entry.discipleId"
+        >
           <span class="rank-no">{{ entry.rank }}</span>
           <DiscipleAvatar
             class="dlb-avatar"
@@ -107,7 +115,8 @@ function valueLabel(entry: DiscipleLeaderboardEntryView): string {
               <span class="dlb-value">{{ valueLabel(entry) }}</span>
             </span>
           </span>
-        </div>
+          <span class="rank-arrow" aria-hidden="true">›</span>
+        </button>
       </li>
     </ul>
 
@@ -115,6 +124,8 @@ function valueLabel(entry: DiscipleLeaderboardEntryView): string {
       <span aria-hidden="true">榜</span>
       <strong>暂无弟子上榜</strong>
     </div>
+
+    <DiscipleProfileDialog v-if="profileId" :disciple-id="profileId" @close="profileId = null" />
   </section>
 </template>
 
@@ -152,7 +163,8 @@ function valueLabel(entry: DiscipleLeaderboardEntryView): string {
   display: grid;
   width: 100%;
   min-width: 0;
-  grid-template-columns: 28px 36px minmax(0, 1fr);
+  grid-template-columns: 28px 36px minmax(0, 1fr) 14px;
+  cursor: pointer;
   align-items: center;
   gap: 8px;
   padding: 10px 6px;

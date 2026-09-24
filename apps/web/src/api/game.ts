@@ -725,6 +725,49 @@ export async function fetchDiscipleLeaderboard(): Promise<DiscipleLeaderboardVie
   return apiRequest<DiscipleLeaderboardView>('/api/v1/game/disciple-leaderboard');
 }
 
+/** 天骄榜点开的弟子公开档案（任何登录玩家可看；不含掌门备注等私有字段）。 */
+export interface DiscipleProfileView {
+  discipleId: string;
+  name: string;
+  gender: string;
+  realmId: string;
+  frameId: string;
+  sectId: string;
+  sectName: string;
+  /** 是不是观看者自己宗门的弟子。 */
+  isMe: boolean;
+  realmName: string;
+  stageName: string;
+  talent: string;
+  talentName: string;
+  talentDescription: string;
+  /** 基础属性（最高 100，不含装备）。 */
+  aptitude: number;
+  attack: number;
+  defense: number;
+  speed: number;
+  luck: number;
+  physique: number;
+  /** 装备加成（已穿装备 5 项之和）。 */
+  gear: { attack: number; defense: number; speed: number; luck: number; physique: number };
+  /** 战力（计入装备，与天骄榜同口径）。 */
+  combatPower: number;
+  /** 综合评分（六项基础属性等权，不计装备）。 */
+  attributeScore: number;
+  bodyTemperingUses: number;
+  daoInsightUsed: number;
+  /** 当前伤势：severe = 重伤卧床，injured = 负伤，null = 无。 */
+  injury: 'severe' | 'injured' | null;
+  /** 已穿戴的装备（按部位排序）。 */
+  equipment: EquipmentItemView[];
+}
+
+export async function fetchDiscipleProfile(discipleId: string): Promise<DiscipleProfileView> {
+  return apiRequest<DiscipleProfileView>(
+    `/api/v1/game/disciple-profile/${encodeURIComponent(discipleId)}`,
+  );
+}
+
 export interface ChatMessageView {
   id: string;
   sectName: string;

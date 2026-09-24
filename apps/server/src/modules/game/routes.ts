@@ -58,6 +58,7 @@ import {
   daoDebate,
   listDebateHistory,
   listDiscipleLeaderboard,
+  getDiscipleProfile,
   expelDisciple,
   exploreSectRealm,
   equipItem,
@@ -253,6 +254,13 @@ export function createGameRoutes(): Hono<AppEnv> {
   routes.get('/game/disciple-leaderboard', async (c) => {
     const userId = requireUserId(c);
     const data = await listDiscipleLeaderboard(getDb(c.env), userId);
+    return respondOk(c, data);
+  });
+
+  // 天骄榜弟子公开档案（只读：不结算、不写库；只返回公开字段，弟子不存在 404）。
+  routes.get('/game/disciple-profile/:discipleId', async (c) => {
+    const userId = requireUserId(c);
+    const data = await getDiscipleProfile(getDb(c.env), userId, c.req.param('discipleId'), Date.now());
     return respondOk(c, data);
   });
 

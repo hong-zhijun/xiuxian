@@ -19,6 +19,15 @@ export const MAX_ENTRIES = 5;
 
 export const CHANGELOG: readonly ChangelogEntry[] = [
   {
+    id: '2026-09-24-9',
+    time: '2026-09-24 23:36',
+    title: '天骄榜可看弟子档案',
+    items: [
+      '点天骄榜上的弟子即可查看档案：境界、战力、综合评分、雷达图与六项属性。',
+      '档案还会显示天赋、淬体与悟道次数、伤势，以及身上穿戴的装备。',
+    ],
+  },
+  {
     id: '2026-09-24-8',
     time: '2026-09-24 21:42',
     title: '讨伐更爽快',
