@@ -62,6 +62,7 @@ import {
   SECT_RENAME_COST,
   attributeScore,
 } from './names';
+import { gearBonusOfDisciple, withGear, type AttrSet } from './equipment';
 import { discipleCombatPower } from './realms';
 import type {
   BuildingRow,
@@ -133,8 +134,13 @@ export interface DiscipleView {
   /** 天赋 id 与展示名（无/未知天赋时 talentName 为「无」）。 */
   talent: string;
   talentName: string;
-  /** 当前战力（展示用，由 realms.ts 的 discipleCombatPower 现算）。 */
+  /**
+   * 当前战力（展示用，由 realms.ts 的 discipleCombatPower 现算）。
+   * 0028 起**计入装备**：属性用的是「基础属性 + 装备加成」（见下面的 gear）。
+   */
   combatPower: number;
+  /** 0028 装备加成（5 项属性各自一件件加起来的和）；没有装备时全 0。 */
+  gear: AttrSet;
   /**
    * 0016 综合评分：**当前**六项属性等权现算，固定一位小数（names.ts 的 attributeScore）。
    * 不是战力、也不是岗位效率：境界、修为、天赋、战力都不参与；不落库，
@@ -1405,6 +1411,19 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
           )
         : null;
 
+    // 0028 装备：战斗属性 = 基础属性 + 装备加成（加成后可以超过 100；基础属性本身仍最高 100）。
+    const gear = gearBonusOfDisciple(disciple);
+    const battleAttrs = withGear(
+      {
+        attack: Number(disciple.attack),
+        defense: Number(disciple.defense),
+        speed: Number(disciple.speed),
+        luck: Number(disciple.luck),
+        physique: Number(disciple.physique),
+      },
+      gear,
+    );
+
     return {
       id: disciple.id,
       name: disciple.name,
@@ -1420,11 +1439,12 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
       combatPower: discipleCombatPower(
         disciple.realm_id,
         Number(disciple.stage),
-        Number(disciple.attack),
-        Number(disciple.defense),
-        Number(disciple.speed),
+        battleAttrs.attack,
+        battleAttrs.defense,
+        battleAttrs.speed,
         disciple.talent,
       ),
+      gear,
       // 六项属性等权现算：与招贤卡共用 names.ts 的同一个纯函数（服务端唯一评分口径）。
       attributeScore: attributeScore({
         aptitude: Number(disciple.aptitude),

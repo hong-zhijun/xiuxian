@@ -58,6 +58,16 @@ export interface DiscipleRow {
   luck: number;
   /** 体魄（1~100，0016）：只影响单人定时历练的受伤概率。 */
   physique: number;
+  /**
+   * 0028 装备加成（冗余列，见 equipment.ts）：该弟子当前穿戴装备的加成之和。
+   * **战斗计算只读这 5 列**，不在战斗时查装备表；每次穿戴 / 卸下 / 驱逐都在同一个 batch 里
+   * 按装备表重新求和写回（refreshDiscipleGearStatement），避免内存加减累积误差。
+   */
+  gear_attack: number;
+  gear_defense: number;
+  gear_speed: number;
+  gear_luck: number;
+  gear_physique: number;
   talent: string;
   realm_id: string;
   stage: number;
@@ -234,6 +244,7 @@ export class DiscipleRepository extends ParamRepository {
   async findBySectId(sectId: string): Promise<DiscipleRow[]> {
     return this.all<DiscipleRow>({
       sql: `SELECT id, sect_id, name, gender, aptitude, attack, defense, speed, luck, physique, talent,
+                   gear_attack, gear_defense, gear_speed, gear_luck, gear_physique,
                    realm_id, stage, cultivation, cultivation_remainder,
                    assignment, injured_until, severe_injured_until, body_tempering_count, note, avatar_frame_id, dao_insight, dao_insight_used, created_at
             FROM disciples WHERE sect_id = ? ORDER BY created_at ASC, id ASC`,
@@ -244,6 +255,7 @@ export class DiscipleRepository extends ParamRepository {
   async findById(discipleId: string): Promise<DiscipleRow | null> {
     return this.one<DiscipleRow>({
       sql: `SELECT id, sect_id, name, gender, aptitude, attack, defense, speed, luck, physique, talent,
+                   gear_attack, gear_defense, gear_speed, gear_luck, gear_physique,
                    realm_id, stage, cultivation, cultivation_remainder,
                    assignment, injured_until, severe_injured_until, body_tempering_count, note, avatar_frame_id, dao_insight, dao_insight_used, created_at
             FROM disciples WHERE id = ?`,
@@ -2760,5 +2772,164 @@ export function incrementPillInventoryStatement(
           ON CONFLICT (sect_id, pill_id)
           DO UPDATE SET quantity = quantity + excluded.quantity, updated_at = excluded.updated_at`,
     params: [crypto.randomUUID(), sectId, pillId, delta, now],
+  };
+}
+
+/* ---------- 装备（0028 迁移：装备表 / 弟子 gear_ 冗余列 / 快照守卫） ---------- */
+
+/**
+ * 装备行（0028）：disciple_id 为 NULL = 在背包里，否则 = 穿在该弟子身上。
+ * 属性（主/副）生成后不再变化，所以没有「修改装备」的语句。
+ */
+export interface EquipmentRow {
+  id: string;
+  sect_id: string;
+  disciple_id: string | null;
+  /** weapon | armor | artifact（见 equipment.ts 的 EQUIPMENT_SLOTS）。 */
+  slot: string;
+  /** common | spirit | treasure | immortal（见 EQUIPMENT_QUALITIES）。 */
+  quality: string;
+  name: string;
+  main_attr: string;
+  main_value: number;
+  sub_attr: string;
+  sub_value: number;
+  /** forge | boss（一期的两个来源）。 */
+  source: string;
+  created_at: number;
+}
+
+export class EquipmentRepository extends ParamRepository {
+  /** 本宗全部装备（背包 + 已穿戴）；新的在前，背包列表与弟子页共用这份数据。 */
+  async findBySectId(sectId: string): Promise<EquipmentRow[]> {
+    return this.all<EquipmentRow>({
+      sql: `SELECT id, sect_id, disciple_id, slot, quality, name, main_attr, main_value,
+                   sub_attr, sub_value, source, created_at
+            FROM equipment WHERE sect_id = ? ORDER BY created_at DESC, id DESC`,
+      params: [sectId],
+    });
+  }
+
+  /** 某名弟子身上的装备（穿戴 / 卸下 / 驱逐 / 跨弟子转移用；走 equipment_disciple_slot_uniq）。 */
+  async findByDiscipleId(discipleId: string): Promise<EquipmentRow[]> {
+    return this.all<EquipmentRow>({
+      sql: `SELECT id, sect_id, disciple_id, slot, quality, name, main_attr, main_value,
+                   sub_attr, sub_value, source, created_at
+            FROM equipment WHERE disciple_id = ? ORDER BY slot ASC, id ASC`,
+      params: [discipleId],
+    });
+  }
+
+  /** 背包件数（disciple_id IS NULL），走 equipment_sect_idx；背包上限判断用。 */
+  async countBagBySectId(sectId: string): Promise<number> {
+    const row = await this.one<{ total: number }>({
+      sql: 'SELECT COUNT(*) AS total FROM equipment WHERE sect_id = ? AND disciple_id IS NULL',
+      params: [sectId],
+    });
+    return Number(row?.total ?? 0);
+  }
+}
+
+export interface NewEquipment {
+  id: string;
+  sectId: string;
+  slot: string;
+  quality: string;
+  name: string;
+  mainAttr: string;
+  mainValue: number;
+  subAttr: string;
+  subValue: number;
+  source: string;
+  now: number;
+}
+
+/** 生成装备（炼器 / Boss 掉落）：新装备一律先落在背包里（disciple_id = NULL）。 */
+export function insertEquipmentStatement(row: NewEquipment): ParameterizedQuery {
+  return {
+    sql: `INSERT INTO equipment
+            (id, sect_id, disciple_id, slot, quality, name, main_attr, main_value,
+             sub_attr, sub_value, source, created_at)
+          VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    params: [
+      row.id,
+      row.sectId,
+      row.slot,
+      row.quality,
+      row.name,
+      row.mainAttr,
+      row.mainValue,
+      row.subAttr,
+      row.subValue,
+      row.source,
+      row.now,
+    ],
+  };
+}
+
+/** 穿戴 / 卸下 / 跨弟子转移：只改归属人（NULL = 放回背包）。 */
+export function updateEquipmentHolderStatement(
+  equipmentId: string,
+  sectId: string,
+  discipleId: string | null,
+): ParameterizedQuery {
+  return {
+    sql: 'UPDATE equipment SET disciple_id = ? WHERE id = ? AND sect_id = ?',
+    params: [discipleId, equipmentId, sectId],
+  };
+}
+
+/** 分解（只对背包里的行生效：穿在身上的删不掉）。 */
+export function deleteEquipmentStatement(equipmentId: string, sectId: string): ParameterizedQuery {
+  return {
+    sql: 'DELETE FROM equipment WHERE id = ? AND sect_id = ? AND disciple_id IS NULL',
+    params: [equipmentId, sectId],
+  };
+}
+
+/**
+ * 按**装备表重新求和**写回这名弟子的 5 个冗余列（计划 2.2）。
+ *
+ * 不在内存里加减，避免多次穿戴 / 卸下把误差累积起来；必须与改动装备的语句放在同一个
+ * batch 里，且排在它们**之后** —— D1 的 batch 按数组顺序执行，SUM 才看得到新归属。
+ * 参数顺序：5 个 SET 子查询各一个 disciple_id，最后 WHERE 一个。
+ */
+export function refreshDiscipleGearStatement(discipleId: string): ParameterizedQuery {
+  const sumOf = (attr: string): string =>
+    `COALESCE((SELECT SUM(CASE WHEN main_attr = '${attr}' THEN main_value ELSE 0 END` +
+    ` + CASE WHEN sub_attr = '${attr}' THEN sub_value ELSE 0 END)` +
+    ` FROM equipment WHERE disciple_id = ?), 0)`;
+  return {
+    sql:
+      `UPDATE disciples SET gear_attack = ${sumOf('attack')}, gear_defense = ${sumOf('defense')},` +
+      ` gear_speed = ${sumOf('speed')}, gear_luck = ${sumOf('luck')}, gear_physique = ${sumOf('physique')}` +
+      ` WHERE id = ?`,
+    params: [discipleId, discipleId, discipleId, discipleId, discipleId, discipleId],
+  };
+}
+
+/**
+ * 装备行的快照守卫（与弟子 / 丹药守卫同一模式）：快照过期时插入 valid=0，
+ * 触发 mutation_guards 的 CHECK，让同批的装备改动 + gear 列写回一起回滚。
+ *
+ * 为什么需要它：同一件装备的两次并发操作（双击「穿戴」到两名不同弟子）读到的归属人一样，
+ * 弟子守卫看不出来；少了这条就会出现「装备表归属是 B，但 A 的 gear 列还算着这件装备」。
+ * 校验内容：这些装备行仍属本宗，且归属人仍是读快照时的那个（NULL = 仍在背包里）。
+ */
+export function equipmentGuardStatement(
+  guardId: string,
+  sectId: string,
+  items: readonly { id: string; discipleId: string | null }[],
+): ParameterizedQuery {
+  const checks: string[] = [];
+  const params: (string | number | null)[] = [guardId];
+  for (const item of items) {
+    checks.push('EXISTS (SELECT 1 FROM equipment WHERE id = ? AND sect_id = ? AND disciple_id IS ?)');
+    params.push(item.id, sectId, item.discipleId);
+  }
+  return {
+    sql: `INSERT INTO mutation_guards (command_id, valid)
+          SELECT ?, CASE WHEN ${checks.length === 0 ? '1' : checks.join(' AND ')} THEN 1 ELSE 0 END`,
+    params,
   };
 }

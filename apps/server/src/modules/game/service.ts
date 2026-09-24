@@ -147,6 +147,7 @@ import {
   findSecretRealm,
   partyCombatPower,
 } from './realms';
+import { gearBonusOfDisciple, withGear, type AttrSet } from './equipment';
 import {
   BuildingRepository,
   ChallengeRepository,
@@ -1625,6 +1626,12 @@ export async function createSect(
       name: randomDiscipleName(),
       gender: randomGender(),
       ...attributes,
+      // 0028 装备：新弟子还没有装备，5 个冗余列都是 0。
+      gear_attack: 0,
+      gear_defense: 0,
+      gear_speed: 0,
+      gear_luck: 0,
+      gear_physique: 0,
       talent: generateTalent(Math.random),
       realm_id: template.realm,
       stage: template.stage,
@@ -1961,6 +1968,12 @@ export async function recruitDisciple(
     speed: candidate.speed,
     luck: candidate.luck,
     physique: candidate.physique,
+    // 0028 装备：新招募的弟子还没有装备，5 个冗余列都是 0。
+    gear_attack: 0,
+    gear_defense: 0,
+    gear_speed: 0,
+    gear_luck: 0,
+    gear_physique: 0,
     talent: candidate.talent,
     realm_id: 'qiRefining',
     stage: 1,
@@ -2979,12 +2992,14 @@ export async function exploreSectRealm(
     if (disciple.injured_until !== null && Number(disciple.injured_until) > now) {
       throw new AppError('INVALID_STATUS', `${disciple.name}正在疗伤，无法出战`);
     }
+    // 0028 装备：秘境速通（/game/explore）计入装备 —— 战力用「基础属性 + 装备加成」。
+    const attrs = battleAttrsOf(disciple);
     members.push({
       realmId: disciple.realm_id,
       stage: Number(disciple.stage),
-      attack: Number(disciple.attack),
-      defense: Number(disciple.defense),
-      speed: Number(disciple.speed),
+      attack: attrs.attack,
+      defense: attrs.defense,
+      speed: attrs.speed,
       talent: disciple.talent,
       name: disciple.name,
     });
@@ -3137,6 +3152,41 @@ function fluctuatedPower(basePower: number): number {
   return Math.floor(basePower * (0.85 + Math.random() * 0.3));
 }
 
+/**
+ * 0028 装备：一名弟子的**战斗属性** = 基础属性 + 装备加成（只读弟子表上 5 个冗余列）。
+ *
+ * 计划 1.2 的计入口径（每个调用点都另有一段说明）：
+ *   计入：挑战（攻方与守擂）、秘境探索（速通 / 交互式）、世界 Boss、弟子视图战力、
+ *         天骄榜战力、切磋；
+ *   不计入：弟子历练、论道赌局、综合评分、悟道值加点上限。
+ * 加法由 equipment.ts 的 withGear 实现：加成后可以超过 100，基础属性本身仍最高 100。
+ */
+function battleAttrsOf(disciple: DiscipleRow): AttrSet {
+  return withGear(
+    {
+      attack: Number(disciple.attack),
+      defense: Number(disciple.defense),
+      speed: Number(disciple.speed),
+      luck: Number(disciple.luck),
+      physique: Number(disciple.physique),
+    },
+    gearBonusOfDisciple(disciple),
+  );
+}
+
+/** 0028：弟子战力（**计入装备**）——把「基础属性 + 装备加成」传给 realms.ts 的战力函数。 */
+function gearedCombatPower(disciple: DiscipleRow): number {
+  const attrs = battleAttrsOf(disciple);
+  return discipleCombatPower(
+    disciple.realm_id,
+    Number(disciple.stage),
+    attrs.attack,
+    attrs.defense,
+    attrs.speed,
+    disciple.talent,
+  );
+}
+
 /** 镇派弟子：境界（realmIndex）→ 阶段 → 资质逐级比较取最高；没有弟子返回 null。 */
 function topDiscipleOf(disciples: readonly DiscipleRow[]): LeaderboardEntryView['topDisciple'] {
   let best: DiscipleRow | null = null;
@@ -3228,14 +3278,11 @@ export async function listDiscipleLeaderboard(
   for (const sect of sects) {
     const disciples = await discipleRepository.findBySectId(sect.id);
     for (const d of disciples) {
+      // 0028 装备：天骄榜的「战力」计入装备；「综合评分」不计入（计划 1.2 明列）。
       all.push({
         row: d,
         sectId: sect.id,
-        combatPower: discipleCombatPower(
-          d.realm_id, Number(d.stage),
-          Number(d.attack), Number(d.defense), Number(d.speed),
-          d.talent,
-        ),
+        combatPower: gearedCombatPower(d),
         score: attributeScore({
           aptitude: Number(d.aptitude),
           attack: Number(d.attack),
@@ -3399,14 +3446,8 @@ export async function getPublicSect(
       realmOrder: realmIndex(disciple.realm_id),
       stage: Number(disciple.stage),
       stageName: findStage(disciple.realm_id, Number(disciple.stage)).name,
-      combatPower: discipleCombatPower(
-        disciple.realm_id,
-        Number(disciple.stage),
-        Number(disciple.attack),
-        Number(disciple.defense),
-        Number(disciple.speed),
-        disciple.talent,
-      ),
+      // 0028 装备：公开档案的「战力」计入装备（这里展示的攻/防/身法仍是基础属性）。
+      combatPower: gearedCombatPower(disciple),
     })),
     buildings: buildings.map((building) => ({
       name: config.buildings.find((item) => item.id === building.def_id)?.name ?? building.def_id,
@@ -3472,26 +3513,9 @@ export async function sparWithSect(
     throw new AppError('NOT_FOUND', '对方弟子不存在');
   }
 
-  const myPower = fluctuatedPower(
-    discipleCombatPower(
-      myDisciple.realm_id,
-      Number(myDisciple.stage),
-      Number(myDisciple.attack),
-      Number(myDisciple.defense),
-      Number(myDisciple.speed),
-      myDisciple.talent,
-    ),
-  );
-  const targetPower = fluctuatedPower(
-    discipleCombatPower(
-      targetDisciple.realm_id,
-      Number(targetDisciple.stage),
-      Number(targetDisciple.attack),
-      Number(targetDisciple.defense),
-      Number(targetDisciple.speed),
-      targetDisciple.talent,
-    ),
-  );
+  // 0028 装备：切磋是「战斗」（不是历练 / 论道 / 综合评分），双方战力都计入装备。
+  const myPower = fluctuatedPower(gearedCombatPower(myDisciple));
+  const targetPower = fluctuatedPower(gearedCombatPower(targetDisciple));
   const result: SparResultView['result'] =
     myPower > targetPower ? 'win' : myPower < targetPower ? 'lose' : 'draw';
 
@@ -3909,22 +3933,23 @@ export async function challengeSect(
     if (disciple.injured_until !== null && Number(disciple.injured_until) > now) {
       throw new AppError('INVALID_STATUS', `${disciple.name}正在疗伤，无法出战`);
     }
+    // 0028 装备：挑战（攻方）计入装备 —— 战力与上下文属性都用「基础 + 装备加成」。
+    const attrs = battleAttrsOf(disciple);
     const stage = Number(disciple.stage);
-    const attack = Number(disciple.attack);
-    const defense = Number(disciple.defense);
-    const speed = Number(disciple.speed);
     attackerRichMembers.push({
       discipleId: disciple.id,
       name: disciple.name,
-      power: discipleCombatPower(disciple.realm_id, stage, attack, defense, speed, disciple.talent),
+      power: discipleCombatPower(
+        disciple.realm_id, stage, attrs.attack, attrs.defense, attrs.speed, disciple.talent,
+      ),
       realmName: findStage(disciple.realm_id, stage).name,
       stage,
-      attack,
-      defense,
-      speed,
+      attack: attrs.attack,
+      defense: attrs.defense,
+      speed: attrs.speed,
       aptitude: Number(disciple.aptitude),
-      luck: Number(disciple.luck),
-      physique: Number(disciple.physique),
+      luck: attrs.luck,
+      physique: attrs.physique,
       talent: disciple.talent,
     });
   }
@@ -3953,22 +3978,23 @@ export async function challengeSect(
   }
   const defenseMode: DefenseMode = plan.mode;
   const toRichMember = (disciple: (typeof defenders)[number]): ChallengeRichMember => {
+    // 0028 装备：挑战（守擂方）同上 —— 守方弟子身上的装备同样计入。
+    const attrs = battleAttrsOf(disciple);
     const stage = Number(disciple.stage);
-    const attack = Number(disciple.attack);
-    const defense = Number(disciple.defense);
-    const speed = Number(disciple.speed);
     return {
       discipleId: disciple.id,
       name: disciple.name,
-      power: discipleCombatPower(disciple.realm_id, stage, attack, defense, speed, disciple.talent),
+      power: discipleCombatPower(
+        disciple.realm_id, stage, attrs.attack, attrs.defense, attrs.speed, disciple.talent,
+      ),
       realmName: findStage(disciple.realm_id, stage).name,
       stage,
-      attack,
-      defense,
-      speed,
+      attack: attrs.attack,
+      defense: attrs.defense,
+      speed: attrs.speed,
       aptitude: Number(disciple.aptitude),
-      luck: Number(disciple.luck),
-      physique: Number(disciple.physique),
+      luck: attrs.luck,
+      physique: attrs.physique,
       talent: disciple.talent,
     };
   };
@@ -4531,6 +4557,9 @@ function journeyEligibilityOf(input: {
 /**
  * 计算奖励快照所需的弟子属性子集（出发时一次性快照，之后不再重算）。
  * luck / physique 是 0016 新增的两项：预览与出发读同一份值，出发之后改属性也不影响已锁定的结果。
+ *
+ * 0028 装备：这里给的是**基础属性**（弟子表上的原始值），历练不计入装备（计划 1.2 明列）；
+ * 也正因为是出发时的快照，途中换装不会改变已出发那一趟的结果。
  */
 function journeyRewardInputOf(disciple: DiscipleRow): {
   realmId: string;
@@ -5415,15 +5444,19 @@ export async function chooseRealmExplore(
   }
   const partyIds = explorationPartyIds(row);
   const party = preflight.disciples.filter((disciple) => partyIds.includes(disciple.id));
+  // 0028 装备：交互式秘境（realm-explore/choose）计入装备 —— 判定用的战力含装备加成。
   const power = partyCombatPower(
-    party.map((disciple) => ({
-      realmId: disciple.realm_id,
-      stage: Number(disciple.stage),
-      attack: Number(disciple.attack),
-      defense: Number(disciple.defense),
-      speed: Number(disciple.speed),
-      talent: disciple.talent,
-    })),
+    party.map((disciple) => {
+      const attrs = battleAttrsOf(disciple);
+      return {
+        realmId: disciple.realm_id,
+        stage: Number(disciple.stage),
+        attack: attrs.attack,
+        defense: attrs.defense,
+        speed: attrs.speed,
+        talent: disciple.talent,
+      };
+    }),
   );
   const arenaLevel =
     preflight.buildings.find((building) => building.def_id === ARENA_BUILDING_ID)?.level ?? 0;
@@ -5634,7 +5667,11 @@ function attributeFloorOf(attribute: BettableAttribute): number {
   return attribute === 'luck' || attribute === 'physique' ? 1 : 0;
 }
 
-/** 弟子六项属性快照（jev 状态文本与侦查文案共用）。 */
+/**
+ * 弟子六项属性快照（jev 状态文本与侦查文案共用）。
+ *
+ * 0028 装备：论道赌局**不计入装备**（计划 1.2 明列）—— 这里给的是基础属性。
+ */
 function debateAttributesOf(disciple: DiscipleRow): Record<BettableAttribute, number> {
   return {
     attack: Number(disciple.attack),
@@ -6982,6 +7019,9 @@ async function worldBossRoundDamage(
     const awayIds = journeyAwayIds(journeys, now);
     const arenaLevel =
       buildings.find((building) => building.def_id === ARENA_BUILDING_ID)?.level ?? 0;
+    // 0028 装备：这里是**关卡血量预估**（全服口径的基准值），**不计入装备** ——
+    // 计划 1.2 的「世界 Boss 计入装备」列的是战斗本身（一轮伤害 / 出手伤害 / 词缀属性 /
+    // 暴击幸运 / 受伤体魄）；血量预估含装备只会让 Boss 血量跟着涨、抵消装备收益。
     const top3 = disciples
       .filter(
         (disciple) =>
@@ -7080,16 +7120,19 @@ export async function attackWorldBoss(
   const fatigueByDisciple = new Map(fatigueRows.map((row) => [row.disciple_id, Number(row.cnt)]));
 
   // 逐人判定：先判重伤，未重伤再判受伤；被判重伤的那一刀不计入队伍伤害。
+  // 0028 装备：讨伐**计入装备** —— 伤害（战力 + 词缀属性加成）、暴击率用的幸运、
+  // 受伤 / 重伤判定用的体魄，全部用「基础属性 + 装备加成」（计划 1.2）。
   const outcomes: WorldBossMemberOutcomeView[] = [];
   const severeMembers: DiscipleRow[] = [];
   const injuredMembers: DiscipleRow[] = [];
   let partyBase = 0;
   let luckSum = 0;
   for (const member of members) {
-    luckSum += Number(member.luck);
+    const attrs = battleAttrsOf(member);
+    luckSum += attrs.luck;
     const verdict = rollOutcome({
       fatigueCount: fatigueByDisciple.get(member.id) ?? 0,
-      physique: Number(member.physique),
+      physique: attrs.physique,
       berserk,
       random: Math.random,
     });
@@ -7108,16 +7151,16 @@ export async function attackWorldBoss(
       discipleCombatPower(
         member.realm_id,
         Number(member.stage),
-        Number(member.attack),
-        Number(member.defense),
-        Number(member.speed),
+        attrs.attack,
+        attrs.defense,
+        attrs.speed,
         member.talent,
       ),
       affix,
       {
-        attack: Number(member.attack),
-        defense: Number(member.defense),
-        speed: Number(member.speed),
+        attack: attrs.attack,
+        defense: attrs.defense,
+        speed: attrs.speed,
       },
     );
   }
