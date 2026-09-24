@@ -497,6 +497,8 @@ export interface SecretRealmView {
   difficulty: number;
   entryCost: Record<string, string>;
   rewards: Record<string, string>;
+  /** 成功时的概率掉落说明（如「玄铁 1~2（15%）」）；没有则为 null。 */
+  bonusDropText: string | null;
   minParty: number;
   maxParty: number;
   dailyLimit: number | null;

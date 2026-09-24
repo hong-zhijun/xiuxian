@@ -210,6 +210,14 @@ export const REALM_XUANTIE_DROPS: Readonly<Record<string, { chance: number; min:
   tribulationRuins: { chance: 0.2, min: 2, max: 3 },
 };
 
+/** 秘境列表里的概率掉落说明，如「玄铁 1~2（15%）」；不掉玄铁的秘境返回 null。 */
+export function realmXuantieDropText(realmId: string): string | null {
+  const drop = REALM_XUANTIE_DROPS[realmId];
+  if (drop === undefined) return null;
+  const amount = drop.min === drop.max ? String(drop.min) : `${String(drop.min)}~${String(drop.max)}`;
+  return `玄铁 ${amount}（${String(Math.round(drop.chance * 100))}%）`;
+}
+
 /** 秘境玄铁掉落（展示单位整数，0 = 没掉）；random 注入便于测试。 */
 export function realmXuantieDrop(realmId: string, random: () => number): number {
   const drop = REALM_XUANTIE_DROPS[realmId];

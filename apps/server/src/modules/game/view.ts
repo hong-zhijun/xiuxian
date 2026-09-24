@@ -1144,6 +1144,8 @@ export interface SecretRealmListView {
   difficulty: number;
   entryCost: Record<string, string>;
   rewards: Record<string, string>;
+  /** 装备二期：成功时的概率掉落说明（如「玄铁 1~2（15%）」）；没有则为 null。 */
+  bonusDropText: string | null;
   minParty: number;
   maxParty: number;
   /** 每日探索次数上限；null = 不限。 */
