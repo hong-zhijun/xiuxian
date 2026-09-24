@@ -811,3 +811,232 @@ describe('装备接口：穿戴 / 卸下 / 分解 / 驱逐（计划 1.5）', () 
     expect(rows.filter((row) => row.slot === 'artifact')).toHaveLength(0);
   });
 });
+
+/* ---------- 阶段三：世界 Boss 掉落的夹具 ---------- */
+
+async function insertBoss(input: {
+  dayKey: string;
+  now: number;
+  stage?: number;
+  roundDamage?: number;
+  maxHp?: number;
+  hp?: number;
+  status?: string;
+}): Promise<string> {
+  const id = crypto.randomUUID();
+  const maxHp = input.maxHp ?? 1_000_000;
+  await env.DB.prepare(
+    `INSERT INTO world_bosses
+       (id, day_key, stage, boss_index, affix, round_damage, max_hp, hp, status,
+        killer_sect_id, half_announced, rewarded_at, created_at, ended_at)
+     VALUES (?, ?, ?, 0, 'ironclad', ?, ?, ?, ?, NULL, 0, NULL, ?, NULL)`,
+  )
+    .bind(
+      id,
+      input.dayKey,
+      input.stage ?? 1,
+      input.roundDamage ?? 20_000,
+      maxHp,
+      input.hp ?? maxHp,
+      input.status ?? 'active',
+      input.now,
+    )
+    .run();
+  return id;
+}
+
+async function systemMessages(): Promise<string[]> {
+  const result = await env.DB.prepare(
+    "SELECT content FROM chat_messages WHERE user_id = 'system'",
+  ).all<{ content: string }>();
+  return (result.results ?? []).map((row) => row.content);
+}
+
+/**
+ * 两个宗门打同一关并把它打死：A 派 1 人（伤害低）、B 派 3 人补刀（总伤害更高 → 排名第 1）。
+ * 随机源固定成 randomValue，掉落概率的判定就跟着它走（0.3 → 非第 1 名也掉；0.5 → 不掉）。
+ */
+async function killBossWithTwoSects(input: {
+  prefix: string;
+  dayOffset: number;
+  stage: number;
+  randomValue: number;
+}): Promise<{ first: SectFixture; second: SectFixture; now: number }> {
+  const first = await makeSect(`${input.prefix}-a`);
+  const second = await makeSect(`${input.prefix}-b`);
+  const now = dayAt(input.dayOffset, 10);
+  const dayKey = dateKeyUtc8(now);
+  vi.spyOn(Math, 'random').mockReturnValue(input.randomValue);
+
+  const bossId = await insertBoss({
+    dayKey,
+    now,
+    stage: input.stage,
+    maxHp: 10_000_000,
+    roundDamage: 20_000,
+  });
+  const hit = await attackWorldBoss(
+    env.DB,
+    first.userId,
+    { discipleIds: [first.discipleIds[0]!] },
+    now,
+  );
+  // 把血量压到「A 打完之后只剩 1 点」→ B 的那一刀必定打死，且总伤害一定高于 A。
+  await env.DB.prepare('UPDATE world_bosses SET hp = ? WHERE id = ?')
+    .bind(hit.result.actualDamage + 1, bossId)
+    .run();
+  const killing = await attackWorldBoss(
+    env.DB,
+    second.userId,
+    { discipleIds: second.discipleIds },
+    now,
+  );
+  expect(killing.result.lastHit).toBe(true);
+  // 连战会顺手开出下一关，删掉以免 Cron 把它一起处理。
+  await env.DB.prepare('DELETE FROM world_bosses WHERE day_key = ? AND stage = ?')
+    .bind(dayKey, input.stage + 1)
+    .run();
+  await processWorldBoss(env.DB, dayAt(input.dayOffset, 14));
+  return { first, second, now };
+}
+
+describe('世界 Boss 装备掉落（计划 1.4）', () => {
+  it('击杀掉落：第 1 名必掉本关段的头名品质，其他参与者按 40% 概率掉低一档', async () => {
+    // 0.3 < 0.4 → 非第 1 名也会掉；第 2 关的头名品质是灵品、其他是凡品。
+    const { first, second } = await killBossWithTwoSects({
+      prefix: 'drop',
+      dayOffset: 40,
+      stage: 2,
+      randomValue: 0.3,
+    });
+
+    const firstItems = await equipmentRows(first.sectId);
+    expect(firstItems).toHaveLength(1);
+    expect(firstItems[0]!.quality).toBe('common');
+    expect(firstItems[0]!.source).toBe('boss');
+    expect(firstItems[0]!.disciple_id).toBeNull();
+    expect(firstItems[0]!.name.startsWith('凡品·')).toBe(true);
+    // 副属性区间与主属性不同（与规则测试同一口径）。
+    expect(firstItems[0]!.sub_attr).not.toBe(firstItems[0]!.main_attr);
+
+    const secondItems = await equipmentRows(second.sectId);
+    expect(secondItems).toHaveLength(1);
+    expect(secondItems[0]!.quality).toBe('spirit');
+    expect(secondItems[0]!.name.startsWith('灵品·')).toBe(true);
+
+    // 只发一次：再跑两次 Cron 不会重复掉落。
+    await processWorldBoss(env.DB, dayAt(40, 15));
+    await processWorldBoss(env.DB, dayAt(40, 16));
+    expect(await equipmentRows(first.sectId)).toHaveLength(1);
+    expect(await equipmentRows(second.sectId)).toHaveLength(1);
+  });
+
+  it('其他参与者 40% 概率：随机数落在阈值之上就不掉（第 1 名仍然必掉）', async () => {
+    const { first, second } = await killBossWithTwoSects({
+      prefix: 'drop-miss',
+      dayOffset: 41,
+      stage: 2,
+      randomValue: 0.5,
+    });
+    expect(await equipmentRows(first.sectId)).toHaveLength(0);
+    expect(await equipmentRows(second.sectId)).toHaveLength(1);
+    expect((await equipmentRows(second.sectId))[0]!.quality).toBe('spirit');
+  });
+
+  it('击退（23:00 逃走且血量掉 ≥70%）不掉装备', async () => {
+    const sect = await makeSect('drop-flee');
+    const now = dayAt(42, 12, 0);
+    const dayKey = dateKeyUtc8(now);
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    const bossId = await insertBoss({ dayKey, now, stage: 1, maxHp: 1_000_000, roundDamage: 20_000 });
+    await attackWorldBoss(env.DB, sect.userId, { discipleIds: [sect.discipleIds[0]!] }, now);
+    // 模拟别的宗门把它打到剩 20% 血：逃走时按「已击退」处理（资源 ×0.5），但一件装备都不掉。
+    await env.DB.prepare('UPDATE world_bosses SET hp = ? WHERE id = ?').bind(200_000, bossId).run();
+    await processWorldBoss(env.DB, dayAt(42, 23, 30));
+
+    expect(await equipmentRows(sect.sectId)).toHaveLength(0);
+    expect((await systemMessages()).some((text) => text.includes('获得 '))).toBe(false);
+  });
+});
+
+describe('世界 Boss 掉落：仙品广播与背包已满', () => {
+  /** 单宗门打死指定关卡（Boss 只剩 100 血，一击必杀）。 */
+  async function killBossSolo(input: {
+    prefix: string;
+    dayOffset: number;
+    stage: number;
+  }): Promise<SectFixture> {
+    const sect = await makeSect(input.prefix);
+    const now = dayAt(input.dayOffset, 10);
+    const dayKey = dateKeyUtc8(now);
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    await insertBoss({ dayKey, now, stage: input.stage, maxHp: 1_000_000, hp: 100, roundDamage: 20_000 });
+    const killed = await attackWorldBoss(
+      env.DB,
+      sect.userId,
+      { discipleIds: [sect.discipleIds[0]!] },
+      now,
+    );
+    expect(killed.result.lastHit).toBe(true);
+    await env.DB.prepare('DELETE FROM world_bosses WHERE day_key = ? AND stage = ?')
+      .bind(dayKey, input.stage + 1)
+      .run();
+    await processWorldBoss(env.DB, dayAt(input.dayOffset, 14));
+    return sect;
+  }
+
+  it('第 5 关及以上掉仙品，并额外全服广播一次（只播一次）', async () => {
+    const sect = await killBossSolo({ prefix: 'drop-immortal', dayOffset: 43, stage: 5 });
+    const rows = await equipmentRows(sect.sectId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.quality).toBe('immortal');
+    expect(rows[0]!.name.startsWith('仙品·')).toBe(true);
+
+    const gains = (await systemMessages()).filter((text) =>
+      text.includes(`获得 ${rows[0]!.name}！`),
+    );
+    expect(gains).toHaveLength(1);
+    expect(gains[0]).toContain('【讨伐】');
+
+    await processWorldBoss(env.DB, dayAt(43, 15));
+    await processWorldBoss(env.DB, dayAt(43, 16));
+    expect(await equipmentRows(sect.sectId)).toHaveLength(1);
+    expect(
+      (await systemMessages()).filter((text) => text.includes(`获得 ${rows[0]!.name}！`)),
+    ).toHaveLength(1);
+  });
+
+  it('背包已满：这一件自动分解成对应品质的矿石（装备不丢、背包不超 50）', async () => {
+    const sect = await makeSect('drop-full');
+    for (let i = 0; i < 50; i += 1) {
+      await insertEquipment(sect.sectId);
+    }
+    // 同一个文件里前面已经有仙品广播，所以这里比的是「获得」类消息的**增量**。
+    const gainsBefore = (await systemMessages()).filter((text) => text.includes('获得 ')).length;
+    const now = dayAt(44, 10);
+    const dayKey = dateKeyUtc8(now);
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    await insertBoss({ dayKey, now, stage: 3, maxHp: 1_000_000, hp: 100, roundDamage: 20_000 });
+    const killed = await attackWorldBoss(
+      env.DB,
+      sect.userId,
+      { discipleIds: [sect.discipleIds[0]!] },
+      now,
+    );
+    expect(killed.result.lastHit).toBe(true);
+    await env.DB.prepare('DELETE FROM world_bosses WHERE day_key = ? AND stage = 4')
+      .bind(dayKey)
+      .run();
+    const oreBefore = await balanceOf(sect.sectId, 'ore');
+
+    await processWorldBoss(env.DB, dayAt(44, 14));
+
+    // 第 3 关第 1 名的掉落品质是宝品 → 分解返还 250 展示单位 = 250000 最小单位。
+    expect(await equipmentRows(sect.sectId)).toHaveLength(50);
+    expect(await bagCountOf(sect.sectId)).toBe(50);
+    expect((await balanceOf(sect.sectId, 'ore')) - oreBefore).toBeGreaterThanOrEqual(250_000);
+    expect((await systemMessages()).filter((text) => text.includes('获得 ')).length).toBe(
+      gainsBefore,
+    );
+  });
+});

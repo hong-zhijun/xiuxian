@@ -1012,6 +1012,8 @@ export interface WorldBossView {
 export interface WorldBossRewardPreviewView {
   stage: number;
   tiers: { rank: number; multiplier: number; resources: Record<string, number>; topDamagePill: boolean }[];
+  /** 0028：当前关卡的装备掉落说明（服务端按 equipment.ts 的品质表拼好，前端只渲染）。 */
+  dropDescription: string;
   lastHitStone: number;
 }
 

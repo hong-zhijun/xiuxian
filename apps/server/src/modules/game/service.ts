@@ -148,10 +148,12 @@ import {
   partyCombatPower,
 } from './realms';
 import {
+  BOSS_DROP_CHANCE_OTHERS,
   BAG_CAPACITY,
   EQUIPMENT_SLOTS,
   FORGE_COST,
   FORGE_QUALITY,
+  bossDropQualities,
   bagFullReason,
   forgeUnlockBlockedReason,
   gearBonusOfDisciple,
@@ -7830,6 +7832,9 @@ async function rewardWorldBoss(
     (a, b) => b[1].damage - a[1].damage || a[1].firstAt - b[1].firstAt,
   );
 
+  // 0028 装备：本关击杀掉落的装备（发奖成功后用它广播仙品）。
+  const bossDrops: { sectId: string; name: string; quality: string }[] = [];
+
   // 击杀与击退才发资源；单纯逃走（<70%）什么也不发。
   if (participants.length > 0 && (killed || repelled)) {
     const sectRows = await repo.sectsByIds(participants.map(([sectId]) => sectId));
@@ -7889,6 +7894,57 @@ async function rewardWorldBoss(
           }
         }
       }
+
+      // 0028 装备掉落（计划 1.4）：只有**击杀**才掉，按该关的伤害排名给品质 ——
+      // 伤害第 1 名必掉 1 件，其他参与者 40% 概率掉 1 件；部位随机、法器主属性随机。
+      // 该宗门背包已满时这一件**自动分解**成对应品质的矿石入账（东西不会丢）。
+      const dropQualities = bossDropQualities(stage);
+      const equipmentRepo = new EquipmentRepository(db);
+      const bagUsedBySect = new Map<string, number>();
+      for (const [index, [sectId]] of participants.entries()) {
+        const isTop = index === 0;
+        if (!isTop && Math.random() >= BOSS_DROP_CHANCE_OTHERS) {
+          continue;
+        }
+        const quality = isTop ? dropQualities.top : dropQualities.others;
+        const slotIndex = Math.min(
+          EQUIPMENT_SLOTS.length - 1,
+          Math.max(0, Math.floor(Math.random() * EQUIPMENT_SLOTS.length)),
+        );
+        const slot = EQUIPMENT_SLOTS[slotIndex]!.id;
+        // 掉落时不给主属性 → 法器在身法 / 幸运之间随机（兵器固定攻击、护甲固定防御）。
+        const mainAttr = resolveMainAttr(slot, undefined, Math.random);
+        if (mainAttr === null) {
+          continue;
+        }
+        const generated = generateEquipment({ slot, quality, mainAttr, random: Math.random });
+
+        let bagUsed = bagUsedBySect.get(sectId);
+        if (bagUsed === undefined) {
+          bagUsed = await equipmentRepo.countBagBySectId(sectId);
+        }
+        if (bagUsed >= BAG_CAPACITY) {
+          statements.push(resourceDeltaStatement(sectId, 'ore', salvageOreUnits(quality), now));
+          continue;
+        }
+        bagUsedBySect.set(sectId, bagUsed + 1);
+        statements.push(
+          insertEquipmentStatement({
+            id: crypto.randomUUID(),
+            sectId,
+            slot: generated.slot,
+            quality: generated.quality,
+            name: generated.name,
+            mainAttr: generated.mainAttr,
+            mainValue: generated.mainValue,
+            subAttr: generated.subAttr,
+            subValue: generated.subValue,
+            source: 'boss',
+            now,
+          }),
+        );
+        bossDrops.push({ sectId, name: generated.name, quality: generated.quality });
+      }
     }
   }
 
@@ -7905,6 +7961,15 @@ async function rewardWorldBoss(
       `【讨伐】${bossDisplayName(Number(boss.boss_index), stage)} ${killed ? '讨伐' : '击退'}奖励已发放（${String(participants.length)} 个宗门参与，伤害第一：${topName}）`,
       now,
     );
+  }
+
+  // 0028 装备：掉到**仙品**时额外广播一条（其他品质静默入背包，计划 1.4）。
+  for (const drop of bossDrops) {
+    if (drop.quality !== 'immortal') {
+      continue;
+    }
+    const sectName = hits.find((hit) => hit.sect_id === drop.sectId)?.sect_name ?? '';
+    await broadcastWorldBoss(db, `【讨伐】${sectName}获得 ${drop.name}！`, now);
   }
 }
 

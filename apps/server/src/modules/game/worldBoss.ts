@@ -1,3 +1,4 @@
+import { bossDropDescription } from './equipment';
 import { ARENA_COMBAT_BONUS_BP_PER_LEVEL } from './realms';
 
 /**
@@ -471,6 +472,8 @@ export function worldBossRewardPreview(input: {
   stage: number;
   tiers: { rank: number; multiplier: number; resources: Record<string, number>; topDamagePill: boolean }[];
   lastHitStone: number;
+  /** 0028 装备掉落说明（「伤害第 1 名必得 灵品装备 ×1；其他参与者 40% 概率得 凡品装备 ×1」）。 */
+  dropDescription: string;
 } {
   const tiers = [1, 2, 3, 4].map((rank) => ({
     rank,
@@ -482,6 +485,7 @@ export function worldBossRewardPreview(input: {
     stage: input.stage,
     tiers,
     lastHitStone: lastHitReward(input.rates.spiritStone ?? 0, input.sectLevel, input.stage),
+    dropDescription: bossDropDescription(input.stage),
   };
 }
 
