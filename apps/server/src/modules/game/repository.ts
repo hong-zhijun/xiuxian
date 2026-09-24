@@ -1233,10 +1233,35 @@ export function discipleSnapshotGuardStatement(
     );
     params.push(row.id, sect.id, row.balance, row.remainder);
   }
+  pushMemberChecks(checks, params, sect.id, members, now, rejectAwayMembers === true);
+  if (defenseLineup !== undefined) {
+    checks.push('EXISTS (SELECT 1 FROM sects WHERE id = ? AND defense_lineup IS ?)');
+    params.push(sect.id, defenseLineup);
+  }
+
+  return {
+    sql: `INSERT INTO mutation_guards (command_id, valid)
+          SELECT ?, CASE WHEN ${checks.join(' AND ')} THEN 1 ELSE 0 END`,
+    params,
+  };
+}
+
+/**
+ * 成员校验（弟子快照守卫与成员分片守卫共用）：每名成员仍属本宗；
+ * rejectAwayMembers 时还要求此刻没有「尚未到期的历练」。
+ */
+function pushMemberChecks(
+  checks: string[],
+  params: (string | number | null)[],
+  sectId: string,
+  members: readonly { id: string }[],
+  now: number,
+  rejectAwayMembers: boolean,
+): void {
   for (const member of members) {
     checks.push('EXISTS (SELECT 1 FROM disciples WHERE id = ? AND sect_id = ?)');
-    params.push(member.id, sect.id);
-    if (rejectAwayMembers === true) {
+    params.push(member.id, sectId);
+    if (rejectAwayMembers) {
       /**
        * 0014：目标弟子在此刻也不得仍处于「尚未到期的历练」。
        *
@@ -1251,11 +1276,22 @@ export function discipleSnapshotGuardStatement(
       params.push(member.id, now);
     }
   }
-  if (defenseLineup !== undefined) {
-    checks.push('EXISTS (SELECT 1 FROM sects WHERE id = ? AND defense_lineup IS ?)');
-    params.push(sect.id, defenseLineup);
-  }
+}
 
+/**
+ * 批量弟子命令的成员分片守卫：D1 单条语句最多绑定 100 个参数，每名成员占 2~4 个，
+ * 所以超出首条守卫的成员按片另起守卫行（口径与 discipleSnapshotGuardStatement 的成员部分一致）。
+ */
+export function discipleMembersGuardStatement(
+  guardId: string,
+  sectId: string,
+  members: readonly { id: string }[],
+  now: number,
+  rejectAwayMembers: boolean,
+): ParameterizedQuery {
+  const checks: string[] = [];
+  const params: (string | number | null)[] = [guardId];
+  pushMemberChecks(checks, params, sectId, members, now, rejectAwayMembers);
   return {
     sql: `INSERT INTO mutation_guards (command_id, valid)
           SELECT ?, CASE WHEN ${checks.join(' AND ')} THEN 1 ELSE 0 END`,

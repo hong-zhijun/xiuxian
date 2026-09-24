@@ -1766,6 +1766,159 @@ ul {
   font-weight: 700;
 }
 
+/* 匹配人数 + 「多选」开关同一行。 */
+.disciple-count-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.disciple-select-toggle {
+  min-height: 30px;
+}
+
+/* 多选模式：卡片可点选，已选卡片描金；勾选框压在卡片左上角。 */
+.disciple-row.is-selecting {
+  cursor: pointer;
+}
+
+.disciple-row.is-selected {
+  border-color: rgba(202, 169, 106, 0.62);
+  background: rgba(202, 169, 106, 0.08);
+}
+
+.disciple-select-check {
+  position: absolute;
+  top: 5px;
+  left: 5px;
+  z-index: 2;
+  display: flex;
+  padding: 2px;
+  cursor: pointer;
+}
+
+.disciple-select-check input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--gold);
+  cursor: pointer;
+}
+
+/* 多选底栏：吸附在名册可视区底部。 */
+.disciple-batch-bar {
+  position: sticky;
+  bottom: 0;
+  z-index: 5;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid rgba(202, 169, 106, 0.32);
+  border-radius: 4px;
+  background: rgba(8, 24, 19, 0.96);
+  box-shadow: 0 -8px 20px rgba(0, 0, 0, 0.35);
+}
+
+.disciple-batch-count {
+  color: #8fa59a;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.disciple-batch-count strong {
+  color: var(--gold-bright);
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size: 15px;
+}
+
+.disciple-batch-bar .disciple-reset {
+  align-self: center;
+}
+
+.disciple-batch-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.disciple-batch-assign {
+  min-width: 132px;
+}
+
+.disciple-batch-breakthrough {
+  min-height: 36px;
+  padding: 0 14px;
+  white-space: nowrap;
+}
+
+/* 批量破境确认：可破境名单 + 将被跳过的名单。 */
+.batch-break-balance {
+  color: #8fa59a;
+  font-size: 12px;
+}
+
+.batch-break-list {
+  display: flex;
+  max-height: 220px;
+  flex-direction: column;
+  margin: 10px 0;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+
+.batch-break-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line);
+  color: #dce6e0;
+  font-size: 13px;
+}
+
+.batch-break-list li:last-child {
+  border-bottom: 0;
+}
+
+.batch-break-name {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.batch-break-cost {
+  color: #8fa59a;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.batch-break-skipped {
+  margin-bottom: 10px;
+  color: #8fa59a;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+@media (max-width: 680px) {
+  .disciple-batch-actions {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .disciple-batch-assign {
+    min-width: 0;
+    flex: 1 1 auto;
+  }
+}
+
 .disciple-count {
   margin: 10px 0 9px;
   color: #657b70;

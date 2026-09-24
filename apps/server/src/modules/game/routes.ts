@@ -7,7 +7,9 @@ import { getDb } from '../../infra/db/client';
 import {
   abandonExplorationSchema,
   allocateDaoInsightRequestSchema,
+  assignBatchRequestSchema,
   assignRequestSchema,
+  breakthroughBatchRequestSchema,
   breakthroughRequestSchema,
   challengeRequestSchema,
   chooseRealmExploreSchema,
@@ -39,7 +41,9 @@ import {
   abandonRealmExplore,
   allocateDaoInsight,
   assignDisciple,
+  assignDisciplesBatch,
   breakthrough,
+  breakthroughBatch,
   challengeSect,
   chooseRealmExplore,
   claimJourney,
@@ -165,6 +169,28 @@ export function createGameRoutes(): Hono<AppEnv> {
       Date.now(),
     );
     return respondOk(c, { state });
+  });
+
+  // 批量转岗（结算 → 逐个校验，不符合条件的跳过 → 一次受保护 batch）。
+  routes.post('/game/assign-batch', async (c) => {
+    const userId = requireUserId(c);
+    const body = await parseStrictJson(assignBatchRequestSchema, c);
+    const result = await assignDisciplesBatch(
+      getDb(c.env),
+      userId,
+      body.discipleIds,
+      body.assignment,
+      Date.now(),
+    );
+    return respondOk(c, { state: result.state, outcome: result.outcome });
+  });
+
+  // 批量破境（结算 → 逐个校验，不符合条件的跳过 → 灵气须够全部 → 逐人抽随机 → 一次受保护 batch）。
+  routes.post('/game/breakthrough-batch', async (c) => {
+    const userId = requireUserId(c);
+    const body = await parseStrictJson(breakthroughBatchRequestSchema, c);
+    const result = await breakthroughBatch(getDb(c.env), userId, body.discipleIds, Date.now());
+    return respondOk(c, { state: result.state, outcome: result.outcome });
   });
 
   routes.post('/game/upgrade-building', async (c) => {

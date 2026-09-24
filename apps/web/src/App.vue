@@ -6,7 +6,9 @@ import {
   abandonRealmExplore,
   allocateDaoInsight,
   assign,
+  assignBatch,
   breakthrough,
+  breakthroughBatch,
   challenge,
   chooseRealmExplore,
   claimJourney,
@@ -34,6 +36,9 @@ import {
 } from './api/game';
 import type {
   ChallengeResultView,
+  AssignBatchOutcome,
+  BatchSkippedDisciple,
+  BreakthroughBatchOutcome,
   CraftPillOutcome,
   DaoAttribute,
   DaoDebateInput,
@@ -609,6 +614,62 @@ function onBreakthrough(discipleId: string): void {
   );
 }
 
+/** 批量结果里的名单：最多列 5 人，其余用「等 N 人」概括。 */
+function nameList(names: string[]): string {
+  const shown = names.slice(0, 5).join('、');
+  return names.length > 5 ? `${shown} 等 ${String(names.length)} 人` : shown;
+}
+
+/** 被跳过的弟子：「；跳过 2 人：甲（外出历练中）、乙（修为未到门槛）」，最多列 3 人。 */
+function skippedSummary(skipped: BatchSkippedDisciple[]): string {
+  if (skipped.length === 0) return '';
+  const shown = skipped
+    .slice(0, 3)
+    .map((item) => `${item.discipleName}（${item.reason}）`)
+    .join('、');
+  return `；跳过 ${String(skipped.length)} 人：${shown}${skipped.length > 3 ? ' 等' : ''}`;
+}
+
+/** 名册多选：批量换岗（不符合条件的由服务端跳过，结果里列出原因）。 */
+function onBatchAssign(discipleIds: string[], assignment: string): void {
+  void runAction(
+    () => assignBatch(discipleIds, assignment),
+    (data) => {
+      const outcome = data.outcome as AssignBatchOutcome | undefined;
+      const skipped = outcome?.skipped ?? [];
+      return {
+        tone: skipped.length > 0 ? 'info' : 'success',
+        title: `批量换岗 · ${outcome?.assignmentName ?? '岗位'}`,
+        message: `已调整 ${String(outcome?.assigned.length ?? 0)} 人${skippedSummary(skipped)}。`,
+      };
+    },
+  );
+}
+
+/** 名册多选：批量破境（确认弹窗里已核对人数与灵气；逐人结果由服务端抽随机）。 */
+function onBatchBreakthrough(discipleIds: string[]): void {
+  void runAction(
+    () => breakthroughBatch(discipleIds),
+    (data) => {
+      const outcome = data.outcome as BreakthroughBatchOutcome | undefined;
+      const results = outcome?.results ?? [];
+      const succeeded = results.filter((item) => item.success).map((item) => item.discipleName);
+      const failed = results.filter((item) => !item.success).map((item) => item.discipleName);
+      const parts: string[] = [];
+      if (succeeded.length > 0) parts.push(`成功：${nameList(succeeded)}`);
+      if (failed.length > 0) parts.push(`失败：${nameList(failed)}（修为跌落并进入调息）`);
+      let tone: ToastTone = 'info';
+      if (failed.length === 0) tone = 'success';
+      else if (succeeded.length === 0) tone = 'warning';
+      return {
+        tone,
+        title: `批量突破 · 成功 ${String(succeeded.length)} / ${String(results.length)}`,
+        message: `${parts.join('；')}${skippedSummary(outcome?.skipped ?? [])}。`,
+      };
+    },
+  );
+}
+
 const PILL_ATTRIBUTE_NAMES: Record<string, string> = { attack: '攻击', defense: '防御', speed: '身法' };
 
 /** 炼丹：数量由炼丹面板选好（1~5），服务端整单校验并扣资源，返回完整 state。 */
@@ -900,6 +961,8 @@ onUnmounted(() => {
       @dao-debate="onDaoDebate"
       @allocate-dao-insight="onAllocateDaoInsight"
       @breakthrough="onBreakthrough"
+      @batch-assign="onBatchAssign"
+      @batch-breakthrough="onBatchBreakthrough"
       @craft-pill="onCraftPill"
       @use-pill="onUsePill"
       @save-note="onSaveNote"

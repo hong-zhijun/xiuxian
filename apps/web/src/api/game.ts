@@ -49,6 +49,8 @@ export interface DiscipleView {
   assignmentName: string;
   injuredUntil: string | null;
   canBreakthrough: boolean;
+  /** 除灵气外的破境条件都已满足（批量破境按这个挑人，灵气整批合计后再判断）。 */
+  breakthroughReadyExceptEnergy: boolean;
   blockedReason: string | null;
   breakthroughCost: string;
   breakthroughChanceBp: number;
@@ -384,6 +386,50 @@ export async function breakthrough(discipleId: string): Promise<GameActionData> 
     method: 'POST',
     body: { discipleId },
   });
+}
+
+/** 批量命令里被跳过的弟子（与后端 service.ts 的 BatchSkippedDisciple 一一对应）。 */
+export interface BatchSkippedDisciple {
+  discipleId: string;
+  discipleName: string;
+  reason: string;
+}
+
+/** 批量换岗结果（POST /game/assign-batch 的 outcome）。 */
+export interface AssignBatchOutcome {
+  assignment: string;
+  assignmentName: string;
+  assigned: { discipleId: string; discipleName: string }[];
+  skipped: BatchSkippedDisciple[];
+}
+
+/** 批量破境结果（POST /game/breakthrough-batch 的 outcome）。 */
+export interface BreakthroughBatchOutcome {
+  results: BreakthroughOutcome[];
+  skipped: BatchSkippedDisciple[];
+  /** 本次共消耗的灵气（最小单位）。 */
+  energySpent: string;
+}
+
+/** 批量换岗：按数组顺序逐个转，不符合条件的由服务端跳过并列出原因。 */
+export async function assignBatch(
+  discipleIds: string[],
+  assignment: string,
+): Promise<{ state: SectStateView; outcome: AssignBatchOutcome }> {
+  return apiRequest<{ state: SectStateView; outcome: AssignBatchOutcome }>('/api/v1/game/assign-batch', {
+    method: 'POST',
+    body: { discipleIds, assignment },
+  });
+}
+
+/** 批量破境：不满足条件的跳过；灵气须够全部可破境弟子，否则整批拒绝。 */
+export async function breakthroughBatch(
+  discipleIds: string[],
+): Promise<{ state: SectStateView; outcome: BreakthroughBatchOutcome }> {
+  return apiRequest<{ state: SectStateView; outcome: BreakthroughBatchOutcome }>(
+    '/api/v1/game/breakthrough-batch',
+    { method: 'POST', body: { discipleIds } },
+  );
 }
 
 /** 事件历史（GET /game/events，最近 20 条）。 */

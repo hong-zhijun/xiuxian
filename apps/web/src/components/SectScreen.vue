@@ -95,6 +95,9 @@ const emit = defineEmits<{
   setDefenseLineup: [discipleIds: string[]];
   dismissChallengeResult: [];
   breakthrough: [discipleId: string];
+  /** 名册多选底栏：批量换岗 / 批量破境（请求与提示都在 App.vue）。 */
+  'batch-assign': [discipleIds: string[], assignment: string];
+  'batch-breakthrough': [discipleIds: string[]];
   'craft-pill': [pillId: string, quantity: number];
   'use-pill': [pillId: string, discipleId: string, count: number];
   notify: [tone: ToastTone, title: string, message: string];
@@ -1117,6 +1120,76 @@ const breakthroughEnergyName = computed(
   () => props.state.resources.find((resource) => resource.id === 'spiritualEnergy')?.name ?? '灵气',
 );
 
+/* ---------- 名册多选：批量换岗 / 批量破境 ---------- */
+
+function onBatchAssign(discipleIds: string[], assignment: string): void {
+  if (props.busy || discipleIds.length === 0) return;
+  emit('batch-assign', discipleIds, assignment);
+}
+
+/** 批量破境确认弹窗对应的已选弟子（null = 未打开）。 */
+const batchBreakthroughIds = ref<string[] | null>(null);
+/** 本弹窗已提交过：等这次请求结束（busy 回落）就关弹窗，结果由 App.vue 的提示展示。 */
+let batchBreakthroughSubmitted = false;
+
+const batchBreakthroughSelected = computed<DiscipleView[]>(() => {
+  const ids = batchBreakthroughIds.value;
+  if (ids === null) return [];
+  const byId = new Map(props.state.disciples.map((disciple) => [disciple.id, disciple]));
+  return ids.flatMap((id) => {
+    const disciple = byId.get(id);
+    return disciple === undefined ? [] : [disciple];
+  });
+});
+
+/** 可破境（除灵气外条件都满足，服务端字段）的弟子；灵气在下面整批合计。 */
+const batchBreakthroughReady = computed(() =>
+  batchBreakthroughSelected.value.filter((disciple) => disciple.breakthroughReadyExceptEnergy),
+);
+const batchBreakthroughSkipped = computed(() =>
+  batchBreakthroughSelected.value.filter((disciple) => !disciple.breakthroughReadyExceptEnergy),
+);
+const batchBreakthroughCost = computed(() =>
+  batchBreakthroughReady.value.reduce((sum, disciple) => sum + Number(disciple.breakthroughCost), 0),
+);
+const batchBreakthroughEnergy = computed(() => liveResources.value['spiritualEnergy'] ?? 0);
+const batchBreakthroughAffordable = computed(
+  () => batchBreakthroughEnergy.value >= batchBreakthroughCost.value,
+);
+/** 同一宗门的破境胜算只由聚灵阵决定，人人相同；取第一名可破境弟子的服务端字段。 */
+const batchBreakthroughChanceBp = computed(
+  () => batchBreakthroughReady.value[0]?.breakthroughChanceBp ?? 0,
+);
+
+function openBatchBreakthrough(discipleIds: string[]): void {
+  if (props.busy || discipleIds.length === 0) return;
+  batchBreakthroughSubmitted = false;
+  batchBreakthroughIds.value = discipleIds;
+}
+
+function closeBatchBreakthrough(): void {
+  batchBreakthroughIds.value = null;
+}
+
+function confirmBatchBreakthrough(): void {
+  const ids = batchBreakthroughIds.value;
+  if (props.busy || ids === null) return;
+  if (batchBreakthroughReady.value.length === 0 || !batchBreakthroughAffordable.value) return;
+  batchBreakthroughSubmitted = true;
+  // 整份已选名单交给服务端：不符合条件的由服务端跳过并在结果里列出原因。
+  emit('batch-breakthrough', ids);
+}
+
+watch(
+  () => props.busy,
+  (busy) => {
+    if (!busy && batchBreakthroughSubmitted) {
+      batchBreakthroughSubmitted = false;
+      closeBatchBreakthrough();
+    }
+  },
+);
+
 /** 头像点击：只开确认弹窗，不发请求（胜算、消耗与阻止原因都用服务端字段）。 */
 function onRequestBreakthrough(discipleId: string): void {
   if (props.busy) return;
@@ -1356,6 +1429,8 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
           :breakthrough-confirm-id="breakthroughConfirmId"
           @open-detail="openDetail"
           @request-breakthrough="onRequestBreakthrough"
+          @request-batch-breakthrough="openBatchBreakthrough"
+          @batch-assign="onBatchAssign"
         />
       </section>
 
@@ -1726,6 +1801,81 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
             @click="confirmBreakthrough"
           >
             <span>{{ busy ? '破境中…' : '确认破境' }}</span>
+          </button>
+        </div>
+      </section>
+    </ModalShell>
+
+    <!-- 名册多选 · 批量破境确认：列出可破境与将被跳过的弟子、整批灵气消耗；灵气不够时不能提交。 -->
+    <ModalShell
+      v-if="batchBreakthroughIds !== null"
+      narrow
+      :loading="busy"
+      loading-text="正在逐一破境"
+      label="批量破境确认"
+      @close="closeBatchBreakthrough"
+    >
+      <section class="disciple-break-confirm" aria-labelledby="batch-break-confirm-title">
+        <header class="section-heading panel-heading compact-heading">
+          <div>
+            <p class="eyebrow">批量破境</p>
+            <h2 id="batch-break-confirm-title">{{ batchBreakthroughReady.length }} 名弟子可破境</h2>
+          </div>
+          <span class="count-badge">已选 {{ batchBreakthroughSelected.length }} 人</span>
+        </header>
+
+        <dl v-if="batchBreakthroughReady.length > 0" class="disciple-facts">
+          <div>
+            <dt>每人胜算</dt>
+            <dd>{{ formatBp(batchBreakthroughChanceBp) }}</dd>
+          </div>
+          <div>
+            <dt>{{ breakthroughEnergyName }}消耗</dt>
+            <dd>
+              {{ formatAmount(batchBreakthroughCost) }}
+              <span class="batch-break-balance">/ 现有 {{ formatAmount(batchBreakthroughEnergy) }}</span>
+            </dd>
+          </div>
+        </dl>
+
+        <ul v-if="batchBreakthroughReady.length > 0" class="batch-break-list">
+          <li v-for="disciple in batchBreakthroughReady" :key="disciple.id">
+            <span class="batch-break-name">{{ disciple.name }}</span>
+            <span class="realm-tag">{{ disciple.stageName }}</span>
+            <span class="batch-break-cost">{{ formatAmount(disciple.breakthroughCost) }} {{ breakthroughEnergyName }}</span>
+          </li>
+        </ul>
+
+        <div v-if="batchBreakthroughSkipped.length > 0" class="batch-break-skipped">
+          <p class="eyebrow">以下 {{ batchBreakthroughSkipped.length }} 人不满足条件，将被跳过</p>
+          <ul>
+            <li v-for="disciple in batchBreakthroughSkipped" :key="disciple.id">
+              {{ disciple.name }}：{{ disciple.blockedReason ?? '当前条件尚未满足' }}
+            </li>
+          </ul>
+        </div>
+
+        <p class="disciple-detail-hint">
+          失败后果：本次消耗的{{ breakthroughEnergyName }}不退，修为会跌落到本阶段的保底值，并进入调息；
+          调息结束前不能再次破境。
+        </p>
+
+        <p v-if="batchBreakthroughReady.length === 0" class="blocked-hint">所选弟子都不满足突破条件。</p>
+        <p v-else-if="!batchBreakthroughAffordable" class="blocked-hint">
+          {{ breakthroughEnergyName }}不足，请减少突破弟子数量。
+        </p>
+
+        <div class="disciple-break-confirm-actions">
+          <button class="action-button" type="button" :disabled="busy" @click="closeBatchBreakthrough">
+            取消
+          </button>
+          <button
+            class="action-button primary-action"
+            type="button"
+            :disabled="busy || batchBreakthroughReady.length === 0 || !batchBreakthroughAffordable"
+            @click="confirmBatchBreakthrough"
+          >
+            <span>{{ busy ? '破境中…' : `确认破境（${batchBreakthroughReady.length} 人）` }}</span>
           </button>
         </div>
       </section>

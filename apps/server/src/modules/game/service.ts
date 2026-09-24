@@ -160,6 +160,7 @@ import {
   deleteChallengeSnapshotGuardStatement,
   deleteDiscipleSnapshotGuardStatement,
   deleteDiscipleStatement,
+  discipleMembersGuardStatement,
   discipleSnapshotGuardStatement,
   insertBuildingStatement,
   insertChallengeLogStatement,
@@ -979,19 +980,36 @@ class SectDraft {
     },
   ): Promise<void> {
     const commandId = crypto.randomUUID();
+    const rejectAwayMembers = options?.allowActiveJourney !== true;
+    // D1 单条语句最多 100 个绑定参数：首条守卫只带前 MEMBERS_PER_GUARD 名成员，其余按片另起守卫行。
+    const MEMBERS_PER_GUARD = 10;
     const guard = discipleSnapshotGuardStatement(commandId, {
       sect: this.base.sect,
       balances: this.base.balances,
-      members,
+      members: members.slice(0, MEMBERS_PER_GUARD),
       now: this.now,
-      rejectAwayMembers: options?.allowActiveJourney !== true,
+      rejectAwayMembers,
       ...(defenseLineup === undefined ? {} : { defenseLineup }),
     });
+    const guardIds = [commandId];
+    const memberGuards: ParameterizedQuery[] = [];
+    for (let start = MEMBERS_PER_GUARD; start < members.length; start += MEMBERS_PER_GUARD) {
+      const guardId = `${commandId}:members:${String(start)}`;
+      guardIds.push(guardId);
+      memberGuards.push(discipleMembersGuardStatement(
+        guardId,
+        this.base.sect.id,
+        members.slice(start, start + MEMBERS_PER_GUARD),
+        this.now,
+        rejectAwayMembers,
+      ));
+    }
     try {
       await this.db.batch(prepareStatements(this.db, [
         guard,
+        ...memberGuards,
         ...this.statements,
-        deleteDiscipleSnapshotGuardStatement(commandId),
+        ...guardIds.map((id) => deleteDiscipleSnapshotGuardStatement(id)),
       ]));
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -1961,6 +1979,92 @@ export async function refreshRecruit(
 }
 
 /** 派工：结算 → 校验岗位 → 更新弟子岗位。 */
+/**
+ * 某名弟子此刻不能执行某个操作的原因（单个命令抛 error；批量命令把 reason 记进跳过列表）。
+ * reason 是不带弟子名的短句，批量结果里与弟子名并列展示。
+ */
+interface DiscipleBlocker {
+  error: AppError;
+  reason: string;
+}
+
+/** 批量命令里被跳过的弟子。 */
+export interface BatchSkippedDisciple {
+  discipleId: string;
+  discipleName: string;
+  reason: string;
+}
+
+/** 批量命令里按 id 找本宗弟子；找不到（已被驱逐 / 他宗 id）记为跳过。 */
+function discipleOrSkip(
+  draft: SectDraft,
+  discipleId: string,
+  skipped: BatchSkippedDisciple[],
+): DiscipleRow | undefined {
+  const disciple = draft.disciples.find((row) => row.id === discipleId);
+  if (disciple === undefined) {
+    skipped.push({ discipleId, discipleName: '未知弟子', reason: '已不在本宗' });
+  }
+  return disciple;
+}
+
+/** 批量命令一个都没执行时的报错文案：列出前几名被跳过的弟子与原因。 */
+function allSkippedMessage(prefix: string, skipped: readonly BatchSkippedDisciple[]): string {
+  const shown = skipped.slice(0, 3).map((item) => `${item.discipleName}：${item.reason}`);
+  const more = skipped.length > 3 ? ` 等 ${String(skipped.length)} 人` : '';
+  return `${prefix}（${shown.join('；')}${more}）`;
+}
+
+/** 岗位 id 必须是闲置或配置里的岗位（单个与批量转岗共用）。 */
+function requireValidAssignment(draft: SectDraft, assignment: string): void {
+  const validAssignments = new Set<string>([
+    IDLE_ASSIGNMENT,
+    ...draft.config.positions.map((position) => position.id),
+  ]);
+  if (!validAssignments.has(assignment)) {
+    throw new AppError('VALIDATION_ERROR', '未知岗位', { assignment });
+  }
+}
+
+/** 岗位展示名（闲置不在配置岗位里）。 */
+function assignmentNameOf(draft: SectDraft, assignment: string): string {
+  if (assignment === IDLE_ASSIGNMENT) return '闲置';
+  return draft.config.positions.find((position) => position.id === assignment)?.name ?? assignment;
+}
+
+/** 转岗校验（单个与批量共用）：可以转岗返回 null。按内存里的当前岗位计数，批量时逐个占位。 */
+function assignmentBlocker(
+  draft: SectDraft,
+  disciple: DiscipleRow,
+  assignment: string,
+): DiscipleBlocker | null {
+  // 0014：在外弟子不能转岗（原岗位名额仍为他保留，归队后自动恢复产出）。
+  const away = awayBlocker(draft, disciple, '转岗');
+  if (away !== null) return away;
+
+  // V5.1 改动三：采灵岗位有人数上限（宗门 6 级前 1 人、6 级起 2 人）。
+  // item.id !== disciple.id：弟子本来就在采灵岗位时，重复派工不该算占位。
+  if (assignment === STONE_MINING_ASSIGNMENT) {
+    const limit =
+      Number(draft.sect.level) >= STONE_MINING_UNLOCK_SECT_LEVEL
+        ? STONE_MINING_LIMIT_HIGH
+        : STONE_MINING_LIMIT_LOW;
+    const currentCount = draft.disciples.filter(
+      (item) => item.assignment === STONE_MINING_ASSIGNMENT && item.id !== disciple.id,
+    ).length;
+    if (currentCount >= limit) {
+      const message = `采灵岗位已满（上限 ${limit} 人）`;
+      return { error: new AppError('CAPACITY_FULL', message), reason: message };
+    }
+  }
+  return null;
+}
+
+function applyAssignment(draft: SectDraft, disciple: DiscipleRow, assignment: string): void {
+  draft.addStatement(updateDiscipleAssignmentStatement(disciple.id, assignment));
+  disciple.assignment = assignment;
+}
+
 export async function assignDisciple(
   db: D1Database,
   userId: string,
@@ -1969,41 +2073,76 @@ export async function assignDisciple(
   now: number,
 ): Promise<SectStateView> {
   const draft = await draftFor(db, userId, now);
-  const validAssignments = new Set<string>([
-    IDLE_ASSIGNMENT,
-    ...draft.config.positions.map((position) => position.id),
-  ]);
-  if (!validAssignments.has(assignment)) {
-    throw new AppError('VALIDATION_ERROR', '未知岗位', { assignment });
-  }
+  requireValidAssignment(draft, assignment);
 
   const disciple = draft.discipleById(discipleId);
-
-  // 0014：在外弟子不能转岗（原岗位名额仍为他保留，归队后自动恢复产出）。
-  requireNotAway(draft, disciple, '转岗');
-
-  // V5.1 改动三：采灵岗位有人数上限（宗门 6 级前 1 人、6 级起 2 人）。
-  // item.id !== discipleId：弟子本来就在采灵岗位时，重复派工不该算占位。
-  if (assignment === STONE_MINING_ASSIGNMENT) {
-    const limit =
-      Number(draft.sect.level) >= STONE_MINING_UNLOCK_SECT_LEVEL
-        ? STONE_MINING_LIMIT_HIGH
-        : STONE_MINING_LIMIT_LOW;
-    const currentCount = draft.disciples.filter(
-      (item) => item.assignment === STONE_MINING_ASSIGNMENT && item.id !== discipleId,
-    ).length;
-    if (currentCount >= limit) {
-      throw new AppError('CAPACITY_FULL', `采灵岗位已满（上限 ${limit} 人）`);
-    }
-  }
-
-  const nextAssignment = assignment;
-  draft.addStatement(updateDiscipleAssignmentStatement(disciple.id, nextAssignment));
-  disciple.assignment = nextAssignment;
+  const blocker = assignmentBlocker(draft, disciple, assignment);
+  if (blocker !== null) throw blocker.error;
+  applyAssignment(draft, disciple, assignment);
 
   // 驱逐可能在读快照后先提交；不能对已离宗弟子返回一次成功派工。
   await draft.commitDisciple([{ id: disciple.id }]);
   return draft.view();
+}
+
+/** 批量转岗结果（POST /game/assign-batch 的 outcome）。 */
+export interface AssignBatchOutcome {
+  assignment: string;
+  assignmentName: string;
+  assigned: { discipleId: string; discipleName: string }[];
+  skipped: BatchSkippedDisciple[];
+}
+
+/**
+ * 批量转岗：结算 → 岗位校验 → 按请求顺序逐个校验并生效（不符合条件的跳过并记原因）
+ * → 一次受保护 batch。采灵岗位按顺序占满名额，其余跳过。
+ * 已在目标岗位的弟子记为跳过（无需变动）。一个都没转成时报 INVALID_STATUS，不写库。
+ */
+export async function assignDisciplesBatch(
+  db: D1Database,
+  userId: string,
+  discipleIds: readonly string[],
+  assignment: string,
+  now: number,
+): Promise<{ state: SectStateView; outcome: AssignBatchOutcome }> {
+  const draft = await draftFor(db, userId, now);
+  requireValidAssignment(draft, assignment);
+  const assignmentName = assignmentNameOf(draft, assignment);
+
+  const assigned: DiscipleRow[] = [];
+  const skipped: BatchSkippedDisciple[] = [];
+  for (const discipleId of discipleIds) {
+    const disciple = discipleOrSkip(draft, discipleId, skipped);
+    if (disciple === undefined) continue;
+    if (disciple.assignment === assignment) {
+      skipped.push({ discipleId, discipleName: disciple.name, reason: `已在${assignmentName}岗位` });
+      continue;
+    }
+    const blocker = assignmentBlocker(draft, disciple, assignment);
+    if (blocker !== null) {
+      skipped.push({ discipleId, discipleName: disciple.name, reason: blocker.reason });
+      continue;
+    }
+    applyAssignment(draft, disciple, assignment);
+    assigned.push(disciple);
+  }
+
+  if (assigned.length === 0) {
+    throw new AppError('INVALID_STATUS', allSkippedMessage(`没有弟子可以转到${assignmentName}`, skipped), {
+      skipped,
+    });
+  }
+
+  await draft.commitDisciple(assigned.map((row) => ({ id: row.id })));
+  return {
+    state: draft.view(),
+    outcome: {
+      assignment,
+      assignmentName,
+      assigned: assigned.map((row) => ({ discipleId: row.id, discipleName: row.name })),
+      skipped,
+    },
+  };
 }
 
 /** 升级建筑：结算 → 检查等级上限与资源 → 扣资源 + 等级 +1。 */
@@ -2047,6 +2186,42 @@ export interface BreakthroughOutcome {
   message: string;
 }
 
+/** 破境资格（单个与批量共用，不含灵气）：可以破境返回 null。 */
+function breakthroughBlocker(draft: SectDraft, disciple: DiscipleRow): DiscipleBlocker | null {
+  // 0014：在外弟子不能破境（服务端裁决）。
+  const away = awayBlocker(draft, disciple, '破境');
+  if (away !== null) return away;
+
+  const stage = findStage(disciple.realm_id, disciple.stage);
+  if (stage.requiredCultivation === null) {
+    return { error: new AppError('INVALID_STATUS', '已达本版本最高境界'), reason: '已达最高境界' };
+  }
+  if (disciple.injured_until !== null && Number(disciple.injured_until) > draft.now) {
+    const remainingSeconds = Math.ceil((Number(disciple.injured_until) - draft.now) / 1000);
+    return {
+      error: new AppError('COOLDOWN_ACTIVE', '突破失败后的调息尚未结束', { remainingSeconds }),
+      reason: '调息 / 疗伤中',
+    };
+  }
+  if (Number(disciple.cultivation) < stage.requiredCultivation) {
+    return {
+      error: new AppError('INVALID_STATUS', '修为不足，先让弟子修炼', {
+        required: stage.requiredCultivation,
+        cultivation: Number(disciple.cultivation),
+      }),
+      reason: '修为未到门槛',
+    };
+  }
+  return null;
+}
+
+/** 本宗当前的破境成功率（万分比，由聚灵阵等级决定）。 */
+function breakthroughChanceOf(draft: SectDraft): number {
+  const arrayLevel =
+    draft.buildings.find((building) => building.def_id === SPIRITUAL_ARRAY_BUILDING_ID)?.level ?? 0;
+  return breakthroughChanceBp(draft.config, arrayLevel);
+}
+
 /** 突破：结算 → 门槛/冷却/灵气检查 → 扣灵气 → 抽一次随机。 */
 export async function breakthrough(
   db: D1Database,
@@ -2057,31 +2232,99 @@ export async function breakthrough(
   const draft = await draftFor(db, userId, now);
   const disciple = draft.discipleById(discipleId);
 
-  // 0014：在外弟子不能破境（服务端裁决）。
-  requireNotAway(draft, disciple, '破境');
-  const { config } = draft;
+  const blocker = breakthroughBlocker(draft, disciple);
+  if (blocker !== null) throw blocker.error;
 
+  draft.requireResource('spiritualEnergy', breakthroughEnergyCost(disciple.stage));
+  const outcome = resolveBreakthrough(draft, disciple, breakthroughChanceOf(draft));
+
+  // 同批核对弟子仍属本宗，避免驱逐先提交后白扣灵气、破境写入影响 0 行。
+  await draft.commitDisciple([{ id: disciple.id }]);
+  return { state: draft.view(), outcome };
+}
+
+/** 批量破境结果（POST /game/breakthrough-batch 的 outcome）。 */
+export interface BreakthroughBatchOutcome {
+  /** 逐人结果（按请求顺序）。 */
+  results: BreakthroughOutcome[];
+  skipped: BatchSkippedDisciple[];
+  /** 本次共消耗的灵气（最小单位）。 */
+  energySpent: string;
+}
+
+/**
+ * 批量破境：结算 → 逐个校验资格（不满足的跳过并记原因）→ 灵气须够全部可破境弟子，
+ * 不够就整批拒绝（提示减少人数，不替玩家挑人）→ 扣灵气 → 逐人抽随机 → 一次受保护 batch。
+ * 一个可破境的都没有时报 INVALID_STATUS，不写库。
+ */
+export async function breakthroughBatch(
+  db: D1Database,
+  userId: string,
+  discipleIds: readonly string[],
+  now: number,
+): Promise<{ state: SectStateView; outcome: BreakthroughBatchOutcome }> {
+  const draft = await draftFor(db, userId, now);
+
+  const eligible: DiscipleRow[] = [];
+  const skipped: BatchSkippedDisciple[] = [];
+  for (const discipleId of discipleIds) {
+    const disciple = discipleOrSkip(draft, discipleId, skipped);
+    if (disciple === undefined) continue;
+    const blocker = breakthroughBlocker(draft, disciple);
+    if (blocker !== null) {
+      skipped.push({ discipleId, discipleName: disciple.name, reason: blocker.reason });
+      continue;
+    }
+    eligible.push(disciple);
+  }
+
+  if (eligible.length === 0) {
+    throw new AppError('INVALID_STATUS', allSkippedMessage('所选弟子都不满足突破条件', skipped), {
+      skipped,
+    });
+  }
+
+  const energyCost = eligible.reduce(
+    (sum, disciple) => sum + breakthroughEnergyCost(disciple.stage),
+    0,
+  );
+  const energyBalance = draft.balanceOf('spiritualEnergy');
+  if (energyBalance < energyCost) {
+    const energyName = draft.resourceName('spiritualEnergy');
+    throw new AppError(
+      'INSUFFICIENT_RESOURCE',
+      `${energyName}不足：${String(eligible.length)} 名弟子突破共需 ${displayAmount(energyCost)}，当前 ${displayAmount(energyBalance)}，请减少突破弟子数量`,
+      {
+        resourceId: 'spiritualEnergy',
+        required: String(energyCost),
+        balance: String(energyBalance),
+        lacking: String(energyCost - energyBalance),
+      },
+    );
+  }
+  draft.requireResource('spiritualEnergy', energyCost);
+
+  const chanceBp = breakthroughChanceOf(draft);
+  const results = eligible.map((disciple) => resolveBreakthrough(draft, disciple, chanceBp));
+
+  await draft.commitDisciple(eligible.map((row) => ({ id: row.id })));
+  return {
+    state: draft.view(),
+    outcome: { results, skipped, energySpent: String(energyCost) },
+  };
+}
+
+/** 抽一次破境随机并写回（资格已校验、灵气已扣）。 */
+function resolveBreakthrough(
+  draft: SectDraft,
+  disciple: DiscipleRow,
+  chanceBp: number,
+): BreakthroughOutcome {
+  const { config, now } = draft;
   const stage = findStage(disciple.realm_id, disciple.stage);
   if (stage.requiredCultivation === null) {
     throw new AppError('INVALID_STATUS', '已达本版本最高境界');
   }
-  if (disciple.injured_until !== null && Number(disciple.injured_until) > now) {
-    const remainingSeconds = Math.ceil((Number(disciple.injured_until) - now) / 1000);
-    throw new AppError('COOLDOWN_ACTIVE', '突破失败后的调息尚未结束', { remainingSeconds });
-  }
-  if (Number(disciple.cultivation) < stage.requiredCultivation) {
-    throw new AppError('INVALID_STATUS', '修为不足，先让弟子修炼', {
-      required: stage.requiredCultivation,
-      cultivation: Number(disciple.cultivation),
-    });
-  }
-
-  const cost = breakthroughEnergyCost(disciple.stage);
-  draft.requireResource('spiritualEnergy', cost);
-
-  const arrayLevel =
-    draft.buildings.find((building) => building.def_id === SPIRITUAL_ARRAY_BUILDING_ID)?.level ?? 0;
-  const chanceBp = breakthroughChanceBp(config, arrayLevel);
   const roll = Math.floor(Math.random() * 10_000);
   const success = roll < chanceBp;
 
@@ -2121,22 +2364,17 @@ export async function breakthrough(
     disciple.injured_until = injuredUntil;
   }
 
-  // 同批核对弟子仍属本宗，避免驱逐先提交后白扣灵气、破境写入影响 0 行。
-  await draft.commitDisciple([{ id: disciple.id }]);
   return {
-    state: draft.view(),
-    outcome: {
-      discipleId: disciple.id,
-      discipleName: disciple.name,
-      success,
-      chanceBp,
-      roll,
-      message: success
-        ? `${disciple.name} 突破成功，境界提升`
-        : `${disciple.name} 突破失败，修为跌落（保留 ${String(
-            Math.floor((stage.requiredCultivation * config.breakthrough.failureKeepBp) / 10_000),
-          )}）`,
-    },
+    discipleId: disciple.id,
+    discipleName: disciple.name,
+    success,
+    chanceBp,
+    roll,
+    message: success
+      ? `${disciple.name} 突破成功，境界提升`
+      : `${disciple.name} 突破失败，修为跌落（保留 ${String(
+          Math.floor((stage.requiredCultivation * config.breakthrough.failureKeepBp) / 10_000),
+        )}）`,
   };
 }
 
@@ -4063,11 +4301,20 @@ export async function usePill(
  * 保存私有备注不在限制之列（计划 2.3 明确允许）。
  */
 function requireNotAway(draft: SectDraft, disciple: DiscipleRow, action: string): void {
+  const blocker = awayBlocker(draft, disciple, action);
+  if (blocker !== null) throw blocker.error;
+}
+
+/** requireNotAway 的判定版：不在外返回 null；批量命令据此把在外弟子记为跳过而不是整批报错。 */
+function awayBlocker(draft: SectDraft, disciple: DiscipleRow, action: string): DiscipleBlocker | null {
   const pending = draft.pendingJourneyOf(disciple.id);
   if (pending === undefined || journeyStatusOf(pending, draft.now) !== 'active') {
-    return;
+    return null;
   }
-  throw new AppError('INVALID_STATUS', `${disciple.name}正在外历练，尚未归队，无法${action}`);
+  return {
+    error: new AppError('INVALID_STATUS', `${disciple.name}正在外历练，尚未归队，无法${action}`),
+    reason: '外出历练中',
+  };
 }
 
 /**

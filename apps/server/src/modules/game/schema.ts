@@ -37,6 +37,27 @@ export const assignRequestSchema = z.strictObject({
   assignment: z.string().min(1).max(32),
 });
 
+/** 批量命令一次最多选几名弟子（宗门弟子上限 35，留出余量）。 */
+export const BATCH_DISCIPLE_LIMIT = 50;
+
+/** 批量命令的弟子列表：1~BATCH_DISCIPLE_LIMIT 个且不重复；归属由服务端逐个判定。 */
+const batchDiscipleIdsSchema = z
+  .array(z.string().min(1).max(64))
+  .min(1)
+  .max(BATCH_DISCIPLE_LIMIT)
+  .refine((ids) => new Set(ids).size === ids.length, { message: '弟子不能重复' });
+
+/** 批量转岗：按数组顺序逐个转（采灵岗位按顺序占名额）。 */
+export const assignBatchRequestSchema = z.strictObject({
+  discipleIds: batchDiscipleIdsSchema,
+  assignment: z.string().min(1).max(32),
+});
+
+/** 批量破境：不满足条件的弟子跳过；灵气须够全部可破境弟子。 */
+export const breakthroughBatchRequestSchema = z.strictObject({
+  discipleIds: batchDiscipleIdsSchema,
+});
+
 export const upgradeBuildingRequestSchema = z.strictObject({
   defId: z.string().min(1).max(64),
 });

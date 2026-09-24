@@ -156,6 +156,11 @@ export interface DiscipleView {
   assignmentName: string;
   injuredUntil: string | null;
   canBreakthrough: boolean;
+  /**
+   * 除灵气外的破境条件都已满足（未在外、未到版本上限、未疗伤、修为到门槛）。
+   * 批量破境按这个挑人：灵气由整批合计后再判断够不够。
+   */
+  breakthroughReadyExceptEnergy: boolean;
   blockedReason: string | null;
   breakthroughCost: string;
   breakthroughChanceBp: number;
@@ -1216,6 +1221,7 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
     const away = journeyView.status === 'active';
 
     let blockedReason: string | null = null;
+    let blockedOnlyByEnergy = false;
     if (away) {
       // 在外期间不能破境（服务端也会拒绝），原因优先于修为/灵气。
       blockedReason = '正在外历练，尚未归队';
@@ -1227,6 +1233,7 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
       blockedReason = `修为不足（需要 ${String(stage.requiredCultivation)}）`;
     } else if (energyBalance < cost) {
       blockedReason = `${energyName}不足（需要 ${String(cost)}）`;
+      blockedOnlyByEnergy = true;
     }
 
     // 淬体丹预览：服务端算好短板与提升量，前端不复制算法；次数用完视为无短板。
@@ -1282,6 +1289,7 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
       assignmentName: assignmentNames.get(disciple.assignment) ?? disciple.assignment,
       injuredUntil: disciple.injured_until === null ? null : new Date(disciple.injured_until).toISOString(),
       canBreakthrough: blockedReason === null,
+      breakthroughReadyExceptEnergy: blockedReason === null || blockedOnlyByEnergy,
       blockedReason,
       breakthroughCost: String(cost),
       breakthroughChanceBp: chanceBp,
