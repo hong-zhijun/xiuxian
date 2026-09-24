@@ -1,29 +1,37 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  WORLD_BOSS_DAILY_ATTACKS,
-  WORLD_BOSS_MAX_LEVEL,
+  WORLD_BOSS_AFFIXES,
+  WORLD_BOSS_COOLDOWN_MS,
+  WORLD_BOSS_FATIGUE_WINDOW_MS,
   WORLD_BOSS_MIN_HP,
   WORLD_BOSS_POOL_RESOURCES,
+  WORLD_BOSS_ROUNDS_PER_STAGE,
   WORLD_BOSSES,
+  affixAttributeMultiplier,
+  affixNameOf,
   arenaCombatMultiplier,
+  bossDefAt,
   bossDisplayName,
-  bossHpCoefficient,
-  bossRewardMultiplier,
-  computeMaxHp,
+  bossIndexFor,
   dayIndexUtc8,
-  halvePool,
+  discipleContribution,
+  expectedPartyDamage,
+  findAffix,
   isFledByDamage,
   isWorldBossAttackable,
-  killPoolBaseShare,
   lastHitReward,
-  nextBossLevel,
-  participationReward,
+  normalInjuryChance,
+  rankRewardMultiplier,
+  rewardFloor,
+  rollAffix,
   rollDamage,
-  splitPool,
-  theoreticalDailyDamage,
-  worldBossDefAt,
-  worldBossIndexFor,
+  rollOutcome,
+  severeInjuryChance,
+  stageMaxHp,
+  stageName,
+  stageResourceRewards,
+  stageRewardMultiplier,
   worldBossPhaseOf,
 } from '../../apps/server/src/modules/game/worldBoss';
 
@@ -37,15 +45,13 @@ function utc8(y: number, month: number, day: number, hour: number, minute = 0): 
   return Date.UTC(y, month - 1, day, hour - 8, minute);
 }
 
-describe('世界 Boss：阶段判定（UTC+8）', () => {
+describe('世界 Boss 二期：阶段判定（UTC+8）', () => {
   it('07:59 before、08:00 open、22:00 frenzy、23:00 closed', () => {
     expect(worldBossPhaseOf(utc8(2026, 9, 23, 7, 59))).toBe('before');
     expect(worldBossPhaseOf(utc8(2026, 9, 23, 8, 0))).toBe('open');
     expect(worldBossPhaseOf(utc8(2026, 9, 23, 21, 59))).toBe('open');
     expect(worldBossPhaseOf(utc8(2026, 9, 23, 22, 0))).toBe('frenzy');
     expect(worldBossPhaseOf(utc8(2026, 9, 23, 23, 0))).toBe('closed');
-    expect(worldBossPhaseOf(utc8(2026, 9, 23, 23, 30))).toBe('closed');
-    // 次日 0:30 已经是新的一天、尚未到 08:00，所以是 before
     expect(worldBossPhaseOf(utc8(2026, 9, 24, 0, 30))).toBe('before');
   });
 
@@ -57,142 +63,236 @@ describe('世界 Boss：阶段判定（UTC+8）', () => {
   });
 });
 
-describe('世界 Boss：等级与轮换', () => {
-  it('前一天被击杀则 +1、否则 −1，夹取 1~5', () => {
-    expect(nextBossLevel(null, true)).toBe(1);
-    expect(nextBossLevel(null, false)).toBe(1);
-    expect(nextBossLevel(3, true)).toBe(4);
-    expect(nextBossLevel(3, false)).toBe(2);
-    expect(nextBossLevel(5, true)).toBe(5);
-    expect(nextBossLevel(1, false)).toBe(1);
-    expect(nextBossLevel(0, false)).toBe(1);
-  });
-
-  it('血量系数与奖励加成按等级表', () => {
-    expect([1, 2, 3, 4, 5].map(bossHpCoefficient)).toEqual([0.8, 0.9, 1, 1.1, 1.2]);
-    expect([1, 2, 3, 4, 5].map(bossRewardMultiplier)).toEqual([1, 1.1, 1.2, 1.3, 1.4]);
-    // 越界等级夹取到 1~5
-    expect(bossHpCoefficient(0)).toBe(0.8);
-    expect(bossHpCoefficient(9)).toBe(1.2);
-    expect(bossRewardMultiplier(9)).toBe(1.4);
-  });
-
-  it('五只 Boss 按 dayIndex % 5 轮换，同一天内不变', () => {
+describe('世界 Boss 二期：连战与关卡', () => {
+  it('第 n 关用第 (dayIndex + n − 1) % 5 只 Boss', () => {
     expect(WORLD_BOSSES).toHaveLength(5);
-    const noon = utc8(2026, 9, 23, 12);
-    expect(worldBossIndexFor(noon)).toBe(dayIndexUtc8(noon) % 5);
-    expect(worldBossIndexFor(noon)).toBe(worldBossIndexFor(noon + 11 * 3_600_000));
-    expect(worldBossIndexFor(noon + 24 * 3_600_000)).toBe((worldBossIndexFor(noon) + 1) % 5);
-    expect(worldBossDefAt(0).name).toBe('黑风妖王');
-    expect(worldBossDefAt(5).index).toBe(0);
+    const dayIndex = 12;
+    for (let stage = 1; stage <= 10; stage += 1) {
+      expect(bossIndexFor(dayIndex, stage)).toBe((dayIndex + stage - 1) % 5);
+    }
+    // 同一天内每往下一关就换一只（第 6 关回到第 1 关那只）。
+    expect(bossIndexFor(dayIndex, 6)).toBe(bossIndexFor(dayIndex, 1));
+    expect(bossDefAt(0).name).toBe('黑风妖王');
+    expect(bossDefAt(5).index).toBe(0);
+    expect(dayIndexUtc8(utc8(2026, 9, 23, 12))).toBe(dayIndexUtc8(utc8(2026, 9, 23, 20)));
   });
 
-  it('显示名带中文阶数', () => {
-    expect(bossDisplayName(0, 1)).toBe('黑风妖王 · 一阶');
-    expect(bossDisplayName(0, 2)).toBe('黑风妖王 · 二阶');
-    expect(bossDisplayName(4, 5)).toBe('裂山石魔 · 五阶');
+  it('关卡名与显示名', () => {
+    expect(stageName(2)).toBe('第 2 关');
+    expect(bossDisplayName(1, 2)).toBe('第 2 关 · 赤炎火蛟');
+    expect(bossDisplayName(0, 1)).toBe('第 1 关 · 黑风妖王');
+  });
+
+  it('血量 = max(10000, 一轮伤害 × 3 × 2^(n−1))', () => {
+    expect(WORLD_BOSS_ROUNDS_PER_STAGE).toBe(3);
+    expect(stageMaxHp(10_000, 1)).toBe(30_000);
+    expect(stageMaxHp(10_000, 2)).toBe(60_000);
+    expect(stageMaxHp(10_000, 3)).toBe(120_000);
+    expect(stageMaxHp(10_000, 4)).toBe(240_000);
+    // 一轮伤害太小时取下限
+    expect(stageMaxHp(0, 1)).toBe(WORLD_BOSS_MIN_HP);
+    expect(stageMaxHp(1000, 1)).toBe(WORLD_BOSS_MIN_HP);
   });
 });
 
-describe('世界 Boss：血量', () => {
-  it('∑ 理论日伤害 × 血量系数，下限 10000', () => {
-    expect(computeMaxHp([100_000, 50_000], 5)).toBe(180_000);
-    expect(computeMaxHp([100_000], 3)).toBe(100_000);
-    // 系数让结果低于下限时取 10000
-    expect(computeMaxHp([10_000], 1)).toBe(WORLD_BOSS_MIN_HP);
-    expect(computeMaxHp([], 5)).toBe(WORLD_BOSS_MIN_HP);
+describe('世界 Boss 二期：随机词缀', () => {
+  it('五个词缀，id / 文案 / 推荐属性与计划表一致', () => {
+    expect(WORLD_BOSS_AFFIXES.map((affix) => affix.id)).toEqual([
+      'ironclad',
+      'swift',
+      'brute',
+      'eerie',
+      'berserk',
+    ]);
+    expect(findAffix('ironclad')?.effect).toBe('防御越高，伤害越高');
+    expect(findAffix('ironclad')?.tip).toBe('派防御高的弟子');
+    expect(findAffix('swift')?.sortAttribute).toBe('speed');
+    expect(findAffix('brute')?.sortAttribute).toBe('attack');
+    expect(findAffix('eerie')?.sortAttribute).toBe('luck');
+    expect(findAffix('berserk')?.sortAttribute).toBe('physique');
+    expect(findAffix('none')).toBeUndefined();
+    expect(affixNameOf('berserk')).toBe('狂暴');
+    expect(affixNameOf('none')).toBe('无');
   });
 
-  it('单宗门理论日伤害 = 前 3 战力 × 演武场加成 × 3 次 × DAMAGE_SCALE', () => {
+  it('属性加成 = 1 + 属性/10 × 0.05（只有前三种词缀有这个加成）', () => {
+    const attrs = { attack: 100, defense: 100, speed: 100 };
+    expect(affixAttributeMultiplier(findAffix('ironclad'), attrs)).toBeCloseTo(1.5, 10);
+    expect(affixAttributeMultiplier(findAffix('swift'), attrs)).toBeCloseTo(1.5, 10);
+    expect(affixAttributeMultiplier(findAffix('brute'), attrs)).toBeCloseTo(1.5, 10);
+    expect(affixAttributeMultiplier(findAffix('eerie'), attrs)).toBe(1);
+    expect(affixAttributeMultiplier(findAffix('berserk'), attrs)).toBe(1);
+    expect(affixAttributeMultiplier(undefined, attrs)).toBe(1);
+    // 属性 50 的那一项只加成 1.25，且只作用于自己那一项
+    expect(
+      affixAttributeMultiplier(findAffix('ironclad'), { attack: 100, defense: 50, speed: 100 }),
+    ).toBeCloseTo(1.25, 10);
+    expect(discipleContribution(200, findAffix('brute'), { attack: 100, defense: 0, speed: 0 })).toBe(
+      300,
+    );
+  });
+
+  it('抽词缀按注入的随机源取（0 → 第一个，接近 1 → 最后一个）', () => {
+    expect(rollAffix(() => 0)).toBe('ironclad');
+    expect(rollAffix(() => 0.21)).toBe('swift');
+    expect(rollAffix(() => 0.99)).toBe('berserk');
+  });
+});
+
+describe('世界 Boss 二期：伤害', () => {
+  it('期望伤害 = 队伍战力 × 演武场加成 × DAMAGE_SCALE（无浮动/暴击/词缀/力竭）', () => {
     expect(arenaCombatMultiplier(0)).toBe(1);
     expect(arenaCombatMultiplier(2)).toBeCloseTo(1.2, 10);
-    expect(theoreticalDailyDamage({ topPartyPower: 100, arenaLevel: 0 })).toBe(
-      100 * 1 * WORLD_BOSS_DAILY_ATTACKS * 100,
-    );
-    expect(theoreticalDailyDamage({ topPartyPower: 100, arenaLevel: 2 })).toBe(36_000);
+    expect(expectedPartyDamage({ topPartyPower: 100, arenaLevel: 0 })).toBe(10_000);
+    expect(expectedPartyDamage({ topPartyPower: 100, arenaLevel: 2 })).toBe(12_000);
   });
-});
-
-describe('世界 Boss：伤害', () => {
-  const party = { partyPower: 100, arenaLevel: 0, avgLuck: 0, frenzy: false };
 
   it('浮动下界 0.8、上界 1.2', () => {
-    expect(rollDamage({ ...party, random: sequence([0, 1]) })).toEqual({
-      damage: 8_000,
-      crit: false,
-    });
-    expect(rollDamage({ ...party, random: sequence([1, 1]) })).toEqual({
-      damage: 12_000,
-      crit: false,
-    });
+    const base = { partyBase: 100, arenaLevel: 0, avgLuck: 0, frenzy: false };
+    expect(rollDamage({ ...base, random: sequence([0, 1]) })).toEqual({ damage: 8_000, crit: false });
+    expect(rollDamage({ ...base, random: sequence([1, 1]) })).toEqual({ damage: 12_000, crit: false });
   });
 
-  it('暴击率 = luck 平均值 / 100 × 20%，暴击倍率 1.5', () => {
-    // luck 平均 100 → 20%：roll 0.1 命中暴击
-    const crit = rollDamage({ ...party, avgLuck: 100, random: sequence([0.5, 0.1]) });
-    expect(crit).toEqual({ damage: 15_000, crit: true });
-    // 同样的浮动，roll 0.5 不暴击
-    const noCrit = rollDamage({ ...party, avgLuck: 100, random: sequence([0.5, 0.5]) });
-    expect(noCrit).toEqual({ damage: 10_000, crit: false });
-    // luck 平均 0 → 暴击率 0，roll 0 也不暴击
-    expect(rollDamage({ ...party, random: sequence([0.5, 0]) }).crit).toBe(false);
+  it('暴击率 = 出战弟子 luck 平均值 / 100 × 20%，暴击倍率 1.5', () => {
+    const base = { partyBase: 100, arenaLevel: 0, frenzy: false };
+    expect(rollDamage({ ...base, avgLuck: 100, random: sequence([0.5, 0.1]) })).toEqual({
+      damage: 15_000,
+      crit: true,
+    });
+    expect(rollDamage({ ...base, avgLuck: 100, random: sequence([0.5, 0.5]) })).toEqual({
+      damage: 10_000,
+      crit: false,
+    });
+    // luck 平均 0 → 暴击率 0
+    expect(rollDamage({ ...base, avgLuck: 0, random: sequence([0.5, 0]) }).crit).toBe(false);
+  });
+
+  it('「邪祟」让暴击率翻倍', () => {
+    const base = { partyBase: 100, arenaLevel: 0, frenzy: false, avgLuck: 50 };
+    // 50/100 × 20% = 10%；roll 0.15 不暴击
+    expect(rollDamage({ ...base, random: sequence([0.5, 0.15]) }).crit).toBe(false);
+    // 翻倍后 20%：同样 roll 0.15 暴击
+    expect(
+      rollDamage({ ...base, critRateMultiplier: 2, random: sequence([0.5, 0.15]) }).crit,
+    ).toBe(true);
   });
 
   it('力竭倍率 1.5', () => {
-    expect(rollDamage({ ...party, frenzy: true, random: sequence([0.5, 0.5]) })).toEqual({
-      damage: 15_000,
-      crit: false,
-    });
-  });
-
-  it('演武场每级 +10% 战力', () => {
-    expect(rollDamage({ ...party, arenaLevel: 2, random: sequence([0.5, 0.5]) }).damage).toBe(
-      12_000,
-    );
+    expect(
+      rollDamage({
+        partyBase: 100,
+        arenaLevel: 0,
+        avgLuck: 0,
+        frenzy: true,
+        random: sequence([0.5, 0.5]),
+      }),
+    ).toEqual({ damage: 15_000, crit: false });
   });
 });
 
-describe('世界 Boss：奖励', () => {
-  it('参与奖 / 最后一击奖按该宗门自己的产出算，带保底与等级加成', () => {
-    // 产出去到 0 时吃保底：10 × 等级 × 1000
-    expect(participationReward(0, 3, 1)).toBe(30_000);
-    expect(participationReward(0, 3, 3)).toBe(36_000);
-    expect(participationReward(0, 1, 1)).toBe(10_000);
-    // 产出够高时用产出：0.25 × 400000 = 100000 > 保底 30000
-    expect(participationReward(400_000, 3, 1)).toBe(100_000);
-    expect(participationReward(400_000, 3, 2)).toBe(110_000);
-    // 最后一击是 0.5 倍产出
+describe('世界 Boss 二期：疲劳 · 受伤 · 重伤', () => {
+  it('重伤概率表：0/1/2 次 0%，第 4 次 30%，第 5 次 70%，第 6 次起 100%', () => {
+    expect(severeInjuryChance(0, 50, false)).toBe(0);
+    expect(severeInjuryChance(2, 50, false)).toBe(0);
+    expect(severeInjuryChance(3, 50, false)).toBe(0.3);
+    expect(severeInjuryChance(4, 50, false)).toBe(0.7);
+    expect(severeInjuryChance(5, 50, false)).toBe(1);
+    expect(severeInjuryChance(9, 50, false)).toBe(1);
+  });
+
+  it('体魄修正只作用在 30% / 70% 两档：每高 10 点下调 3 个百分点，最低 0', () => {
+    expect(severeInjuryChance(3, 60, false)).toBeCloseTo(0.27, 10);
+    expect(severeInjuryChance(3, 100, false)).toBeCloseTo(0.15, 10);
+    expect(severeInjuryChance(4, 100, false)).toBeCloseTo(0.55, 10);
+    // 体魄再高也不会低于 0
+    expect(severeInjuryChance(3, 500, false)).toBe(0);
+    // 100% 那一档不修正
+    expect(severeInjuryChance(5, 500, false)).toBe(1);
+  });
+
+  it('「狂暴」让两个概率翻倍（封顶 100%）', () => {
+    expect(severeInjuryChance(3, 50, true)).toBeCloseTo(0.6, 10);
+    expect(severeInjuryChance(4, 50, true)).toBeCloseTo(1, 10);
+    expect(severeInjuryChance(4, 100, true)).toBeCloseTo(1, 10);
+    expect(severeInjuryChance(0, 50, true)).toBe(0);
+    expect(normalInjuryChance(50, true)).toBeCloseTo(0.3, 10);
+  });
+
+  it('普通受伤概率 = 15% − (体魄 − 50)/10 × 1.5%，夹在 5%~25%', () => {
+    expect(normalInjuryChance(50, false)).toBeCloseTo(0.15, 10);
+    expect(normalInjuryChance(100, false)).toBeCloseTo(0.075, 10);
+    expect(normalInjuryChance(0, false)).toBeCloseTo(0.225, 10);
+    expect(normalInjuryChance(200, false)).toBeCloseTo(0.05, 10);
+  });
+
+  it('判定顺序：先重伤；重伤就不再取受伤那个随机数', () => {
+    // 疲劳 3 次（30%）+ roll 0.1 → 重伤；第二个随机数不会被取用（fallback 0 也不会变成受伤）
+    expect(rollOutcome({ fatigueCount: 3, physique: 50, berserk: false, random: sequence([0.1]) })).toEqual(
+      { severe: true, injured: false },
+    );
+    // 未重伤（roll 0.9 > 0.3）→ 再判受伤：roll 0.1 < 0.15 → 受伤
+    expect(
+      rollOutcome({ fatigueCount: 3, physique: 50, berserk: false, random: sequence([0.9, 0.1]) }),
+    ).toEqual({ severe: false, injured: true });
+    // 都不触发（roll 0.9 与 0.9）
+    expect(
+      rollOutcome({ fatigueCount: 0, physique: 50, berserk: false, random: sequence([0.9, 0.9]) }),
+    ).toEqual({ severe: false, injured: false });
+  });
+});
+
+describe('世界 Boss 二期：奖励', () => {
+  it('保底、关卡系数、排名倍数', () => {
+    expect(rewardFloor(1)).toBe(10_000);
+    expect(rewardFloor(3)).toBe(30_000);
+    expect(stageRewardMultiplier(1)).toBe(1);
+    expect(stageRewardMultiplier(2)).toBeCloseTo(1.2, 10);
+    expect(stageRewardMultiplier(6)).toBeCloseTo(2, 10);
+    expect(rankRewardMultiplier(1)).toBe(1.5);
+    expect(rankRewardMultiplier(2)).toBe(1.25);
+    expect(rankRewardMultiplier(3)).toBe(1.1);
+    expect(rankRewardMultiplier(4)).toBe(1);
+    expect(rankRewardMultiplier(9)).toBe(1);
+  });
+
+  it('基础份 = max(产出 × 1.0, 保底) × 关卡系数 × 排名倍数（按资源分别算）', () => {
+    const rewards = stageResourceRewards({
+      rates: { spiritStone: 40_000, herb: 0, ore: 300_000 },
+      sectLevel: 1,
+      stage: 1,
+      rank: 1,
+    });
+    expect(Object.keys(rewards).sort()).toEqual([...WORLD_BOSS_POOL_RESOURCES].sort());
+    expect(rewards.spiritStone).toBe(60_000);
+    // 没有这项产出时只吃保底
+    expect(rewards.herb).toBe(15_000);
+    expect(rewards.ore).toBe(450_000);
+  });
+
+  it('关卡系数与排名倍数叠乘；击退时资源减半', () => {
+    const base = { rates: { spiritStone: 100_000, herb: 100_000, ore: 100_000 }, sectLevel: 1 };
+    // 第 3 关第 2 名：100000 × 1.4 × 1.25 = 175000
+    expect(stageResourceRewards({ ...base, stage: 3, rank: 2 }).spiritStone).toBe(175_000);
+    // 击退：再 ×0.5
+    expect(stageResourceRewards({ ...base, stage: 3, rank: 2, repelled: true }).spiritStone).toBe(
+      87_500,
+    );
+  });
+
+  it('最后一击奖 = max(产出 × 0.5, 保底) × 关卡系数', () => {
     expect(lastHitReward(0, 1, 1)).toBe(10_000);
     expect(lastHitReward(400_000, 1, 1)).toBe(200_000);
+    expect(lastHitReward(0, 1, 3)).toBe(14_000);
   });
 
-  it('击杀奖池基础份按资源分别算（灵石/药材/矿石），缺项只吃保底', () => {
-    const share = killPoolBaseShare({ spiritStone: 100_000, ore: 400_000 }, 1, 1);
-    expect(Object.keys(share).sort()).toEqual([...WORLD_BOSS_POOL_RESOURCES].sort());
-    expect(share.spiritStone).toBe(150_000);
-    expect(share.herb).toBe(10_000);
-    expect(share.ore).toBe(600_000);
-    // 等级加成同样作用在奖池份上
-    expect(killPoolBaseShare({ ore: 400_000 }, 1, 5).ore).toBe(840_000);
-  });
-
-  it('splitPool 按伤害占比向下取整，总和不超过奖池', () => {
-    expect(splitPool(1_000, [100, 300])).toEqual([250, 750]);
-    expect(splitPool(100, [1, 1, 1])).toEqual([33, 33, 33]);
-    const pool = 999;
-    const damages = [7, 11, 13, 17, 19];
-    const shares = splitPool(pool, damages);
-    expect(shares.reduce((sum, value) => sum + value, 0)).toBeLessThanOrEqual(pool);
-    // 总量为 0 时人人 0，不出现 NaN
-    expect(splitPool(pool, [0, 0])).toEqual([0, 0]);
-    expect(splitPool(0, damages)).toEqual([0, 0, 0, 0, 0]);
-  });
-
-  it('击退：奖池减半；≥70% 才算击退', () => {
-    expect(halvePool(1_001)).toBe(500);
+  it('击退阈值 ≥70%', () => {
     expect(isFledByDamage(1_000, 300)).toBe(true);
     expect(isFledByDamage(1_000, 301)).toBe(false);
     expect(isFledByDamage(0, 0)).toBe(false);
-    expect(WORLD_BOSS_MAX_LEVEL).toBe(5);
+  });
+
+  it('冷却与疲劳窗口常量', () => {
+    expect(WORLD_BOSS_COOLDOWN_MS).toBe(10_000);
+    expect(WORLD_BOSS_FATIGUE_WINDOW_MS).toBe(60 * 60 * 1000);
   });
 });

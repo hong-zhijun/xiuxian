@@ -247,11 +247,13 @@ import {
 import {
   WorldBossRepository,
   incrementPillInventoryStatement,
+  insertDiscipleBossBattleStatement,
   insertWorldBossHitStatement,
   markWorldBossFledStatement,
   markWorldBossHalfAnnouncedStatement,
   markWorldBossHitLastHitStatement,
   markWorldBossRewardedStatement,
+  setDiscipleSevereInjuryStatement,
   updateWorldBossHpStatement,
   type WorldBossHitRow,
   type WorldBossRow,
@@ -259,29 +261,33 @@ import {
 } from './repository';
 import { settleEconomy, resourceRates, type SettleResult } from './settle';
 import {
+  WORLD_BOSS_AFFIX_NONE,
   WORLD_BOSS_CLOSE_HOUR,
-  WORLD_BOSS_DAILY_ATTACKS,
+  WORLD_BOSS_COOLDOWN_MS,
+  WORLD_BOSS_FATIGUE_WINDOW_MS,
+  WORLD_BOSS_INJURY_DURATION_MS,
   WORLD_BOSS_KILL_PILL_ID,
   WORLD_BOSS_MAX_PARTY,
   WORLD_BOSS_MIN_PARTY,
   WORLD_BOSS_OPEN_HOUR,
-  WORLD_BOSS_POOL_RESOURCES,
   WORLD_BOSS_TOP_DAMAGE_PILL_ID,
+  affixNameOf,
+  bossDefAt,
   bossDisplayName,
-  computeMaxHp,
-  halvePool,
+  bossIndexFor,
+  dayIndexUtc8,
+  discipleContribution,
+  expectedPartyDamage,
+  findAffix,
   isFledByDamage,
   isWorldBossAttackable,
-  killPoolBaseShare,
   lastHitReward,
-  nextBossLevel,
-  participationReward,
+  rollAffix,
   rollDamage,
-  splitPool,
-  theoreticalDailyDamage,
-  worldBossIndexFor,
+  rollOutcome,
+  stageMaxHp,
+  stageResourceRewards,
   worldBossPhaseOf,
-  worldBossDefAt,
 } from './worldBoss';
 
 import {
@@ -362,6 +368,8 @@ import {
   type WorldBossRankView,
   type WorldBossView,
   type WorldBossDefView,
+  type WorldBossAffixView,
+  type WorldBossMemberOutcomeView,
 } from './view';
 
 /**
@@ -1543,7 +1551,7 @@ export async function getSectState(
     if (snapshot === null) return null;
     // 0025 讨伐：按钮角标要的「此刻能不能出手」只在 sync 里算（两条走索引的小查询）；
     // 不在开放时段时 worldBossAttackableFor 提前返回，连查询都省掉。
-    const worldBossAttackable = await worldBossAttackableFor(db, snapshot.sect.id, now);
+    const worldBossAttackable = await worldBossAttackableFor(db, now);
     // 省 D1 写入：前端每分钟自动同步一次，若每次都把结算写回，挂机玩家一小时就要写上千行。
     // 产出是按时间确定性计算的，晚几分钟写回结果不变；所以距上次写回不足 SYNC_PERSIST_INTERVAL_MS 时
     // 只在内存里结算并返回（不掷随机事件——事件按经过时长计期望次数，推迟写回不会少发），
@@ -6637,13 +6645,16 @@ class ParamRepository2 {
   }
 }
 
-/* ---------- 0025 世界 Boss（讨伐） ---------- */
+/* ---------- 0025/0027 世界 Boss（讨伐，二期） ---------- */
 
-/** 活跃宗门的判定窗口：最近 3 天结算过的宗门才计入血量估算。 */
+/** 合格宗门的兜底窗口：最近 3 天结算过的宗门（没有任何出手记录时用，且一轮伤害 ×0.5）。 */
 const WORLD_BOSS_ACTIVE_SECT_MS = 3 * 86_400_000;
-
+/** 「合格宗门」按出手记录判定时回看的天数。 */
+const WORLD_BOSS_HIT_SECT_DAYS = 3;
 /** 面板里展示的出手记录条数。 */
 const WORLD_BOSS_HIT_FEED_LIMIT = 20;
+/** 疲劳记录保留时长（Cron 顺带清理，防表无限增长）。 */
+const WORLD_BOSS_BATTLE_RETENTION_MS = 2 * 86_400_000;
 
 /**
  * 全服广播：失败不影响主流程（与灵兽竞逐同一处理）。
@@ -6655,22 +6666,6 @@ async function broadcastWorldBoss(db: D1Database, content: string, now: number):
   } catch {
     /* 广播失败不影响主流程 */
   }
-}
-
-/** 出手发奖：写语句与内存余额一起改（与 exploreSectRealm 发奖励同一手法）。 */
-function grantResourceToDraft(
-  draft: SectDraft,
-  resourceId: string,
-  amount: number,
-  now: number,
-): void {
-  if (amount <= 0) return;
-  draft.addStatement(resourceDeltaStatement(draft.sect.id, resourceId, amount, now));
-  draft.balances = draft.balances.map((row) =>
-    row.resource_id === resourceId
-      ? { ...row, balance: Number(row.balance) + amount, updated_at: now }
-      : row,
-  );
 }
 
 /**
@@ -6703,17 +6698,6 @@ function resourceRatesOfSect(input: {
   );
 }
 
-/** 出手奖用的产出：直接用草稿里已经结算过的弟子/建筑。 */
-function draftResourceRates(draft: SectDraft): Map<string, number> {
-  return resourceRatesOfSect({
-    config: draft.config,
-    disciples: draft.disciples,
-    buildings: draft.buildings,
-    journeys: draft.journeys,
-    now: draft.now,
-  });
-}
-
 function ratesRecordOf(rates: Map<string, number>): Record<string, number> {
   const record: Record<string, number> = {};
   for (const [resourceId, amount] of rates) {
@@ -6723,27 +6707,42 @@ function ratesRecordOf(rates: Map<string, number>): Record<string, number> {
 }
 
 /**
- * 此刻能否出手（sync 的按钮角标用）：不在开放时段直接返回 false，连查询都不做
- * —— 这是唯一会被高频调用的世界 Boss 读取，省 D1 读取额度。
+ * 此刻能不能出手（sync 的按钮角标用）：不在开放时段直接返回 false，连查询都不做；
+ * 二期不限次数，所以只看「今天有没有仍然 active 的关卡」这一条走索引的查询。
  */
-async function worldBossAttackableFor(
-  db: D1Database,
-  sectId: string,
-  now: number,
-): Promise<boolean> {
+async function worldBossAttackableFor(db: D1Database, now: number): Promise<boolean> {
   if (!isWorldBossAttackable(worldBossPhaseOf(now))) return false;
-  const repo = new WorldBossRepository(db);
-  const boss = await repo.findByDayKey(dateKeyUtc8(now));
-  if (boss === null || boss.status !== 'active') return false;
-  return (await repo.countAttempts(boss.id, sectId)) < WORLD_BOSS_DAILY_ATTACKS;
+  const boss = await new WorldBossRepository(db).findLatestByDayKey(dateKeyUtc8(now));
+  return boss !== null && boss.status === 'active';
 }
 
-function worldBossDefViewOf(index: number, level: number): WorldBossDefView {
-  const def = worldBossDefAt(index);
+/** 词缀视图（'none' = 迁移过来的旧行，没有词缀）。 */
+function worldBossAffixViewOf(affixId: string): WorldBossAffixView {
+  const affix = findAffix(affixId);
+  if (affix === undefined) {
+    return {
+      id: WORLD_BOSS_AFFIX_NONE,
+      name: '无',
+      effect: '本关没有词缀',
+      tip: '正常配队即可',
+      sortAttribute: 'attack',
+    };
+  }
+  return {
+    id: affix.id,
+    name: affix.name,
+    effect: affix.effect,
+    tip: affix.tip,
+    sortAttribute: affix.sortAttribute,
+  };
+}
+
+function worldBossDefViewOf(bossIndex: number, stage: number): WorldBossDefView {
+  const def = bossDefAt(bossIndex);
   return {
     index: def.index,
     name: def.name,
-    displayName: bossDisplayName(index, level),
+    displayName: bossDisplayName(bossIndex, stage),
     sealCharacter: def.sealCharacter,
     color: def.color,
     description: def.description,
@@ -6755,6 +6754,8 @@ function toWorldBossHitView(row: WorldBossHitRow): WorldBossHitView {
     sectId: row.sect_id,
     sectName: row.sect_name,
     discipleNames: stringArrayOf(row.disciple_names),
+    injuredNames: stringArrayOf(row.injured_names),
+    severeNames: stringArrayOf(row.severe_names),
     damage: Number(row.damage),
     isCrit: Number(row.is_crit) === 1,
     isLastHit: Number(row.is_last_hit) === 1,
@@ -6764,19 +6765,20 @@ function toWorldBossHitView(row: WorldBossHitRow): WorldBossHitView {
 
 /**
  * 讨伐面板（GET /game/world-boss 与出手后的返回共用同一份装配）。
- * 只读：今天的 Boss、本宗已出手次数、今日伤害榜、最近 20 条出手、历史最强一击。
+ * 只读：当前关卡、今日已连斩、史上最高单日关数、冷却、疲劳表、伤害榜、最近 20 条、史上最强一击。
  */
 async function buildWorldBossView(input: {
   db: D1Database;
   sectId: string;
   now: number;
-  /** 已经读到的 Boss 行（出手后传刚读回来的那一行，省一次查询）。 */
+  /** 已经读到的关卡行（出手后传刚读回来的那一行，省一次查询）。 */
   boss?: WorldBossRow | null;
 }): Promise<WorldBossView> {
   const repo = new WorldBossRepository(input.db);
   const { now } = input;
   const phase = worldBossPhaseOf(now);
-  const boss = input.boss === undefined ? await repo.findByDayKey(dateKeyUtc8(now)) : input.boss;
+  const dayKey = dateKeyUtc8(now);
+  const boss = input.boss === undefined ? await repo.findLatestByDayKey(dayKey) : input.boss;
 
   const todayStart = dayStartMs(now);
   const closesAt = todayStart + WORLD_BOSS_CLOSE_HOUR * 3_600_000;
@@ -6787,16 +6789,33 @@ async function buildWorldBossView(input: {
       : todayStart + 86_400_000 + WORLD_BOSS_OPEN_HOUR * 3_600_000;
   const remainingSeconds = now >= closesAt ? 0 : Math.max(0, Math.ceil((closesAt - now) / 1000));
 
-  const usedToday = boss === null ? 0 : await repo.countAttempts(boss.id, input.sectId);
-  const remaining = Math.max(0, WORLD_BOSS_DAILY_ATTACKS - usedToday);
-  const attackable =
-    boss !== null && boss.status === 'active' && isWorldBossAttackable(phase) && remaining > 0;
+  // 冷却：该宗门最近一条出手记录 + 10 秒（走 (sect_id, created_at DESC) 索引）。
+  const lastHitAt = await repo.lastHitAtBySect(input.sectId);
+  const cooldownSeconds =
+    lastHitAt === null
+      ? 0
+      : Math.max(0, Math.ceil((lastHitAt + WORLD_BOSS_COOLDOWN_MS - now) / 1000));
+
+  // 疲劳表：本宗门弟子最近 60 分钟内的出战次数。
+  const fatigueRows = await repo.fatigueCountsBySect(input.sectId, now - WORLD_BOSS_FATIGUE_WINDOW_MS);
+  const fatigue: Record<string, number> = {};
+  for (const row of fatigueRows) {
+    fatigue[row.disciple_id] = Number(row.cnt);
+  }
+
+  const attackable = boss !== null && boss.status === 'active' && isWorldBossAttackable(phase);
 
   const rankPromise: Promise<WorldBossSectDamageRow[]> =
     boss === null ? Promise.resolve([]) : repo.sectDamageRows(boss.id);
   const hitPromise: Promise<WorldBossHitRow[]> =
     boss === null ? Promise.resolve([]) : repo.recentHitsByBoss(boss.id, WORLD_BOSS_HIT_FEED_LIMIT);
-  const [rankRows, hitRows, topRow] = await Promise.all([rankPromise, hitPromise, repo.topHit()]);
+  const [rankRows, hitRows, topRow, killedToday, bestStage] = await Promise.all([
+    rankPromise,
+    hitPromise,
+    repo.topHit(),
+    repo.countKilledByDayKey(dayKey),
+    repo.maxKilledStage(),
+  ]);
 
   const ranks: WorldBossRankView[] = rankRows.map((row, index) => ({
     sectId: row.sect_id,
@@ -6808,15 +6827,15 @@ async function buildWorldBossView(input: {
     isMe: row.sect_id === input.sectId,
   }));
 
-  const level = boss === null ? 0 : Number(boss.level);
   const bossView: WorldBossCurrentView | null =
     boss === null
       ? null
       : {
           id: boss.id,
           dayKey: boss.day_key,
-          level,
-          def: worldBossDefViewOf(Number(boss.boss_index), level),
+          stage: Number(boss.stage),
+          def: worldBossDefViewOf(Number(boss.boss_index), Number(boss.stage)),
+          affix: worldBossAffixViewOf(boss.affix),
           maxHp: Number(boss.max_hp),
           hp: Number(boss.hp),
           status:
@@ -6838,9 +6857,10 @@ async function buildWorldBossView(input: {
     phase,
     opensAt,
     remainingSeconds,
-    dailyLimit: WORLD_BOSS_DAILY_ATTACKS,
-    usedToday,
-    remaining,
+    killedToday,
+    bestStage,
+    cooldownSeconds,
+    fatigue,
     attackable,
     ranks,
     hits: hitRows.map(toWorldBossHitView),
@@ -6862,11 +6882,114 @@ export async function getWorldBoss(
 }
 
 /**
+ * 生成第 stage 关：血量 = 一轮伤害 × 3 × 2^(stage−1)，词缀当场随机一个。
+ * `(day_key, stage)` 唯一 —— 并发或重复触发时插不进去，返回 null（调用方据此不广播）。
+ */
+async function spawnWorldBossStage(input: {
+  repo: WorldBossRepository;
+  now: number;
+  dayKey: string;
+  stage: number;
+  roundDamage: number;
+}): Promise<WorldBossRow | null> {
+  const bossIndex = bossIndexFor(dayIndexUtc8(input.now), input.stage);
+  const affix = rollAffix(Math.random);
+  const maxHp = stageMaxHp(input.roundDamage, input.stage);
+  const id = crypto.randomUUID();
+  const inserted = await input.repo.insertBossIfAbsent({
+    id,
+    dayKey: input.dayKey,
+    stage: input.stage,
+    bossIndex,
+    affix,
+    roundDamage: input.roundDamage,
+    maxHp,
+    now: input.now,
+  });
+  if (!inserted) return null;
+  return {
+    id,
+    day_key: input.dayKey,
+    stage: input.stage,
+    boss_index: bossIndex,
+    affix,
+    round_damage: input.roundDamage,
+    max_hp: maxHp,
+    hp: maxHp,
+    status: 'active',
+    killer_sect_id: null,
+    half_announced: 0,
+    rewarded_at: null,
+    created_at: input.now,
+    ended_at: null,
+  };
+}
+
+/**
+ * 一轮伤害（计划 2.3）：Σ 合格宗门的期望伤害。
+ *
+ * 合格宗门 = 最近 3 天在 world_boss_hits 里出过手的宗门；一个都没有时退化为
+ * 「最近 3 天结算过的宗门」，且一轮伤害 × 0.5。
+ * 每个宗门只取战力最高的 3 名（非在外、非重伤）弟子，按「无浮动 / 无暴击 / 无词缀 / 无力竭」算期望。
+ */
+async function worldBossRoundDamage(
+  db: D1Database,
+  repo: WorldBossRepository,
+  now: number,
+): Promise<number> {
+  const sinceDayKey = dateKeyUtc8(now - WORLD_BOSS_HIT_SECT_DAYS * 86_400_000);
+  const hitSectIds = await repo.sectsWithHitsSince(sinceDayKey);
+  const fallback = hitSectIds.length === 0;
+  const sects = fallback
+    ? await repo.activeSectsSince(now - WORLD_BOSS_ACTIVE_SECT_MS)
+    : hitSectIds.map((id) => ({ id }));
+
+  const discipleRepo = new DiscipleRepository(db);
+  const buildingRepo = new BuildingRepository(db);
+  const journeyRepo = new DiscipleJourneyRepository(db);
+  let total = 0;
+  for (const sect of sects) {
+    const [disciples, buildings, journeys] = await Promise.all([
+      discipleRepo.findBySectId(sect.id),
+      buildingRepo.findBySectId(sect.id),
+      journeyRepo.findOpenBySectId(sect.id),
+    ]);
+    const awayIds = journeyAwayIds(journeys, now);
+    const arenaLevel =
+      buildings.find((building) => building.def_id === ARENA_BUILDING_ID)?.level ?? 0;
+    const top3 = disciples
+      .filter(
+        (disciple) =>
+          !awayIds.has(disciple.id) && !isSeverelyInjured(disciple.severe_injured_until, now),
+      )
+      .map((disciple) =>
+        discipleCombatPower(
+          disciple.realm_id,
+          Number(disciple.stage),
+          Number(disciple.attack),
+          Number(disciple.defense),
+          Number(disciple.speed),
+          disciple.talent,
+        ),
+      )
+      .sort((a, b) => b - a)
+      .slice(0, WORLD_BOSS_MAX_PARTY);
+    total += expectedPartyDamage({
+      topPartyPower: top3.reduce((sum, power) => sum + power, 0),
+      arenaLevel,
+    });
+  }
+  // 兜底口径（没有任何宗门出过手）按计划的「×0.5」处理。
+  return fallback ? Math.floor(total * 0.5) : total;
+}
+
+/**
  * POST /game/world-boss/attack：出手（讨伐）。
  *
- * 套路与其它命令一致：读快照（顺带结算）→ 全部只读校验 → 参与奖、出手记录、扣血
- * 组装成**一次** `draft.commit()`。提交之后再重新读一次 Boss 行，用库里的结果决定
- * 「最后一击 / 半血 / 刷新纪录」这三条广播 —— 广播不参与事务。
+ * 套路与其它命令一致：读快照（顺带结算）→ 全部只读校验（时段 / 关卡 / 冷却 / 弟子资格）
+ * → 逐人判定受伤与重伤 → 状态写回、疲劳记录、出手记录、扣血组装成**一次** `draft.commit()`。
+ * 提交之后再重新读一次关卡行，用库里的结果决定「击杀 → 立刻开下一关」以及
+ * 「半血 / 最强一击 / 重伤」这几条广播 —— 广播不参与事务。
  */
 export async function attackWorldBoss(
   db: D1Database,
@@ -6882,15 +7005,27 @@ export async function attackWorldBoss(
     throw new AppError('INVALID_STATUS', '讨伐每日 08:00–23:00 开放（UTC+8）');
   }
 
-  const boss = await repo.findByDayKey(dateKeyUtc8(now));
+  const dayKey = dateKeyUtc8(now);
+  const boss = await repo.findLatestByDayKey(dayKey);
   if (boss === null) {
     throw new AppError('NOT_FOUND', '妖王尚未降临（每日 08:00 现身）');
   }
   if (boss.status !== 'active') {
-    throw new AppError('INVALID_STATUS', '今日的妖王已经结束讨伐');
+    throw new AppError('INVALID_STATUS', '本关已经结束，请刷新面板');
   }
 
-  // 出战弟子：1~3 名、不重复、属于本宗、不在历练中、不在疗伤中。
+  // 冷却 10 秒：按该宗门最近一条出手记录算（跨关卡同样生效），拒绝时给出剩余秒数。
+  const lastHitAt = await repo.lastHitAtBySect(draft.sect.id);
+  if (lastHitAt !== null) {
+    const remainingMs = lastHitAt + WORLD_BOSS_COOLDOWN_MS - now;
+    if (remainingMs > 0) {
+      throw new AppError('COOLDOWN_ACTIVE', '出手太快，妖王还没缓过神', {
+        remainingSeconds: Math.ceil(remainingMs / 1000),
+      });
+    }
+  }
+
+  // 出战弟子：1~3 名、不重复、属于本宗、不在历练 / 疗伤 / 重伤中。
   const discipleIds = [...new Set(input.discipleIds)];
   if (discipleIds.length < WORLD_BOSS_MIN_PARTY || discipleIds.length > WORLD_BOSS_MAX_PARTY) {
     throw new AppError(
@@ -6906,48 +7041,97 @@ export async function attackWorldBoss(
     }
   }
 
-  const usedBefore = await repo.countAttempts(boss.id, draft.sect.id);
-  if (usedBefore >= WORLD_BOSS_DAILY_ATTACKS) {
-    throw new AppError(
-      'DAILY_LIMIT',
-      `今日讨伐次数已用完（${String(WORLD_BOSS_DAILY_ATTACKS)} 次/天）`,
+  const affix = findAffix(boss.affix);
+  const berserk = affix?.id === 'berserk';
+  const frenzy = phase === 'frenzy';
+  const arenaLevel =
+    draft.buildings.find((building) => building.def_id === ARENA_BUILDING_ID)?.level ?? 0;
+
+  // 疲劳：每名弟子最近 60 分钟内已出战讨伐的次数（不含本次）。
+  const fatigueRows = await repo.fatigueCountsBySect(
+    draft.sect.id,
+    now - WORLD_BOSS_FATIGUE_WINDOW_MS,
+  );
+  const fatigueByDisciple = new Map(fatigueRows.map((row) => [row.disciple_id, Number(row.cnt)]));
+
+  // 逐人判定：先判重伤，未重伤再判受伤；被判重伤的那一刀不计入队伍伤害。
+  const outcomes: WorldBossMemberOutcomeView[] = [];
+  const severeMembers: DiscipleRow[] = [];
+  const injuredMembers: DiscipleRow[] = [];
+  let partyBase = 0;
+  let luckSum = 0;
+  for (const member of members) {
+    luckSum += Number(member.luck);
+    const verdict = rollOutcome({
+      fatigueCount: fatigueByDisciple.get(member.id) ?? 0,
+      physique: Number(member.physique),
+      berserk,
+      random: Math.random,
+    });
+    if (verdict.severe) {
+      severeMembers.push(member);
+      outcomes.push({ discipleId: member.id, discipleName: member.name, outcome: 'severe' });
+      continue;
+    }
+    if (verdict.injured) {
+      injuredMembers.push(member);
+      outcomes.push({ discipleId: member.id, discipleName: member.name, outcome: 'injured' });
+    } else {
+      outcomes.push({ discipleId: member.id, discipleName: member.name, outcome: 'normal' });
+    }
+    partyBase += discipleContribution(
+      discipleCombatPower(
+        member.realm_id,
+        Number(member.stage),
+        Number(member.attack),
+        Number(member.defense),
+        Number(member.speed),
+        member.talent,
+      ),
+      affix,
+      {
+        attack: Number(member.attack),
+        defense: Number(member.defense),
+        speed: Number(member.speed),
+      },
     );
   }
 
-  const arenaLevel =
-    draft.buildings.find((building) => building.def_id === ARENA_BUILDING_ID)?.level ?? 0;
-  const partyPower = partyCombatPower(
-    members.map((member) => ({
-      realmId: member.realm_id,
-      stage: Number(member.stage),
-      attack: Number(member.attack),
-      defense: Number(member.defense),
-      speed: Number(member.speed),
-      talent: member.talent,
-    })),
-  );
-  const avgLuck = members.reduce((sum, member) => sum + Number(member.luck), 0) / members.length;
   const { damage, crit } = rollDamage({
-    partyPower,
+    partyBase,
     arenaLevel,
-    avgLuck,
-    frenzy: phase === 'frenzy',
+    // 暴击率用「出战弟子」的幸运平均值（本次派出的全部成员，与计划 2.5 一致）。
+    avgLuck: members.length === 0 ? 0 : luckSum / members.length,
+    frenzy,
+    ...(affix?.id === 'eerie' ? { critRateMultiplier: 2 } : {}),
     random: Math.random,
   });
-
-  const bossLevel = Number(boss.level);
   const actualDamage = Math.min(damage, Number(boss.hp));
-  // 刷新纪录的比较基准：本次出手之前的历史最强一击。
   const previousTopDamage = (await repo.topHit())?.damage ?? 0;
 
-  // 参与奖：出手时立即发，与出手记录、扣血同一次 commit。
-  const rates = draftResourceRates(draft);
-  const participation = participationReward(
-    rates.get('spiritStone') ?? 0,
-    Number(draft.sect.level),
-    bossLevel,
-  );
-  grantResourceToDraft(draft, 'spiritStone', participation, now);
+  // 状态写回 + 疲劳记录 + 出手记录 + 扣血：全部挂在同一个 draft 上，只提交一次。
+  for (const member of severeMembers) {
+    const until = now + SEVERE_INJURY_MS;
+    draft.addStatement(setDiscipleSevereInjuryStatement(member.id, until));
+    const row = draft.disciples.find((item) => item.id === member.id);
+    if (row !== undefined) row.severe_injured_until = until;
+  }
+  for (const member of injuredMembers) {
+    const until = now + WORLD_BOSS_INJURY_DURATION_MS;
+    draft.addStatement(updateDiscipleInjuryStatement(member.id, until));
+    const row = draft.disciples.find((item) => item.id === member.id);
+    if (row !== undefined) row.injured_until = until;
+  }
+  for (const member of members) {
+    draft.addStatement(
+      insertDiscipleBossBattleStatement({
+        id: crypto.randomUUID(),
+        discipleId: member.id,
+        sectId: draft.sect.id,
+        now,
+      }),
+    );
+  }
 
   const hitId = crypto.randomUUID();
   draft.addStatement(
@@ -6956,8 +7140,10 @@ export async function attackWorldBoss(
       bossId: boss.id,
       sectId: draft.sect.id,
       sectName: draft.sect.name,
-      attemptNo: usedBefore + 1,
       discipleNames: JSON.stringify(members.map((member) => member.name)),
+      discipleIds: JSON.stringify(members.map((member) => member.id)),
+      injuredNames: JSON.stringify(injuredMembers.map((member) => member.name)),
+      severeNames: JSON.stringify(severeMembers.map((member) => member.name)),
       damage: actualDamage,
       isCrit: crit,
       now,
@@ -6965,29 +7151,41 @@ export async function attackWorldBoss(
   );
   draft.addStatement(updateWorldBossHpStatement(boss.id, actualDamage, draft.sect.id, now));
 
-  try {
-    await draft.commit();
-  } catch (error) {
-    // UNIQUE (boss_id, sect_id, attempt_no)：连点两次只落一条记录，第二次映射成业务错误。
-    const message = error instanceof Error ? error.message : String(error);
-    if (/UNIQUE constraint failed: world_boss_hits/i.test(message)) {
-      throw new AppError('VALIDATION_ERROR', '请勿重复出手');
-    }
-    throw error;
-  }
+  await draft.commit();
 
   const after = await repo.findById(boss.id);
-  const displayName = bossDisplayName(Number(boss.boss_index), bossLevel);
+  const displayName = bossDisplayName(Number(boss.boss_index), Number(boss.stage));
   const lastHit =
     after !== null && after.status === 'killed' && after.killer_sect_id === draft.sect.id;
+  let nextStage: number | null = null;
 
   if (lastHit) {
     await repo.execute(markWorldBossHitLastHitStatement(hitId));
-    await broadcastWorldBoss(
-      db,
-      `【讨伐】${draft.sect.name}一击斩落${displayName}！讨伐成功`,
-      now,
-    );
+    const stage = Number(boss.stage) + 1;
+    // 连战：这一刀打死了，立刻开下一关（仍要在开放时段内才开）。
+    const created = isWorldBossAttackable(worldBossPhaseOf(now))
+      ? await spawnWorldBossStage({
+          repo,
+          now,
+          dayKey,
+          stage,
+          roundDamage: Number(boss.round_damage),
+        })
+      : null;
+    if (created === null) {
+      await broadcastWorldBoss(
+        db,
+        `【讨伐】${draft.sect.name}一击斩落${displayName}！讨伐成功，今日讨伐结束`,
+        now,
+      );
+    } else {
+      nextStage = stage;
+      await broadcastWorldBoss(
+        db,
+        `【讨伐】${draft.sect.name}一击斩落${displayName}！讨伐成功，${bossDisplayName(created.boss_index, stage)}（${affixNameOf(created.affix)}）已降临`,
+        now,
+      );
+    }
   } else if (
     after !== null &&
     after.status === 'active' &&
@@ -7007,27 +7205,36 @@ export async function attackWorldBoss(
     );
   }
 
-  const bossView = await buildWorldBossView({ db, sectId: draft.sect.id, now, boss: after });
+  for (const member of severeMembers) {
+    await broadcastWorldBoss(
+      db,
+      `【讨伐】${draft.sect.name}门下${member.name}被${bossDefAt(Number(boss.boss_index)).name}重创，需静养三日`,
+      now,
+    );
+  }
+
+  // 面板：打死之后如果已经开出下一关，就把新关卡交给前端（可以直接接着打）。
+  const viewBoss = nextStage === null ? after : await repo.findLatestByDayKey(dayKey);
   return {
     state: draft.view(),
     result: {
       damage,
       actualDamage,
       crit,
-      frenzy: phase === 'frenzy',
+      frenzy,
       lastHit,
       bossHp: after === null ? 0 : Number(after.hp),
       bossMaxHp: after === null ? Number(boss.max_hp) : Number(after.max_hp),
-      participationReward: String(participation),
+      nextStage,
+      members: outcomes,
     },
-    boss: bossView,
+    boss: await buildWorldBossView({ db, sectId: draft.sect.id, now, boss: viewBoss }),
   };
 }
-
 /**
- * 0025 世界 Boss：Cron 的每 10 分钟处理（出现 → 逃走 → 发奖）。
+ * 0027 世界 Boss：Cron 的每 10 分钟处理（出现 → 逃走 → 发奖 → 清理疲劳记录）。
  *
- * Workers 不等未完成的 Promise，所以每一步都 await；三步各自兜错，
+ * Workers 不等未完成的 Promise，所以每一步都 await；各步各自兜错，
  * 前一步失败不会挡住后面的发奖。
  */
 export async function processWorldBoss(db: D1Database, now: number): Promise<void> {
@@ -7046,92 +7253,37 @@ export async function processWorldBoss(db: D1Database, now: number): Promise<voi
   } catch (error) {
     console.warn(`world_boss_reward_failed now=${String(now)} error=${String(error)}`);
   }
+  try {
+    await cleanupWorldBossBattles(db, now);
+  } catch (error) {
+    console.warn(`world_boss_cleanup_failed now=${String(now)} error=${String(error)}`);
+  }
 }
 
 /**
- * 出现：阶段到了（08:00 之后）且今天还没有 Boss → 算等级与血量、插入、广播。
- * `day_key` 唯一约束兜住「Cron 重复触发只会创建一次」，插入失败就不广播。
+ * 出现：阶段到了（08:00 之后）且今天还没有第 1 关 → 算一轮伤害与血量、插入、广播。
+ * 后续关卡由「击杀」那条路径就地生成（见 attackWorldBoss），不用等 Cron。
  */
 async function spawnWorldBoss(db: D1Database, now: number): Promise<void> {
   if (!isWorldBossAttackable(worldBossPhaseOf(now))) return;
 
   const repo = new WorldBossRepository(db);
   const dayKey = dateKeyUtc8(now);
-  if ((await repo.findByDayKey(dayKey)) !== null) return;
+  if ((await repo.findByDayKeyAndStage(dayKey, 1)) !== null) return;
 
-  const previous = await repo.findLatestBefore(dayKey);
-  const level = nextBossLevel(
-    previous === null ? null : Number(previous.level),
-    previous !== null && previous.status === 'killed',
-  );
-  const bossIndex = worldBossIndexFor(now);
-  const maxHp = computeMaxHp(await theoreticalDailyDamages(db, repo, now), level);
-
-  const inserted = await repo.insertBossIfAbsent({
-    id: crypto.randomUUID(),
-    dayKey,
-    bossIndex,
-    level,
-    maxHp,
-    now,
-  });
-  if (!inserted) return;
+  const roundDamage = await worldBossRoundDamage(db, repo, now);
+  const created = await spawnWorldBossStage({ repo, now, dayKey, stage: 1, roundDamage });
+  if (created === null) return;
 
   await broadcastWorldBoss(
     db,
-    `【讨伐】${bossDisplayName(bossIndex, level)} 降临！各宗门速来讨伐（每宗每日 ${String(WORLD_BOSS_DAILY_ATTACKS)} 次）`,
+    `【讨伐】${bossDisplayName(created.boss_index, 1)}（${affixNameOf(created.affix)}）降临！全服共讨，每宗门每 10 秒可出手一次`,
     now,
   );
 }
 
-/** 各活跃宗门的理论日伤害（只对活跃宗门逐个读弟子与建筑，不做全表扫）。 */
-async function theoreticalDailyDamages(
-  db: D1Database,
-  repo: WorldBossRepository,
-  now: number,
-): Promise<number[]> {
-  const sects = await repo.activeSectsSince(now - WORLD_BOSS_ACTIVE_SECT_MS);
-  const discipleRepo = new DiscipleRepository(db);
-  const buildingRepo = new BuildingRepository(db);
-  const damages: number[] = [];
-  for (const sect of sects) {
-    const [disciples, buildings] = await Promise.all([
-      discipleRepo.findBySectId(sect.id),
-      buildingRepo.findBySectId(sect.id),
-    ]);
-    const arenaLevel =
-      buildings.find((building) => building.def_id === ARENA_BUILDING_ID)?.level ?? 0;
-    const strongest = disciples
-      .map((disciple) => ({
-        disciple,
-        power: discipleCombatPower(
-          disciple.realm_id,
-          Number(disciple.stage),
-          Number(disciple.attack),
-          Number(disciple.defense),
-          Number(disciple.speed),
-          disciple.talent,
-        ),
-      }))
-      .sort((a, b) => b.power - a.power)
-      .slice(0, WORLD_BOSS_MAX_PARTY)
-      .map(({ disciple }) => ({
-        realmId: disciple.realm_id,
-        stage: Number(disciple.stage),
-        attack: Number(disciple.attack),
-        defense: Number(disciple.defense),
-        speed: Number(disciple.speed),
-        talent: disciple.talent,
-      }));
-    damages.push(
-      theoreticalDailyDamage({ topPartyPower: partyCombatPower(strongest), arenaLevel }),
-    );
-  }
-  return damages;
-}
-
 /**
- * 逃走：今天的 Boss 过了 23:00 仍 active → 逃走；隔夜残留（Cron 漏跑）一并收口，
+ * 逃走：今天的关卡过了 23:00 仍 active → 逃走；隔夜残留（Cron 漏跑）一并收口，
  * 否则那条记录永远不会进入发奖。血掉 ≥70% 记为「已击退」。
  */
 async function fleeExpiredWorldBosses(db: D1Database, now: number): Promise<void> {
@@ -7142,11 +7294,10 @@ async function fleeExpiredWorldBosses(db: D1Database, now: number): Promise<void
   const dayKey = dateKeyUtc8(now);
   const phase = worldBossPhaseOf(now);
   for (const boss of actives) {
-    // 还没到那一天的 Boss 行（脏数据）不动；今天且未过 23:00 继续讨伐。
     if (boss.day_key > dayKey) continue;
     if (boss.day_key === dayKey && phase !== 'closed') continue;
     await repo.execute(markWorldBossFledStatement(boss.id, now));
-    const name = bossDisplayName(Number(boss.boss_index), Number(boss.level));
+    const name = bossDisplayName(Number(boss.boss_index), Number(boss.stage));
     await broadcastWorldBoss(
       db,
       isFledByDamage(Number(boss.max_hp), Number(boss.hp))
@@ -7157,7 +7308,7 @@ async function fleeExpiredWorldBosses(db: D1Database, now: number): Promise<void
   }
 }
 
-/** 发奖：所有已结束且还没发奖的 Boss。 */
+/** 发奖：所有已结束且还没发奖的关卡。 */
 async function rewardFinishedWorldBosses(db: D1Database, now: number): Promise<void> {
   const repo = new WorldBossRepository(db);
   const bosses = await repo.findUnrewardedEnded();
@@ -7167,10 +7318,12 @@ async function rewardFinishedWorldBosses(db: D1Database, now: number): Promise<v
 }
 
 /**
- * 单个 Boss 的发奖（1.6 节）。
+ * 单关发奖（计划 2.8）。
  *
- * 奖励按**参与宗门自己的每小时产出**计算：击杀奖池 = 各参与宗门基础份之和，
- * 每个宗门按自己的伤害占比分（向下取整）；击退时奖池减半，且没有丹药与最后一击奖。
+ * 二期取消了「打破奖池再按伤害占比分」：每个参与宗门拿的是**自己**的基础份
+ *   max(该宗门产出(r) × 1.0, 保底(L)) × 关卡系数 × 排名倍数
+ * 排名由「对该关的总伤害」决定（并列取先达到者）；击退（≥70%）时资源 ×0.5。
+ * 击杀时另发：每个参与者 聚气丹 ×1、第 1 名 淬体丹 ×1、最后一击 灵石 max(产出 × 0.5, 保底) × 关卡系数。
  * 全部语句与「标记已发奖」放在同一个 db.batch 里 —— 要么都成功，要么都没发。
  */
 async function rewardWorldBoss(
@@ -7181,33 +7334,36 @@ async function rewardWorldBoss(
 ): Promise<void> {
   const hits = await repo.hitsByBoss(boss.id);
   const killed = boss.status === 'killed';
-  const bossLevel = Number(boss.level);
+  const stage = Number(boss.stage);
+  const repelled = !killed && isFledByDamage(Number(boss.max_hp), Number(boss.hp));
   const statements: ParameterizedQuery[] = [];
 
-  if (hits.length > 0) {
-    // 按宗门汇总伤害：伤害高的在前，并列取先达到者（与今日伤害榜同一口径）。
-    const bySect = new Map<string, { damage: number; firstAt: number }>();
-    for (const hit of hits) {
-      const entry = bySect.get(hit.sect_id);
-      if (entry === undefined) {
-        bySect.set(hit.sect_id, {
-          damage: Number(hit.damage),
-          firstAt: Number(hit.created_at),
-        });
-        continue;
-      }
-      entry.damage += Number(hit.damage);
-      entry.firstAt = Math.min(entry.firstAt, Number(hit.created_at));
+  // 参与者 = 对该关造成过伤害（>0）的宗门，按总伤害降序，并列取先达到者。
+  const bySect = new Map<string, { damage: number; firstAt: number }>();
+  for (const hit of hits) {
+    if (Number(hit.damage) <= 0) continue;
+    const entry = bySect.get(hit.sect_id);
+    if (entry === undefined) {
+      bySect.set(hit.sect_id, {
+        damage: Number(hit.damage),
+        firstAt: Number(hit.created_at),
+      });
+      continue;
     }
-    const participants = [...bySect.entries()].sort(
-      (a, b) => b[1].damage - a[1].damage || a[1].firstAt - b[1].firstAt,
-    );
+    entry.damage += Number(hit.damage);
+    entry.firstAt = Math.min(entry.firstAt, Number(hit.created_at));
+  }
+  const participants = [...bySect.entries()].sort(
+    (a, b) => b[1].damage - a[1].damage || a[1].firstAt - b[1].firstAt,
+  );
 
+  // 击杀与击退才发资源；单纯逃走（<70%）什么也不发。
+  if (participants.length > 0 && (killed || repelled)) {
     const sectRows = await repo.sectsByIds(participants.map(([sectId]) => sectId));
     const levelById = new Map(sectRows.map((row) => [row.id, Number(row.level)]));
     const config = gameConfig();
 
-    // 只读参与宗门的弟子与建筑（参与宗门最多几个，不做全表扫）。
+    // 只读参与宗门的弟子 / 建筑 / 在外记录（参与宗门最多几个，不做全表扫）。
     const ratesById = new Map<string, Map<string, number>>();
     for (const [sectId] of participants) {
       const [disciples, buildings, journeys] = await Promise.all([
@@ -7218,36 +7374,22 @@ async function rewardWorldBoss(
       ratesById.set(sectId, resourceRatesOfSect({ config, disciples, buildings, journeys, now }));
     }
 
-    // 只有击杀与击退才发奖池：击退时奖池减半，单纯逃走（<70%）没有奖池。
-    const repelled = !killed && isFledByDamage(Number(boss.max_hp), Number(boss.hp));
-    const damages = participants.map(([, entry]) => entry.damage);
-    if (killed || repelled) {
-      const poolByResource: Record<string, number> = {};
-      for (const [sectId] of participants) {
-        const share = killPoolBaseShare(
-          ratesRecordOf(ratesById.get(sectId) ?? new Map()),
-          levelById.get(sectId) ?? 1,
-          bossLevel,
-        );
-        for (const resourceId of WORLD_BOSS_POOL_RESOURCES) {
-          poolByResource[resourceId] =
-            (poolByResource[resourceId] ?? 0) + (share[resourceId] ?? 0);
+    participants.forEach(([sectId], index) => {
+      const rewards = stageResourceRewards({
+        rates: ratesRecordOf(ratesById.get(sectId) ?? new Map()),
+        sectLevel: levelById.get(sectId) ?? 1,
+        stage,
+        rank: index + 1,
+        ...(repelled ? { repelled: true } : {}),
+      });
+      for (const [resourceId, amount] of Object.entries(rewards)) {
+        if (amount > 0) {
+          statements.push(resourceDeltaStatement(sectId, resourceId, amount, now));
         }
       }
+    });
 
-      for (const resourceId of WORLD_BOSS_POOL_RESOURCES) {
-        const total = poolByResource[resourceId] ?? 0;
-        const shares = splitPool(killed ? total : halvePool(total), damages);
-        shares.forEach((amount, index) => {
-          const participant = participants[index];
-          if (participant !== undefined && amount > 0) {
-            statements.push(resourceDeltaStatement(participant[0], resourceId, amount, now));
-          }
-        });
-      }
-    }
-
-    // 丹药与最后一击只随击杀发放（击退没有）。
+    // 丹药与最后一击只随击杀发放。
     if (killed) {
       for (const [sectId] of participants) {
         statements.push(
@@ -7267,7 +7409,7 @@ async function rewardWorldBoss(
           const amount = lastHitReward(
             killerRates.get('spiritStone') ?? 0,
             levelById.get(killerSectId) ?? 1,
-            bossLevel,
+            stage,
           );
           if (amount > 0) {
             statements.push(resourceDeltaStatement(killerSectId, 'spiritStone', amount, now));
@@ -7282,6 +7424,11 @@ async function rewardWorldBoss(
   await db.batch(prepareStatements(db, statements));
 }
 
+/** 疲劳记录只留 2 天（Cron 顺带清理，防表无限增长）。 */
+async function cleanupWorldBossBattles(db: D1Database, now: number): Promise<void> {
+  const repo = new WorldBossRepository(db);
+  await repo.deleteBattlesBefore(now - WORLD_BOSS_BATTLE_RETENTION_MS);
+}
 /* ---------- 坊市（shop.ts 的纯规则 + 受保护 batch 提交） ---------- */
 
 /**

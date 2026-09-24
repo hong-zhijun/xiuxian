@@ -2369,16 +2369,20 @@ export function settleRaceRoundStatement(roundId: string, winnerIndex: number, n
   };
 }
 
-/* ---------- 0025 世界 Boss（讨伐） ---------- */
+/* ---------- 0025/0027 世界 Boss（讨伐，二期） ---------- */
 
 export interface WorldBossRow {
   id: string;
-  /** UTC+8 日期键 'YYYY-MM-DD'；一天一只。 */
+  /** UTC+8 日期键 'YYYY-MM-DD'；一天可以有多个关卡（连战）。 */
   day_key: string;
+  /** 第几关（每天从 1 开始）。 */
+  stage: number;
   /** 五只轮换 Boss 的下标（0~4）。 */
   boss_index: number;
-  /** 1~5。 */
-  level: number;
+  /** 随机词缀 id（见 worldBoss.ts 的 WORLD_BOSS_AFFIXES；迁移过来的旧行是 'none'）。 */
+  affix: string;
+  /** 生成第 1 关时算好的「一轮伤害」，后续关卡复用它算血量。 */
+  round_damage: number;
   max_hp: number;
   hp: number;
   /** 'active' | 'killed' | 'fled'。 */
@@ -2399,10 +2403,14 @@ export interface WorldBossHitRow {
   sect_id: string;
   /** 冗余的宗门名（榜单与出手记录不用再 JOIN sects）。 */
   sect_name: string;
-  /** 1~3，本宗门当天第几次出手。 */
-  attempt_no: number;
   /** 出战弟子名的 JSON 数组。 */
   disciple_names: string;
+  /** 出战弟子 id 的 JSON 数组。 */
+  disciple_ids: string;
+  /** 本次受伤（普通）的弟子名 JSON 数组。 */
+  injured_names: string;
+  /** 本次被打成重伤的弟子名 JSON 数组。 */
+  severe_names: string;
   /** 实际扣血。 */
   damage: number;
   is_crit: number;
@@ -2410,7 +2418,7 @@ export interface WorldBossHitRow {
   created_at: number;
 }
 
-/** 今日伤害榜的一行（按宗门汇总）。 */
+/** 本关伤害榜的一行（按宗门汇总）。 */
 export interface WorldBossSectDamageRow {
   sect_id: string;
   sect_name: string;
@@ -2424,8 +2432,14 @@ export interface WorldBossSectDamageRow {
 /** 历史最强一击（带 Boss 信息，用于展示名字）。 */
 export interface WorldBossTopHitRow extends WorldBossHitRow {
   day_key: string;
-  level: number;
+  stage: number;
   boss_index: number;
+}
+
+/** 一名弟子在疲劳窗口内的出战次数。 */
+export interface DiscipleBattleCountRow {
+  disciple_id: string;
+  cnt: number;
 }
 
 export class WorldBossRepository extends ParamRepository {
@@ -2436,25 +2450,44 @@ export class WorldBossRepository extends ParamRepository {
     });
   }
 
-  async findByDayKey(dayKey: string): Promise<WorldBossRow | null> {
+  /** 当天最新的一关（连战时就是当前关；已被打死的那关是上一条）。 */
+  async findLatestByDayKey(dayKey: string): Promise<WorldBossRow | null> {
     return this.one<WorldBossRow>({
-      sql: 'SELECT * FROM world_bosses WHERE day_key = ?',
+      sql: 'SELECT * FROM world_bosses WHERE day_key = ? ORDER BY stage DESC LIMIT 1',
       params: [dayKey],
     });
   }
 
-  /** 今天之前最近的一条记录（用来决定今天的等级）。 */
-  async findLatestBefore(dayKey: string): Promise<WorldBossRow | null> {
+  /** 指定关卡（day_key + stage 唯一，用来防重复生成）。 */
+  async findByDayKeyAndStage(dayKey: string, stage: number): Promise<WorldBossRow | null> {
     return this.one<WorldBossRow>({
-      sql: 'SELECT * FROM world_bosses WHERE day_key < ? ORDER BY day_key DESC LIMIT 1',
+      sql: 'SELECT * FROM world_bosses WHERE day_key = ? AND stage = ?',
+      params: [dayKey, stage],
+    });
+  }
+
+  /** 今天已击杀的关数（面板「今日已连斩 N 只」）。 */
+  async countKilledByDayKey(dayKey: string): Promise<number> {
+    const row = await this.one<{ killed: number }>({
+      sql: "SELECT COUNT(*) AS killed FROM world_bosses WHERE day_key = ? AND status = 'killed'",
       params: [dayKey],
     });
+    return Number(row?.killed ?? 0);
+  }
+
+  /** 史上最高单日关数 = 历史上达成过的最高关卡（status = 'killed'）。 */
+  async maxKilledStage(): Promise<number> {
+    const row = await this.one<{ max_stage: number | null }>({
+      sql: "SELECT MAX(stage) AS max_stage FROM world_bosses WHERE status = 'killed'",
+      params: [],
+    });
+    return Number(row?.max_stage ?? 0);
   }
 
   /** 仍是 active 的 Boss（正常最多一条；Cron 漏跑时会留下隔夜的残留）。 */
   async findActiveBosses(): Promise<WorldBossRow[]> {
     return this.all<WorldBossRow>({
-      sql: "SELECT * FROM world_bosses WHERE status = 'active' ORDER BY day_key ASC",
+      sql: "SELECT * FROM world_bosses WHERE status = 'active' ORDER BY day_key ASC, stage ASC",
       params: [],
     });
   }
@@ -2462,12 +2495,27 @@ export class WorldBossRepository extends ParamRepository {
   /** 已结束但还没发奖的 Boss（Cron 发奖用）。 */
   async findUnrewardedEnded(): Promise<WorldBossRow[]> {
     return this.all<WorldBossRow>({
-      sql: "SELECT * FROM world_bosses WHERE status IN ('killed', 'fled') AND rewarded_at IS NULL ORDER BY day_key ASC",
+      sql: "SELECT * FROM world_bosses WHERE status IN ('killed', 'fled') AND rewarded_at IS NULL ORDER BY day_key ASC, stage ASC",
       params: [],
     });
   }
 
-  /** 活跃宗门（血量估算用）：last_settled_at 在阈值之后的宗门。 */
+  /**
+   * 「合格宗门」的第一优先口径：最近 N 天在 world_boss_hits 里出过手的宗门。
+   * 两边都走索引（world_bosses 的 (day_key, stage) 唯一索引 + hits 的 (boss_id, created_at)）。
+   */
+  async sectsWithHitsSince(sinceDayKey: string): Promise<string[]> {
+    const rows = await this.all<{ sect_id: string }>({
+      sql: `SELECT DISTINCT h.sect_id AS sect_id
+              FROM world_boss_hits h
+              JOIN world_bosses b ON b.id = h.boss_id
+             WHERE b.day_key >= ?`,
+      params: [sinceDayKey],
+    });
+    return rows.map((row) => row.sect_id);
+  }
+
+  /** 合格宗门的兜底口径：last_settled_at 在阈值之后（活跃）的宗门。 */
   async activeSectsSince(thresholdMs: number): Promise<{ id: string; name: string; level: number }[]> {
     return this.all<{ id: string; name: string; level: number }>({
       sql: 'SELECT id, name, level FROM sects WHERE last_settled_at >= ? ORDER BY id',
@@ -2485,19 +2533,19 @@ export class WorldBossRepository extends ParamRepository {
     });
   }
 
-  /** 本宗门今天已出手次数（UNIQUE(boss_id, sect_id, attempt_no) 保证它等于最大 attempt_no）。 */
-  async countAttempts(bossId: string, sectId: string): Promise<number> {
-    const row = await this.one<{ used: number }>({
-      sql: 'SELECT COUNT(*) AS used FROM world_boss_hits WHERE boss_id = ? AND sect_id = ?',
-      params: [bossId, sectId],
+  /** 该宗门最近一条出手记录的时间（冷却判断；走 (sect_id, created_at DESC) 索引）。 */
+  async lastHitAtBySect(sectId: string): Promise<number | null> {
+    const row = await this.one<{ created_at: number | null }>({
+      sql: 'SELECT created_at FROM world_boss_hits WHERE sect_id = ? ORDER BY created_at DESC LIMIT 1',
+      params: [sectId],
     });
-    return Number(row?.used ?? 0);
+    return row?.created_at === null || row?.created_at === undefined ? null : Number(row.created_at);
   }
 
-  /** 某只 Boss 的全部出手记录（发奖按宗门汇总用）。 */
+  /** 某只 Boss 的全部出手记录（发奖排名用）。 */
   async hitsByBoss(bossId: string): Promise<WorldBossHitRow[]> {
     return this.all<WorldBossHitRow>({
-      sql: 'SELECT * FROM world_boss_hits WHERE boss_id = ? ORDER BY created_at ASC, attempt_no ASC',
+      sql: 'SELECT * FROM world_boss_hits WHERE boss_id = ? ORDER BY created_at ASC',
       params: [bossId],
     });
   }
@@ -2505,12 +2553,12 @@ export class WorldBossRepository extends ParamRepository {
   /** 出手记录（新的在前）。 */
   async recentHitsByBoss(bossId: string, limit: number): Promise<WorldBossHitRow[]> {
     return this.all<WorldBossHitRow>({
-      sql: 'SELECT * FROM world_boss_hits WHERE boss_id = ? ORDER BY created_at DESC, attempt_no DESC LIMIT ?',
+      sql: 'SELECT * FROM world_boss_hits WHERE boss_id = ? ORDER BY created_at DESC LIMIT ?',
       params: [bossId, limit],
     });
   }
 
-  /** 今日伤害榜：按宗门汇总，伤害高的在前，并列取先达到者。 */
+  /** 本关伤害榜：按宗门汇总，伤害高的在前，并列取先达到者。 */
   async sectDamageRows(bossId: string): Promise<WorldBossSectDamageRow[]> {
     return this.all<WorldBossSectDamageRow>({
       sql: `SELECT sect_id,
@@ -2530,7 +2578,7 @@ export class WorldBossRepository extends ParamRepository {
   /** 历史最强一击（全表）。 */
   async topHit(): Promise<WorldBossTopHitRow | null> {
     return this.one<WorldBossTopHitRow>({
-      sql: `SELECT h.*, b.day_key, b.level, b.boss_index
+      sql: `SELECT h.*, b.day_key, b.stage, b.boss_index
               FROM world_boss_hits h
               JOIN world_bosses b ON b.id = h.boss_id
              ORDER BY h.damage DESC, h.created_at ASC
@@ -2539,25 +2587,58 @@ export class WorldBossRepository extends ParamRepository {
     });
   }
 
-  /** 出现：day_key 唯一，已有则什么都不做；返回是否真的插入了（据此决定要不要广播）。 */
+  /** 疲劳：本宗门每名弟子在窗口内的出战次数。 */
+  async fatigueCountsBySect(sectId: string, sinceMs: number): Promise<DiscipleBattleCountRow[]> {
+    return this.all<DiscipleBattleCountRow>({
+      sql: `SELECT disciple_id, COUNT(*) AS cnt
+              FROM disciple_boss_battles
+             WHERE sect_id = ? AND created_at >= ?
+             GROUP BY disciple_id`,
+      params: [sectId, sinceMs],
+    });
+  }
+
+  /** 清掉窗口之外的老行（Cron 顺带调用，防止表无限增长）。 */
+  async deleteBattlesBefore(thresholdMs: number): Promise<number> {
+    const result = await this.execute({
+      sql: 'DELETE FROM disciple_boss_battles WHERE created_at < ?',
+      params: [thresholdMs],
+    });
+    return Number(result.meta.changes);
+  }
+
+  /** 出现：UNIQUE (day_key, stage)，已有则什么都不做；返回是否真的插入了。 */
   async insertBossIfAbsent(row: {
     id: string;
     dayKey: string;
+    stage: number;
     bossIndex: number;
-    level: number;
+    affix: string;
+    roundDamage: number;
     maxHp: number;
     now: number;
   }): Promise<boolean> {
     const result = await this.execute({
-      sql: `INSERT INTO world_bosses (id, day_key, boss_index, level, max_hp, hp, status, half_announced, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, 'active', 0, ?)
-            ON CONFLICT (day_key) DO NOTHING`,
-      params: [row.id, row.dayKey, row.bossIndex, row.level, row.maxHp, row.maxHp, row.now],
+      sql: `INSERT INTO world_bosses
+              (id, day_key, stage, boss_index, affix, round_damage, max_hp, hp, status, half_announced, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', 0, ?)
+            ON CONFLICT (day_key, stage) DO NOTHING`,
+      params: [
+        row.id,
+        row.dayKey,
+        row.stage,
+        row.bossIndex,
+        row.affix,
+        row.roundDamage,
+        row.maxHp,
+        row.maxHp,
+        row.now,
+      ],
     });
     return Number(result.meta.changes) > 0;
   }
 
-  /** 单条写入（出现 / 逃走 / 半血标记 / 最后一击标记）：与 ChatMessageRepository 同一处理。 */
+  /** 单条写入（出现 / 逃走 / 半血标记 / 最后一击标记 / 清理疲劳）：与 ChatMessageRepository 同一处理。 */
   override async execute(query: ParameterizedQuery): Promise<D1Result> {
     return super.execute(query);
   }
@@ -2590,27 +2671,45 @@ export function insertWorldBossHitStatement(row: {
   bossId: string;
   sectId: string;
   sectName: string;
-  attemptNo: number;
   discipleNames: string;
+  discipleIds: string;
+  injuredNames: string;
+  severeNames: string;
   damage: number;
   isCrit: boolean;
   now: number;
 }): ParameterizedQuery {
   return {
     sql: `INSERT INTO world_boss_hits
-            (id, boss_id, sect_id, sect_name, attempt_no, disciple_names, damage, is_crit, is_last_hit, created_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`,
+            (id, boss_id, sect_id, sect_name, disciple_names, disciple_ids,
+             injured_names, severe_names, damage, is_crit, is_last_hit, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`,
     params: [
       row.id,
       row.bossId,
       row.sectId,
       row.sectName,
-      row.attemptNo,
       row.discipleNames,
+      row.discipleIds,
+      row.injuredNames,
+      row.severeNames,
       row.damage,
       row.isCrit ? 1 : 0,
       row.now,
     ],
+  };
+}
+
+/** 疲劳记录：每名出战弟子每次写一行。 */
+export function insertDiscipleBossBattleStatement(row: {
+  id: string;
+  discipleId: string;
+  sectId: string;
+  now: number;
+}): ParameterizedQuery {
+  return {
+    sql: 'INSERT INTO disciple_boss_battles (id, disciple_id, sect_id, created_at) VALUES (?, ?, ?, ?)',
+    params: [row.id, row.discipleId, row.sectId, row.now],
   };
 }
 
