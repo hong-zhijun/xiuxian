@@ -47,12 +47,49 @@ const sealStyle = computed<CSSProperties>(() => ({
   '--boss-color': boss.value?.def.color ?? '#7a8c6e',
 }));
 
-const remainingText = computed(() => {
-  const seconds = panel.value?.remainingSeconds ?? 0;
-  const mm = String(Math.floor(seconds / 60)).padStart(2, '0');
-  const ss = String(seconds % 60).padStart(2, '0');
-  return `${mm}:${ss}`;
-});
+/**
+ * 「距结束」倒计时：打开面板 / 出手后拿到剩余秒数，之后由前端计时器自己走，
+ * **不再发任何请求**（倒计时不是轮询）。
+ *
+ * 与 SpiritBeastRaceDialog.vue 的 startCountdown / stopCountdown 同一写法；
+ * 唯一区别是把「剩余秒数」换算成绝对截止时刻再每秒回算 —— 后台标签页的 setInterval
+ * 会被节流，纯递减会越走越慢，回算则回到前台立刻就是正确值。
+ */
+const remaining = ref(0);
+let countdownDeadlineMs = 0;
+let countdownTimer: number | undefined;
+
+/** 拿到新的剩余秒数：以此为截止点重启倒计时。 */
+function applyRemainingSeconds(seconds: number): void {
+  remaining.value = Math.max(0, Math.floor(seconds));
+  countdownDeadlineMs = Date.now() + remaining.value * 1000;
+  startCountdown();
+}
+
+function tickCountdown(): void {
+  remaining.value = Math.max(0, Math.ceil((countdownDeadlineMs - Date.now()) / 1000));
+  if (remaining.value <= 0) stopCountdown();
+}
+
+function startCountdown(): void {
+  stopCountdown();
+  tickCountdown();
+  if (remaining.value <= 0) return;
+  countdownTimer = window.setInterval(tickCountdown, 1000);
+}
+
+function stopCountdown(): void {
+  if (countdownTimer !== undefined) {
+    window.clearInterval(countdownTimer);
+    countdownTimer = undefined;
+  }
+}
+
+function formatCountdown(seconds: number): string {
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+}
 
 const statusText = computed(() => {
   const current = boss.value;
@@ -65,12 +102,16 @@ const statusText = computed(() => {
   if (current.status === 'fled') {
     return current.fledOutcome === 'repelled' ? '已击退' : '已逃走';
   }
+  // 本地倒计时归零 = 讨伐时段已过（23:00）：服务端的下一次 Cron 已经收口，
+  // 让玩家点刷新取最新状态，而不是继续显示「讨伐中」。
+  if (current.phase === 'closed' || remaining.value <= 0) return '已结束，点击刷新';
   return current.phase === 'frenzy' ? '力竭中 ×1.5' : '讨伐中';
 });
 
 const canAttack = computed(
   () =>
     (panel.value?.attackable ?? false) &&
+    remaining.value > 0 &&
     selected.value.length > 0 &&
     !submitting.value &&
     props.busy !== true,
@@ -81,9 +122,15 @@ function formatDamage(value: number): string {
   return Number.isFinite(value) ? value.toLocaleString('en-US') : '0';
 }
 
-function timeText(ms: number): string {
-  const date = new Date(ms);
-  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+/**
+ * 时刻一律按 **UTC+8** 渲染（业务日就是 UTC+8，见 constants.dateKeyUtc8）：
+ * 不用浏览器本地时区，否则跨时区的玩家看到的出手时刻会与业务日对不上。
+ */
+function timeUtc8(ms: number): string {
+  const shifted = new Date(ms + 8 * 3_600_000);
+  const hh = String(shifted.getUTCHours()).padStart(2, '0');
+  const mm = String(shifted.getUTCMinutes()).padStart(2, '0');
+  return `${hh}:${mm}`;
 }
 
 /** 出手记录一行：`21:32  乾坤门 · 白折月、墨明烛 联手打出 9,870 【暴击】【最后一击】`。 */
@@ -91,7 +138,7 @@ function hitLine(entry: WorldBossHitView): string {
   const names = entry.discipleNames.join('、');
   const verb = entry.discipleNames.length > 1 ? '联手打出' : '打出';
   const tags = `${entry.isCrit ? '【暴击】' : ''}${entry.isLastHit ? '【最后一击】' : ''}`;
-  return `${timeText(entry.createdAt)}  ${entry.sectName} · ${names} ${verb} ${formatDamage(entry.damage)} ${tags}`.trim();
+  return `${timeUtc8(entry.createdAt)}  ${entry.sectName} · ${names} ${verb} ${formatDamage(entry.damage)} ${tags}`.trim();
 }
 
 async function refresh(): Promise<void> {
@@ -101,6 +148,7 @@ async function refresh(): Promise<void> {
     const data = await fetchWorldBoss();
     panel.value = data.boss;
     emit('state-update', data.state);
+    applyRemainingSeconds(data.boss.remainingSeconds);
   } catch (error) {
     emit('notify', 'warning', '讨伐', error instanceof Error ? error.message : '面板加载失败');
   } finally {
@@ -115,6 +163,7 @@ async function submit(): Promise<void> {
     const data = await attackWorldBoss(selected.value);
     panel.value = data.boss;
     emit('state-update', data.state);
+    applyRemainingSeconds(data.boss.remainingSeconds);
 
     hitKey.value += 1;
     hit.value = { damage: data.result.actualDamage, crit: data.result.crit };
@@ -138,10 +187,12 @@ async function submit(): Promise<void> {
 }
 
 onMounted(() => {
+  // 打开面板取一次数（剩余秒数由 applyRemainingSeconds 启动本地倒计时）。
   void refresh();
 });
 
 onUnmounted(() => {
+  stopCountdown();
   if (hitTimer !== null) window.clearTimeout(hitTimer);
 });
 
@@ -174,7 +225,9 @@ const dayKeyText = computed(() => boss.value?.dayKey ?? '');
         <span v-if="boss" class="boss-level">{{ levelName(boss.level) }}阶</span>
       </h3>
       <div class="boss-head-actions">
-        <span v-if="panel" class="boss-countdown">距结束 {{ remainingText }}</span>
+        <span v-if="panel && remaining > 0" class="boss-countdown">
+          距结束 {{ formatCountdown(remaining) }}
+        </span>
         <button class="boss-quiet-button" type="button" @click="showRules = !showRules">
           {{ showRules ? '收起说明' : '说明' }}
         </button>
