@@ -18,7 +18,7 @@ import { dataOf, errorOf, TestClient } from './support/authClient';
  * 存储说明：本文件一份独立内存 D1，没有逐用例回滚 —— 每个用例用独立账号/宗门，
  * Boss 用**互不相同的 UTC+8 日期**（day_key 唯一）隔离；库层面的断言都按宗门 id / day_key 定界。
  *
- * 时间说明：讨伐只在 12:00–23:00（UTC+8）开放，一天一只 Boss。测试完全不依赖真实时钟：
+ * 时间说明：讨伐只在 08:00–23:00（UTC+8）开放，一天一只 Boss。测试完全不依赖真实时钟：
  * service 的三个入口（getWorldBoss / attackWorldBoss / processWorldBoss）都显式收 `now`，
  * 由用例自己决定「现在是第几天几点」。每次都用 `freezeDay` 把宗门的 last_settled_at 拨到
  * **当天 23:59 之后** —— 于是用例里任何一次调用的结算窗口都是 0（零产出零事件），资源断言才精确。
@@ -238,21 +238,21 @@ afterEach(() => {
 });
 
 describe('世界 Boss：出现（Cron）', () => {
-  it('12:00 之前不出现；出现后重复触发也只创建一次、广播一次', async () => {
+  it('08:00 之前不出现；出现后重复触发也只创建一次、广播一次', async () => {
     const fixture = await makeSect('spawn');
     const noon = bossNow(0, 12, 30);
     const dayKey = dateKeyUtc8(noon);
     await freezeDay(fixture.sectId, 0);
 
-    // 11:00：还没到 12:00 → 不出现；面板给出「12:00 降临」。
-    await processWorldBoss(env.DB, bossNow(0, 11));
+    // 07:00：还没到 08:00 → 不出现；面板给出「08:00 降临」。
+    await processWorldBoss(env.DB, bossNow(0, 7));
     expect(await bossRow(dayKey)).toBeNull();
-    const early = await getWorldBoss(env.DB, fixture.userId, bossNow(0, 11, 0));
+    const early = await getWorldBoss(env.DB, fixture.userId, bossNow(0, 7, 0));
     expect(early.boss.boss).toBeNull();
     expect(early.boss.phase).toBe('before');
     expect(early.boss.attackable).toBe(false);
     expect(early.boss.remainingSeconds).toBeGreaterThan(0);
-    expect(early.boss.opensAt).toBe(dayStartMs(bossNow(0, 11)) + 12 * HOUR);
+    expect(early.boss.opensAt).toBe(dayStartMs(bossNow(0, 7)) + 8 * HOUR);
 
     // 12:30：第一次 Cron → 创建当天 Boss 并广播一次。
     const spawns = await countMessages((text) => text.includes('降临'));
@@ -378,7 +378,7 @@ describe('世界 Boss：出手', () => {
     await freezeDay(fixture.sectId, 5);
 
     expect(
-      await codeOf(attackWorldBoss(env.DB, fixture.userId, { discipleIds }, bossNow(5, 11))),
+      await codeOf(attackWorldBoss(env.DB, fixture.userId, { discipleIds }, bossNow(5, 7))),
     ).toBe('INVALID_STATUS');
     expect(
       await codeOf(attackWorldBoss(env.DB, fixture.userId, { discipleIds }, bossNow(5, 23))),

@@ -95,8 +95,8 @@ const statusText = computed(() => {
   const current = boss.value;
   if (current === null) {
     return panel.value !== null && panel.value.phase === 'closed'
-      ? '今日已结束，明日 12:00 再临'
-      : '未出现：12:00 降临';
+      ? '今日已结束，明日 08:00 再临'
+      : '未出现：08:00 降临';
   }
   if (current.status === 'killed') return '已击杀';
   if (current.status === 'fled') {
@@ -198,7 +198,7 @@ onUnmounted(() => {
 
 const RULES_TEXT = `讨伐 · 玩法说明
 
-时间：每日 12:00 妖王降临，12:00–23:00 可出手，23:00 未击杀即逃走。
+时间：每日 08:00 妖王降临，08:00–23:00 可出手，23:00 未击杀即逃走。
 力竭：22:00–23:00 妖王力竭，受到的伤害 ×1.5。
 次数：每个宗门每日 3 次（不占赌坊次数），每次派 1~3 名弟子。
 弟子：在外历练或正在疗伤的弟子不能出战；出手不会让弟子受伤，也不占用弟子。
@@ -272,7 +272,7 @@ const dayKeyText = computed(() => boss.value?.dayKey ?? '');
         <div class="boss-info">
           <p class="boss-name">{{ boss?.def.displayName ?? '妖王未现' }}</p>
           <p class="boss-desc">
-            {{ boss?.def.description ?? '每日 12:00 妖王降临黑风岭外，全服共讨之。' }}
+            {{ boss?.def.description ?? '每日 08:00 妖王降临黑风岭外，全服共讨之。' }}
           </p>
           <p class="boss-status" :class="{ 'is-down': boss !== null && boss.status !== 'active' }">
             {{ statusText }}

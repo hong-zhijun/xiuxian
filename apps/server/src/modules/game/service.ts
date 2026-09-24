@@ -6412,7 +6412,7 @@ async function buildWorldBossView(input: {
 
   const todayStart = dayStartMs(now);
   const closesAt = todayStart + WORLD_BOSS_CLOSE_HOUR * 3_600_000;
-  // 「12:00 降临」提示：今天还没到 12:00 就是今天，否则是明天。
+  // 「08:00 降临」提示：今天还没到 08:00 就是今天，否则是明天。
   const opensAt =
     phase === 'before'
       ? todayStart + WORLD_BOSS_OPEN_HOUR * 3_600_000
@@ -6511,12 +6511,12 @@ export async function attackWorldBoss(
   const phase = worldBossPhaseOf(now);
 
   if (!isWorldBossAttackable(phase)) {
-    throw new AppError('INVALID_STATUS', '讨伐每日 12:00–23:00 开放（UTC+8）');
+    throw new AppError('INVALID_STATUS', '讨伐每日 08:00–23:00 开放（UTC+8）');
   }
 
   const boss = await repo.findByDayKey(dateKeyUtc8(now));
   if (boss === null) {
-    throw new AppError('NOT_FOUND', '妖王尚未降临（每日 12:00 现身）');
+    throw new AppError('NOT_FOUND', '妖王尚未降临（每日 08:00 现身）');
   }
   if (boss.status !== 'active') {
     throw new AppError('INVALID_STATUS', '今日的妖王已经结束讨伐');
@@ -6681,7 +6681,7 @@ export async function processWorldBoss(db: D1Database, now: number): Promise<voi
 }
 
 /**
- * 出现：阶段到了（12:00 之后）且今天还没有 Boss → 算等级与血量、插入、广播。
+ * 出现：阶段到了（08:00 之后）且今天还没有 Boss → 算等级与血量、插入、广播。
  * `day_key` 唯一约束兜住「Cron 重复触发只会创建一次」，插入失败就不广播。
  */
 async function spawnWorldBoss(db: D1Database, now: number): Promise<void> {

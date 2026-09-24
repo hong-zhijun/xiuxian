@@ -38,14 +38,14 @@ function utc8(y: number, month: number, day: number, hour: number, minute = 0): 
 }
 
 describe('世界 Boss：阶段判定（UTC+8）', () => {
-  it('11:59 before、12:00 open、22:00 frenzy、23:00 closed', () => {
-    expect(worldBossPhaseOf(utc8(2026, 9, 23, 11, 59))).toBe('before');
-    expect(worldBossPhaseOf(utc8(2026, 9, 23, 12, 0))).toBe('open');
+  it('07:59 before、08:00 open、22:00 frenzy、23:00 closed', () => {
+    expect(worldBossPhaseOf(utc8(2026, 9, 23, 7, 59))).toBe('before');
+    expect(worldBossPhaseOf(utc8(2026, 9, 23, 8, 0))).toBe('open');
     expect(worldBossPhaseOf(utc8(2026, 9, 23, 21, 59))).toBe('open');
     expect(worldBossPhaseOf(utc8(2026, 9, 23, 22, 0))).toBe('frenzy');
     expect(worldBossPhaseOf(utc8(2026, 9, 23, 23, 0))).toBe('closed');
     expect(worldBossPhaseOf(utc8(2026, 9, 23, 23, 30))).toBe('closed');
-    // 次日 0:30 已经是新的一天、尚未到 12:00，所以是 before
+    // 次日 0:30 已经是新的一天、尚未到 08:00，所以是 before
     expect(worldBossPhaseOf(utc8(2026, 9, 24, 0, 30))).toBe('before');
   });
 

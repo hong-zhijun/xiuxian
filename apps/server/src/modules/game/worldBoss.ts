@@ -13,8 +13,8 @@ export const WORLD_BOSS_DAILY_ATTACKS = 3;
 export const WORLD_BOSS_MIN_PARTY = 1;
 export const WORLD_BOSS_MAX_PARTY = 3;
 
-/** 时间线（UTC+8 小时）：12:00 出现、22:00 力竭、23:00 逃走。 */
-export const WORLD_BOSS_OPEN_HOUR = 12;
+/** 时间线（UTC+8 小时）：08:00 出现、22:00 力竭、23:00 逃走。 */
+export const WORLD_BOSS_OPEN_HOUR = 8;
 export const WORLD_BOSS_FRENZY_HOUR = 22;
 export const WORLD_BOSS_CLOSE_HOUR = 23;
 
@@ -120,7 +120,7 @@ export type WorldBossPhase = 'before' | 'open' | 'frenzy' | 'closed';
 
 /**
  * 阶段判定（UTC+8 小时整数）：
- * 12:00 前 before；12:00~22:00 open；22:00~23:00 frenzy；23:00 起 closed。
+ * 08:00 前 before；08:00~22:00 open；22:00~23:00 frenzy；23:00 起 closed。
  */
 export function worldBossPhaseOf(now: number): WorldBossPhase {
   const hour = new Date(now + 8 * 3_600_000).getUTCHours();
