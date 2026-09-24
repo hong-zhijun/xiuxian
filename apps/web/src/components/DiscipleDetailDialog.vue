@@ -302,7 +302,25 @@ const DAO_ATTRIBUTE_OPTIONS: readonly { value: DaoAttribute; label: string }[] =
   { value: 'physique', label: '体魄' },
 ];
 
-const daoAttribute = ref<DaoAttribute>('attack');
+/** 某项属性离 100 上限还剩多少点。 */
+function daoRoom(attribute: DaoAttribute): number {
+  return ATTRIBUTE_MAX - props.disciple[attribute];
+}
+
+/** 默认选第一个还能加点的属性（攻击已满时不能一直停在攻击上，否则整块加点区会被判成不可用）。 */
+function firstOpenAttribute(): DaoAttribute {
+  return DAO_ATTRIBUTE_OPTIONS.find((option) => daoRoom(option.value) > 0)?.value ?? 'attack';
+}
+
+const daoAttribute = ref<DaoAttribute>(firstOpenAttribute());
+
+// 换弟子 / 加点后选中的属性满了：自动切到下一个还能加的属性。
+watch(
+  () => props.disciple,
+  () => {
+    if (daoRoom(daoAttribute.value) <= 0) daoAttribute.value = firstOpenAttribute();
+  },
+);
 const daoPointsInput = ref('1');
 
 const daoAttributeValue = computed(() => props.disciple[daoAttribute.value]);
@@ -319,13 +337,22 @@ const daoPointsMax = computed(() =>
   ),
 );
 
-/** 是否还有可分配空间（可用悟道值、累计额度、属性未到 100 三者都要满足）。 */
+/** 是否还有可分配空间：有可用悟道值、累计额度未满，且**任意一项**属性未到 100（不是只看当前选中的那项）。 */
 const daoAllocatable = computed(
   () =>
     props.disciple.daoInsight > 0 &&
     props.disciple.daoInsightRemaining > 0 &&
-    ATTRIBUTE_MAX - daoAttributeValue.value > 0,
+    DAO_ATTRIBUTE_OPTIONS.some((option) => daoRoom(option.value) > 0),
 );
+
+/** 有悟道值却加不了时的原因（让玩家知道为什么没有加点按钮）。 */
+const daoBlockedReason = computed<string | null>(() => {
+  if (props.disciple.daoInsight <= 0 || daoAllocatable.value) return null;
+  if (props.disciple.daoInsightRemaining <= 0) {
+    return `该弟子已累计分配 ${String(props.disciple.daoInsightUsed)} 点，达到上限`;
+  }
+  return '该弟子六项属性均已达到 100';
+});
 
 const daoPoints = computed(() => Math.floor(Number(daoPointsInput.value)));
 const daoPointsValid = computed(
@@ -997,12 +1024,12 @@ function unequipGear(item: EquipmentItemView | null): void {
                   :class="{ 'is-selected': daoAttribute === option.value }"
                   type="button"
                   role="radio"
-                  :disabled="busy"
+                  :disabled="busy || daoRoom(option.value) <= 0"
                   :aria-checked="daoAttribute === option.value"
                   @click="daoAttribute = option.value"
                 >
                   <strong>{{ option.label }}</strong>
-                  <small>当前 {{ valueWithGear(option.value, disciple[option.value]) }}</small>
+                  <small>{{ daoRoom(option.value) <= 0 ? '已满 100' : `当前 ${valueWithGear(option.value, disciple[option.value])}` }}</small>
                 </button>
               </li>
             </ul>
@@ -1033,6 +1060,7 @@ function unequipGear(item: EquipmentItemView | null): void {
               本次可分配 1 ~ {{ daoPointsMax }} 点
             </p>
           </template>
+          <p v-else-if="daoBlockedReason !== null" class="disciple-note-meta">{{ daoBlockedReason }}</p>
 
           <ModalShell v-if="showDaoInsightHelp" narrow label="悟道值说明" @close="showDaoInsightHelp = false">
             <section class="dao-insight-help-card" aria-labelledby="dao-insight-help-title">
