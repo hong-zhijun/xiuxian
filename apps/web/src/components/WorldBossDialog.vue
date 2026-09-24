@@ -10,7 +10,9 @@ import type {
 } from '../api/game';
 import { attackWorldBoss, fetchWorldBoss } from '../api/game';
 import { formatAmount } from '../utils/format';
+import { severeRiskPercent } from '../utils/worldBossRisk';
 import DisciplePicker from './DisciplePicker.vue';
+import ModalShell from './ModalShell.vue';
 
 /**
  * 0027 世界 Boss（讨伐，二期）面板（计划 §阶段三）。
@@ -218,6 +220,38 @@ async function refresh(): Promise<void> {
   } finally {
     loading.value = false;
   }
+}
+
+/* ---------- 冒进二次确认 ---------- */
+
+const isBerserk = computed(() => boss.value?.affix.id === 'berserk');
+
+/** 已选弟子里有重伤风险的（本小时已出战 ≥3 次）：名字 + 概率。 */
+const riskyPicks = computed(() =>
+  selected.value
+    .map((id) => props.state.disciples.find((disciple) => disciple.id === id))
+    .filter((disciple): disciple is NonNullable<typeof disciple> => disciple !== undefined)
+    .map((disciple) => ({
+      name: disciple.name,
+      risk: severeRiskPercent(panel.value?.fatigue[disciple.id] ?? 0, disciple.physique, isBerserk.value),
+    }))
+    .filter((pick) => pick.risk > 0),
+);
+
+const confirmRisk = ref(false);
+
+function onAttackClick(): void {
+  if (!canAttack.value) return;
+  if (riskyPicks.value.length > 0) {
+    confirmRisk.value = true;
+    return;
+  }
+  void submit();
+}
+
+function confirmAttack(): void {
+  confirmRisk.value = false;
+  void submit();
 }
 
 async function submit(): Promise<void> {
@@ -467,9 +501,10 @@ const RULES_TEXT = `讨伐 · 玩法说明
         title="选择出战弟子"
         :fatigue="panel?.fatigue"
         :extra-sort="boss?.affix.sortAttribute"
+        :berserk="isBerserk"
       />
 
-      <button class="boss-attack-button" type="button" :disabled="!canAttack" @click="submit">
+      <button class="boss-attack-button" type="button" :disabled="!canAttack" @click="onAttackClick">
         <span v-if="submitting">讨伐中…</span>
         <span v-else>{{ attackButtonText }}</span>
       </button>
@@ -528,6 +563,25 @@ const RULES_TEXT = `讨伐 · 玩法说明
         </template>
       </section>
     </template>
+
+    <!-- 冒进二次确认：已选弟子里有重伤风险时，点「出手」先弹这里 -->
+    <ModalShell v-if="confirmRisk" narrow label="重伤风险确认" @close="confirmRisk = false">
+      <section class="boss-risk-card" aria-labelledby="boss-risk-title">
+        <h2 id="boss-risk-title" class="disciple-detail-title">重伤风险</h2>
+        <p class="boss-risk-text">以下弟子本小时已多次出战，这次出手可能重伤：</p>
+        <ul class="boss-risk-list">
+          <li v-for="pick in riskyPicks" :key="pick.name">
+            <strong>{{ pick.name }}</strong>
+            <span>{{ pick.risk >= 100 ? '必定重伤' : `重伤概率 ${pick.risk}%` }}</span>
+          </li>
+        </ul>
+        <p class="boss-risk-text">重伤需静养 <b>1 天</b>：期间不产出、不修炼、不能做任何事，丹药无效，且这一刀不计伤害。</p>
+        <div class="boss-risk-actions">
+          <button class="action-button" type="button" @click="confirmRisk = false">取消</button>
+          <button class="action-button primary-action" type="button" @click="confirmAttack">仍然出手</button>
+        </div>
+      </section>
+    </ModalShell>
   </section>
 </template>
 
@@ -593,6 +647,55 @@ const RULES_TEXT = `讨伐 · 玩法说明
 
 .boss-more-button {
   align-self: flex-start;
+}
+
+.boss-risk-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.boss-risk-text {
+  margin: 0;
+  color: #c8d6ce;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.boss-risk-text b {
+  color: #e8664e;
+}
+
+.boss-risk-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.boss-risk-list li {
+  display: flex;
+  justify-content: space-between;
+  padding: 6px 10px;
+  border: 1px solid rgba(232, 102, 78, 0.35);
+  border-radius: 3px;
+  background: rgba(232, 102, 78, 0.08);
+  font-size: 13px;
+}
+
+.boss-risk-list li span {
+  color: #e8664e;
+}
+
+.boss-risk-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.boss-risk-actions .action-button {
+  flex: 1 1 0;
 }
 
 .boss-reward-title {

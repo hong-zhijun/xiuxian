@@ -3,6 +3,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 
 import type { DiscipleView } from '../api/game';
 import { isInjured, selectionBlockReason, severeInjuryStatusLabel } from '../utils/discipleFilter';
+import { severeRiskPercent } from '../utils/worldBossRisk';
 import DiscipleAvatar from './DiscipleAvatar.vue';
 
 /**
@@ -43,6 +44,8 @@ const props = withDefaults(
      * 只有讨伐会传；传了才在卡片状态栏显示「本小时 n/3」/「冒进 xx%」/「必重伤」。
      */
     fatigue?: Record<string, number>;
+    /** 当前关卡是「狂暴」词缀：冒进概率 ×2（只有讨伐会传）。 */
+    berserk?: boolean;
     /**
      * 0027 世界 Boss 二期：词缀推荐的额外排序属性 —— 在排序按钮里追加一个「xx ↓」按钮
      * （若已存在如「幸运 ↓」则不重复），不默认选中。
@@ -176,21 +179,13 @@ const fatigueById = computed(() => {
   return map;
 });
 
-/** 冒进受伤概率（基础概率按体魄减免后的整数百分比）。 */
-function fatigueProbability(base: number, physique: number): number {
-  const penalty = (Math.max(0, physique - 50) / 10) * 0.03;
-  return Math.round((base - penalty) * 100);
-}
-
 function fatigueStatusText(disciple: DiscipleView): { text: string; danger: boolean } | null {
   const count = props.fatigue?.[disciple.id] ?? 0;
   if (count <= 0) return null;
-  if (count >= 5) return { text: '必重伤', danger: true };
-  if (count === 4) {
-    return { text: `冒进 ${String(fatigueProbability(0.7, disciple.physique))}%`, danger: true };
-  }
-  if (count === 3) {
-    return { text: `冒进 ${String(fatigueProbability(0.3, disciple.physique))}%`, danger: true };
+  if (count >= 3) {
+    // 与二次确认弹窗同一个算法（含体魄减免与「狂暴」×2）
+    const risk = severeRiskPercent(count, disciple.physique, props.berserk === true);
+    return { text: risk >= 100 ? '必重伤' : `冒进 ${String(risk)}%`, danger: true };
   }
   return { text: `本小时 ${String(count)}/3`, danger: false };
 }
