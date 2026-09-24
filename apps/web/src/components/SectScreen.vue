@@ -574,6 +574,7 @@ function buildingGlyph(defId: string): string {
   if (defId === 'missionHall') return '矿';
   if (defId === 'scriptureLibrary') return '经';
   if (defId === 'arenaHall') return '武';
+  if (defId === 'forgeWorkshop') return '器';
   return '殿';
 }
 
@@ -1032,6 +1033,9 @@ function openEquipment(): void {
   void loadEquipment();
 }
 
+/** 资源栏：四种常规资源走通用卡片；玄铁（装备二期，无产速）单独一个窄格。 */
+const mainResources = computed(() => props.state.resources.filter((resource) => resource.id !== 'xuantie'));
+
 /** 打开背包（资源栏最右侧的「背包」格）。 */
 function openBag(): void {
   openPanel.value = 'bag';
@@ -1044,11 +1048,15 @@ onMounted(() => {
 });
 
 /** 炼器（POST /game/forge-equipment）：法器必须带主属性；成功后刷新背包与余额。 */
-async function onForgeEquipment(slot: EquipmentSlotId, mainAttr: EquipmentMainAttr | undefined): Promise<void> {
+async function onForgeEquipment(
+  slot: EquipmentSlotId,
+  mainAttr: EquipmentMainAttr | undefined,
+  quality?: string,
+): Promise<void> {
   if (props.busy || equipmentSubmitting.value) return;
   equipmentSubmitting.value = true;
   try {
-    const { state: next, outcome } = await forgeEquipment(slot, mainAttr);
+    const { state: next, outcome } = await forgeEquipment(slot, mainAttr, quality);
     handOffEquipmentState(next);
     await loadEquipment();
     emit('notify', 'success', `炼得 ${outcome.name}`, `${outcome.slotName} · 已放入背包。`);
@@ -1071,7 +1079,9 @@ async function onSalvageEquipment(equipmentIds: string[]): Promise<void> {
       'notify',
       'success',
       `分解 ${String(outcome.count)} 件装备`,
-      `返还矿石 ${formatAmount(outcome.ore)}。`,
+      outcome.xuantie > 0
+        ? `返还矿石 ${formatAmount(outcome.ore)}、玄铁 ${formatAmount(outcome.xuantie)}。`
+        : `返还矿石 ${formatAmount(outcome.ore)}。`,
     );
   } catch (caught) {
     emit('notify', 'error', '分解未成', caught instanceof Error ? caught.message : '无法分解，请稍后重试。');
@@ -1596,7 +1606,7 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
 
         <ul class="resource-grid">
           <li
-            v-for="resource in state.resources"
+            v-for="resource in mainResources"
             :key="resource.id"
             class="resource-card"
             :class="[
@@ -1619,6 +1629,13 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
             </div>
             <div class="resource-track" aria-hidden="true">
               <span :style="{ width: `${resourcePercent(resource.id, resource.capacity)}%` }" />
+            </div>
+          </li>
+          <li class="resource-card narrow-card">
+            <div class="resource-glyph" aria-hidden="true">铁</div>
+            <div class="resource-main">
+              <span class="resource-name">玄铁</span>
+              <strong>{{ formatAmount(liveResources.xuantie ?? 0) }}</strong>
             </div>
           </li>
           <li class="resource-card bag-card">

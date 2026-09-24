@@ -1729,6 +1729,17 @@ export interface EquipmentView {
   /** 一期只能炼的品质（凡品）。 */
   forgeQuality: string;
   forgeQualityName: string;
+  /** 装备二期：炼器坊等级（决定可炼的最高品质）。 */
+  workshopLevel: number;
+  /** 装备二期：各品质炼造选项（消耗为最小单位；unlocked = 炼器坊等级已够）。 */
+  forgeOptions: {
+    quality: string;
+    name: string;
+    color: string;
+    workshopLevel: number;
+    unlocked: boolean;
+    cost: Record<string, string>;
+  }[];
   slots: EquipmentSlotView[];
   /** 品质 id → 分解返还的矿石（**展示单位**，直接显示数字即可）。 */
   salvageOre: Record<string, number>;
@@ -1766,6 +1777,8 @@ export interface SalvageEquipmentOutcome {
   count: number;
   /** 返还的矿石（**最小单位**，用 formatAmount 显示）。 */
   ore: number;
+  /** 装备二期：返还的玄铁（最小单位）。 */
+  xuantie: number;
 }
 
 /** 0028 读取装备面板（GET /game/equipment）：只读，不结算；装备明细不放进 /game/sync。 */
@@ -1780,10 +1793,18 @@ export async function fetchEquipment(): Promise<{
 export async function forgeEquipment(
   slot: EquipmentSlotId,
   mainAttr?: EquipmentMainAttr,
+  quality?: string,
 ): Promise<{ state: SectStateView; outcome: ForgeEquipmentOutcome }> {
   return apiRequest<{ state: SectStateView; outcome: ForgeEquipmentOutcome }>(
     '/api/v1/game/forge-equipment',
-    { method: 'POST', body: mainAttr === undefined ? { slot } : { slot, mainAttr } },
+    {
+      method: 'POST',
+      body: {
+        slot,
+        ...(mainAttr === undefined ? {} : { mainAttr }),
+        ...(quality === undefined ? {} : { quality }),
+      },
+    },
   );
 }
 

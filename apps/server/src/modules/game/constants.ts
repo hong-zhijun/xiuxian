@@ -180,7 +180,7 @@ export const SECT_LEVELS: readonly SectLevelDef[] = [
     upgradeCost: { spiritStone: '200000', ore: '100000' },
     buildingRequirements: [{ defId: 'spiritualArray', minLevel: 2 }],
     discipleRequirements: [{ minRealmId: 'foundationEstablishment', count: 1 }],
-    unlockBuildings: ['scriptureLibrary'],
+    unlockBuildings: ['scriptureLibrary', 'forgeWorkshop'],
   },
   {
     level: 3,

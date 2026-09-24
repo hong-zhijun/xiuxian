@@ -81,10 +81,86 @@ export const EQUIPMENT_ATTR_NAMES: Readonly<Record<EquipmentAttr, string>> = {
 
 /** 炼器解锁：宗门等级下限（不需要建筑）。 */
 export const FORGE_UNLOCK_SECT_LEVEL = 2;
-/** 一期只能炼凡品，必定成功（品质不随机）。 */
+/** 默认炼器品质（炼器坊 1 级只能炼凡品）；炼器必定成功，品质由玩家选、不随机。 */
 export const FORGE_QUALITY: EquipmentQuality = 'common';
-/** 单次炼器的消耗（最小单位：矿石 150 + 灵石 80）。 */
-export const FORGE_COST: Readonly<Record<string, string>> = { ore: '150000', spiritStone: '80000' };
+
+/* ---------- 装备二期：玄铁 · 炼器坊 · 各品质炼造消耗 ---------- */
+
+/** 玄铁的资源 id（game-config 里的第五种资源）。 */
+export const XUANTIE_RESOURCE_ID = 'xuantie';
+/** 炼器坊的建筑 id。 */
+export const FORGE_WORKSHOP_ID = 'forgeWorkshop';
+
+/** 各品质单件炼造消耗（最小单位）与所需炼器坊等级。 */
+export const FORGE_RECIPES: readonly { quality: EquipmentQuality; workshopLevel: number; cost: Readonly<Record<string, string>> }[] = [
+  { quality: 'common', workshopLevel: 1, cost: { spiritStone: '80000', ore: '150000' } },
+  { quality: 'spirit', workshopLevel: 2, cost: { spiritStone: '250000', ore: '400000', xuantie: '3000' } },
+  { quality: 'treasure', workshopLevel: 3, cost: { spiritStone: '600000', ore: '1000000', xuantie: '10000' } },
+  { quality: 'immortal', workshopLevel: 4, cost: { spiritStone: '1500000', ore: '2500000', xuantie: '30000' } },
+];
+
+/** 兼容一期：凡品的消耗。 */
+export const FORGE_COST: Readonly<Record<string, string>> = FORGE_RECIPES[0]!.cost;
+
+export function forgeRecipeOf(quality: string) {
+  return FORGE_RECIPES.find((recipe) => recipe.quality === quality);
+}
+
+/** 炼器坊升级表：升到 level 需要的宗门等级与消耗（最小单位）。1 级随宗门 2 级自动获得。 */
+export const FORGE_WORKSHOP_UPGRADES: readonly { level: number; sectLevel: number; cost: Readonly<Record<string, string>> }[] = [
+  { level: 2, sectLevel: 3, cost: { spiritStone: '2000000', ore: '3000000', xuantie: '15000' } },
+  { level: 3, sectLevel: 5, cost: { spiritStone: '6000000', ore: '6000000', xuantie: '40000' } },
+  { level: 4, sectLevel: 7, cost: { spiritStone: '15000000', ore: '12000000', xuantie: '100000' } },
+];
+
+/** 从 currentLevel 升一级的条件；已满级返回 null。 */
+export function forgeWorkshopUpgradeFrom(currentLevel: number) {
+  return FORGE_WORKSHOP_UPGRADES.find((item) => item.level === currentLevel + 1) ?? null;
+}
+
+/** 分解返还玄铁（最小单位）：凡品 0 / 灵品 1 / 宝品 3 / 仙品 8。 */
+const SALVAGE_XUANTIE: Readonly<Record<EquipmentQuality, number>> = {
+  common: 0,
+  spirit: 1000,
+  treasure: 3000,
+  immortal: 8000,
+};
+
+export function salvageXuantieUnits(quality: EquipmentQuality): number {
+  return SALVAGE_XUANTIE[quality] ?? 0;
+}
+
+/** 世界 Boss 玄铁：对该关伤害占比 ≥ 15% 才有；按关卡给量，伤害第 1 名更多；击退减半（向下取整）。 */
+export const BOSS_XUANTIE_MIN_SHARE = 0.15;
+const BOSS_XUANTIE_BY_STAGE: readonly { base: number; top: number }[] = [
+  { base: 2, top: 3 },
+  { base: 3, top: 5 },
+  { base: 4, top: 6 },
+  { base: 6, top: 9 },
+  { base: 8, top: 12 },
+];
+
+/** 返回玄铁数量（展示单位整数；调用方 × 1000 入账）。 */
+export function bossXuantieFor(input: { stage: number; damageShare: number; isTop: boolean; repelled: boolean }): number {
+  if (input.damageShare < BOSS_XUANTIE_MIN_SHARE) return 0;
+  const row = BOSS_XUANTIE_BY_STAGE[Math.min(BOSS_XUANTIE_BY_STAGE.length, Math.max(1, Math.floor(input.stage))) - 1]!;
+  const amount = input.isTop ? row.top : row.base;
+  return input.repelled ? Math.floor(amount / 2) : amount;
+}
+
+/** 高级秘境探索成功时的玄铁掉落（只有这三个秘境）。 */
+export const REALM_XUANTIE_DROPS: Readonly<Record<string, { chance: number; min: number; max: number }>> = {
+  beastNest: { chance: 0.1, min: 1, max: 1 },
+  ancientRealm: { chance: 0.15, min: 1, max: 2 },
+  tribulationRuins: { chance: 0.2, min: 2, max: 3 },
+};
+
+/** 秘境玄铁掉落（展示单位整数，0 = 没掉）；random 注入便于测试。 */
+export function realmXuantieDrop(realmId: string, random: () => number): number {
+  const drop = REALM_XUANTIE_DROPS[realmId];
+  if (drop === undefined || random() >= drop.chance) return 0;
+  return drop.min + Math.min(drop.max - drop.min, Math.floor(random() * (drop.max - drop.min + 1)));
+}
 /** 背包上限 = 本宗门**未穿戴**装备的件数上限（穿在身上的不占背包）。 */
 export const BAG_CAPACITY = 50;
 /** 世界 Boss 掉落：非第 1 名参与者的掉落概率。 */

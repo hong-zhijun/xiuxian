@@ -151,8 +151,15 @@ import {
   BAG_CAPACITY,
   BOSS_DROP_CHANCE_OTHERS,
   EQUIPMENT_SLOTS,
-  FORGE_COST,
   FORGE_QUALITY,
+  FORGE_WORKSHOP_ID,
+  XUANTIE_RESOURCE_ID,
+  bossXuantieFor,
+  forgeRecipeOf,
+  forgeWorkshopUpgradeFrom,
+  qualityNameOf,
+  realmXuantieDrop,
+  salvageXuantieUnits,
   bagFullReason,
   bossDropQualities,
   forgeUnlockBlockedReason,
@@ -2344,7 +2351,15 @@ export async function upgradeBuilding(
     });
   }
 
-  const cost = upgradeCost(definition.upgradeCostPerLevel, building.level);
+  // 装备二期：炼器坊走分档表（宗门等级门槛 + 玄铁），其余建筑沿用线性升级消耗。
+  const workshopStep = defId === FORGE_WORKSHOP_ID ? forgeWorkshopUpgradeFrom(building.level) : null;
+  if (workshopStep !== null && Number(draft.sect.level) < workshopStep.sectLevel) {
+    throw new AppError(
+      'INVALID_STATUS',
+      `${definition.name}升到 ${String(workshopStep.level)} 级需要宗门 ${String(workshopStep.sectLevel)} 级`,
+    );
+  }
+  const cost = workshopStep !== null ? workshopStep.cost : upgradeCost(definition.upgradeCostPerLevel, building.level);
   for (const [resourceId, amount] of Object.entries(cost)) {
     draft.requireResource(resourceId, Number(amount));
   }
@@ -2846,6 +2861,7 @@ export async function expelDisciple(
   let bagCount = sectEquipment.filter((row) => row.disciple_id === null).length;
   let equipmentReturned = 0;
   let salvagedOre = 0;
+  let salvagedXuantie = 0;
   for (const item of wornItems) {
     if (bagCount < BAG_CAPACITY) {
       draft.addStatement(updateEquipmentHolderStatement(item.id, draft.sect.id, null));
@@ -2855,9 +2871,13 @@ export async function expelDisciple(
     }
     draft.addStatement(deleteEquipmentStatement(item.id, draft.sect.id));
     salvagedOre += isEquipmentQuality(item.quality) ? salvageOreUnits(item.quality) : 0;
+    salvagedXuantie += isEquipmentQuality(item.quality) ? salvageXuantieUnits(item.quality) : 0;
   }
   if (salvagedOre > 0) {
     draft.addResource('ore', salvagedOre);
+  }
+  if (salvagedXuantie > 0) {
+    draft.addResource(XUANTIE_RESOURCE_ID, salvagedXuantie);
   }
 
   // 阵容守卫必须用「读到的库值」：守卫是本批第一条语句，此时本批写入还没执行。
@@ -3156,6 +3176,17 @@ export async function exploreSectRealm(
           : row,
       );
       actualRewards[resourceId] = amount;
+    }
+    // 装备二期：高级秘境成功时低概率掉玄铁（与固定奖励同一批入账）。
+    const xuantie = realmXuantieDrop(realm.id, Math.random) * 1000;
+    if (xuantie > 0) {
+      draft.addStatement(resourceDeltaStatement(draft.sect.id, XUANTIE_RESOURCE_ID, xuantie, now));
+      draft.balances = draft.balances.map((row) =>
+        row.resource_id === XUANTIE_RESOURCE_ID
+          ? { ...row, balance: Number(row.balance) + xuantie, updated_at: now }
+          : row,
+      );
+      actualRewards[XUANTIE_RESOURCE_ID] = String(xuantie);
     }
   }
 
@@ -4651,6 +4682,8 @@ export interface EquipChangeOutcome {
 
 /** 分解回执。 */
 export interface SalvageEquipmentOutcome {
+  /** 装备二期：返还的玄铁（最小单位）。 */
+  xuantie: number;
   count: number;
   /** 返还的矿石（最小单位）。 */
   ore: number;
@@ -4715,9 +4748,22 @@ export async function forgeEquipment(
   slot: string,
   mainAttr: string | undefined,
   now: number,
+  quality: string = FORGE_QUALITY,
 ): Promise<{ state: SectStateView; outcome: ForgeEquipmentOutcome }> {
   const draft = await draftFor(db, userId, now);
   requireForgeUnlocked(draft);
+  // 装备二期：品质由玩家选（不随机），但不能超过炼器坊等级允许的品质。
+  const recipe = forgeRecipeOf(quality);
+  if (recipe === undefined) {
+    throw new AppError('VALIDATION_ERROR', '未知装备品质');
+  }
+  const workshopLevel = draft.buildings.find((row) => row.def_id === FORGE_WORKSHOP_ID)?.level ?? 1;
+  if (workshopLevel < recipe.workshopLevel) {
+    throw new AppError(
+      'INVALID_STATUS',
+      `炼${qualityNameOf(recipe.quality)}需要炼器坊 ${String(recipe.workshopLevel)} 级`,
+    );
+  }
   if (!isEquipmentSlot(slot)) {
     throw new AppError('VALIDATION_ERROR', '未知装备部位');
   }
@@ -4738,13 +4784,13 @@ export async function forgeEquipment(
   if (bagCount >= BAG_CAPACITY) {
     throw new AppError('INVALID_STATUS', bagFullReason(bagCount));
   }
-  for (const [resourceId, amount] of Object.entries(FORGE_COST)) {
+  for (const [resourceId, amount] of Object.entries(recipe.cost)) {
     draft.requireResource(resourceId, Number(amount));
   }
 
   const generated = generateEquipment({
     slot,
-    quality: FORGE_QUALITY,
+    quality: recipe.quality,
     mainAttr: resolvedMainAttr,
     random: Math.random,
   });
@@ -4773,7 +4819,7 @@ export async function forgeEquipment(
       slot: generated.slot,
       slotName: slotNameOf(generated.slot),
       quality: generated.quality,
-      cost: { ...FORGE_COST },
+      cost: { ...recipe.cost },
     },
   };
 }
@@ -4930,17 +4976,22 @@ export async function salvageEquipment(
   }
 
   let ore = 0;
+  let xuantie = 0;
   for (const row of chosen) {
     draft.addStatement(deleteBagEquipmentStatement(row.id, draft.sect.id));
     ore += isEquipmentQuality(row.quality) ? salvageOreUnits(row.quality) : 0;
+    xuantie += isEquipmentQuality(row.quality) ? salvageXuantieUnits(row.quality) : 0;
   }
   if (ore > 0) {
     draft.addResource('ore', ore);
   }
+  if (xuantie > 0) {
+    draft.addResource(XUANTIE_RESOURCE_ID, xuantie);
+  }
   await draft.commit({
     equipmentItems: chosen.map((row) => ({ id: row.id, discipleId: row.disciple_id })),
   });
-  return { state: draft.view(), outcome: { count: chosen.length, ore } };
+  return { state: draft.view(), outcome: { count: chosen.length, ore, xuantie } };
 }
 
 /**
@@ -4959,6 +5010,7 @@ export async function getEquipment(
     state: draft.view(),
     equipment: buildEquipmentView({
       sectLevel: Number(draft.sect.level),
+      workshopLevel: draft.buildings.find((row) => row.def_id === FORGE_WORKSHOP_ID)?.level ?? 1,
       items,
       bagCount,
       discipleNames,
@@ -6052,6 +6104,15 @@ export async function chooseRealmExplore(
     } else {
       usedIds = [...usedIds, next.id];
       nextEncounter = encounterJsonOf(next);
+    }
+  }
+
+  // 装备二期：高级秘境通关时低概率掉玄铁（只进本次发放，不写进中段账本）。
+  if (status === 'completed') {
+    const xuantie = realmXuantieDrop(realm.id, Math.random) * 1000;
+    if (xuantie > 0) {
+      payout = { ...payout, [XUANTIE_RESOURCE_ID]: (payout[XUANTIE_RESOURCE_ID] ?? 0) + xuantie };
+      finalRewards = payout;
     }
   }
 
@@ -7992,7 +8053,18 @@ async function rewardWorldBoss(
       ratesById.set(sectId, resourceRatesOfSect({ config, disciples, buildings, journeys, now }));
     }
 
-    participants.forEach(([sectId], index) => {
+    const totalDamage = participants.reduce((sum, [, info]) => sum + info.damage, 0);
+    participants.forEach(([sectId, info], index) => {
+      // 装备二期：玄铁只给对本关伤害占比 ≥15% 的宗门（蹭一刀拿不到）；第 1 名更多，击退减半。
+      const xuantie = bossXuantieFor({
+        stage,
+        damageShare: totalDamage > 0 ? info.damage / totalDamage : 0,
+        isTop: index === 0,
+        repelled,
+      });
+      if (xuantie > 0) {
+        statements.push(resourceDeltaStatement(sectId, XUANTIE_RESOURCE_ID, xuantie * 1000, now));
+      }
       const rewards = stageResourceRewards({
         rates: ratesRecordOf(ratesById.get(sectId) ?? new Map()),
         sectLevel: levelById.get(sectId) ?? 1,
@@ -8065,6 +8137,9 @@ async function rewardWorldBoss(
         }
         if (bagUsed >= BAG_CAPACITY) {
           statements.push(resourceDeltaStatement(sectId, 'ore', salvageOreUnits(quality), now));
+          if (salvageXuantieUnits(quality) > 0) {
+            statements.push(resourceDeltaStatement(sectId, XUANTIE_RESOURCE_ID, salvageXuantieUnits(quality), now));
+          }
           continue;
         }
         bagUsedBySect.set(sectId, bagUsed + 1);

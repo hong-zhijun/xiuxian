@@ -329,7 +329,7 @@ export function createGameRoutes(): Hono<AppEnv> {
   routes.post('/game/forge-equipment', async (c) => {
     const userId = requireUserId(c);
     const body = await parseStrictJson(forgeEquipmentRequestSchema, c);
-    const result = await forgeEquipment(getDb(c.env), userId, body.slot, body.mainAttr, Date.now());
+    const result = await forgeEquipment(getDb(c.env), userId, body.slot, body.mainAttr, Date.now(), body.quality);
     return respondOk(c, { state: result.state, outcome: result.outcome });
   });
 

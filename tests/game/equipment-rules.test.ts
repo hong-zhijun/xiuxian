@@ -31,6 +31,11 @@ import {
   withGear,
   type EquipmentAttr,
   type EquipmentQuality,
+  bossXuantieFor,
+  forgeRecipeOf,
+  forgeWorkshopUpgradeFrom,
+  realmXuantieDrop,
+  salvageXuantieUnits,
 } from '../../apps/server/src/modules/game/equipment';
 
 /** 依次吐出给定随机值（用完之后固定 0.5），与其它规则测试同一写法。 */
@@ -227,5 +232,33 @@ describe('装备规则 · 分解与加成', () => {
       gear_attack: 0, gear_defense: 0, gear_speed: 0, gear_luck: 0, gear_physique: 0,
     });
     expect(withGear(base, none)).toEqual(base);
+  });
+});
+
+describe('装备二期：玄铁 · 炼器坊', () => {
+  it('世界 Boss 玄铁：占比 <15% 没有；按关卡给量，第 1 名更多；击退减半向下取整', () => {
+    expect(bossXuantieFor({ stage: 1, damageShare: 0.14, isTop: false, repelled: false })).toBe(0);
+    expect(bossXuantieFor({ stage: 1, damageShare: 0.15, isTop: false, repelled: false })).toBe(2);
+    expect(bossXuantieFor({ stage: 1, damageShare: 0.5, isTop: true, repelled: false })).toBe(3);
+    expect(bossXuantieFor({ stage: 4, damageShare: 0.3, isTop: false, repelled: false })).toBe(6);
+    expect(bossXuantieFor({ stage: 9, damageShare: 0.3, isTop: true, repelled: false })).toBe(12);
+    expect(bossXuantieFor({ stage: 2, damageShare: 0.3, isTop: true, repelled: true })).toBe(2);
+  });
+
+  it('秘境玄铁：只有三个高级秘境会掉，概率与数量按表', () => {
+    expect(realmXuantieDrop('mistyForest', () => 0)).toBe(0);
+    expect(realmXuantieDrop('beastNest', () => 0.09)).toBe(1);
+    expect(realmXuantieDrop('beastNest', () => 0.1)).toBe(0);
+    expect(realmXuantieDrop('tribulationRuins', () => 0)).toBe(2);
+    expect(realmXuantieDrop('tribulationRuins', sequence([0.1, 0.99]))).toBe(3);
+  });
+
+  it('炼器坊升级表与各品质配方、分解返还玄铁', () => {
+    expect(forgeWorkshopUpgradeFrom(1)).toMatchObject({ level: 2, sectLevel: 3, cost: { xuantie: '15000' } });
+    expect(forgeWorkshopUpgradeFrom(3)).toMatchObject({ level: 4, sectLevel: 7, cost: { xuantie: '100000' } });
+    expect(forgeWorkshopUpgradeFrom(4)).toBeNull();
+    expect(forgeRecipeOf('immortal')).toMatchObject({ workshopLevel: 4, cost: { xuantie: '30000' } });
+    expect(salvageXuantieUnits('common')).toBe(0);
+    expect(salvageXuantieUnits('immortal')).toBe(8000);
   });
 });

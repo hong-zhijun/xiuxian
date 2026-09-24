@@ -69,6 +69,9 @@ import {
   EQUIPMENT_SLOTS,
   FORGE_COST,
   FORGE_QUALITY,
+  FORGE_RECIPES,
+  FORGE_WORKSHOP_ID,
+  forgeWorkshopUpgradeFrom,
   attrNameOf,
   forgeUnlockBlockedReason,
   gearBonusOfDisciple,
@@ -340,9 +343,20 @@ export interface EquipmentView {
   bagCapacity: number;
   /** 单次炼器消耗（最小单位）。 */
   forgeCost: Record<string, string>;
-  /** 一期只能炼的品质（凡品）。 */
+  /** 默认品质（凡品）。 */
   forgeQuality: string;
   forgeQualityName: string;
+  /** 装备二期：炼器坊等级（决定可炼的最高品质）。 */
+  workshopLevel: number;
+  /** 装备二期：各品质的炼造选项（消耗为最小单位；unlocked = 炼器坊等级已够）。 */
+  forgeOptions: {
+    quality: string;
+    name: string;
+    color: string;
+    workshopLevel: number;
+    unlocked: boolean;
+    cost: Record<string, string>;
+  }[];
   /** 可炼部位；法器的 mainAttrChoices 非空（玩家必须选身法或幸运）。 */
   slots: {
     id: string;
@@ -380,6 +394,7 @@ export function equipmentItemViewOf(row: EquipmentRow, discipleName: string | nu
 
 export function buildEquipmentView(input: {
   sectLevel: number;
+  workshopLevel: number;
   items: readonly EquipmentRow[];
   bagCount: number;
   discipleNames: ReadonlyMap<string, string>;
@@ -392,6 +407,15 @@ export function buildEquipmentView(input: {
     forgeCost: { ...FORGE_COST },
     forgeQuality: FORGE_QUALITY,
     forgeQualityName: qualityNameOf(FORGE_QUALITY),
+    workshopLevel: input.workshopLevel,
+    forgeOptions: FORGE_RECIPES.map((recipe) => ({
+      quality: recipe.quality,
+      name: qualityNameOf(recipe.quality),
+      color: qualityColorOf(recipe.quality),
+      workshopLevel: recipe.workshopLevel,
+      unlocked: input.workshopLevel >= recipe.workshopLevel,
+      cost: { ...recipe.cost },
+    })),
     slots: EQUIPMENT_SLOTS.map((slot) => ({
       id: slot.id,
       name: slot.name,
@@ -1649,7 +1673,20 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
       };
     }
 
-    const cost = upgradeCost(definition.upgradeCostPerLevel, building.level);
+    // 装备二期：炼器坊走分档表（宗门等级门槛 + 玄铁）。
+    const workshopStep = building.def_id === FORGE_WORKSHOP_ID ? forgeWorkshopUpgradeFrom(building.level) : null;
+    const cost = workshopStep !== null ? { ...workshopStep.cost } : upgradeCost(definition.upgradeCostPerLevel, building.level);
+    if (workshopStep !== null && Number(sect.level) < workshopStep.sectLevel) {
+      return {
+        defId: building.def_id,
+        name: definition.name,
+        level: building.level,
+        maxLevel,
+        upgradeCost: cost,
+        canUpgrade: false,
+        blockedReason: `需要宗门 ${String(workshopStep.sectLevel)} 级`,
+      };
+    }
     const lacking = Object.entries(cost).find(
       ([resourceId, amount]) => (balancesByResource.get(resourceId) ?? 0) < Number(amount),
     );

@@ -122,6 +122,8 @@ export const usePillRequestSchema = z.strictObject({
 export const forgeEquipmentRequestSchema = z.strictObject({
   slot: z.string().min(1).max(16),
   mainAttr: z.string().min(1).max(16).optional(),
+  /** 装备二期：品质（common / spirit / treasure / immortal）；不传 = 凡品。 */
+  quality: z.string().min(1).max(16).optional(),
 });
 
 /** 0028 装备：穿戴（归属与状态由 service 校验）。 */

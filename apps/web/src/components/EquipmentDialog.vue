@@ -22,8 +22,8 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-  /** 炼器：法器必须带 mainAttr（speed / luck），其他部位传 undefined。 */
-  forge: [slot: EquipmentSlotId, mainAttr: EquipmentMainAttr | undefined];
+  /** 炼器：法器必须带 mainAttr（speed / luck），其他部位传 undefined；quality 为所选品质。 */
+  forge: [slot: EquipmentSlotId, mainAttr: EquipmentMainAttr | undefined, quality: string];
 }>();
 
 /* ---------- 台账：余额、背包容量（名字与数值都取自服务端） ---------- */
@@ -74,16 +74,27 @@ function selectSlot(slot: EquipmentSlotView): void {
   forgeSlot.value = slot.id;
 }
 
+/* 装备二期：品质由玩家选；默认选当前炼器坊能炼的最高品质。 */
+const forgeQuality = ref<string>(
+  [...props.equipment.forgeOptions].reverse().find((option) => option.unlocked)?.quality ?? 'common',
+);
+
+const currentOption = computed(
+  () => props.equipment.forgeOptions.find((option) => option.quality === forgeQuality.value) ?? null,
+);
+
+const currentCost = computed<Record<string, string>>(() => currentOption.value?.cost ?? props.equipment.forgeCost);
+
 /** 单次消耗（最小单位 → 展示单位）。 */
 const forgeCostText = computed(() =>
-  Object.entries(props.equipment.forgeCost)
+  Object.entries(currentCost.value)
     .map(([resourceId, amount]) => `${resourceName(resourceId)} ${formatAmount(amount)}`)
     .join(' · '),
 );
 
 /** 按当前余额还差哪几样（只用于提前置灰；最终裁决在服务端）。 */
 const forgeMissing = computed(() =>
-  Object.entries(props.equipment.forgeCost)
+  Object.entries(currentCost.value)
     .filter(([resourceId, amount]) => resourceBalance(resourceId) < Number(amount))
     .map(([resourceId]) => resourceName(resourceId)),
 );
@@ -99,7 +110,12 @@ const forgeHint = computed<string | null>(() => {
 });
 
 const canForge = computed(
-  () => props.equipment.unlocked && !bagFull.value && forgeMissing.value.length === 0 && !props.busy,
+  () =>
+    props.equipment.unlocked &&
+    (currentOption.value?.unlocked ?? true) &&
+    !bagFull.value &&
+    forgeMissing.value.length === 0 &&
+    !props.busy,
 );
 
 function onForge(): void {
@@ -107,7 +123,7 @@ function onForge(): void {
   const slot = currentSlot.value;
   // 有主属性候选（法器）时必须选一个；其余部位不能带 mainAttr（服务端严格校验）。
   const hasChoices = (slot?.mainAttrChoices.length ?? 0) > 0;
-  emit('forge', forgeSlot.value, hasChoices ? (forgeMainAttr.value ?? undefined) : undefined);
+  emit('forge', forgeSlot.value, hasChoices ? (forgeMainAttr.value ?? undefined) : undefined, forgeQuality.value);
 }
 
 </script>
@@ -116,7 +132,7 @@ function onForge(): void {
   <section class="equipment-panel" aria-labelledby="equipment-title">
     <header class="section-heading panel-heading compact-heading">
       <h2 id="equipment-title">炼器</h2>
-      <span class="count-badge">背包 {{ bagCount }}/{{ bagCapacity }}</span>
+      <span class="count-badge">炼器坊 {{ equipment.workshopLevel }} 级 · 背包 {{ bagCount }}/{{ bagCapacity }}</span>
     </header>
 
     <p v-if="!equipment.unlocked" class="blocked-hint">
@@ -124,7 +140,24 @@ function onForge(): void {
     </p>
 
     <template v-else>
-      <p class="eyebrow">选择部位</p>
+      <p class="eyebrow">选择品质</p>
+      <div class="equipment-choices" role="group" aria-label="炼器品质">
+        <button
+          v-for="option in equipment.forgeOptions"
+          :key="option.quality"
+          class="equipment-choice"
+          :class="{ 'is-selected': forgeQuality === option.quality }"
+          type="button"
+          :disabled="busy || !option.unlocked"
+          :aria-pressed="forgeQuality === option.quality"
+          @click="forgeQuality = option.quality"
+        >
+          <strong :style="option.unlocked ? { color: option.color } : undefined">{{ option.name }}</strong>
+          <small v-if="!option.unlocked">炼器坊 {{ option.workshopLevel }} 级</small>
+        </button>
+      </div>
+
+      <p class="eyebrow equipment-row-label">选择部位</p>
       <div class="equipment-choices" role="group" aria-label="炼器部位">
         <button
           v-for="slot in equipment.slots"
@@ -160,16 +193,16 @@ function onForge(): void {
 
       <dl class="equipment-facts">
         <div>
-          <dt>品质</dt>
-          <dd>{{ equipment.forgeQualityName }}</dd>
-        </div>
-        <div>
           <dt>单次消耗</dt>
           <dd>{{ forgeCostText }}</dd>
         </div>
         <div>
           <dt>现有{{ oreName }}</dt>
           <dd>{{ formatAmount(resourceBalance('ore')) }}</dd>
+        </div>
+        <div v-if="currentCost.xuantie !== undefined">
+          <dt>现有玄铁</dt>
+          <dd>{{ formatAmount(resourceBalance('xuantie')) }}</dd>
         </div>
         <div>
           <dt>现有灵石</dt>

@@ -7,6 +7,7 @@ const RESOURCE_GLYPHS: Record<string, string> = {
   spiritualEnergy: '炁',
   herb: '药',
   ore: '矿',
+  xuantie: '铁',
 };
 
 /** 资源 id → 单字标记。 */

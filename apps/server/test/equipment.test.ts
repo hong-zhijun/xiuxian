@@ -17,6 +17,7 @@ import {
   salvageEquipment,
   sparWithSect,
   unequipItem,
+  upgradeBuilding,
 } from '../src/modules/game/service';
 import { dataOf, TestClient } from './support/authClient';
 /**
@@ -1143,5 +1144,49 @@ describe('复核修复回归：守卫分片 / 内存回写 / 秘境与切磋战�
         view.talent,
       ),
     );
+  });
+});
+
+describe('装备二期：炼器坊 · 玄铁', () => {
+  async function addWorkshop(sectId: string, level: number): Promise<void> {
+    await env.DB.prepare(
+      'INSERT INTO buildings (id, sect_id, def_id, level, created_at) VALUES (?, ?, ?, ?, ?)',
+    )
+      .bind(crypto.randomUUID(), sectId, 'forgeWorkshop', level, Date.now())
+      .run();
+  }
+
+  it('炼器坊 1 级炼不了灵品；宗门等级不够不能升级；升到 2 级后可炼灵品并扣玄铁', async () => {
+    const { fixture, now } = await frozenSect('eq-v2-forge');
+    await addWorkshop(fixture.sectId, 1);
+    await setBalance(fixture.sectId, 'xuantie', 50_000);
+
+    await expect(forgeEquipment(env.DB, fixture.userId, 'weapon', undefined, now, 'spirit')).rejects.toMatchObject({
+      code: 'INVALID_STATUS',
+    });
+    // 宗门 2 级：升炼器坊 2 级需要宗门 3 级
+    await expect(upgradeBuilding(env.DB, fixture.userId, 'forgeWorkshop', now)).rejects.toMatchObject({
+      code: 'INVALID_STATUS',
+    });
+
+    await setSectLevel(fixture.sectId, 3);
+    await upgradeBuilding(env.DB, fixture.userId, 'forgeWorkshop', now);
+    expect(await balanceOf(fixture.sectId, 'xuantie')).toBe(35_000);
+
+    const forged = await forgeEquipment(env.DB, fixture.userId, 'weapon', undefined, now, 'spirit');
+    expect(forged.outcome.quality).toBe('spirit');
+    expect(await balanceOf(fixture.sectId, 'xuantie')).toBe(32_000);
+    const panel = await getEquipment(env.DB, fixture.userId, now);
+    expect(panel.equipment.workshopLevel).toBe(2);
+    expect(panel.equipment.forgeOptions.map((option) => option.unlocked)).toEqual([true, true, false, false]);
+  });
+
+  it('分解灵品返还玄铁', async () => {
+    const { fixture, now } = await frozenSect('eq-v2-salvage');
+    await setBalance(fixture.sectId, 'xuantie', 0);
+    const itemId = await insertEquipment(fixture.sectId, { quality: 'spirit' });
+    const result = await salvageEquipment(env.DB, fixture.userId, [itemId], now);
+    expect(result.outcome.xuantie).toBe(1000);
+    expect(await balanceOf(fixture.sectId, 'xuantie')).toBe(1000);
   });
 });

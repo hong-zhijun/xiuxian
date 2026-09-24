@@ -1415,10 +1415,15 @@ ul {
 
 .resource-grid {
   display: grid;
-  /* 四种资源 + 最右侧较窄的「背包」格 */
-  grid-template-columns: repeat(4, minmax(0, 1fr)) minmax(96px, 0.6fr);
+  /* 四种资源 + 较窄的「玄铁」「背包」两格 */
+  grid-template-columns: repeat(4, minmax(0, 1fr)) minmax(88px, 0.5fr) minmax(96px, 0.6fr);
   border-top: 1px solid var(--line);
   border-bottom: 1px solid var(--line);
+}
+
+/* 窄格（玄铁）：只有图标 + 名称数量，没有产速列 */
+.resource-card.narrow-card {
+  grid-template-columns: 32px minmax(0, 1fr);
 }
 
 /* 背包格：外层 li 不再用资源格的三列网格，否则按钮会被挤进 32px 的图标列 */
@@ -5954,10 +5959,6 @@ h2.public-sect-name {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  /* 窄屏两列时「背包」格独占最后一行 */
-  .bag-card {
-    grid-column: 1 / -1;
-  }
 
   .resource-card:nth-child(odd) {
     border-left: 0;
@@ -6262,10 +6263,6 @@ h2.public-sect-name {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  /* 窄屏两列时「背包」格独占最后一行 */
-  .bag-card {
-    grid-column: 1 / -1;
-  }
 
   .resource-card {
     min-height: 83px;
