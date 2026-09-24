@@ -2328,3 +2328,298 @@ export function settleRaceRoundStatement(roundId: string, winnerIndex: number, n
     params: [winnerIndex, now, roundId],
   };
 }
+
+/* ---------- 0025 世界 Boss（讨伐） ---------- */
+
+export interface WorldBossRow {
+  id: string;
+  /** UTC+8 日期键 'YYYY-MM-DD'；一天一只。 */
+  day_key: string;
+  /** 五只轮换 Boss 的下标（0~4）。 */
+  boss_index: number;
+  /** 1~5。 */
+  level: number;
+  max_hp: number;
+  hp: number;
+  /** 'active' | 'killed' | 'fled'。 */
+  status: string;
+  /** 最后一击的宗门 id；未击杀为 null。 */
+  killer_sect_id: string | null;
+  /** 是否已广播过「血量不足一半」（0/1）。 */
+  half_announced: number;
+  /** 奖励发放完成时间；NULL = 未发。 */
+  rewarded_at: number | null;
+  created_at: number;
+  ended_at: number | null;
+}
+
+export interface WorldBossHitRow {
+  id: string;
+  boss_id: string;
+  sect_id: string;
+  /** 冗余的宗门名（榜单与出手记录不用再 JOIN sects）。 */
+  sect_name: string;
+  /** 1~3，本宗门当天第几次出手。 */
+  attempt_no: number;
+  /** 出战弟子名的 JSON 数组。 */
+  disciple_names: string;
+  /** 实际扣血。 */
+  damage: number;
+  is_crit: number;
+  is_last_hit: number;
+  created_at: number;
+}
+
+/** 今日伤害榜的一行（按宗门汇总）。 */
+export interface WorldBossSectDamageRow {
+  sect_id: string;
+  sect_name: string;
+  damage: number;
+  attempts: number;
+  /** 该宗门第一次出手的时间；并列时「先达到者」靠它排序。 */
+  first_at: number;
+  last_hit: number;
+}
+
+/** 历史最强一击（带 Boss 信息，用于展示名字）。 */
+export interface WorldBossTopHitRow extends WorldBossHitRow {
+  day_key: string;
+  level: number;
+  boss_index: number;
+}
+
+export class WorldBossRepository extends ParamRepository {
+  async findById(bossId: string): Promise<WorldBossRow | null> {
+    return this.one<WorldBossRow>({
+      sql: 'SELECT * FROM world_bosses WHERE id = ?',
+      params: [bossId],
+    });
+  }
+
+  async findByDayKey(dayKey: string): Promise<WorldBossRow | null> {
+    return this.one<WorldBossRow>({
+      sql: 'SELECT * FROM world_bosses WHERE day_key = ?',
+      params: [dayKey],
+    });
+  }
+
+  /** 今天之前最近的一条记录（用来决定今天的等级）。 */
+  async findLatestBefore(dayKey: string): Promise<WorldBossRow | null> {
+    return this.one<WorldBossRow>({
+      sql: 'SELECT * FROM world_bosses WHERE day_key < ? ORDER BY day_key DESC LIMIT 1',
+      params: [dayKey],
+    });
+  }
+
+  /** 仍是 active 的 Boss（正常最多一条；Cron 漏跑时会留下隔夜的残留）。 */
+  async findActiveBosses(): Promise<WorldBossRow[]> {
+    return this.all<WorldBossRow>({
+      sql: "SELECT * FROM world_bosses WHERE status = 'active' ORDER BY day_key ASC",
+      params: [],
+    });
+  }
+
+  /** 已结束但还没发奖的 Boss（Cron 发奖用）。 */
+  async findUnrewardedEnded(): Promise<WorldBossRow[]> {
+    return this.all<WorldBossRow>({
+      sql: "SELECT * FROM world_bosses WHERE status IN ('killed', 'fled') AND rewarded_at IS NULL ORDER BY day_key ASC",
+      params: [],
+    });
+  }
+
+  /** 活跃宗门（血量估算用）：last_settled_at 在阈值之后的宗门。 */
+  async activeSectsSince(thresholdMs: number): Promise<{ id: string; name: string; level: number }[]> {
+    return this.all<{ id: string; name: string; level: number }>({
+      sql: 'SELECT id, name, level FROM sects WHERE last_settled_at >= ? ORDER BY id',
+      params: [thresholdMs],
+    });
+  }
+
+  /** 参与宗门的等级/名字（发奖按各自产出计算时用）。 */
+  async sectsByIds(sectIds: readonly string[]): Promise<{ id: string; name: string; level: number }[]> {
+    if (sectIds.length === 0) return [];
+    const placeholders = sectIds.map(() => '?').join(', ');
+    return this.all<{ id: string; name: string; level: number }>({
+      sql: `SELECT id, name, level FROM sects WHERE id IN (${placeholders})`,
+      params: [...sectIds],
+    });
+  }
+
+  /** 本宗门今天已出手次数（UNIQUE(boss_id, sect_id, attempt_no) 保证它等于最大 attempt_no）。 */
+  async countAttempts(bossId: string, sectId: string): Promise<number> {
+    const row = await this.one<{ used: number }>({
+      sql: 'SELECT COUNT(*) AS used FROM world_boss_hits WHERE boss_id = ? AND sect_id = ?',
+      params: [bossId, sectId],
+    });
+    return Number(row?.used ?? 0);
+  }
+
+  /** 某只 Boss 的全部出手记录（发奖按宗门汇总用）。 */
+  async hitsByBoss(bossId: string): Promise<WorldBossHitRow[]> {
+    return this.all<WorldBossHitRow>({
+      sql: 'SELECT * FROM world_boss_hits WHERE boss_id = ? ORDER BY created_at ASC, attempt_no ASC',
+      params: [bossId],
+    });
+  }
+
+  /** 出手记录（新的在前）。 */
+  async recentHitsByBoss(bossId: string, limit: number): Promise<WorldBossHitRow[]> {
+    return this.all<WorldBossHitRow>({
+      sql: 'SELECT * FROM world_boss_hits WHERE boss_id = ? ORDER BY created_at DESC, attempt_no DESC LIMIT ?',
+      params: [bossId, limit],
+    });
+  }
+
+  /** 今日伤害榜：按宗门汇总，伤害高的在前，并列取先达到者。 */
+  async sectDamageRows(bossId: string): Promise<WorldBossSectDamageRow[]> {
+    return this.all<WorldBossSectDamageRow>({
+      sql: `SELECT sect_id,
+                   MAX(sect_name) AS sect_name,
+                   SUM(damage) AS damage,
+                   COUNT(*) AS attempts,
+                   MIN(created_at) AS first_at,
+                   MAX(CASE WHEN is_last_hit = 1 THEN 1 ELSE 0 END) AS last_hit
+              FROM world_boss_hits
+             WHERE boss_id = ?
+             GROUP BY sect_id
+             ORDER BY damage DESC, first_at ASC`,
+      params: [bossId],
+    });
+  }
+
+  /** 历史最强一击（全表）。 */
+  async topHit(): Promise<WorldBossTopHitRow | null> {
+    return this.one<WorldBossTopHitRow>({
+      sql: `SELECT h.*, b.day_key, b.level, b.boss_index
+              FROM world_boss_hits h
+              JOIN world_bosses b ON b.id = h.boss_id
+             ORDER BY h.damage DESC, h.created_at ASC
+             LIMIT 1`,
+      params: [],
+    });
+  }
+
+  /** 出现：day_key 唯一，已有则什么都不做；返回是否真的插入了（据此决定要不要广播）。 */
+  async insertBossIfAbsent(row: {
+    id: string;
+    dayKey: string;
+    bossIndex: number;
+    level: number;
+    maxHp: number;
+    now: number;
+  }): Promise<boolean> {
+    const result = await this.execute({
+      sql: `INSERT INTO world_bosses (id, day_key, boss_index, level, max_hp, hp, status, half_announced, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, 'active', 0, ?)
+            ON CONFLICT (day_key) DO NOTHING`,
+      params: [row.id, row.dayKey, row.bossIndex, row.level, row.maxHp, row.maxHp, row.now],
+    });
+    return Number(result.meta.changes) > 0;
+  }
+
+  /** 单条写入（出现 / 逃走 / 半血标记 / 最后一击标记）：与 ChatMessageRepository 同一处理。 */
+  override async execute(query: ParameterizedQuery): Promise<D1Result> {
+    return super.execute(query);
+  }
+}
+
+/**
+ * 出手扣血（一次条件 UPDATE，原子性由数据库保证）：
+ * `WHERE status = 'active'` 让结束后的并发提交变成空操作；SET 里的表达式一律用**更新前**的
+ * 行值求值，所以 `hp - ?` 就是「扣血前的血量」，最后一击/结束时间都由它判定。
+ */
+export function updateWorldBossHpStatement(
+  bossId: string,
+  damage: number,
+  sectId: string,
+  now: number,
+): ParameterizedQuery {
+  return {
+    sql: `UPDATE world_bosses
+             SET hp = MAX(0, hp - ?),
+                 status = CASE WHEN hp - ? <= 0 THEN 'killed' ELSE status END,
+                 killer_sect_id = CASE WHEN hp - ? <= 0 AND killer_sect_id IS NULL THEN ? ELSE killer_sect_id END,
+                 ended_at = CASE WHEN hp - ? <= 0 THEN ? ELSE ended_at END
+           WHERE id = ? AND status = 'active'`,
+    params: [damage, damage, damage, sectId, damage, now, bossId],
+  };
+}
+
+export function insertWorldBossHitStatement(row: {
+  id: string;
+  bossId: string;
+  sectId: string;
+  sectName: string;
+  attemptNo: number;
+  discipleNames: string;
+  damage: number;
+  isCrit: boolean;
+  now: number;
+}): ParameterizedQuery {
+  return {
+    sql: `INSERT INTO world_boss_hits
+            (id, boss_id, sect_id, sect_name, attempt_no, disciple_names, damage, is_crit, is_last_hit, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`,
+    params: [
+      row.id,
+      row.bossId,
+      row.sectId,
+      row.sectName,
+      row.attemptNo,
+      row.discipleNames,
+      row.damage,
+      row.isCrit ? 1 : 0,
+      row.now,
+    ],
+  };
+}
+
+/** 血量首次跌破一半的广播标记（条件更新：并发下只有一个请求抢到）。 */
+export function markWorldBossHalfAnnouncedStatement(bossId: string): ParameterizedQuery {
+  return {
+    sql: 'UPDATE world_bosses SET half_announced = 1 WHERE id = ? AND half_announced = 0',
+    params: [bossId],
+  };
+}
+
+export function markWorldBossHitLastHitStatement(hitId: string): ParameterizedQuery {
+  return {
+    sql: 'UPDATE world_boss_hits SET is_last_hit = 1 WHERE id = ?',
+    params: [hitId],
+  };
+}
+
+/** 逃走（23:00 窗口结束仍未击杀）；只对仍 active 的行生效。 */
+export function markWorldBossFledStatement(bossId: string, now: number): ParameterizedQuery {
+  return {
+    sql: "UPDATE world_bosses SET status = 'fled', ended_at = ? WHERE id = ? AND status = 'active'",
+    params: [now, bossId],
+  };
+}
+
+/** 发奖完成标记：条件更新 `rewarded_at IS NULL`，与写奖语句同批提交 → 只会发一次。 */
+export function markWorldBossRewardedStatement(bossId: string, now: number): ParameterizedQuery {
+  return {
+    sql: 'UPDATE world_bosses SET rewarded_at = ? WHERE id = ? AND rewarded_at IS NULL',
+    params: [now, bossId],
+  };
+}
+
+/**
+ * 丹药库存的**增量** upsert（0025）：与 upsertPillInventoryStatement 的绝对值写回不同，
+ * 它可以在 Cron 里一次给多个宗门加同一味丹药，并且并发时不会互相覆盖。
+ */
+export function incrementPillInventoryStatement(
+  sectId: string,
+  pillId: string,
+  delta: number,
+  now: number,
+): ParameterizedQuery {
+  return {
+    sql: `INSERT INTO pill_inventories (id, sect_id, pill_id, quantity, updated_at)
+          VALUES (?, ?, ?, ?, ?)
+          ON CONFLICT (sect_id, pill_id)
+          DO UPDATE SET quantity = quantity + excluded.quantity, updated_at = excluded.updated_at`,
+    params: [crypto.randomUUID(), sectId, pillId, delta, now],
+  };
+}

@@ -50,6 +50,7 @@ import DiscipleLeaderboardPanel from './DiscipleLeaderboardPanel.vue';
 import LeaderboardPanel from './LeaderboardPanel.vue';
 import RecruitDialog from './RecruitDialog.vue';
 import ShopDialog from './ShopDialog.vue';
+import WorldBossDialog from './WorldBossDialog.vue';
 import ModalShell from './ModalShell.vue';
 
 /**
@@ -125,7 +126,7 @@ const emit = defineEmits<{
   wheelReset: [];
 }>();
 
-/** 操作条里的弹窗开关：天机录 / 秘境探索 / 江湖榜 / 守擂阵容 / 演武录 / 炼丹 / 赌坊 / 坊市（宗门晋升与建筑仍在右栏常驻）。 */
+/** 操作条里的弹窗开关：天机录 / 秘境探索 / 讨伐 / 江湖榜 / 守擂阵容 / 演武录 / 炼丹 / 赌坊 / 坊市（宗门晋升与建筑仍在右栏常驻）。 */
 const openPanel = ref<
   | 'events'
   | 'explore'
@@ -136,6 +137,7 @@ const openPanel = ref<
   | 'alchemy'
   | 'gambling'
   | 'shop'
+  | 'world-boss'
   | null
 >(null);
 
@@ -900,6 +902,11 @@ function onRaceNotify(tone: 'success' | 'warning', title: string, message: strin
   emit('notify', tone, title, message);
 }
 
+/** 0025 讨伐结果提示：由子组件直接 emit，SectScreen 只转发（与 onRaceNotify 同一处理）。 */
+function onWorldBossNotify(tone: 'success' | 'warning', title: string, message: string): void {
+  emit('notify', tone, title, message);
+}
+
 /**
  * 关掉赌坊弹窗：结果由 App.vue 保留，下次打开仍是干净的玩法列表。
  * 但玩家可能在对峙阶段（或天机轮转动 / 灵兽竞逐中）直接按 Esc / 点右上角 X —— 那时账其实已经结算了，
@@ -1398,6 +1405,19 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
         </svg>
         <span>秘境探索</span>
       </button>
+      <button
+        class="action-chip"
+        type="button"
+        aria-label="讨伐：全服共讨妖王"
+        title="每日 12:00 妖王降临，全服共讨（每宗每日 3 次）"
+        @click="openPanel = 'world-boss'"
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M14.5 3.2 20.8 9.5 9.6 20.7 3.3 21l.3-6.3L14.5 3.2Zm-8.6 12.5 3.4 3.4M16.2 6.9l1 1" />
+        </svg>
+        <span>讨伐</span>
+        <span v-if="state.worldBoss?.attackable" class="chip-badge">!</span>
+      </button>
       <button class="action-chip" type="button" @click="openPanel = 'gambling'">
         <svg viewBox="0 0 24 24" aria-hidden="true">
           <path d="M5 5h14v14H5zM8.5 9h.01M12 12h.01M15.5 15h.01" />
@@ -1645,6 +1665,20 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
         @reveal="onGamblingRevealed"
       />
     </ModalShell>
+  <!-- 0025 世界 Boss（讨伐）：只在打开时 / 出手后 / 点刷新时请求，不做定时轮询。 -->
+  <ModalShell
+    v-if="openPanel === 'world-boss'"
+    :loading="busy"
+    label="讨伐"
+    @close="openPanel = null"
+  >
+    <WorldBossDialog
+      :state="state"
+      :busy="busy"
+      @state-update="(s: SectStateView) => emit('recruited', s)"
+      @notify="onWorldBossNotify"
+    />
+  </ModalShell>
 
     <!--
       坊市：三笔交易都在 ShopDialog 里当场算预览，接口调用与 toast 在本组件；

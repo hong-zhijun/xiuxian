@@ -36,6 +36,7 @@ import {
   upgradeBuildingRequestSchema,
   usePillRequestSchema,
   wheelSpinRequestSchema,
+  worldBossAttackRequestSchema,
 } from './schema';
 import {
   abandonRealmExplore,
@@ -57,8 +58,10 @@ import {
   getActiveExploration,
   getPublicSect,
   getSectState,
+  attackWorldBoss,
   getRaceHistory,
   getRaceState,
+  getWorldBoss,
   placeRaceBet,
   listChallengeHistory,
   listLeaderboard,
@@ -510,6 +513,21 @@ export function createGameRoutes(): Hono<AppEnv> {
     const page = Math.max(1, Math.floor(Number(c.req.query('page') ?? '1')) || 1);
     const result = await getRaceHistory(getDb(c.env), page);
     return respondOk(c, result);
+  });
+
+  // 0025 世界 Boss（讨伐）：面板数据（今天的 Boss、今日伤害榜、出手记录、史上最强一击）。
+  routes.get('/game/world-boss', async (c) => {
+    const userId = requireUserId(c);
+    const result = await getWorldBoss(getDb(c.env), userId, Date.now());
+    return respondOk(c, { state: result.state, boss: result.boss });
+  });
+
+  // 0025 世界 Boss（讨伐）：出手（1~3 名弟子；每宗每日 3 次，参与奖出手时立即发）。
+  routes.post('/game/world-boss/attack', async (c) => {
+    const userId = requireUserId(c);
+    const body = await parseStrictJson(worldBossAttackRequestSchema, c);
+    const result = await attackWorldBoss(getDb(c.env), userId, body, Date.now());
+    return respondOk(c, { state: result.state, result: result.result, boss: result.boss });
   });
 
   // 坊市：买入材料（结算 → 白名单 / 灵石余额 / 材料容量校验 → 扣灵石、加材料，一次受保护 batch）。

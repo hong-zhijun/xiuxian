@@ -86,6 +86,7 @@ import {
   parseJourneyRewardResources,
 } from './journey';
 import { cultivationRatePerHour, resourceRates, type DiscipleState, type SettleResult } from './settle';
+import type { WorldBossPhase } from './worldBoss';
 /**
  * 接口返回的视图类型（前端只读这些字段，不需要再读配置）。
  *
@@ -748,6 +749,107 @@ export interface RenameView {
   discipleNameMaxChars: number;
 }
 
+/* ---------- 0025 世界 Boss（讨伐） ---------- */
+
+/** Boss 的展示定义（名字、印章字、主色都由服务端给，前端不复制常量）。 */
+export interface WorldBossDefView {
+  index: number;
+  /** 基础名（如「黑风妖王」）。 */
+  name: string;
+  /** 带阶数的显示名（如「黑风妖王 · 二阶」）。 */
+  displayName: string;
+  /** 圆形印章中间的字。 */
+  sealCharacter: string;
+  /** 主色。 */
+  color: string;
+  description: string;
+}
+
+/** 今日伤害榜的一行（按宗门汇总）。 */
+export interface WorldBossRankView {
+  sectId: string;
+  sectName: string;
+  /** 今日总伤害。 */
+  damage: number;
+  /** 出手次数。 */
+  attempts: number;
+  /** 当日伤害总和最高的宗门（并列取先达到者）。 */
+  isTopDamage: boolean;
+  /** 打出最后一击。 */
+  isLastHit: boolean;
+  /** 是不是自己宗门（前端高亮）。 */
+  isMe: boolean;
+}
+
+/** 一条出手记录（也用作历史最强一击）。 */
+export interface WorldBossHitView {
+  sectId: string;
+  sectName: string;
+  discipleNames: string[];
+  damage: number;
+  isCrit: boolean;
+  isLastHit: boolean;
+  createdAt: number;
+}
+
+/** 今天的 Boss（还没出现时为 null）。 */
+export interface WorldBossCurrentView {
+  id: string;
+  /** UTC+8 日期键。 */
+  dayKey: string;
+  level: number;
+  def: WorldBossDefView;
+  maxHp: number;
+  hp: number;
+  status: 'active' | 'killed' | 'fled';
+  /** UTC+8 的阶段（未出现 / 讨伐中 / 力竭中 / 已结束）。 */
+  phase: WorldBossPhase;
+  /** 击杀它的宗门名；未击杀为 null。 */
+  killerSectName: string | null;
+  /** 逃走时的结果：'repelled' = 已击退（打掉 ≥70%）、'escaped' = 逃走了；其他状态为 null。 */
+  fledOutcome: 'repelled' | 'escaped' | null;
+  endedAt: number | null;
+}
+
+/** 讨伐面板（GET /game/world-boss 的返回值）。 */
+export interface WorldBossView {
+  /** 今天的 Boss；null = 还没出现（用 opensAt 提示）。 */
+  boss: WorldBossCurrentView | null;
+  /** 今天的阶段（boss 为 null 时同样给出）。 */
+  phase: WorldBossPhase;
+  /** 今天的 Boss 出现时间点（毫秒），用于「12:00 降临」提示。 */
+  opensAt: number;
+  /** 距离 23:00 结束的秒数（已结束为 0）。 */
+  remainingSeconds: number;
+  dailyLimit: number;
+  usedToday: number;
+  remaining: number;
+  /** 此刻能否出手：Boss 仍在讨伐中 + 在开放时段 + 还有剩余次数。 */
+  attackable: boolean;
+  /** 今日伤害榜（伤害高的在前）。 */
+  ranks: WorldBossRankView[];
+  /** 出手记录（新的在前，最多 20 条）。 */
+  hits: WorldBossHitView[];
+  /** 历史最强一击（全服）。 */
+  topHit: WorldBossHitView | null;
+}
+
+/** 一次出手的结果（POST /game/world-boss/attack 的 result）。 */
+export interface WorldBossAttackResultView {
+  /** 本次伤害（账面伤害，未按剩余血量截断）。 */
+  damage: number;
+  /** 实际扣血（= min(伤害, 出手前的血量)）。 */
+  actualDamage: number;
+  crit: boolean;
+  /** 是否处于力竭期（伤害 ×1.5）。 */
+  frenzy: boolean;
+  /** 是否由本次出手击杀（最后一击）。 */
+  lastHit: boolean;
+  bossHp: number;
+  bossMaxHp: number;
+  /** 本次出手立即到账的参与奖（灵石，最小单位）。 */
+  participationReward: string;
+}
 export interface SectStateView {
   sect: {
     id: string;
@@ -812,6 +914,8 @@ export interface SectStateView {
   journey: JourneyView;
   /** V6 交互式秘境探索：本宗当前进行中的一局；没有则 null（每宗门同时最多一局）。 */
   activeExploration: ActiveExplorationView | null;
+  /** 0025 世界 Boss（讨伐）：是否可出手（按钮角标用；只有 sync 会算真值）。 */
+  worldBoss: { attackable: boolean };
 }
 
 /** 秘境列表视图（GET /game/realms）：规则（锁定/次数）由服务端算好，前端只渲染。 */
@@ -1126,6 +1230,11 @@ export interface SectStateInput {
    */
   activeExploration?: ActiveExplorationView | null;
   capacityMultiplier: number;
+  /**
+   * 0025 世界 Boss：只有 GET /game/sync（getSectState）会算这一个布尔值（两条走索引的小查询），
+   * 其他接口一律不给（默认 false）。前端据此在「讨伐」按钮上显示角标。
+   */
+  worldBossAttackable?: boolean;
 }
 
 export function buildSectStateView(input: SectStateInput): SectStateView {
@@ -1524,6 +1633,7 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
     alchemy: alchemyView,
     journey: journeySlot,
     activeExploration: input.activeExploration ?? null,
+    worldBoss: { attackable: input.worldBossAttackable ?? false },
     challenge: {
       dailyLimit: CHALLENGE_DAILY_LIMIT,
       usedToday: challengeDay.usedToday,

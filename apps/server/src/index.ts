@@ -1,6 +1,6 @@
 import { createApp } from './app';
 import { getDb } from './infra/db/client';
-import { settleCurrentRound } from './modules/game/service';
+import { processWorldBoss, settleCurrentRound } from './modules/game/service';
 
 const app = createApp();
 
@@ -16,6 +16,17 @@ export default {
 
   async scheduled(_event: ScheduledController, env: Env, _ctx: ExecutionContext) {
     const db = getDb(env);
-    await settleCurrentRound(db, Date.now());
+    const now = Date.now();
+    // 0024 灵兽竞逐结算与 0025 世界 Boss（出现 / 逃走 / 发奖）各自兜错，互不影响。
+    try {
+      await settleCurrentRound(db, now);
+    } catch (error) {
+      console.warn(`settle_current_round_failed error=${String(error)}`);
+    }
+    try {
+      await processWorldBoss(db, now);
+    } catch (error) {
+      console.warn(`process_world_boss_failed error=${String(error)}`);
+    }
   },
 } satisfies ExportedHandler<Env>;
