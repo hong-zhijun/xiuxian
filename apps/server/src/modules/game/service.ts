@@ -12,7 +12,8 @@ import {
 } from '../../infra/openrouter/decisions';
 import {
   alchemyUnlockBlockedReason,
-  bodyTemperingTarget,
+  bodyTemperingPlan,
+  cultivationPillsToFull,
   findPillRecipe,
   BODY_TEMPERING_MAX_USES,
   CULTIVATION_PILL_GAIN,
@@ -3836,12 +3837,16 @@ export interface UsePillOutcome {
   pillName: string;
   discipleId: string;
   discipleName: string;
+  /** 实际服用颗数（请求颗数按「服到满所需」与库存截断后的结果）。 */
+  count: number;
   effect: {
     kind: 'heal' | 'cultivation' | 'bodyTempering';
-    /** cultivation / bodyTempering 的提升量。 */
+    /** cultivation / bodyTempering 的总提升量。 */
     gain?: number;
-    /** bodyTempering 服务端自动选中的短板属性。 */
+    /** bodyTempering 第一颗补的短板属性。 */
     attribute?: PillAttribute;
+    /** bodyTempering 各属性的累计提升量（连服时可能补到不止一项）。 */
+    gains?: Partial<Record<PillAttribute, number>>;
   };
 }
 
@@ -3914,12 +3919,17 @@ export async function craftPill(
  *   已达本版本最高阶段或修为已满门槛的弟子不能用。
  * - 淬体丹：服务端自动选短板（attack -> defense -> speed），每名弟子最多 10 次；
  *   没有短板时拒绝。不使用随机数。
+ *
+ * count（想服几颗）：聚气丹 / 淬体丹按「服到满所需」与库存截断，至少服 1 颗
+ * （库存为 0 时照常报库存不足）；回春丹一颗就治好，恒为 1。实际颗数见 outcome.count。
+ * 连服只写一次最终值，仍是一次 batch。
  */
 export async function usePill(
   db: D1Database,
   userId: string,
   pillId: string,
   discipleId: string,
+  count: number,
   now: number,
 ): Promise<{ state: SectStateView; outcome: UsePillOutcome }> {
   const draft = await draftFor(db, userId, now);
@@ -3945,6 +3955,7 @@ export async function usePill(
         pillName: recipe.name,
         discipleId: disciple.id,
         discipleName: disciple.name,
+        count: 1,
         effect: { kind: 'heal' },
       },
     };
@@ -3958,11 +3969,15 @@ export async function usePill(
     if (Number(disciple.cultivation) >= stage.requiredCultivation) {
       throw new AppError('INVALID_STATUS', `${disciple.name}修为已达突破门槛，请先突破再服用聚气丹`);
     }
-    const gain = Math.min(
-      CULTIVATION_PILL_GAIN,
-      stage.requiredCultivation - Number(disciple.cultivation),
+    const remaining = stage.requiredCultivation - Number(disciple.cultivation);
+    const used = Math.min(
+      count,
+      cultivationPillsToFull(Number(disciple.cultivation), stage.requiredCultivation),
+      Math.max(1, draft.pillQuantity(recipe.id)),
     );
-    draft.requirePill(recipe.id);
+    // 最后一颗可能只生效一部分：总增益封顶到门槛。
+    const gain = Math.min(CULTIVATION_PILL_GAIN * used, remaining);
+    draft.removePill(recipe.id, used);
     const cultivation = Number(disciple.cultivation) + gain;
     // 修为余数保持不变：不因服药丢弃离线结算的小数余量。
     draft.addStatement(
@@ -3977,6 +3992,7 @@ export async function usePill(
         pillName: recipe.name,
         discipleId: disciple.id,
         discipleName: disciple.name,
+        count: used,
         effect: { kind: 'cultivation', gain },
       },
     };
@@ -3990,22 +4006,32 @@ export async function usePill(
       `${disciple.name}已服用淬体丹 ${BODY_TEMPERING_MAX_USES} 次，药力已满`,
     );
   }
-  const target = bodyTemperingTarget(
+  const plan = bodyTemperingPlan(
     Number(disciple.attack),
     Number(disciple.defense),
     Number(disciple.speed),
+    uses,
+    Math.min(count, Math.max(1, draft.pillQuantity(recipe.id))),
   );
-  if (target === null) {
+  const first = plan[0];
+  if (first === undefined) {
     throw new AppError('INVALID_STATUS', `${disciple.name}没有需要补齐的属性短板`);
   }
-  draft.requirePill(recipe.id);
-  const nextValue = Number(disciple[target.attribute]) + target.gain;
-  const nextUses = uses + 1;
-  disciple[target.attribute] = nextValue;
+  draft.removePill(recipe.id, plan.length);
+  const gains: Partial<Record<PillAttribute, number>> = {};
+  for (const step of plan) {
+    gains[step.attribute] = (gains[step.attribute] ?? 0) + step.gain;
+  }
+  const nextUses = uses + plan.length;
   disciple.body_tempering_count = nextUses;
-  draft.addStatement(
-    updateDiscipleBodyTemperingStatement(disciple.id, target.attribute, nextValue, nextUses),
-  );
+  // 每个被补到的属性只写一次最终值（同批语句都把次数写成同一个最终值）。
+  for (const [attribute, gain] of Object.entries(gains) as [PillAttribute, number][]) {
+    const nextValue = Number(disciple[attribute]) + gain;
+    disciple[attribute] = nextValue;
+    draft.addStatement(
+      updateDiscipleBodyTemperingStatement(disciple.id, attribute, nextValue, nextUses),
+    );
+  }
   await draft.commitAlchemy(recipe.id, disciple.id);
   return {
     state: draft.view(),
@@ -4014,7 +4040,13 @@ export async function usePill(
       pillName: recipe.name,
       discipleId: disciple.id,
       discipleName: disciple.name,
-      effect: { kind: 'bodyTempering', gain: target.gain, attribute: target.attribute },
+      count: plan.length,
+      effect: {
+        kind: 'bodyTempering',
+        gain: plan.reduce((sum, step) => sum + step.gain, 0),
+        attribute: first.attribute,
+        gains,
+      },
     },
   };
 }

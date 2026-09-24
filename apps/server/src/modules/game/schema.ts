@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-import { MAX_CRAFT_QUANTITY } from './alchemy';
+import { MAX_CRAFT_QUANTITY, MAX_PILL_USE_COUNT } from './alchemy';
 import { BETTABLE_ATTRIBUTES, RACE_BEAST_COUNT, RACE_BET_MAX, RACE_BET_MIN } from './gambling';
 import { SHOP_MAX_PILL_QUANTITY, SHOP_MAX_TRADE_AMOUNT, SHOP_TRADABLE_RESOURCES } from './shop';
 
@@ -78,10 +78,14 @@ export const craftPillRequestSchema = z.strictObject({
   quantity: z.number().int().min(1).max(MAX_CRAFT_QUANTITY),
 });
 
-/** 丹药服用：目标弟子必须属于当前宗门（服务端用 draft.discipleById 判定归属）。 */
+/**
+ * 丹药服用：目标弟子必须属于当前宗门（服务端用 draft.discipleById 判定归属）。
+ * count 是想服几颗（默认 1）；服务端按「服到满所需」与库存截断，实际颗数见 outcome.count。
+ */
 export const usePillRequestSchema = z.strictObject({
   pillId: z.string().min(1).max(64),
   discipleId: z.string().min(1).max(64),
+  count: z.number().int().min(1).max(MAX_PILL_USE_COUNT).optional(),
 });
 
 /**

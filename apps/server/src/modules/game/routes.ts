@@ -266,7 +266,7 @@ export function createGameRoutes(): Hono<AppEnv> {
   routes.post('/game/use-pill', async (c) => {
     const userId = requireUserId(c);
     const body = await parseStrictJson(usePillRequestSchema, c);
-    const result = await usePill(getDb(c.env), userId, body.pillId, body.discipleId, Date.now());
+    const result = await usePill(getDb(c.env), userId, body.pillId, body.discipleId, body.count ?? 1, Date.now());
     return respondOk(c, { state: result.state, outcome: result.outcome });
   });
 

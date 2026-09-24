@@ -74,6 +74,10 @@ export interface DiscipleView {
   bodyTemperingRemaining: number;
   bodyTemperingTarget: 'attack' | 'defense' | 'speed' | null;
   bodyTemperingGain: number;
+  /** 聚气丹「服到满」（修为达到突破门槛）需要几颗；0 = 不可服用。 */
+  cultivationPillsToFull: number;
+  /** 淬体丹「服到满」的逐颗计划（服务端算好）；长度即需要几颗，空 = 不可服用。 */
+  bodyTemperingPlan: { attribute: 'attack' | 'defense' | 'speed'; gain: number }[];
   /** 0013 掌门私有备注（单行纯文本，≤60 字；空串 = 未填写）。只在自己的 sync 状态里有值。 */
   note: string;
   /** 0017 头像框样式 id（白名单，见 utils/avatarFrames.ts）：旧、新弟子默认 `classic`。 */
@@ -266,8 +270,12 @@ export interface CraftPillOutcome {
 /** 服用效果（与后端 service.ts 的 UsePillOutcome['effect'] 一一对应）。 */
 export interface PillUseEffect {
   kind: 'heal' | 'cultivation' | 'bodyTempering';
+  /** 总提升量。 */
   gain?: number;
+  /** 淬体丹第一颗补的属性。 */
   attribute?: 'attack' | 'defense' | 'speed';
+  /** 淬体丹各属性的累计提升量（连服时可能补到不止一项）。 */
+  gains?: Partial<Record<'attack' | 'defense' | 'speed', number>>;
 }
 
 /** 服用结果（与后端 service.ts 的 UsePillOutcome 一一对应）。 */
@@ -276,6 +284,8 @@ export interface UsePillOutcome {
   pillName: string;
   discipleId: string;
   discipleName: string;
+  /** 实际服用颗数（服务端按「服到满所需」与库存截断）。 */
+  count: number;
   effect: PillUseEffect;
 }
 
@@ -755,14 +765,17 @@ export async function craftPill(pillId: string, quantity: number): Promise<{
   });
 }
 
-/** 服用丹药（POST /game/use-pill）：目标弟子必须属于当前宗门，返回写库后的完整状态与服用效果。 */
-export async function usePill(pillId: string, discipleId: string): Promise<{
+/**
+ * 服用丹药（POST /game/use-pill）：目标弟子必须属于当前宗门，返回写库后的完整状态与服用效果。
+ * count = 想服几颗（「服到满」传所需颗数）；服务端会按所需与库存截断，实际颗数见 outcome.count。
+ */
+export async function usePill(pillId: string, discipleId: string, count = 1): Promise<{
   state: SectStateView;
   outcome: UsePillOutcome;
 }> {
   return apiRequest<{ state: SectStateView; outcome: UsePillOutcome }>('/api/v1/game/use-pill', {
     method: 'POST',
-    body: { pillId, discipleId },
+    body: { pillId, discipleId, count },
   });
 }
 

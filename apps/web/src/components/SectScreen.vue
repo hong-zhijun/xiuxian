@@ -96,7 +96,7 @@ const emit = defineEmits<{
   dismissChallengeResult: [];
   breakthrough: [discipleId: string];
   'craft-pill': [pillId: string, quantity: number];
-  'use-pill': [pillId: string, discipleId: string];
+  'use-pill': [pillId: string, discipleId: string, count: number];
   notify: [tone: ToastTone, title: string, message: string];
   /** 详情里保存私有备注（note 为空串 = 清空）；App.vue 绑定了这个名字。 */
   'save-note': [discipleId: string, note: string];
@@ -994,9 +994,9 @@ function onCraftPill(pillId: string, quantity: number): void {
  * 弟子详情里点「服用」：目标弟子与服务端状态由服务端校验，转发给上层调接口。
  * （原文的全局「弟子用药」区块已迁入详情，炼丹面板只负责炼制。）
  */
-function onUsePill(pillId: string, discipleId: string): void {
+function onUsePill(pillId: string, discipleId: string, count: number): void {
   if (props.busy) return;
-  emit('use-pill', pillId, discipleId);
+  emit('use-pill', pillId, discipleId, count);
 }
 
 /* ---------- 弟子详情：只存 discipleId，每次渲染都从最新 state.disciples 取对象 ---------- */

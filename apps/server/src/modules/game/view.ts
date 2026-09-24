@@ -2,8 +2,11 @@ import type { GameConfigContent } from '@xiuxian/game-core';
 
 import {
   alchemyUnlockBlockedReason,
+  bodyTemperingPlan,
   bodyTemperingTarget,
+  cultivationPillsToFull,
   firstInsufficientResource,
+  type BodyTemperingStep,
   BODY_TEMPERING_MAX_USES,
   PILL_RECIPES,
   CULTIVATION_PILL_GAIN,
@@ -163,6 +166,10 @@ export interface DiscipleView {
   bodyTemperingTarget: 'attack' | 'defense' | 'speed' | null;
   /** 本次服用淬体丹的提升量；无短板时为 0。 */
   bodyTemperingGain: number;
+  /** 聚气丹「服到满」（修为达到突破门槛）需要几颗；0 = 不可服用。 */
+  cultivationPillsToFull: number;
+  /** 淬体丹「服到满」的逐颗计划（每颗补哪项、补多少）；长度即需要几颗，空 = 不可服用。 */
+  bodyTemperingPlan: BodyTemperingStep[];
   /** 0019 悟道值：当前可用余额（非负整数；本版本只能通过论道赌局获得）。 */
   daoInsight: number;
   /** 0019 悟道值：累计已分配点数（上限 DAO_INSIGHT_CAP = 50）。 */
@@ -1282,6 +1289,16 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
       bodyTemperingRemaining: Math.max(0, BODY_TEMPERING_MAX_USES - temperingUses),
       bodyTemperingTarget: temperingTarget?.attribute ?? null,
       bodyTemperingGain: temperingTarget?.gain ?? 0,
+      cultivationPillsToFull: cultivationPillsToFull(
+        Number(disciple.cultivation),
+        stage.requiredCultivation,
+      ),
+      bodyTemperingPlan: bodyTemperingPlan(
+        Number(disciple.attack),
+        Number(disciple.defense),
+        Number(disciple.speed),
+        temperingUses,
+      ),
       /** 0019 悟道值：可用余额 / 累计已分配 / 剩余可分配额度（服务端算好，前端不复制规则）。 */
       daoInsight: Number(disciple.dao_insight) || 0,
       daoInsightUsed: Number(disciple.dao_insight_used) || 0,

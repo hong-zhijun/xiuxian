@@ -632,7 +632,12 @@ describe('丹药系统：服用', () => {
     });
     expect(result.status).toBe(200);
     const data = dataOf(result) as Record<string, any>;
-    expect(data.outcome.effect).toEqual({ kind: 'bodyTempering', gain: 5, attribute: 'attack' });
+    expect(data.outcome.effect).toEqual({
+      kind: 'bodyTempering',
+      gain: 5,
+      attribute: 'attack',
+      gains: { attack: 5 },
+    });
     const after = (data.state.disciples as Record<string, any>[]).find((d) => d.id === discipleId);
     expect(after?.attack).toBe(37);
     expect(after?.defense).toBe(76);
@@ -676,7 +681,12 @@ describe('丹药系统：服用', () => {
     });
     expect(result.status).toBe(200);
     const data = dataOf(result) as Record<string, any>;
-    expect(data.outcome.effect).toEqual({ kind: 'bodyTempering', gain: 1, attribute: 'defense' });
+    expect(data.outcome.effect).toEqual({
+      kind: 'bodyTempering',
+      gain: 1,
+      attribute: 'defense',
+      gains: { defense: 1 },
+    });
 
     // 用满 10 次：直接把计数拨到 10，再服用被拒绝，sync 预览为空、剩余 0。
     await env.DB.prepare('UPDATE disciples SET body_tempering_count = 10 WHERE id = ?')
@@ -746,6 +756,135 @@ describe('丹药系统：服用', () => {
       .bind(discipleId)
       .first<{ injured_until: number | null }>();
     expect(row?.injured_until).not.toBeNull();
+  });
+});
+
+describe('丹药系统：服到满（count）', () => {
+  it('聚气丹服到正好满门槛：最后一颗只生效一部分，只扣实际颗数', async () => {
+    const sect = await makeSect();
+    await unlockAlchemy(sect.sectId);
+    await freezeSettlement(sect.sectId);
+    await setPillStock(sect.sectId, 'cultivationPill', 10);
+
+    const discipleId = sect.discipleIds[0] as string;
+    // 筑基初期门槛 300，修为 50：还差 250 → 需 3 颗（120 + 120 + 10）。
+    await env.DB.prepare(
+      "UPDATE disciples SET realm_id = 'foundationEstablishment', stage = 1, cultivation = 50 WHERE id = ?",
+    )
+      .bind(discipleId)
+      .run();
+    const before = (await sect.state()).disciples.find((d: Record<string, any>) => d.id === discipleId);
+    expect(before.cultivationPillsToFull).toBe(3);
+
+    const result = await sect.api.post('/api/v1/game/use-pill', {
+      pillId: 'cultivationPill',
+      discipleId,
+      count: 99,
+    });
+    expect(result.status).toBe(200);
+    const data = dataOf(result) as Record<string, any>;
+    expect(data.outcome.count).toBe(3);
+    expect(data.outcome.effect).toEqual({ kind: 'cultivation', gain: 250 });
+    const after = data.state.disciples.find((d: Record<string, any>) => d.id === discipleId);
+    expect(after.cultivation).toBe(300);
+    expect(after.cultivationPillsToFull).toBe(0);
+    expect(await pillQuantity(sect.sectId, 'cultivationPill')).toBe(7);
+  });
+
+  it('库存不够服到满时，能服几颗服几颗', async () => {
+    const sect = await makeSect();
+    await unlockAlchemy(sect.sectId);
+    await freezeSettlement(sect.sectId);
+    await setPillStock(sect.sectId, 'cultivationPill', 2);
+
+    const discipleId = sect.discipleIds[0] as string;
+    await env.DB.prepare(
+      "UPDATE disciples SET realm_id = 'foundationEstablishment', stage = 1, cultivation = 0 WHERE id = ?",
+    )
+      .bind(discipleId)
+      .run();
+
+    const result = await sect.api.post('/api/v1/game/use-pill', {
+      pillId: 'cultivationPill',
+      discipleId,
+      count: 99,
+    });
+    expect(result.status).toBe(200);
+    const data = dataOf(result) as Record<string, any>;
+    expect(data.outcome.count).toBe(2);
+    expect(data.outcome.effect.gain).toBe(240);
+    expect(await pillQuantity(sect.sectId, 'cultivationPill')).toBe(0);
+  });
+
+  it('淬体丹服到满：按服务端计划逐颗补短板，只写最终值', async () => {
+    const sect = await makeSect();
+    await unlockAlchemy(sect.sectId);
+    await freezeSettlement(sect.sectId);
+    await setPillStock(sect.sectId, 'bodyTemperingPill', 20);
+
+    const discipleId = sect.discipleIds[0] as string;
+    await env.DB.prepare(
+      'UPDATE disciples SET attack = 32, defense = 76, speed = 70, body_tempering_count = 0 WHERE id = ?',
+    )
+      .bind(discipleId)
+      .run();
+    const before = (await sect.state()).disciples.find((d: Record<string, any>) => d.id === discipleId);
+    const plan = before.bodyTemperingPlan as { attribute: 'attack' | 'defense' | 'speed'; gain: number }[];
+    expect(plan.length).toBeGreaterThan(1);
+    expect(plan.length).toBeLessThanOrEqual(10);
+    expect(plan[0]).toEqual({ attribute: 'attack', gain: 5 });
+    const expected = { attack: 32, defense: 76, speed: 70 };
+    for (const step of plan) expected[step.attribute] += step.gain;
+
+    const result = await sect.api.post('/api/v1/game/use-pill', {
+      pillId: 'bodyTemperingPill',
+      discipleId,
+      count: 99,
+    });
+    expect(result.status).toBe(200);
+    const data = dataOf(result) as Record<string, any>;
+    expect(data.outcome.count).toBe(plan.length);
+    expect(data.outcome.effect.gain).toBe(plan.reduce((sum, step) => sum + step.gain, 0));
+    const after = data.state.disciples.find((d: Record<string, any>) => d.id === discipleId);
+    expect({ attack: after.attack, defense: after.defense, speed: after.speed }).toEqual(expected);
+    expect(after.bodyTemperingUses).toBe(plan.length);
+    expect(after.bodyTemperingPlan).toEqual([]);
+    expect(await pillQuantity(sect.sectId, 'bodyTemperingPill')).toBe(20 - plan.length);
+
+    const row = await env.DB.prepare('SELECT attack, defense, speed, body_tempering_count FROM disciples WHERE id = ?')
+      .bind(discipleId)
+      .first<Record<string, number>>();
+    expect(row).toEqual({ ...expected, body_tempering_count: plan.length });
+  });
+
+  it('回春丹传 count 也只服 1 颗；count 非法被 VALIDATION_ERROR 拒绝', async () => {
+    const sect = await makeSect();
+    await unlockAlchemy(sect.sectId);
+    await freezeSettlement(sect.sectId);
+    await setPillStock(sect.sectId, 'healingPill', 5);
+
+    const discipleId = sect.discipleIds[0] as string;
+    await env.DB.prepare('UPDATE disciples SET injured_until = ? WHERE id = ?')
+      .bind(Date.now() + 3_600_000, discipleId)
+      .run();
+    const result = await sect.api.post('/api/v1/game/use-pill', {
+      pillId: 'healingPill',
+      discipleId,
+      count: 5,
+    });
+    expect(result.status).toBe(200);
+    expect((dataOf(result) as Record<string, any>).outcome.count).toBe(1);
+    expect(await pillQuantity(sect.sectId, 'healingPill')).toBe(4);
+
+    for (const count of [0, -1, 1.5, 1001]) {
+      const rejected = await sect.api.post('/api/v1/game/use-pill', {
+        pillId: 'healingPill',
+        discipleId,
+        count,
+      });
+      expect(rejected.status).toBe(400);
+      expect(errorOf(rejected).code).toBe('VALIDATION_ERROR');
+    }
   });
 });
 

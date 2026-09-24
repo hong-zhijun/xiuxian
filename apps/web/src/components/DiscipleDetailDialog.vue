@@ -66,7 +66,8 @@ const props = defineProps<{
 const emit = defineEmits<{
   assign: [discipleId: string, assignment: string];
   breakthrough: [discipleId: string];
-  usePill: [pillId: string, discipleId: string];
+  /** count = 想服几颗（「服到满」传所需颗数，服务端按所需与库存截断）。 */
+  usePill: [pillId: string, discipleId: string, count: number];
   saveNote: [discipleId: string, note: string];
   /** 0017 保存头像框样式（frameId 只可能是白名单里的固定 id）。 */
   setAvatarFrame: [discipleId: string, frameId: AvatarFrameId];
@@ -562,6 +563,17 @@ interface PillOption {
   preview: string;
   /** 不可用 / 无库存时的原因。 */
   disabledReason: string;
+  /**
+   * 「服到满」：本次实际会服几颗（= min(服到满所需, 库存)）；小于 2 时不提供这个入口
+   * （只服 1 颗与普通服用相同）。颗数与计划都来自服务端视图，前端不复制判定公式。
+   */
+  fullCount: number;
+  /** 服到满总共需要几颗（库存不够时大于 fullCount）。 */
+  fullNeeded: number;
+  /** 服到满的效果预览，例如「修为 +250（达到 300 门槛）」。 */
+  fullPreview: string;
+  /** 需要特别提醒的一句，例如「最后一颗只生效 10 点」「库存只有 2 颗」；没有则为空。 */
+  fullNote: string;
 }
 
 const pillOptions = computed<PillOption[]>(() => {
@@ -582,6 +594,9 @@ const pillOptions = computed<PillOption[]>(() => {
     let available = false;
     let preview = '';
     let reason = '';
+    let fullNeeded = 0;
+    let fullPreview = '';
+    let fullNote = '';
 
     if (pillId === 'healingPill') {
       available = injured.value;
@@ -595,6 +610,21 @@ const pillOptions = computed<PillOption[]>(() => {
         available = disciple.cultivation < required;
         preview = `修为 +${Math.min(gainPerPill, required - disciple.cultivation)}（达到 ${required} 门槛为止）`;
         reason = '修为已达门槛，无需进补';
+
+        const remaining = required - disciple.cultivation;
+        fullNeeded = disciple.cultivationPillsToFull;
+        const count = Math.min(fullNeeded, recipe.owned);
+        const total = Math.min(gainPerPill * count, remaining);
+        fullPreview =
+          count === fullNeeded
+            ? `修为 +${total}（达到 ${required} 门槛）`
+            : `修为 +${total}（${disciple.cultivation + total} / ${required}）`;
+        const lastGain = remaining - gainPerPill * (fullNeeded - 1);
+        if (count < fullNeeded) {
+          fullNote = `库存只有 ${recipe.owned} 颗，服到满需要 ${fullNeeded} 颗`;
+        } else if (lastGain < gainPerPill) {
+          fullNote = `最后一颗只生效 ${lastGain} 点`;
+        }
       }
     } else {
       const target = disciple.bodyTemperingTarget;
@@ -604,6 +634,20 @@ const pillOptions = computed<PillOption[]>(() => {
           ? ''
           : `本次补：${ATTRIBUTE_NAMES[target] ?? target} +${disciple.bodyTemperingGain}（已服 ${disciple.bodyTemperingUses} 次 · 剩余 ${disciple.bodyTemperingRemaining} 次）`;
       reason = '已无属性短板或淬体次数已用尽';
+
+      const plan = disciple.bodyTemperingPlan;
+      fullNeeded = plan.length;
+      const count = Math.min(fullNeeded, recipe.owned);
+      const gains = new Map<string, number>();
+      for (const step of plan.slice(0, count)) {
+        gains.set(step.attribute, (gains.get(step.attribute) ?? 0) + step.gain);
+      }
+      fullPreview = [...gains]
+        .map(([attribute, gain]) => `${ATTRIBUTE_NAMES[attribute] ?? attribute} +${gain}`)
+        .join(' · ');
+      if (count < fullNeeded) {
+        fullNote = `库存只有 ${recipe.owned} 颗，服到满需要 ${fullNeeded} 颗`;
+      }
     }
 
     if (locked) {
@@ -619,6 +663,10 @@ const pillOptions = computed<PillOption[]>(() => {
       available,
       preview: available ? preview : '',
       disabledReason: available && recipe.owned < 1 ? '丹药库存不足，请先炼制' : reason,
+      fullCount: available ? Math.min(fullNeeded, recipe.owned) : 0,
+      fullNeeded,
+      fullPreview,
+      fullNote,
     });
   }
   return options;
@@ -636,7 +684,30 @@ function usePill(option: PillOption): void {
     return;
   }
   showPillPicker.value = false;
-  emit('usePill', option.pillId, props.disciple.id);
+  emit('usePill', option.pillId, props.disciple.id, 1);
+}
+
+/** 「服到满」先在列表里展开确认（写明颗数、效果与浪费/库存提示），确认后才提交。 */
+const confirmingFullPillId = ref<string | null>(null);
+
+watch(showPillPicker, (open) => {
+  if (!open) confirmingFullPillId.value = null;
+});
+
+function askUsePillToFull(option: PillOption): void {
+  if (props.busy || option.fullCount < 2) return;
+  confirmingFullPillId.value = option.pillId;
+}
+
+function confirmUsePillToFull(option: PillOption): void {
+  if (props.busy) return;
+  if (journey.value.status === 'active') {
+    emit('notify', 'warning', `${props.disciple.name}正在外历练`, awayHint.value ?? '在外历练期间不能服药。');
+    return;
+  }
+  if (!option.available || option.fullCount < 2) return;
+  showPillPicker.value = false;
+  emit('usePill', option.pillId, props.disciple.id, option.fullCount);
 }
 
 /* ---------- 驱逐：在「档案」Tab 内二次确认后才 emit ---------- */
@@ -1371,14 +1442,48 @@ function confirmExpel(): void {
                 {{ option.owned < 1 ? '丹药库存不足，请先炼制' : option.disabledReason }}
               </p>
             </div>
-            <button
-              class="upgrade-button disciple-pill-button"
-              type="button"
-              :disabled="busy || !option.available || option.owned < 1"
-              @click="usePill(option)"
+            <div class="disciple-pill-actions">
+              <button
+                class="upgrade-button disciple-pill-button"
+                type="button"
+                :disabled="busy || !option.available || option.owned < 1"
+                @click="usePill(option)"
+              >
+                <span>{{ option.fullCount >= 2 ? '服 1 颗' : '服用' }}</span>
+              </button>
+              <button
+                v-if="option.fullCount >= 2"
+                class="upgrade-button disciple-pill-button"
+                type="button"
+                :disabled="busy"
+                :aria-expanded="confirmingFullPillId === option.pillId"
+                @click="askUsePillToFull(option)"
+              >
+                <span>服到满 · 需 {{ option.fullNeeded }} 颗</span>
+              </button>
+            </div>
+            <div
+              v-if="confirmingFullPillId === option.pillId"
+              class="disciple-pill-confirm"
+              role="group"
+              :aria-label="`确认服到满 · ${option.name}`"
             >
-              <span>选择</span>
-            </button>
+              <p>
+                将服用 <strong>{{ option.fullCount }}</strong> 颗{{ option.name }}：{{ option.fullPreview }}
+              </p>
+              <p v-if="option.fullNote !== ''" class="disciple-pill-confirm-note">{{ option.fullNote }}</p>
+              <div class="disciple-pill-confirm-actions">
+                <button class="upgrade-button" type="button" @click="confirmingFullPillId = null">取消</button>
+                <button
+                  class="action-button primary-action"
+                  type="button"
+                  :disabled="busy"
+                  @click="confirmUsePillToFull(option)"
+                >
+                  确认服用
+                </button>
+              </div>
+            </div>
           </li>
         </ul>
       </section>

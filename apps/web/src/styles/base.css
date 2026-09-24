@@ -2369,6 +2369,7 @@ ul {
 .disciple-pill {
   display: flex;
   min-width: 0;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
@@ -2387,6 +2388,7 @@ ul {
 .disciple-pill-copy {
   display: flex;
   min-width: 0;
+  flex: 1 1 0;
   flex-direction: column;
   gap: 2px;
 }
@@ -2416,6 +2418,47 @@ ul {
   color: var(--jade-bright);
   font-size: 12px;
   line-height: 1.45;
+}
+
+.disciple-pill-actions {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* 「服到满」确认：在该丹药条目下方展开，占满整行。 */
+.disciple-pill-confirm {
+  display: flex;
+  flex: 1 0 100%;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid rgba(202, 169, 106, 0.28);
+  border-radius: 8px;
+  color: #dce6e0;
+  background: rgba(202, 169, 106, 0.05);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.disciple-pill-confirm strong {
+  color: var(--gold-bright);
+}
+
+.disciple-pill-confirm-note {
+  color: var(--gold-bright);
+}
+
+.disciple-pill-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.disciple-pill-confirm-actions button {
+  padding: 6px 14px;
+  font-size: 12px;
 }
 
 .disciple-pill-button {

@@ -629,21 +629,27 @@ function onCraftPill(pillId: string, quantity: number): void {
 }
 
 /** 服用丹药：目标与状态由服务端校验，成功后按效果提示（回春/修为/淬体）。 */
-function onUsePill(pillId: string, discipleId: string): void {
+function onUsePill(pillId: string, discipleId: string, count = 1): void {
   void runAction(
-    () => usePill(pillId, discipleId),
+    () => usePill(pillId, discipleId, count),
     (data) => {
       const outcome = data.outcome as UsePillOutcome | undefined;
       const effect = outcome?.effect;
+      const name = outcome?.discipleName ?? '弟子';
       let message = '丹药入腹，药力生效。';
       if (effect?.kind === 'heal') {
-        message = `${outcome?.discipleName ?? '弟子'} 伤势尽复，可以再度出战。`;
+        message = `${name} 伤势尽复，可以再度出战。`;
       } else if (effect?.kind === 'cultivation') {
-        message = `${outcome?.discipleName ?? '弟子'} 修为 +${String(effect.gain ?? 0)}。`;
+        message = `${name} 修为 +${String(effect.gain ?? 0)}。`;
       } else if (effect?.kind === 'bodyTempering') {
-        message = `${outcome?.discipleName ?? '弟子'} ${PILL_ATTRIBUTE_NAMES[effect.attribute ?? ''] ?? '属性'} +${String(effect.gain ?? 0)}。`;
+        const gains = Object.entries(effect.gains ?? {})
+          .map(([attribute, gain]) => `${PILL_ATTRIBUTE_NAMES[attribute] ?? '属性'} +${String(gain)}`)
+          .join(' · ');
+        message = `${name} ${gains || `${PILL_ATTRIBUTE_NAMES[effect.attribute ?? ''] ?? '属性'} +${String(effect.gain ?? 0)}`}。`;
       }
-      return { title: `服用${outcome?.pillName ?? '丹药'}`, message };
+      const used = outcome?.count ?? 1;
+      const title = `服用${outcome?.pillName ?? '丹药'}${used > 1 ? ` × ${String(used)}` : ''}`;
+      return { title, message };
     },
   );
 }
