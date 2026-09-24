@@ -9,6 +9,7 @@ import type {
   WorldBossView,
 } from '../api/game';
 import { attackWorldBoss, fetchWorldBoss } from '../api/game';
+import { formatAmount } from '../utils/format';
 import DisciplePicker from './DisciplePicker.vue';
 
 /**
@@ -32,6 +33,22 @@ const loading = ref(false);
 const submitting = ref(false);
 const selected = ref<string[]>([]);
 const showRules = ref(false);
+/** 奖励说明：各名次能拿到什么（数字由服务端按本宗门产出算好）。 */
+const showRewards = ref(false);
+
+function toggleRules(): void {
+  showRules.value = !showRules.value;
+  if (showRules.value) showRewards.value = false;
+}
+
+function toggleRewards(): void {
+  showRewards.value = !showRewards.value;
+  if (showRewards.value) showRules.value = false;
+}
+
+function rankLabel(rank: number): string {
+  return rank >= 4 ? '第 4 名及以后' : `第 ${String(rank)} 名`;
+}
 /** 词缀气泡：点标签展开「一行效果 + 一行配队提示」。 */
 const showAffixTip = ref(false);
 /** 伤害榜：默认只显示前 3 名。 */
@@ -262,13 +279,13 @@ onUnmounted(() => {
 
 const RULES_TEXT = `讨伐 · 玩法说明
 
-连战：每天 08:00 第 1 关降临，打死立刻出下一关（第 n 关血量 = 一轮伤害 × 3 × 2 的 n−1 次方）；
+连战：每天 08:00 第 1 关降临，打死立刻出下一关（第 1 关血量 = 一轮伤害 × 2，之后每关 ×1.6）；
       23:00 当前关逃走，血量被打掉 70% 以上记为「击退」。
 出手：不限次数，但同一宗门每 10 秒只能出手一次；每次派 1~3 名弟子。
 弟子：在外历练 / 疗伤中 / 重伤卧床的弟子不能出战。
-受伤：概率 = 15% −（体魄 − 50）/10 × 1.5%，夹在 5%~25%；受伤后疗伤 30 分钟，回春丹可治。
+受伤：概率 = 8% −（体魄 − 50）/10 × 1%，夹在 3%~15%；受伤后疗伤 30 分钟，回春丹可治。
 重伤：本小时第 4 次出手 30%、第 5 次 70%、第 6 次起必定重伤（体魄每高 10 点让前两档下调 3 个百分点）；
-      被打成重伤要静养 3 天 —— 期间不产出、不修炼，转岗/破境/服丹/历练/秘境/挑战/论道/讨伐全都不行，丹药无效；
+      被打成重伤要静养 1 天 —— 期间不产出、不修炼，转岗/破境/服丹/历练/秘境/挑战/论道/讨伐全都不行，丹药无效；
       被判重伤的那一刀不计伤害。
 词缀：每关随机一个 ——
       铁甲：防御越高，伤害越高（派防御高的弟子）
@@ -276,8 +293,8 @@ const RULES_TEXT = `讨伐 · 玩法说明
       蛮力：攻击越高，伤害越高（派攻击高的弟子）
       邪祟：暴击率翻倍（派幸运高的弟子）
       狂暴：受伤、重伤概率翻倍（派体魄高的弟子，别贪刀）
-奖励：每关单独结算 —— 参与宗门各按自己的产出拿 灵石/药材/矿石（伤害第 1/2/3 名额外 ×1.5/1.25/1.1），
-      关卡越高系数越高（第 n 关 ×(1 + 0.2 × (n−1))）；
+奖励：每关单独结算 —— 参与宗门各得自己 3.5 小时产出的 灵石/药材/矿石（伤害第 1/2/3 名额外 ×1.5/1.25/1.1），
+      每往后一关奖励 +50%；具体数字点「奖励」查看；
       击杀时每个参与宗门再得聚气丹 ×1、伤害第 1 名得淬体丹 ×1、最后一击另有灵石；
       击退时资源减半、没有丹药与最后一击；不足 70% 逃走则什么也不发。`;
 </script>
@@ -293,7 +310,10 @@ const RULES_TEXT = `讨伐 · 玩法说明
         <span v-if="panel && remaining > 0" class="boss-countdown">
           距结束 {{ formatCountdown(remaining) }}
         </span>
-        <button class="boss-quiet-button" type="button" @click="showRules = !showRules">
+        <button class="boss-quiet-button" type="button" @click="toggleRewards">
+          {{ showRewards ? '收起奖励' : '奖励' }}
+        </button>
+        <button class="boss-quiet-button" type="button" @click="toggleRules">
           {{ showRules ? '收起说明' : '说明' }}
         </button>
         <button class="boss-quiet-button" type="button" :disabled="loading" @click="refresh">
@@ -304,6 +324,32 @@ const RULES_TEXT = `讨伐 · 玩法说明
 
     <div v-if="showRules" class="boss-rules">
       <p class="boss-rules-text">{{ RULES_TEXT }}</p>
+    </div>
+
+    <div v-else-if="showRewards" class="boss-rules">
+      <template v-if="panel?.rewardPreview">
+        <p class="boss-reward-title">第 {{ panel.rewardPreview.stage }} 关击杀奖励（按你宗门当前产出计算）</p>
+        <table class="boss-reward-table">
+          <thead>
+            <tr><th>伤害名次</th><th>灵石</th><th>药材</th><th>矿石</th><th>丹药</th></tr>
+          </thead>
+          <tbody>
+            <tr v-for="tier in panel.rewardPreview.tiers" :key="tier.rank">
+              <td>{{ rankLabel(tier.rank) }} <small>×{{ tier.multiplier }}</small></td>
+              <td>{{ formatAmount(String(tier.resources.spiritStone ?? 0)) }}</td>
+              <td>{{ formatAmount(String(tier.resources.herb ?? 0)) }}</td>
+              <td>{{ formatAmount(String(tier.resources.ore ?? 0)) }}</td>
+              <td>{{ tier.topDamagePill ? '聚气丹、淬体丹' : '聚气丹' }}</td>
+            </tr>
+          </tbody>
+        </table>
+        <ul class="boss-reward-notes">
+          <li>最后一击：另得灵石 {{ formatAmount(String(panel.rewardPreview.lastHitStone)) }}</li>
+          <li>每往后一关，奖励 +50%</li>
+          <li>击退（打掉 70% 以上没打死）：资源减半，无丹药；不足 70% 逃走：无奖励</li>
+        </ul>
+      </template>
+      <p v-else class="boss-empty">奖励信息加载中…</p>
     </div>
 
     <template v-else>
@@ -547,6 +593,50 @@ const RULES_TEXT = `讨伐 · 玩法说明
 
 .boss-more-button {
   align-self: flex-start;
+}
+
+.boss-reward-title {
+  margin: 0 0 8px;
+  color: var(--gold, #caa96a);
+  font-size: 13px;
+}
+
+.boss-reward-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.boss-reward-table th,
+.boss-reward-table td {
+  padding: 5px 6px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  color: #c8d6ce;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.boss-reward-table th {
+  color: #8fa79b;
+  font-weight: 600;
+}
+
+.boss-reward-table th:first-child,
+.boss-reward-table td:first-child,
+.boss-reward-table td:last-child {
+  text-align: left;
+}
+
+.boss-reward-table small {
+  color: #7d9186;
+}
+
+.boss-reward-notes {
+  margin: 8px 0 0;
+  padding-left: 16px;
+  color: #8fa79b;
+  font-size: 12px;
+  line-height: 1.7;
 }
 
 .boss-rules-text {

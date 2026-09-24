@@ -39,8 +39,10 @@ export const WORLD_BOSS_DAMAGE_SCALE = 100;
 /** 血量下限。 */
 export const WORLD_BOSS_MIN_HP = 10_000;
 
-/** 第 1 关的血量 = 一轮伤害 × 这个倍数；每往下一关再翻倍（3、6、12、24… 轮）。 */
-export const WORLD_BOSS_ROUNDS_PER_STAGE = 3;
+/** 第 1 关的血量 = 一轮伤害 × 这个倍数；每往下一关再 ×1.6（2、3.2、5.1、8.2… 轮）。 */
+export const WORLD_BOSS_ROUNDS_PER_STAGE = 2;
+/** 每关血量相对上一关的倍数。 */
+export const WORLD_BOSS_STAGE_HP_GROWTH = 1.6;
 
 /** 打掉这个比例以上算「击退」（而不是单纯逃走）。 */
 export const WORLD_BOSS_FLED_THRESHOLD = 0.7;
@@ -56,11 +58,11 @@ export const WORLD_BOSS_FATIGUE_WINDOW_MS = 60 * 60 * 1000;
 /** 普通受伤持续 30 分钟（沿用 disciples.injured_until）。 */
 export const WORLD_BOSS_INJURY_DURATION_MS = 30 * 60 * 1000;
 
-/** 普通受伤概率 = 15% − (体魄 − 50)/10 × 1.5%，夹在 5%~25%。 */
-export const WORLD_BOSS_INJURY_BASE_RATE = 0.15;
-export const WORLD_BOSS_INJURY_RATE_MIN = 0.05;
-export const WORLD_BOSS_INJURY_RATE_MAX = 0.25;
-export const WORLD_BOSS_INJURY_PHYSIQUE_STEP = 0.015;
+/** 普通受伤概率 = 8% − (体魄 − 50)/10 × 1%，夹在 3%~15%。 */
+export const WORLD_BOSS_INJURY_BASE_RATE = 0.08;
+export const WORLD_BOSS_INJURY_RATE_MIN = 0.03;
+export const WORLD_BOSS_INJURY_RATE_MAX = 0.15;
+export const WORLD_BOSS_INJURY_PHYSIQUE_STEP = 0.01;
 
 /** 重伤概率表：本次是这一小时第 n+1 次出手。 */
 export const WORLD_BOSS_SEVERE_RATE_AT_3 = 0.3;
@@ -73,9 +75,11 @@ export const WORLD_BOSS_REWARD_FLOOR_UNIT = 10 * 1000;
 /** 奖励涉及的资源（按资源分别算）。 */
 export const WORLD_BOSS_POOL_RESOURCES = ['spiritStone', 'herb', 'ore'] as const;
 /** 基础份的产量系数。 */
-export const WORLD_BOSS_KILL_POOL_RATE_FACTOR = 1.0;
+export const WORLD_BOSS_KILL_POOL_RATE_FACTOR = 3.5;
 /** 最后一击奖的产量系数。 */
-export const WORLD_BOSS_LAST_HIT_RATE_FACTOR = 0.5;
+export const WORLD_BOSS_LAST_HIT_RATE_FACTOR = 1.0;
+/** 关卡系数每关递增量：第 n 关 ×(1 + 0.5 × (n−1))。 */
+export const WORLD_BOSS_STAGE_REWARD_STEP = 0.5;
 /** 击杀时必发的丹药（每参与宗门）。 */
 export const WORLD_BOSS_KILL_PILL_ID = 'cultivationPill';
 /** 伤害第 1 名的额外丹药。 */
@@ -270,9 +274,9 @@ export function bossDisplayName(bossIndex: number, stage: number): string {
   return `${stageName(stage)} · ${bossDefAt(bossIndex).name}`;
 }
 
-/** 第 n 关最大血量 = max(10000, 一轮伤害 × 3 × 2^(n−1))。 */
+/** 第 n 关最大血量 = max(10000, 一轮伤害 × 2 × 1.6^(n−1))。 */
 export function stageMaxHp(roundDamage: number, stage: number): number {
-  const rounds = WORLD_BOSS_ROUNDS_PER_STAGE * 2 ** Math.max(0, stage - 1);
+  const rounds = WORLD_BOSS_ROUNDS_PER_STAGE * WORLD_BOSS_STAGE_HP_GROWTH ** Math.max(0, stage - 1);
   return Math.max(WORLD_BOSS_MIN_HP, Math.floor(Math.max(0, roundDamage) * rounds));
 }
 
@@ -412,9 +416,9 @@ export function rewardFloor(sectLevel: number): number {
   return WORLD_BOSS_REWARD_FLOOR_UNIT * Math.max(1, Math.floor(sectLevel));
 }
 
-/** 关卡系数 = 1 + 0.2 × (关卡 − 1)。 */
+/** 关卡系数 = 1 + 0.5 × (关卡 − 1)。 */
 export function stageRewardMultiplier(stage: number): number {
-  return 1 + 0.2 * (Math.max(1, Math.floor(stage)) - 1);
+  return 1 + WORLD_BOSS_STAGE_REWARD_STEP * (Math.max(1, Math.floor(stage)) - 1);
 }
 
 /** 排名倍数：第 1 名 1.5、第 2 名 1.25、第 3 名 1.1，其余 1.0。 */
@@ -449,10 +453,36 @@ export function stageResourceRewards(input: {
   return rewards;
 }
 
-/** 最后一击奖（灵石）：max(产出(灵石) × 0.5, 保底(L)) × 关卡系数。 */
+/** 最后一击奖（灵石）：max(产出(灵石) × 1, 保底(L)) × 关卡系数。 */
 export function lastHitReward(rateStone: number, sectLevel: number, stage: number): number {
   const base = Math.max(rateStone * WORLD_BOSS_LAST_HIT_RATE_FACTOR, rewardFloor(sectLevel));
   return Math.floor(base * stageRewardMultiplier(stage));
+}
+
+/**
+ * 奖励预览（面板「奖励」按钮）：按当前关卡与本宗门此刻的产出，列出各名次能拿到的资源。
+ * 与发奖同一套函数（stageResourceRewards / lastHitReward），前端不复制公式。
+ */
+export function worldBossRewardPreview(input: {
+  rates: Readonly<Record<string, number>>;
+  sectLevel: number;
+  stage: number;
+}): {
+  stage: number;
+  tiers: { rank: number; multiplier: number; resources: Record<string, number>; topDamagePill: boolean }[];
+  lastHitStone: number;
+} {
+  const tiers = [1, 2, 3, 4].map((rank) => ({
+    rank,
+    multiplier: rankRewardMultiplier(rank),
+    resources: stageResourceRewards({ rates: input.rates, sectLevel: input.sectLevel, stage: input.stage, rank }),
+    topDamagePill: rank === 1,
+  }));
+  return {
+    stage: input.stage,
+    tiers,
+    lastHitStone: lastHitReward(input.rates.spiritStone ?? 0, input.sectLevel, input.stage),
+  };
 }
 
 /** 已击退？打掉的血量比例达到阈值（含）。 */

@@ -376,8 +376,8 @@ export const RECRUIT_REFRESH_PER_LEVEL = 3;
 
 /* ---------- 世界 Boss 二期 · 阶段一：重伤 ---------- */
 
-/** 重伤持续时间：3 天（被世界 Boss 打成重伤后要静养这么久）。 */
-export const SEVERE_INJURY_MS = 3 * 86_400_000;
+/** 重伤持续时间：1 天（被世界 Boss 打成重伤后要静养这么久）。 */
+export const SEVERE_INJURY_MS = 1 * 86_400_000;
 
 /** 该弟子此刻是否重伤卧床（未填 / 已过期都算未重伤）。 */
 export function isSeverelyInjured(severeInjuredUntil: number | null, now: number): boolean {

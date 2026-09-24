@@ -42,7 +42,7 @@ export interface FilterableDisciple {
   /** null = 未受伤。 */
   injuredUntil: string | null;
   /**
-   * 重伤卧床截止时间（ISO，世界 Boss 打伤，静养 3 天）：null / 缺字段 = 未重伤。
+   * 重伤卧床截止时间（ISO，世界 Boss 打伤，静养 1 天）：null / 缺字段 = 未重伤。
    * 这里写成可选，是为了让根级测试的最小结构不必带上它；`DiscipleView` 一定给值。
    */
   severeInjuredUntil?: string | null;

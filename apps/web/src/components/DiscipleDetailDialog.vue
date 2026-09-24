@@ -94,7 +94,7 @@ const emit = defineEmits<{
 const serverNowMs = computed(() => Date.parse(props.state.serverNow));
 const injured = computed(() => isInjured(props.disciple, serverNowMs.value));
 
-/** 重伤卧床中（世界 Boss 打伤，静养 3 天）：期间不产出、不修炼，写操作一律被服务端拒绝。 */
+/** 重伤卧床中（世界 Boss 打伤，静养 1 天）：期间不产出、不修炼，写操作一律被服务端拒绝。 */
 const severeInjured = computed(() => isSeverelyInjured(props.disciple, serverNowMs.value));
 /** 重伤状态文案：`重伤 · 剩 2天5时`（按服务器时间口径倒算）；未重伤为 null。 */
 const severeLabel = computed(() => severeInjuryStatusLabel(props.disciple, serverNowMs.value));

@@ -147,8 +147,8 @@ function discipleOf(state: Record<string, any>, discipleId: string): Record<stri
 }
 
 describe('二期阶段一：重伤的规则与结算', () => {
-  it('重伤常量是 3 天', () => {
-    expect(SEVERE_INJURY_MS).toBe(3 * 86_400_000);
+  it('重伤常量是 1 天', () => {
+    expect(SEVERE_INJURY_MS).toBe(1 * 86_400_000);
   });
 
   it('重伤期间不产出、不修炼、产速按 0 显示；到期后恢复', async () => {

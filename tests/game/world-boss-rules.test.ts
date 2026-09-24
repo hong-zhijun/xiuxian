@@ -83,12 +83,12 @@ describe('世界 Boss 二期：连战与关卡', () => {
     expect(bossDisplayName(0, 1)).toBe('第 1 关 · 黑风妖王');
   });
 
-  it('血量 = max(10000, 一轮伤害 × 3 × 2^(n−1))', () => {
-    expect(WORLD_BOSS_ROUNDS_PER_STAGE).toBe(3);
-    expect(stageMaxHp(10_000, 1)).toBe(30_000);
-    expect(stageMaxHp(10_000, 2)).toBe(60_000);
-    expect(stageMaxHp(10_000, 3)).toBe(120_000);
-    expect(stageMaxHp(10_000, 4)).toBe(240_000);
+  it('血量 = max(10000, 一轮伤害 × 2 × 1.6^(n−1))', () => {
+    expect(WORLD_BOSS_ROUNDS_PER_STAGE).toBe(2);
+    expect(stageMaxHp(10_000, 1)).toBe(20_000);
+    expect(stageMaxHp(10_000, 2)).toBe(32_000);
+    expect(stageMaxHp(10_000, 3)).toBe(51_200);
+    expect(stageMaxHp(10_000, 4)).toBe(81_920);
     // 一轮伤害太小时取下限
     expect(stageMaxHp(0, 1)).toBe(WORLD_BOSS_MIN_HP);
     expect(stageMaxHp(1000, 1)).toBe(WORLD_BOSS_MIN_HP);
@@ -215,14 +215,14 @@ describe('世界 Boss 二期：疲劳 · 受伤 · 重伤', () => {
     expect(severeInjuryChance(4, 50, true)).toBeCloseTo(1, 10);
     expect(severeInjuryChance(4, 100, true)).toBeCloseTo(1, 10);
     expect(severeInjuryChance(0, 50, true)).toBe(0);
-    expect(normalInjuryChance(50, true)).toBeCloseTo(0.3, 10);
+    expect(normalInjuryChance(50, true)).toBeCloseTo(0.16, 10);
   });
 
-  it('普通受伤概率 = 15% − (体魄 − 50)/10 × 1.5%，夹在 5%~25%', () => {
-    expect(normalInjuryChance(50, false)).toBeCloseTo(0.15, 10);
-    expect(normalInjuryChance(100, false)).toBeCloseTo(0.075, 10);
-    expect(normalInjuryChance(0, false)).toBeCloseTo(0.225, 10);
-    expect(normalInjuryChance(200, false)).toBeCloseTo(0.05, 10);
+  it('普通受伤概率 = 8% − (体魄 − 50)/10 × 1%，夹在 3%~15%', () => {
+    expect(normalInjuryChance(50, false)).toBeCloseTo(0.08, 10);
+    expect(normalInjuryChance(100, false)).toBeCloseTo(0.03, 10);
+    expect(normalInjuryChance(0, false)).toBeCloseTo(0.13, 10);
+    expect(normalInjuryChance(200, false)).toBeCloseTo(0.03, 10);
   });
 
   it('判定顺序：先重伤；重伤就不再取受伤那个随机数', () => {
@@ -230,9 +230,9 @@ describe('世界 Boss 二期：疲劳 · 受伤 · 重伤', () => {
     expect(rollOutcome({ fatigueCount: 3, physique: 50, berserk: false, random: sequence([0.1]) })).toEqual(
       { severe: true, injured: false },
     );
-    // 未重伤（roll 0.9 > 0.3）→ 再判受伤：roll 0.1 < 0.15 → 受伤
+    // 未重伤（roll 0.9 > 0.3）→ 再判受伤：roll 0.05 < 0.08 → 受伤
     expect(
-      rollOutcome({ fatigueCount: 3, physique: 50, berserk: false, random: sequence([0.9, 0.1]) }),
+      rollOutcome({ fatigueCount: 3, physique: 50, berserk: false, random: sequence([0.9, 0.05]) }),
     ).toEqual({ severe: false, injured: true });
     // 都不触发（roll 0.9 与 0.9）
     expect(
@@ -246,8 +246,8 @@ describe('世界 Boss 二期：奖励', () => {
     expect(rewardFloor(1)).toBe(10_000);
     expect(rewardFloor(3)).toBe(30_000);
     expect(stageRewardMultiplier(1)).toBe(1);
-    expect(stageRewardMultiplier(2)).toBeCloseTo(1.2, 10);
-    expect(stageRewardMultiplier(6)).toBeCloseTo(2, 10);
+    expect(stageRewardMultiplier(2)).toBeCloseTo(1.5, 10);
+    expect(stageRewardMultiplier(6)).toBeCloseTo(3.5, 10);
     expect(rankRewardMultiplier(1)).toBe(1.5);
     expect(rankRewardMultiplier(2)).toBe(1.25);
     expect(rankRewardMultiplier(3)).toBe(1.1);
@@ -255,7 +255,7 @@ describe('世界 Boss 二期：奖励', () => {
     expect(rankRewardMultiplier(9)).toBe(1);
   });
 
-  it('基础份 = max(产出 × 1.0, 保底) × 关卡系数 × 排名倍数（按资源分别算）', () => {
+  it('基础份 = max(产出 × 3.5, 保底) × 关卡系数 × 排名倍数（按资源分别算）', () => {
     const rewards = stageResourceRewards({
       rates: { spiritStone: 40_000, herb: 0, ore: 300_000 },
       sectLevel: 1,
@@ -263,26 +263,26 @@ describe('世界 Boss 二期：奖励', () => {
       rank: 1,
     });
     expect(Object.keys(rewards).sort()).toEqual([...WORLD_BOSS_POOL_RESOURCES].sort());
-    expect(rewards.spiritStone).toBe(60_000);
+    expect(rewards.spiritStone).toBe(210_000);
     // 没有这项产出时只吃保底
     expect(rewards.herb).toBe(15_000);
-    expect(rewards.ore).toBe(450_000);
+    expect(rewards.ore).toBe(1_575_000);
   });
 
   it('关卡系数与排名倍数叠乘；击退时资源减半', () => {
     const base = { rates: { spiritStone: 100_000, herb: 100_000, ore: 100_000 }, sectLevel: 1 };
-    // 第 3 关第 2 名：100000 × 1.4 × 1.25 = 175000
-    expect(stageResourceRewards({ ...base, stage: 3, rank: 2 }).spiritStone).toBe(175_000);
+    // 第 3 关第 2 名：100000 × 3.5 × 2 × 1.25 = 875000
+    expect(stageResourceRewards({ ...base, stage: 3, rank: 2 }).spiritStone).toBe(875_000);
     // 击退：再 ×0.5
     expect(stageResourceRewards({ ...base, stage: 3, rank: 2, repelled: true }).spiritStone).toBe(
-      87_500,
+      437_500,
     );
   });
 
-  it('最后一击奖 = max(产出 × 0.5, 保底) × 关卡系数', () => {
+  it('最后一击奖 = max(产出 × 1, 保底) × 关卡系数', () => {
     expect(lastHitReward(0, 1, 1)).toBe(10_000);
-    expect(lastHitReward(400_000, 1, 1)).toBe(200_000);
-    expect(lastHitReward(0, 1, 3)).toBe(14_000);
+    expect(lastHitReward(400_000, 1, 1)).toBe(400_000);
+    expect(lastHitReward(0, 1, 3)).toBe(20_000);
   });
 
   it('击退阈值 ≥70%', () => {

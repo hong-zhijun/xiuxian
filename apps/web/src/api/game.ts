@@ -48,7 +48,7 @@ export interface DiscipleView {
   assignment: string;
   assignmentName: string;
   injuredUntil: string | null;
-  /** 重伤卧床（世界 Boss 造成，3 天）：ISO 字符串，格式与 injuredUntil 相同；null = 未重伤。 */
+  /** 重伤卧床（世界 Boss 造成，1 天）：ISO 字符串，格式与 injuredUntil 相同；null = 未重伤。 */
   severeInjuredUntil: string | null;
   canBreakthrough: boolean;
   /** 除灵气外的破境条件都已满足（批量破境按这个挑人，灵气整批合计后再判断）。 */
@@ -1537,7 +1537,7 @@ export interface WorldBossHitView {
   discipleNames: string[];
   /** 本次受伤（普通受伤，30 分钟）的弟子名。 */
   injuredNames: string[];
-  /** 本次被打成重伤（静养 3 天）的弟子名。 */
+  /** 本次被打成重伤（静养 1 天）的弟子名。 */
   severeNames: string[];
   damage: number;
   isCrit: boolean;
@@ -1589,6 +1589,12 @@ export interface WorldBossView {
   ranks: WorldBossRankView[];
   hits: WorldBossHitView[];
   topHit: WorldBossHitView | null;
+  /** 奖励预览：当前关卡、按本宗门此刻产出算的各名次奖励；rank 4 = 第 4 名及以后；资源为最小单位。 */
+  rewardPreview: {
+    stage: number;
+    tiers: { rank: number; multiplier: number; resources: Record<string, number>; topDamagePill: boolean }[];
+    lastHitStone: number;
+  } | null;
 }
 
 export interface WorldBossAttackResultView {

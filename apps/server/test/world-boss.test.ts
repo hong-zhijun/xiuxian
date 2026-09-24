@@ -7,6 +7,8 @@ import { attackWorldBoss, getWorldBoss, processWorldBoss } from '../src/modules/
 import {
   WORLD_BOSS_COOLDOWN_MS,
   WORLD_BOSS_INJURY_DURATION_MS,
+  WORLD_BOSS_KILL_POOL_RATE_FACTOR,
+  WORLD_BOSS_LAST_HIT_RATE_FACTOR,
   WORLD_BOSS_MIN_HP,
   WORLD_BOSS_ROUNDS_PER_STAGE,
   bossIndexFor,
@@ -495,7 +497,7 @@ describe('世界 Boss 二期：出手', () => {
     await freezeDay(fixture.sectId, 8);
     const member = fixture.discipleIds[0]!;
     await insertBoss({ dayKey: dateKeyUtc8(now), now });
-    // 第 1 个随机数给重伤（疲劳 0 → 概率 0，不会重伤），第 2 个给受伤（0.01 < 15% → 受伤）
+    // 第 1 个随机数给重伤（疲劳 0 → 概率 0，不会重伤），第 2 个给受伤（0.01 < 8% → 受伤）
     vi.spyOn(Math, 'random').mockReturnValue(0);
 
     const result = await attackWorldBoss(env.DB, fixture.userId, { discipleIds: [member] }, now);
@@ -548,7 +550,7 @@ describe('世界 Boss 二期：出手', () => {
 });
 
 describe('世界 Boss 二期：连战', () => {
-  it('打死立刻开下一关（血量翻倍、换 Boss 与词缀），且不会重复生成', async () => {
+  it('打死立刻开下一关（血量 ×1.6、换 Boss 与词缀），且不会重复生成', async () => {
     const fixture = await makeSect('chain');
     const now = dayAt(10, 10);
     await freezeDay(fixture.sectId, 10);
@@ -571,7 +573,7 @@ describe('世界 Boss 二期：连战', () => {
     // 第 2 关：换 Boss、换词缀、血量 = 一轮伤害 × 6
     const stage2 = (await bossRow(dayKey, 2))!;
     expect(stage2.status).toBe('active');
-    expect(Number(stage2.max_hp)).toBe(Math.max(WORLD_BOSS_MIN_HP, 20_000 * 6));
+    expect(Number(stage2.max_hp)).toBe(stageMaxHp(20_000, 2));
     expect(Number(stage2.boss_index)).toBe(bossIndexFor(dayIndexUtc8(now), 2));
     expect(Number(stage2.round_damage)).toBe(20_000);
     // 面板直接切到新关卡
@@ -645,9 +647,9 @@ describe('世界 Boss 二期：Cron 逃走与发奖', () => {
     // 只有一个参与宗门 → 排名 1（×1.5），第 2 关（×1.2）：factor = 1.8
     const factor = stageRewardMultiplier(2) * rankRewardMultiplier(1);
     const share = (rate: number): number =>
-      Math.floor(Math.max(rate * 1.0, rewardFloor(1)) * factor);
+      Math.floor(Math.max(rate * WORLD_BOSS_KILL_POOL_RATE_FACTOR, rewardFloor(1)) * factor);
     const lastHit = Math.floor(
-      Math.max((rates.spiritStone ?? 0) * 0.5, rewardFloor(1)) * stageRewardMultiplier(2),
+      Math.max((rates.spiritStone ?? 0) * WORLD_BOSS_LAST_HIT_RATE_FACTOR, rewardFloor(1)) * stageRewardMultiplier(2),
     );
 
     expect((await balanceOf(fixture.sectId, 'spiritStone')) - before.spiritStone).toBe(
@@ -715,7 +717,7 @@ describe('世界 Boss 二期：Cron 逃走与发奖', () => {
     const factorA = stageRewardMultiplier(1) * rankRewardMultiplier(2);
     const factorB = stageRewardMultiplier(1) * rankRewardMultiplier(1);
     const shareOf = (rate: number, factor: number): number =>
-      Math.floor(Math.max(rate * 1.0, rewardFloor(1)) * factor);
+      Math.floor(Math.max(rate * WORLD_BOSS_KILL_POOL_RATE_FACTOR, rewardFloor(1)) * factor);
 
     expect((await balanceOf(first.sectId, 'herb')) - beforeA.herb).toBe(
       shareOf(ratesA.herb ?? 0, factorA),
@@ -730,7 +732,7 @@ describe('世界 Boss 二期：Cron 逃走与发奖', () => {
     expect(await pillCount(second.sectId, 'bodyTemperingPill')).toBe(1);
     // 最后一击奖只给最后一击的宗门（B），灵石会比 A 多出这一份
     const lastHit = Math.floor(
-      Math.max((ratesB.spiritStone ?? 0) * 0.5, rewardFloor(1)) * stageRewardMultiplier(1),
+      Math.max((ratesB.spiritStone ?? 0) * WORLD_BOSS_LAST_HIT_RATE_FACTOR, rewardFloor(1)) * stageRewardMultiplier(1),
     );
     expect((await balanceOf(second.sectId, 'spiritStone')) - beforeB.spiritStone).toBe(
       shareOf(ratesB.spiritStone ?? 0, factorB) + lastHit,
@@ -770,7 +772,7 @@ describe('世界 Boss 二期：Cron 逃走与发奖', () => {
 
     const halved = (rate: number): number =>
       Math.floor(
-        Math.max(rate * 1.0, rewardFloor(1)) *
+        Math.max(rate * WORLD_BOSS_KILL_POOL_RATE_FACTOR, rewardFloor(1)) *
           stageRewardMultiplier(1) *
           rankRewardMultiplier(1) *
           0.5,

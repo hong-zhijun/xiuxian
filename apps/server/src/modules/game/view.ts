@@ -803,7 +803,7 @@ export interface WorldBossHitView {
   discipleNames: string[];
   /** 本次受伤（普通受伤，30 分钟）的弟子名。 */
   injuredNames: string[];
-  /** 本次被打成重伤（静养 3 天）的弟子名。 */
+  /** 本次被打成重伤（静养 1 天）的弟子名。 */
   severeNames: string[];
   damage: number;
   isCrit: boolean;
@@ -836,7 +836,7 @@ export interface WorldBossCurrentView {
 export interface WorldBossMemberOutcomeView {
   discipleId: string;
   discipleName: string;
-  /** normal = 正常；injured = 普通受伤（30 分钟）；severe = 重伤（静养 3 天）。 */
+  /** normal = 正常；injured = 普通受伤（30 分钟）；severe = 重伤（静养 1 天）。 */
   outcome: 'normal' | 'injured' | 'severe';
 }
 
@@ -866,6 +866,15 @@ export interface WorldBossView {
   hits: WorldBossHitView[];
   /** 历史最强一击（全服）。 */
   topHit: WorldBossHitView | null;
+  /** 奖励预览：当前关卡、按本宗门此刻产出算的各名次奖励（面板「奖励」按钮）。 */
+  rewardPreview: WorldBossRewardPreviewView | null;
+}
+
+/** 奖励预览：rank 4 表示「第 4 名及以后」；资源为最小单位。 */
+export interface WorldBossRewardPreviewView {
+  stage: number;
+  tiers: { rank: number; multiplier: number; resources: Record<string, number>; topDamagePill: boolean }[];
+  lastHitStone: number;
 }
 
 /** 一次出手的结果（POST /game/world-boss/attack 的 result）。 */

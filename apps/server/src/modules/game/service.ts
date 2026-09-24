@@ -287,6 +287,7 @@ import {
   rollOutcome,
   stageMaxHp,
   stageResourceRewards,
+  worldBossRewardPreview,
   worldBossPhaseOf,
 } from './worldBoss';
 
@@ -688,7 +689,9 @@ class SectDraft {
     for (const row of base.disciples) {
       const until = row.severe_injured_until === null ? null : Number(row.severe_injured_until);
       if (until === null) continue;
-      absences.push({ discipleId: row.id, startMs: until - SEVERE_INJURY_MS, endMs: until });
+      // 起点取 0（到期前一律视为不在岗），不用 until − 时长倒推：时长调整过（3 天 → 1 天）时，
+      // 按旧时长打出的重伤会被倒推错。被打成重伤的那次出手已把宗门结算到当时，之后的窗口都在受伤之后，不会误扣。
+      absences.push({ discipleId: row.id, startMs: 0, endMs: until });
     }
     this.settleResult = settleEconomy({
       config: this.config,
@@ -6771,6 +6774,8 @@ async function buildWorldBossView(input: {
   db: D1Database;
   sectId: string;
   now: number;
+  /** 奖励预览要用的本宗门产出与等级（不传则不出预览）。 */
+  rewardContext?: { rates: Record<string, number>; sectLevel: number };
   /** 已经读到的关卡行（出手后传刚读回来的那一行，省一次查询）。 */
   boss?: WorldBossRow | null;
 }): Promise<WorldBossView> {
@@ -6865,7 +6870,22 @@ async function buildWorldBossView(input: {
     ranks,
     hits: hitRows.map(toWorldBossHitView),
     topHit: topRow === null ? null : toWorldBossHitView(topRow),
+    rewardPreview:
+      input.rewardContext === undefined
+        ? null
+        : worldBossRewardPreview({
+            ...input.rewardContext,
+            // 当前关已被打死（下一关还没生成）时，预览下一关的奖励。
+            stage: bossView === null ? 1 : bossView.status === 'killed' ? bossView.stage + 1 : bossView.stage,
+          }),
   };
+}
+
+/** 奖励预览的上下文：产出取自宗门视图（已排除在外 / 重伤弟子，与发奖同口径）。 */
+function worldBossRewardContext(state: SectStateView): { rates: Record<string, number>; sectLevel: number } {
+  const rates: Record<string, number> = {};
+  for (const resource of state.resources) rates[resource.id] = Number(resource.ratePerHour);
+  return { rates, sectLevel: Number(state.sect.level) };
 }
 
 /** GET /game/world-boss：讨伐面板（顺带结算并返回 state）。 */
@@ -6875,7 +6895,12 @@ export async function getWorldBoss(
   now: number,
 ): Promise<{ state: SectStateView; boss: WorldBossView }> {
   const draft = await draftFor(db, userId, now);
-  const boss = await buildWorldBossView({ db, sectId: draft.sect.id, now });
+  const boss = await buildWorldBossView({
+    db,
+    sectId: draft.sect.id,
+    now,
+    rewardContext: worldBossRewardContext(draft.view()),
+  });
   // 面板已经算过「能不能出手」，顺手让 state 里的角标与它一致。
   draft.worldBossAttackable = boss.attackable;
   return { state: draft.view(), boss };
@@ -7208,7 +7233,7 @@ export async function attackWorldBoss(
   for (const member of severeMembers) {
     await broadcastWorldBoss(
       db,
-      `【讨伐】${draft.sect.name}门下${member.name}被${bossDefAt(Number(boss.boss_index)).name}重创，需静养三日`,
+      `【讨伐】${draft.sect.name}门下${member.name}被${bossDefAt(Number(boss.boss_index)).name}重创，需静养一日`,
       now,
     );
   }
@@ -7228,7 +7253,13 @@ export async function attackWorldBoss(
       nextStage,
       members: outcomes,
     },
-    boss: await buildWorldBossView({ db, sectId: draft.sect.id, now, boss: viewBoss }),
+    boss: await buildWorldBossView({
+      db,
+      sectId: draft.sect.id,
+      now,
+      boss: viewBoss,
+      rewardContext: worldBossRewardContext(draft.view()),
+    }),
   };
 }
 /**
