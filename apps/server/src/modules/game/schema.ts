@@ -330,5 +330,5 @@ export const raceBetRequestSchema = z.strictObject({
  * 去重、时段、每日次数与弟子资格（本宗 / 不在历练与疗伤中）全部在 service 里判定。
  */
 export const worldBossAttackRequestSchema = z.strictObject({
-  discipleIds: z.array(z.string().min(1).max(64)).min(1).max(3),
+  discipleIds: z.array(z.string().min(1).max(64)).min(1).max(10),
 });

@@ -1637,6 +1637,8 @@ export interface WorldBossView {
     tiers: { rank: number; multiplier: number; resources: Record<string, number>; topDamagePill: boolean }[];
     lastHitStone: number;
     dropDescription: string;
+    /** 本关击杀的玄铁：伤害占比 ≥ minSharePercent% 才有，第 1 名拿 top。 */
+    xuantie: { top: number; others: number; minSharePercent: number };
   } | null;
 }
 

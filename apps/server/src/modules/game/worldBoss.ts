@@ -16,7 +16,7 @@ import { ARENA_COMBAT_BONUS_BP_PER_LEVEL } from './realms';
  * 金额一律是最小单位（1 展示单位 = 1000 最小单位）。
  */
 export const WORLD_BOSS_MIN_PARTY = 1;
-export const WORLD_BOSS_MAX_PARTY = 3;
+export const WORLD_BOSS_MAX_PARTY = 10;
 
 /** 时间线（UTC+8 小时）：08:00 开放、22:00 力竭、23:00 逃走。 */
 export const WORLD_BOSS_OPEN_HOUR = 8;

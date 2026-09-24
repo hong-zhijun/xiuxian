@@ -19,6 +19,16 @@ export const MAX_ENTRIES = 5;
 
 export const CHANGELOG: readonly ChangelogEntry[] = [
   {
+    id: '2026-09-24-8',
+    time: '2026-09-24 21:42',
+    title: '讨伐更爽快',
+    items: [
+      '讨伐每次最多派 10 名弟子，Boss 血量同步调整。',
+      '新增「一键选人」：自动挑选可出战、不会冒进的弟子，并按词缀排序。',
+      '奖励说明补充玄铁数量。',
+    ],
+  },
+  {
     id: '2026-09-24-7',
     time: '2026-09-24 21:34',
     title: '炼器有成有败',

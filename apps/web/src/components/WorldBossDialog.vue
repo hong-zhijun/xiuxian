@@ -11,6 +11,7 @@ import type {
 import { attackWorldBoss, fetchWorldBoss } from '../api/game';
 import { formatAmount } from '../utils/format';
 import { severeRiskPercent } from '../utils/worldBossRisk';
+import { selectionBlockReason } from '../utils/discipleFilter';
 import DisciplePicker from './DisciplePicker.vue';
 import ModalShell from './ModalShell.vue';
 
@@ -222,6 +223,35 @@ async function refresh(): Promise<void> {
   }
 }
 
+/* ---------- 一键选人 ---------- */
+
+/** 词缀 → 加伤害的属性（铁甲 / 迅捷 / 蛮力）；其余词缀按战力排。 */
+const AFFIX_DAMAGE_ATTR: Record<string, 'defense' | 'speed' | 'attack'> = {
+  ironclad: 'defense',
+  swift: 'speed',
+  brute: 'attack',
+};
+
+/**
+ * 自动挑最多 10 名「安全」弟子：能出战（不在外、不疗伤、不重伤）且本小时出战不到 3 次（不会冒进）。
+ * 排序 ≈ 伤害：战力 ×（1 + 对应属性（含装备）× 0.5%），与服务端词缀加成同一口径。
+ */
+function autoPick(): void {
+  const affixAttr = AFFIX_DAMAGE_ATTR[boss.value?.affix.id ?? ''];
+  const now = Date.now();
+  const score = (disciple: (typeof props.state.disciples)[number]): number => {
+    if (affixAttr === undefined) return disciple.combatPower;
+    const value = disciple[affixAttr] + (disciple.gear?.[affixAttr] ?? 0);
+    return disciple.combatPower * (1 + value * 0.005);
+  };
+  selected.value = props.state.disciples
+    .filter((disciple) => selectionBlockReason(disciple, now, { blockInjured: true, blockAway: true }) === null)
+    .filter((disciple) => (panel.value?.fatigue[disciple.id] ?? 0) < 3)
+    .sort((a, b) => score(b) - score(a))
+    .slice(0, 10)
+    .map((disciple) => disciple.id);
+}
+
 /* ---------- 冒进二次确认 ---------- */
 
 const isBerserk = computed(() => boss.value?.affix.id === 'berserk');
@@ -315,7 +345,7 @@ const RULES_TEXT = `讨伐 · 玩法说明
 
 连战：每天 08:00 第 1 关降临，打死立刻出下一关（第 1 关血量 = 一轮伤害 × 2，之后每关 ×1.6）；
       23:00 当前关逃走，血量被打掉 70% 以上记为「击退」。
-出手：不限次数，但同一宗门每 10 秒只能出手一次；每次派 1~3 名弟子。
+出手：不限次数，但同一宗门每 10 秒只能出手一次；每次派 1~10 名弟子（可点「一键选人」）。
 弟子：在外历练 / 疗伤中 / 重伤卧床的弟子不能出战。
 受伤：概率 = 8% −（体魄 − 50）/10 × 1%，夹在 3%~15%；受伤后疗伤 30 分钟，回春丹可治。
 重伤：本小时第 4 次出手 30%、第 5 次 70%、第 6 次起必定重伤（体魄每高 10 点让前两档下调 3 个百分点）；
@@ -366,7 +396,7 @@ const RULES_TEXT = `讨伐 · 玩法说明
         <p class="boss-reward-title">第 {{ panel.rewardPreview.stage }} 关击杀奖励（按你宗门当前产出计算）</p>
         <table class="boss-reward-table">
           <thead>
-            <tr><th>伤害名次</th><th>灵石</th><th>药材</th><th>矿石</th><th>丹药</th></tr>
+            <tr><th>伤害名次</th><th>灵石</th><th>药材</th><th>矿石</th><th>玄铁</th><th>丹药</th></tr>
           </thead>
           <tbody>
             <tr v-for="tier in panel.rewardPreview.tiers" :key="tier.rank">
@@ -374,12 +404,14 @@ const RULES_TEXT = `讨伐 · 玩法说明
               <td>{{ formatAmount(String(tier.resources.spiritStone ?? 0)) }}</td>
               <td>{{ formatAmount(String(tier.resources.herb ?? 0)) }}</td>
               <td>{{ formatAmount(String(tier.resources.ore ?? 0)) }}</td>
+              <td>{{ tier.rank === 1 ? panel.rewardPreview.xuantie.top : panel.rewardPreview.xuantie.others }}</td>
               <td>{{ tier.topDamagePill ? '聚气丹、淬体丹' : '聚气丹' }}</td>
             </tr>
           </tbody>
         </table>
         <ul class="boss-reward-notes">
           <li>最后一击：另得灵石 {{ formatAmount(String(panel.rewardPreview.lastHitStone)) }}</li>
+          <li>玄铁：本关伤害占比 ≥{{ panel.rewardPreview.xuantie.minSharePercent }}% 才能获得（表中为达标时的数量），击退减半</li>
           <li>每往后一关，奖励 +50%</li>
           <li>击退（打掉 70% 以上没打死）：资源减半，无丹药；不足 70% 逃走：无奖励</li>
           <!-- 0028 装备掉落说明：文案由服务端按当前关卡的品质表拼好，前端直接渲染。 -->
@@ -500,14 +532,20 @@ const RULES_TEXT = `讨伐 · 玩法说明
         v-model:selected="selected"
         :disciples="state.disciples"
         :min="1"
-        :max="3"
+        :max="10"
         :busy="submitting || busy === true"
         sort="power"
         title="选择出战弟子"
         :fatigue="panel?.fatigue"
         :extra-sort="boss?.affix.sortAttribute"
         :berserk="isBerserk"
-      />
+      >
+        <template #actions>
+          <button class="quiet-button" type="button" :disabled="submitting || busy === true" @click="autoPick">
+            一键选人
+          </button>
+        </template>
+      </DisciplePicker>
 
       <button class="boss-attack-button" type="button" :disabled="!canAttack" @click="onAttackClick">
         <span v-if="submitting">讨伐中…</span>
@@ -731,6 +769,7 @@ const RULES_TEXT = `讨伐 · 玩法说明
 
 .boss-reward-table th:first-child,
 .boss-reward-table td:first-child,
+.boss-reward-table th:last-child,
 .boss-reward-table td:last-child {
   text-align: left;
 }

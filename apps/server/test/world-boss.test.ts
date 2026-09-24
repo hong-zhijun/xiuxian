@@ -361,13 +361,13 @@ describe('世界 Boss 二期：面板', () => {
     expect(closed.boss.remainingSeconds).toBe(0);
   });
 
-  it('出手入参校验：1~3 名、去重、多余字段一律 400', async () => {
+  it('出手入参校验：1~10 名、去重、多余字段一律 400', async () => {
     const fixture = await makeSect('validate');
     const empty = await fixture.api.post('/api/v1/game/world-boss/attack', { discipleIds: [] });
     expect(empty.status).toBe(400);
     expect(errorOf(empty).code).toBe('VALIDATION_ERROR');
     const tooMany = await fixture.api.post('/api/v1/game/world-boss/attack', {
-      discipleIds: ['a', 'b', 'c', 'd'],
+      discipleIds: ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k'],
     });
     expect(tooMany.status).toBe(400);
     const strict = await fixture.api.post('/api/v1/game/world-boss/attack', {

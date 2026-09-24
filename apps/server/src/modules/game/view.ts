@@ -1043,6 +1043,8 @@ export interface WorldBossRewardPreviewView {
   /** 0028：当前关卡的装备掉落说明（服务端按 equipment.ts 的品质表拼好，前端只渲染）。 */
   dropDescription: string;
   lastHitStone: number;
+  /** 装备二期：本关击杀的玄铁（展示单位）；伤害占比 ≥ minSharePercent% 才有，第 1 名拿 top。 */
+  xuantie: { top: number; others: number; minSharePercent: number };
 }
 
 /** 一次出手的结果（POST /game/world-boss/attack 的 result）。 */

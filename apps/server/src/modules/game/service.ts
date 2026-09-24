@@ -155,6 +155,7 @@ import {
   FORGE_WORKSHOP_ID,
   XUANTIE_RESOURCE_ID,
   bossXuantieFor,
+  BOSS_XUANTIE_MIN_SHARE,
   forgeRecipeOf,
   forgeWorkshopUpgradeFrom,
   qualityNameOf,
@@ -7542,11 +7543,25 @@ async function buildWorldBossView(input: {
     rewardPreview:
       input.rewardContext === undefined
         ? null
-        : worldBossRewardPreview({
-            ...input.rewardContext,
-            // 当前关已被打死（下一关还没生成）时，预览下一关的奖励。
-            stage: bossView === null ? 1 : bossView.status === 'killed' ? bossView.stage + 1 : bossView.stage,
-          }),
+        : withXuantiePreview(
+            worldBossRewardPreview({
+              ...input.rewardContext,
+              // 当前关已被打死（下一关还没生成）时，预览下一关的奖励。
+              stage: bossView === null ? 1 : bossView.status === 'killed' ? bossView.stage + 1 : bossView.stage,
+            }),
+          ),
+  };
+}
+
+/** 奖励预览补上本关的玄铁数量（与发奖同一个 bossXuantieFor）。 */
+function withXuantiePreview<T extends { stage: number }>(preview: T): T & { xuantie: { top: number; others: number; minSharePercent: number } } {
+  return {
+    ...preview,
+    xuantie: {
+      top: bossXuantieFor({ stage: preview.stage, damageShare: 1, isTop: true, repelled: false }),
+      others: bossXuantieFor({ stage: preview.stage, damageShare: 1, isTop: false, repelled: false }),
+      minSharePercent: Math.round(BOSS_XUANTIE_MIN_SHARE * 100),
+    },
   };
 }
 
