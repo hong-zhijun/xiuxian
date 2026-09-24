@@ -45,9 +45,9 @@ describe('装备规则 · 品质与部位（计划 1.1）', () => {
   it('四档品质的数值与计划表一致', () => {
     expect(EQUIPMENT_QUALITIES.map((q) => q.id)).toEqual(QUALITY_IDS);
     expect(EQUIPMENT_QUALITIES.map((q) => q.name)).toEqual(['凡品', '灵品', '宝品', '仙品']);
-    expect(EQUIPMENT_QUALITIES.map((q) => q.mainValue)).toEqual([4, 8, 12, 18]);
-    expect(EQUIPMENT_QUALITIES.map((q) => q.subMin)).toEqual([1, 2, 3, 4]);
-    expect(EQUIPMENT_QUALITIES.map((q) => q.subMax)).toEqual([2, 4, 6, 8]);
+    expect(EQUIPMENT_QUALITIES.map((q) => q.mainValue)).toEqual([8, 16, 20, 24]);
+    expect(EQUIPMENT_QUALITIES.map((q) => q.subMin)).toEqual([2, 4, 6, 8]);
+    expect(EQUIPMENT_QUALITIES.map((q) => q.subMax)).toEqual([4, 8, 10, 16]);
     // 分解返还矿石（展示单位）：50 / 120 / 250 / 500。
     expect(EQUIPMENT_QUALITIES.map((q) => q.salvageOre)).toEqual([50, 120, 250, 500]);
   });
@@ -68,7 +68,7 @@ describe('装备规则 · 品质与部位（计划 1.1）', () => {
     expect(qualityColorOf('immortal')).toBe('#fbbf24');
     expect(slotNameOf('artifact')).toBe('法器');
     expect(attrNameOf('physique')).toBe('体魄');
-    expect(findQuality('treasure')?.mainValue).toBe(12);
+    expect(findQuality('treasure')?.mainValue).toBe(20);
     expect(findQuality('nope')).toBeUndefined();
   });
 
@@ -119,10 +119,10 @@ describe('装备规则 · 生成装备（计划 1.1）', () => {
     });
     expect(item.name).toBe('宝品·青锋剑');
     expect(item.mainAttr).toBe('attack');
-    expect(item.mainValue).toBe(12);
+    expect(item.mainValue).toBe(20);
     // 副属性候选里不含主属性：random 0 → 第一项（attack 被剔除后是 defense）。
     expect(item.subAttr).toBe('defense');
-    expect(item.subValue).toBe(3);
+    expect(item.subValue).toBe(6);
   });
 
   it('法器掉落随机主属性时，副属性仍然不等于主属性', () => {
@@ -135,7 +135,7 @@ describe('装备规则 · 生成装备（计划 1.1）', () => {
     });
     expect(item.name).toBe('仙品·紫金葫芦');
     expect(item.subAttr).toBe('attack');
-    expect(item.subValue).toBe(8);
+    expect(item.subValue).toBe(16);
   });
 
   it('副属性不等于主属性，且数值落在该品质区间内（含两端）', () => {

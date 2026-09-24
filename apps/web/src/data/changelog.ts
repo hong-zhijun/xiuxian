@@ -19,6 +19,16 @@ export const MAX_ENTRIES = 5;
 
 export const CHANGELOG: readonly ChangelogEntry[] = [
   {
+    id: '2026-09-24-5',
+    date: '2026-09-24',
+    title: '装备加强',
+    items: [
+      '装备属性大幅提升：凡品主属性 +8、灵品 +16、宝品 +20、仙品 +24。',
+      '已有装备同步加强，无需重新炼制。',
+      '背包移到资源栏最右侧，炼器面板更简洁。',
+    ],
+  },
+  {
     id: '2026-09-24-4',
     date: '2026-09-24',
     title: '装备系统上线',

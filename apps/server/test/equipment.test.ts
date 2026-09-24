@@ -588,11 +588,11 @@ describe('装备接口：炼器 / 背包（计划 1.3、1.5）', () => {
     expect(row.disciple_id).toBeNull();
     expect(row.quality).toBe('common');
     expect(row.main_attr).toBe('luck');
-    expect(row.main_value).toBe(4);
+    expect(row.main_value).toBe(8);
     expect(row.name.startsWith('凡品·')).toBe(true);
     expect(['attack', 'defense', 'speed', 'physique']).toContain(row.sub_attr);
-    expect(row.sub_value).toBeGreaterThanOrEqual(1);
-    expect(row.sub_value).toBeLessThanOrEqual(2);
+    expect(row.sub_value).toBeGreaterThanOrEqual(2);
+    expect(row.sub_value).toBeLessThanOrEqual(4);
 
     await expect(
       forgeEquipment(env.DB, fixture.userId, 'artifact', undefined, now),

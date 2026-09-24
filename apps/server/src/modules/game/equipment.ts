@@ -45,10 +45,10 @@ export interface EquipmentQualityDef {
 }
 
 export const EQUIPMENT_QUALITIES: readonly EquipmentQualityDef[] = [
-  { id: 'common', name: '凡品', mainValue: 4, subMin: 1, subMax: 2, salvageOre: 50, color: '#b9c0c9' },
-  { id: 'spirit', name: '灵品', mainValue: 8, subMin: 2, subMax: 4, salvageOre: 120, color: '#4ade80' },
-  { id: 'treasure', name: '宝品', mainValue: 12, subMin: 3, subMax: 6, salvageOre: 250, color: '#60a5fa' },
-  { id: 'immortal', name: '仙品', mainValue: 18, subMin: 4, subMax: 8, salvageOre: 500, color: '#fbbf24' },
+  { id: 'common', name: '凡品', mainValue: 8, subMin: 2, subMax: 4, salvageOre: 50, color: '#b9c0c9' },
+  { id: 'spirit', name: '灵品', mainValue: 16, subMin: 4, subMax: 8, salvageOre: 120, color: '#4ade80' },
+  { id: 'treasure', name: '宝品', mainValue: 20, subMin: 6, subMax: 10, salvageOre: 250, color: '#60a5fa' },
+  { id: 'immortal', name: '仙品', mainValue: 24, subMin: 8, subMax: 16, salvageOre: 500, color: '#fbbf24' },
 ];
 
 /** 3 个装备格（计划 1.1）：兵器 = 攻击、护甲 = 防御，法器的主属性由玩家 / 随机二选一。 */
