@@ -193,9 +193,14 @@ function timeUtc8(ms: number): string {
   return `${hh}:${mm}`;
 }
 
+/** 出战弟子超过 3 人时不逐个列名，写「门下 N 名弟子」（一次最多 10 人，全列出来太长）。 */
+function partyLabel(names: readonly string[]): string {
+  return names.length > 3 ? `门下 ${String(names.length)} 名弟子` : names.join('、');
+}
+
 /** 出手记录一行：`21:32  乾坤门 · 白折月、墨明烛 联手打出 9,870 【暴击】【受伤：墨明烛】`。 */
 function hitLine(entry: WorldBossHitView): string {
-  const names = entry.discipleNames.join('、');
+  const names = partyLabel(entry.discipleNames);
   const verb = entry.discipleNames.length > 1 ? '联手打出' : '打出';
   const allSevere = entry.damage === 0 && entry.severeNames.length === entry.discipleNames.length;
   const body = allSevere ? '全员重伤，未造成伤害' : `${verb} ${formatDamage(entry.damage)}`;
@@ -433,7 +438,7 @@ const RULES_TEXT = `讨伐 · 玩法说明
         <span class="boss-record-label boss-record-sep">史上最强一击</span>
         <template v-if="panel?.topHit">
           <strong class="boss-record-who">
-            {{ panel.topHit.sectName }} · {{ panel.topHit.discipleNames.join('、') }}
+            {{ panel.topHit.sectName }} · {{ partyLabel(panel.topHit.discipleNames) }}
           </strong>
           <span class="boss-record-damage">{{ formatDamage(panel.topHit.damage) }}</span>
         </template>

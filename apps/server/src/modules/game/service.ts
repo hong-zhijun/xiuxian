@@ -7912,7 +7912,9 @@ export async function attackWorldBoss(
   }
 
   if (actualDamage > previousTopDamage) {
-    const names = members.map((member) => member.name).join('、');
+    // 出战超过 3 人时不逐个列名（一次最多 10 人），写「门下 N 名弟子」。
+    const names =
+      members.length > 3 ? `门下 ${String(members.length)} 名弟子` : members.map((member) => member.name).join('、');
     await broadcastWorldBoss(
       db,
       `【讨伐】${draft.sect.name} · ${names} 打出 ${String(actualDamage)}，刷新史上最强一击！`,
