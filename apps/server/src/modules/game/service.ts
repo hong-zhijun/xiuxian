@@ -7460,6 +7460,17 @@ async function rewardWorldBoss(
   // 发奖与「标记已发」同一个 batch：整批成功执行过，就不会再发第二次。
   statements.push(markWorldBossRewardedStatement(boss.id, now));
   await db.batch(prepareStatements(db, statements));
+
+  // 发奖成功后广播一次（奖励是静默入账的，靠这条让玩家知道去看资源）；失败不影响发奖。
+  const top = participants[0];
+  if ((killed || repelled) && top !== undefined) {
+    const topName = hits.find((hit) => hit.sect_id === top[0])?.sect_name ?? '';
+    await broadcastWorldBoss(
+      db,
+      `【讨伐】${bossDisplayName(Number(boss.boss_index), stage)} ${killed ? '讨伐' : '击退'}奖励已发放（${String(participants.length)} 个宗门参与，伤害第一：${topName}）`,
+      now,
+    );
+  }
 }
 
 /** 疲劳记录只留 2 天（Cron 顺带清理，防表无限增长）。 */

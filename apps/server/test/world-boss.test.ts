@@ -303,7 +303,7 @@ describe('世界 Boss 二期：出现（Cron）', () => {
     expect(next.status).toBe('active');
     const roundDamage = Number(next.round_damage);
     expect(roundDamage).toBeGreaterThan(0);
-    expect(Number(next.max_hp)).toBe(Math.max(WORLD_BOSS_MIN_HP, roundDamage * WORLD_BOSS_ROUNDS_PER_STAGE * 2));
+    expect(Number(next.max_hp)).toBe(stageMaxHp(roundDamage, 2));
 
     // 有进行中的关卡时不再补位
     await processWorldBoss(env.DB, dayAt(60, 11));
@@ -642,7 +642,10 @@ describe('世界 Boss 二期：Cron 逃走与发奖', () => {
       bodyTemperingPill: await pillCount(fixture.sectId, 'bodyTemperingPill'),
     };
 
+    const rewardNotices = await countMessages((text) => text.includes('讨伐奖励已发放'));
     await processWorldBoss(env.DB, dayAt(20, 14));
+    const noticesAfterReward = await countMessages((text) => text.includes('讨伐奖励已发放'));
+    expect(noticesAfterReward).toBeGreaterThan(rewardNotices);
 
     // 只有一个参与宗门 → 排名 1（×1.5），第 2 关（×1.2）：factor = 1.8
     const factor = stageRewardMultiplier(2) * rankRewardMultiplier(1);
@@ -664,6 +667,7 @@ describe('世界 Boss 二期：Cron 逃走与发奖', () => {
     // 再跑两次 Cron：rewarded_at 已写 → 不再发
     await processWorldBoss(env.DB, dayAt(20, 15));
     await processWorldBoss(env.DB, dayAt(20, 16));
+    expect(await countMessages((text) => text.includes('讨伐奖励已发放'))).toBe(noticesAfterReward);
     expect(await pillCount(fixture.sectId, 'cultivationPill')).toBe(before.cultivationPill + 1);
     expect(await balanceOf(fixture.sectId, 'herb')).toBe(before.herb + share(rates.herb ?? 0));
   });
