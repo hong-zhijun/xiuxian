@@ -1033,8 +1033,13 @@ function openEquipment(): void {
   void loadEquipment();
 }
 
-/** 资源栏：四种常规资源走通用卡片；玄铁（装备二期，无产速）单独一个窄格。 */
-const mainResources = computed(() => props.state.resources.filter((resource) => resource.id !== 'xuantie'));
+/**
+ * 资源栏：四种常规资源走通用卡片；玄铁（装备二期，无产速）单独一个窄格；
+ * 功勋（三期）只在讨伐面板里看，不上资源栏、也不占窄格。
+ */
+const mainResources = computed(() =>
+  props.state.resources.filter((resource) => resource.id !== 'xuantie' && resource.id !== 'bossMerit'),
+);
 
 /** 打开背包（资源栏最右侧的「背包」格）。 */
 function openBag(): void {

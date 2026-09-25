@@ -1,4 +1,4 @@
-import { bossDropDescription } from './equipment';
+import { bossDropDescription, type EquipmentQuality } from './equipment';
 import { ARENA_COMBAT_BONUS_BP_PER_LEVEL } from './realms';
 
 /**
@@ -12,6 +12,11 @@ import { ARENA_COMBAT_BONUS_BP_PER_LEVEL } from './realms';
  * - **随机词缀**：每关生成时随机一个，整关不变，给弟子属性加成与额外风险。
  * - **不限出手次数**：靠「冷却 3 秒 + 弟子疲劳/受伤/重伤」自然约束。
  *   一期的「阶（level）」「每日 3 次」「参与奖」「打破奖池按伤害占比分」全部去掉。
+ *
+ * 三期的三处结构性变化（docs/世界Boss三期开发计划.md 2.1~2.4）：
+ * - **掉落人人有份**：装备掉落改为每个参与宗门按 √伤害占比各自判定，不再只给伤害第一。
+ * - **功勋**：每关按 √伤害占比发新资源「功勋」，可在讨伐面板兑换玄铁与装备。
+ * - **玄铁门槛放宽**：伤害占比不足 15% 的宗门每关也能得 1 个玄铁。
  *
  * 金额一律是最小单位（1 展示单位 = 1000 最小单位）。
  */
@@ -472,7 +477,7 @@ export function worldBossRewardPreview(input: {
   stage: number;
   tiers: { rank: number; multiplier: number; resources: Record<string, number>; topDamagePill: boolean }[];
   lastHitStone: number;
-  /** 0028 装备掉落说明（「伤害第 1 名必得 灵品装备 ×1；其他参与者 40% 概率得 凡品装备 ×1」）。 */
+  /** 装备掉落说明（三期 2.1：「按本关伤害占比各自判定：仙品装备 ×1 概率 = 75% × √占比；未得时 40% 概率得 宝品装备 ×1」）。 */
   dropDescription: string;
 } {
   const tiers = [1, 2, 3, 4].map((rank) => ({
@@ -493,4 +498,50 @@ export function worldBossRewardPreview(input: {
 export function isFledByDamage(maxHp: number, hp: number): boolean {
   if (maxHp <= 0) return false;
   return (maxHp - hp) / maxHp >= WORLD_BOSS_FLED_THRESHOLD;
+}
+
+/* ---------- 三期：功勋与功勋兑换（计划 2.3、2.4） ---------- */
+
+/** 功勋资源 id（game-config 的第六种资源）。 */
+export const BOSS_MERIT_RESOURCE_ID = 'bossMerit';
+/** 功勋基数（展示单位）：base = max(WORLD_BOSS_MERIT_MIN, round(它 × 关卡系数 × √伤害占比))。 */
+export const WORLD_BOSS_MERIT_BASE = 10;
+/** 功勋保底（展示单位）：伤害占比再小也不低于它。 */
+export const WORLD_BOSS_MERIT_MIN = 2;
+
+/**
+ * 一个参与宗门在该关获得的功勋（展示单位整数）：
+ *   base = max(2, round(10 × 关卡系数 × √伤害占比))；击杀给 base，击退给 floor(base / 2)（至少 1）。
+ * 伤害占比先夹到 [0, 1]；占比 ≤ 0 直接返回 0（蹭不到伤害就没有功勋）。
+ */
+export function worldBossMeritFor(input: {
+  stage: number;
+  damageShare: number;
+  repelled: boolean;
+}): number {
+  if (input.damageShare <= 0) return 0;
+  const share = Math.min(1, Math.max(0, input.damageShare));
+  const base = Math.max(
+    WORLD_BOSS_MERIT_MIN,
+    Math.round(WORLD_BOSS_MERIT_BASE * stageRewardMultiplier(input.stage) * Math.sqrt(share)),
+  );
+  return input.repelled ? Math.max(1, Math.floor(base / 2)) : base;
+}
+
+export type BossMeritShopItemId = 'xuantie' | 'spirit' | 'treasure' | 'immortal';
+
+/** 功勋兑换价目表（唯一一份，前端只渲染）：cost 是展示单位，扣款时 × 1000；quality 为 null = 给玄铁。 */
+export const WORLD_BOSS_MERIT_SHOP: readonly { id: BossMeritShopItemId; name: string; cost: number; quality: EquipmentQuality | null }[] = [
+  { id: 'xuantie', name: '玄铁', cost: 4, quality: null },
+  { id: 'spirit', name: '灵品装备', cost: 25, quality: 'spirit' },
+  { id: 'treasure', name: '宝品装备', cost: 70, quality: 'treasure' },
+  { id: 'immortal', name: '仙品装备', cost: 200, quality: 'immortal' },
+];
+
+/** 一次最多兑换多少个玄铁。 */
+export const WORLD_BOSS_MERIT_XUANTIE_MAX = 100;
+
+/** 按 id 找价目表项；未知 id 返回 undefined（调用方报 VALIDATION_ERROR）。 */
+export function findMeritShopItem(id: string) {
+  return WORLD_BOSS_MERIT_SHOP.find((item) => item.id === id);
 }

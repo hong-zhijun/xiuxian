@@ -332,3 +332,13 @@ export const raceBetRequestSchema = z.strictObject({
 export const worldBossAttackRequestSchema = z.strictObject({
   discipleIds: z.array(z.string().min(1).max(64)).min(1).max(10),
 });
+
+/**
+ * 世界 Boss 三期：功勋兑换。合法性（部位 / 主属性 / 数量组合）由 service 校验，这里只做类型与长度。
+ */
+export const worldBossExchangeRequestSchema = z.strictObject({
+  itemId: z.enum(['xuantie', 'spirit', 'treasure', 'immortal']),
+  quantity: z.number().int().min(1).max(100).optional(),
+  slot: z.string().min(1).max(16).optional(),
+  mainAttr: z.string().min(1).max(16).optional(),
+});

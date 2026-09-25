@@ -151,7 +151,6 @@ import {
 } from './realms';
 import {
   BAG_CAPACITY,
-  BOSS_DROP_CHANCE_OTHERS,
   EQUIPMENT_SLOTS,
   FORGE_QUALITY,
   FORGE_WORKSHOP_ID,
@@ -171,6 +170,8 @@ import {
   salvageXuantieUnits,
   bagFullReason,
   bossDropQualities,
+  bossHighDropChance,
+  rollBossDrop,
   forgeUnlockBlockedReason,
   gearBonusOf,
   gearBonusOfDisciple,
@@ -184,6 +185,8 @@ import {
   slotNameOf,
   withGear,
   type AttrSet,
+  type EquipmentAttr,
+  type EquipmentSlot,
 } from './equipment';
 import {
   BuildingRepository,
@@ -307,6 +310,7 @@ import {
 } from './repository';
 import { settleEconomy, resourceRates, type SettleResult } from './settle';
 import {
+  BOSS_MERIT_RESOURCE_ID,
   WORLD_BOSS_AFFIX_NONE,
   WORLD_BOSS_CLOSE_HOUR,
   WORLD_BOSS_COOLDOWN_MS,
@@ -314,6 +318,8 @@ import {
   WORLD_BOSS_INJURY_DURATION_MS,
   WORLD_BOSS_KILL_PILL_ID,
   WORLD_BOSS_MAX_PARTY,
+  WORLD_BOSS_MERIT_SHOP,
+  WORLD_BOSS_MERIT_XUANTIE_MAX,
   WORLD_BOSS_MIN_PARTY,
   WORLD_BOSS_OPEN_HOUR,
   WORLD_BOSS_TOP_DAMAGE_PILL_ID,
@@ -325,6 +331,7 @@ import {
   discipleContribution,
   expectedPartyDamage,
   findAffix,
+  findMeritShopItem,
   isFledByDamage,
   isWorldBossAttackable,
   lastHitReward,
@@ -334,6 +341,7 @@ import {
   stageMaxHp,
   stageResourceRewards,
   worldBossRewardPreview,
+  worldBossMeritFor,
   worldBossPhaseOf,
 } from './worldBoss';
 
@@ -4825,6 +4833,33 @@ function requireForgeUnlocked(draft: SectDraft): void {
   }
 }
 
+/**
+ * 装备请求的部位 / 主属性校验（炼器与三期功勋兑换**共用**，避免两处各写一份，规则见计划 1.3）：
+ * 部位必须是 3 个合法装备格之一；法器**必须**选身法 / 幸运，其它部位**不许**传主属性。
+ * 返回收窄后的部位与解析好的主属性（法器缺省时按 resolveMainAttr 随机二选一）。
+ */
+function resolveRequestedEquipment(
+  slot: string | undefined,
+  mainAttr: string | undefined,
+): { slot: EquipmentSlot; mainAttr: EquipmentAttr } {
+  if (slot === undefined || !isEquipmentSlot(slot)) {
+    throw new AppError('VALIDATION_ERROR', '未知装备部位');
+  }
+  if (slot === 'artifact') {
+    if (mainAttr !== 'speed' && mainAttr !== 'luck') {
+      throw new AppError('VALIDATION_ERROR', '法器需要选择身法或幸运');
+    }
+  } else if (mainAttr !== undefined) {
+    throw new AppError('VALIDATION_ERROR', '该部位不需要选择主属性');
+  }
+  const resolved = resolveMainAttr(slot, mainAttr, Math.random);
+  if (resolved === null) {
+    // 上面的校验已经覆盖了所有非法组合，这里只是给类型收窄兜底。
+    throw new AppError('VALIDATION_ERROR', '主属性无效');
+  }
+  return { slot, mainAttr: resolved };
+}
+
 /** 本宗全部装备（背包 + 已穿戴）与背包件数；背包 = disciple_id IS NULL。 */
 async function loadEquipment(
   db: D1Database,
@@ -4894,22 +4929,8 @@ export async function forgeEquipment(
       `炼${qualityNameOf(recipe.quality)}需要炼器坊 ${String(recipe.workshopLevel)} 级`,
     );
   }
-  if (!isEquipmentSlot(slot)) {
-    throw new AppError('VALIDATION_ERROR', '未知装备部位');
-  }
-  // 计划 1.3：部位由玩家选；法器**必须**选身法 / 幸运，其它部位**不许**给主属性。
-  if (slot === 'artifact') {
-    if (mainAttr !== 'speed' && mainAttr !== 'luck') {
-      throw new AppError('VALIDATION_ERROR', '法器需要选择身法或幸运');
-    }
-  } else if (mainAttr !== undefined) {
-    throw new AppError('VALIDATION_ERROR', '该部位不需要选择主属性');
-  }
-  const resolvedMainAttr = resolveMainAttr(slot, mainAttr, Math.random);
-  if (resolvedMainAttr === null) {
-    // 上面的校验已经覆盖了所有非法组合，这里只是给类型收窄兜底。
-    throw new AppError('VALIDATION_ERROR', '主属性无效');
-  }
+  // 计划 1.3：部位由玩家选；法器**必须**选身法 / 幸运，其它部位**不许**给主属性（与功勋兑换共用）。
+  const requested = resolveRequestedEquipment(slot, mainAttr);
   const { bagCount } = await loadEquipment(db, draft.sect.id);
   if (bagCount >= BAG_CAPACITY) {
     throw new AppError('INVALID_STATUS', bagFullReason(bagCount));
@@ -4942,9 +4963,9 @@ export async function forgeEquipment(
   }
 
   const generated = generateEquipment({
-    slot,
+    slot: requested.slot,
     quality: result === 'downgrade' ? lowerQuality(recipe.quality) : recipe.quality,
-    mainAttr: resolvedMainAttr,
+    mainAttr: requested.mainAttr,
     random: Math.random,
   });
   const equipmentId = crypto.randomUUID();
@@ -7578,6 +7599,28 @@ function toWorldBossHitView(row: WorldBossHitRow): WorldBossHitView {
 }
 
 /**
+ * 三期：本宗门在当前关的掉落概率（boss 为 null 时为 null）。
+ * 伤害占比 = 本宗门对该关的伤害 / 所有参与宗门之和（和为 0 或还没出手时为 0）。
+ */
+function myDropView(input: {
+  boss: WorldBossCurrentView | null;
+  rankRows: WorldBossSectDamageRow[];
+  sectId: string;
+}): WorldBossView['myDrop'] {
+  if (input.boss === null) return null;
+  const total = input.rankRows.reduce((sum, row) => sum + Number(row.damage), 0);
+  const mine = Number(input.rankRows.find((row) => row.sect_id === input.sectId)?.damage ?? 0);
+  const damageShare = total > 0 ? mine / total : 0;
+  const { top, others } = bossDropQualities(input.boss.stage);
+  return {
+    damageShare,
+    highChance: bossHighDropChance(damageShare),
+    highQualityName: qualityNameOf(top),
+    lowQualityName: qualityNameOf(others),
+  };
+}
+
+/**
  * 讨伐面板（GET /game/world-boss 与出手后的返回共用同一份装配）。
  * 只读：当前关卡、今日已连斩、史上最高单日关数、冷却、疲劳表、伤害榜、最近 20 条、史上最强一击。
  */
@@ -7689,6 +7732,15 @@ async function buildWorldBossView(input: {
     ranks,
     hits: hitRows.map(toWorldBossHitView),
     topHit: topRow === null ? null : toWorldBossHitView(topRow),
+    // 三期：本宗门在当前关的掉落概率（面板与奖励说明都读它，前端不复制公式）。
+    myDrop: myDropView({ boss: bossView, rankRows, sectId: input.sectId }),
+    // 三期：功勋兑换价目（服务端唯一一份，前端只渲染）。
+    meritShop: WORLD_BOSS_MERIT_SHOP.map((item) => ({
+      id: item.id,
+      name: item.name,
+      cost: item.cost,
+      quality: item.quality,
+    })),
     rewardPreview:
       input.rewardContext === undefined
         ? null
@@ -7702,15 +7754,24 @@ async function buildWorldBossView(input: {
   };
 }
 
-/** 奖励预览补上本关的玄铁数量（与发奖同一个 bossXuantieFor）。 */
-function withXuantiePreview<T extends { stage: number }>(preview: T): T & { xuantie: { top: number; others: number; minSharePercent: number } } {
+/** 奖励预览补上本关的玄铁与功勋数量（与发奖同一套 bossXuantieFor / worldBossMeritFor）。 */
+function withXuantiePreview<T extends { stage: number }>(
+  preview: T,
+): T & {
+  xuantie: { top: number; others: number; minSharePercent: number; below: number };
+  meritFullShare: number;
+} {
   return {
     ...preview,
     xuantie: {
       top: bossXuantieFor({ stage: preview.stage, damageShare: 1, isTop: true, repelled: false }),
       others: bossXuantieFor({ stage: preview.stage, damageShare: 1, isTop: false, repelled: false }),
       minSharePercent: Math.round(BOSS_XUANTIE_MIN_SHARE * 100),
+      // 三期：占比不足门槛时的数量（计划 2.2：每关 1 个）。
+      below: 1,
     },
+    // 三期：占比 100% 时的功勋（实际按 √占比 折算，保底 2）。
+    meritFullShare: worldBossMeritFor({ stage: preview.stage, damageShare: 1, repelled: false }),
   };
 }
 
@@ -8204,6 +8265,8 @@ async function rewardFinishedWorldBosses(db: D1Database, now: number): Promise<v
  *   max(该宗门产出(r) × 1.0, 保底(L)) × 关卡系数 × 排名倍数
  * 排名由「对该关的总伤害」决定（并列取先达到者）；击退（≥70%）时资源 ×0.5。
  * 击杀时另发：每个参与者 聚气丹 ×1、第 1 名 淬体丹 ×1、最后一击 灵石 max(产出 × 0.5, 保底) × 关卡系数。
+ * 装备二期：玄铁按伤害占比给（不足 15% 每关 1 个）；三期：功勋按 √伤害占比给（击退减半）。
+ * 三期：装备掉落改为每个参与宗门按 √伤害占比各自判定（不再只给伤害第 1 名，计划 2.1）。
  * 全部语句与「标记已发奖」放在同一个 db.batch 里 —— 要么都成功，要么都没发。
  */
 async function rewardWorldBoss(
@@ -8271,7 +8334,7 @@ async function rewardWorldBoss(
     const totalDamage = participants.reduce((sum, [, info]) => sum + info.damage, 0);
     participants.forEach(([sectId, info], index) => {
       rewardLedger.set(sectId, { rank: index + 1, effects: {}, items: [], lastHit: false });
-      // 装备二期：玄铁只给对本关伤害占比 ≥15% 的宗门（蹭一刀拿不到）；第 1 名更多，击退减半。
+      // 装备二期 / 三期：玄铁给伤害占比 ≥15% 的宗门（第 1 名更多，击退减半）；占比不足 15% 每关也给 1 个。
       const xuantie = bossXuantieFor({
         stage,
         damageShare: totalDamage > 0 ? info.damage / totalDamage : 0,
@@ -8281,6 +8344,16 @@ async function rewardWorldBoss(
       if (xuantie > 0) {
         statements.push(resourceDeltaStatement(sectId, XUANTIE_RESOURCE_ID, xuantie * 1000, now));
         creditLedger(sectId, XUANTIE_RESOURCE_ID, xuantie * 1000);
+      }
+      // 三期：功勋按本关伤害占比发（击杀给 base，击退减半），与玄铁一起进同一个 batch。
+      const merit = worldBossMeritFor({
+        stage,
+        damageShare: totalDamage > 0 ? info.damage / totalDamage : 0,
+        repelled,
+      });
+      if (merit > 0) {
+        statements.push(resourceDeltaStatement(sectId, BOSS_MERIT_RESOURCE_ID, merit * 1000, now));
+        creditLedger(sectId, BOSS_MERIT_RESOURCE_ID, merit * 1000);
       }
       const rewards = stageResourceRewards({
         rates: ratesRecordOf(ratesById.get(sectId) ?? new Map()),
@@ -8330,18 +8403,20 @@ async function rewardWorldBoss(
         }
       }
 
-      // 0028 装备掉落（计划 1.4）：只有**击杀**才掉，按该关的伤害排名给品质 ——
-      // 伤害第 1 名必掉 1 件，其他参与者 40% 概率掉 1 件；部位随机、法器主属性随机。
+      // 0028 装备掉落（计划 1.4 / 三期 2.1）：只有**击杀**才掉，每个参与宗门按本关伤害占比**各自**判定 ——
+      // 高档概率 = 75% × √占比，未中再 40% 概率得低档；部位随机、法器主属性随机。
       // 该宗门背包已满时这一件**自动分解**成对应品质的矿石入账（东西不会丢）。
-      const dropQualities = bossDropQualities(stage);
       const equipmentRepo = new EquipmentRepository(db);
       const bagUsedBySect = new Map<string, number>();
-      for (const [index, [sectId]] of participants.entries()) {
-        const isTop = index === 0;
-        if (!isTop && Math.random() >= BOSS_DROP_CHANCE_OTHERS) {
+      for (const [sectId, info] of participants) {
+        const quality = rollBossDrop({
+          stage,
+          damageShare: totalDamage > 0 ? info.damage / totalDamage : 0,
+          random: Math.random,
+        });
+        if (quality === null) {
           continue;
         }
-        const quality = isTop ? dropQualities.top : dropQualities.others;
         const slotIndex = Math.min(
           EQUIPMENT_SLOTS.length - 1,
           Math.max(0, Math.floor(Math.random() * EQUIPMENT_SLOTS.length)),
@@ -8443,6 +8518,122 @@ async function cleanupWorldBossBattles(db: D1Database, now: number): Promise<voi
   const repo = new WorldBossRepository(db);
   await repo.deleteBattlesBefore(now - WORLD_BOSS_BATTLE_RETENTION_MS);
 }
+
+/* ---------- 三期：功勋兑换（POST /game/world-boss/exchange） ---------- */
+
+/** 功勋兑换回执（纯命令结果）；不属于任何公开视图。 */
+export interface BossMeritExchangeOutcome {
+  itemId: string;
+  /** 花掉的功勋（最小单位）。 */
+  cost: number;
+  /** 兑换到的玄铁（最小单位）；兑换装备时为 0。 */
+  xuantie: number;
+  /** 兑换到的装备；兑换玄铁时为 null。 */
+  equipment: { id: string; name: string; quality: string; slot: string; slotName: string } | null;
+}
+
+/**
+ * 功勋兑换（计划 2.4）：结算 → 价目 / 数量 / 部位与主属性 / 背包 / 功勋余额校验
+ * → 扣功勋 + 发玄铁或一件装备，只做**一次**受保护 batch。
+ *
+ * 与炼器不同：必定成功、不需要炼器坊等级、不花灵石矿石；装备的部位由玩家自选
+ * （法器**必须**给身法 / 幸运，其它部位**不许**给主属性 —— 与炼器共用同一套校验）。
+ * 装备的 source 记 'boss'（不新增来源类型）。
+ */
+export async function exchangeBossMerit(
+  db: D1Database,
+  userId: string,
+  input: { itemId: string; quantity?: number; slot?: string; mainAttr?: string },
+  now: number,
+): Promise<{ state: SectStateView; outcome: BossMeritExchangeOutcome }> {
+  const draft = await draftFor(db, userId, now);
+  const item = findMeritShopItem(input.itemId);
+  if (item === undefined) {
+    throw new AppError('VALIDATION_ERROR', '未知兑换项');
+  }
+  // 价目表里的 cost 是展示单位，入库一律是最小单位。
+  const costMinUnits = item.cost * 1000;
+  const quality = item.quality;
+
+  // 玄铁：不许带部位 / 主属性；数量 1~WORLD_BOSS_MERIT_XUANTIE_MAX，缺省 1。
+  if (quality === null) {
+    if (input.slot !== undefined || input.mainAttr !== undefined) {
+      throw new AppError('VALIDATION_ERROR', '兑换玄铁不需要选择部位');
+    }
+    const quantity = input.quantity ?? 1;
+    if (!Number.isInteger(quantity) || quantity < 1 || quantity > WORLD_BOSS_MERIT_XUANTIE_MAX) {
+      throw new AppError(
+        'VALIDATION_ERROR',
+        `一次最多兑换 ${String(WORLD_BOSS_MERIT_XUANTIE_MAX)} 个玄铁`,
+      );
+    }
+    draft.requireResource(BOSS_MERIT_RESOURCE_ID, costMinUnits * quantity);
+    draft.addResource(XUANTIE_RESOURCE_ID, quantity * 1000);
+    await draft.commit();
+    return {
+      state: draft.view(),
+      outcome: {
+        itemId: item.id,
+        cost: costMinUnits * quantity,
+        xuantie: quantity * 1000,
+        equipment: null,
+      },
+    };
+  }
+
+  // 装备：一次只能 1 件；部位与主属性的校验与炼器完全相同。
+  if (input.quantity !== undefined && input.quantity !== 1) {
+    throw new AppError('VALIDATION_ERROR', '装备一次只能兑换 1 件');
+  }
+  const requested = resolveRequestedEquipment(input.slot, input.mainAttr);
+  const { bagCount } = await loadEquipment(db, draft.sect.id);
+  if (bagCount >= BAG_CAPACITY) {
+    throw new AppError('INVALID_STATUS', bagFullReason(bagCount));
+  }
+  draft.requireResource(BOSS_MERIT_RESOURCE_ID, costMinUnits);
+  const generated = generateEquipment({
+    slot: requested.slot,
+    quality,
+    mainAttr: requested.mainAttr,
+    random: Math.random,
+  });
+  const equipmentId = crypto.randomUUID();
+  draft.addStatement(
+    insertEquipmentStatement({
+      id: equipmentId,
+      sectId: draft.sect.id,
+      slot: generated.slot,
+      quality: generated.quality,
+      name: generated.name,
+      mainAttr: generated.mainAttr,
+      mainValue: generated.mainValue,
+      subAttr: generated.subAttr,
+      subValue: generated.subValue,
+      source: 'boss',
+      now,
+    }),
+  );
+  await draft.commit();
+  if (generated.quality === 'immortal') {
+    await broadcastWorldBoss(db, `【讨伐】${draft.sect.name}以功勋兑换 ${generated.name}！`, now);
+  }
+  return {
+    state: draft.view(),
+    outcome: {
+      itemId: item.id,
+      cost: costMinUnits,
+      xuantie: 0,
+      equipment: {
+        id: equipmentId,
+        name: generated.name,
+        quality: generated.quality,
+        slot: generated.slot,
+        slotName: slotNameOf(generated.slot),
+      },
+    },
+  };
+}
+
 /* ---------- 坊市（shop.ts 的纯规则 + 受保护 batch 提交） ---------- */
 
 /**

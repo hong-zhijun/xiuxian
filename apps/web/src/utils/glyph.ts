@@ -8,6 +8,7 @@ const RESOURCE_GLYPHS: Record<string, string> = {
   herb: '药',
   ore: '矿',
   xuantie: '铁',
+  bossMerit: '勋',
 };
 
 /** 资源 id → 单字标记。 */

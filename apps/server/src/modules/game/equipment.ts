@@ -9,7 +9,7 @@
  *
  * 一期不做（计划第 6 节）：强化 / 升级装备、炼器师与更高品质的炼器、套装效果、
  * 耐久与修理、玩家间交易、装备锁定、装备影响历练 / 论道 / 综合评分、背包扩容、
- * 除炼器与世界 Boss 以外的其他来源。
+ * 除炼器、世界 Boss 与三期功勋兑换以外的其他来源。
  */
 
 export type EquipmentSlot = 'weapon' | 'armor' | 'artifact';
@@ -190,7 +190,7 @@ export function salvageXuantieUnits(quality: EquipmentQuality): number {
   return SALVAGE_XUANTIE[quality] ?? 0;
 }
 
-/** 世界 Boss 玄铁：对该关伤害占比 ≥ 15% 才有；按关卡给量，伤害第 1 名更多；击退减半（向下取整）。 */
+/** 世界 Boss 玄铁：伤害占比 ≥ 15% 按关卡给量、伤害第 1 名更多；占比不足 15% 每关也给 1 个（三期）；击退减半（向下取整）。 */
 export const BOSS_XUANTIE_MIN_SHARE = 0.15;
 const BOSS_XUANTIE_BY_STAGE: readonly { base: number; top: number }[] = [
   { base: 2, top: 3 },
@@ -202,7 +202,9 @@ const BOSS_XUANTIE_BY_STAGE: readonly { base: number; top: number }[] = [
 
 /** 返回玄铁数量（展示单位整数；调用方 × 1000 入账）。 */
 export function bossXuantieFor(input: { stage: number; damageShare: number; isTop: boolean; repelled: boolean }): number {
-  if (input.damageShare < BOSS_XUANTIE_MIN_SHARE) return 0;
+  if (input.damageShare <= 0) return 0;
+  // 三期：占比不足门槛的参与者每关也给 1 个（击退减半后向下取整 = 0）。
+  if (input.damageShare < BOSS_XUANTIE_MIN_SHARE) return input.repelled ? 0 : 1;
   const row = BOSS_XUANTIE_BY_STAGE[Math.min(BOSS_XUANTIE_BY_STAGE.length, Math.max(1, Math.floor(input.stage))) - 1]!;
   const amount = input.isTop ? row.top : row.base;
   return input.repelled ? Math.floor(amount / 2) : amount;
@@ -231,7 +233,9 @@ export function realmXuantieDrop(realmId: string, random: () => number): number 
 }
 /** 背包上限 = 本宗门**未穿戴**装备的件数上限（穿在身上的不占背包）。 */
 export const BAG_CAPACITY = 50;
-/** 世界 Boss 掉落：非第 1 名参与者的掉落概率。 */
+/** 世界 Boss 掉落：击杀时掉高档装备的概率系数（概率 = 它 × √伤害占比）。 */
+export const BOSS_HIGH_DROP_FACTOR = 0.75;
+/** 世界 Boss 掉落：未中高档时掉低档的概率。 */
 export const BOSS_DROP_CHANCE_OTHERS = 0.4;
 /** 分解返还矿石的换算：1 展示单位 = 1000 最小单位。 */
 export const ORE_UNITS_PER_DISPLAY = 1000;
@@ -360,7 +364,7 @@ export function generateEquipment(input: {
   };
 }
 
-/** 世界 Boss 击杀掉落的品质（计划 1.4）：按**该关**的伤害名次给。 */
+/** 世界 Boss 击杀掉落的品质（三期 2.1）：top = 高档，others = 低档；按关卡给。 */
 export function bossDropQualities(stage: number): { top: EquipmentQuality; others: EquipmentQuality } {
   if (stage <= 2) {
     return { top: 'spirit', others: 'common' };
@@ -371,11 +375,40 @@ export function bossDropQualities(stage: number): { top: EquipmentQuality; other
   return { top: 'immortal', others: 'treasure' };
 }
 
-/** 「奖励」预览里的掉落说明（与发奖同一套品质表，前端不复制公式）。 */
+/**
+ * 击杀时掉高档装备的概率 = BOSS_HIGH_DROP_FACTOR × √伤害占比。
+ * 伤害占比先夹到 [0, 1]（负数与 >1 的脏值都不会把概率放大）。
+ */
+export function bossHighDropChance(damageShare: number): number {
+  const share = Math.min(1, Math.max(0, damageShare));
+  return BOSS_HIGH_DROP_FACTOR * Math.sqrt(share);
+}
+
+/**
+ * 世界 Boss 击杀掉落判定：先判高档，未中再判低档；都没中返回 null。
+ *
+ * 随机数取用顺序（测试依赖）：每个参与者先取一个判高档，未中高档才再取一个判低档；
+ * damageShare ≤ 0 直接返回 null，且**不**取随机数。
+ */
+export function rollBossDrop(input: {
+  stage: number;
+  damageShare: number;
+  random: () => number;
+}): EquipmentQuality | null {
+  if (input.damageShare <= 0) return null;
+  const { top, others } = bossDropQualities(input.stage);
+  if (input.random() < bossHighDropChance(input.damageShare)) {
+    return top;
+  }
+  return input.random() < BOSS_DROP_CHANCE_OTHERS ? others : null;
+}
+
+/** 「奖励」预览里的掉落说明（与发奖同一套判定，前端不复制公式）。 */
 export function bossDropDescription(stage: number): string {
   const { top, others } = bossDropQualities(stage);
-  const percent = Math.round(BOSS_DROP_CHANCE_OTHERS * 100);
-  return `伤害第 1 名必得 ${qualityNameOf(top)}装备 ×1；其他参与者 ${String(percent)}% 概率得 ${qualityNameOf(others)}装备 ×1`;
+  const highPercent = Math.round(BOSS_HIGH_DROP_FACTOR * 100);
+  const lowPercent = Math.round(BOSS_DROP_CHANCE_OTHERS * 100);
+  return `按本关伤害占比各自判定：${qualityNameOf(top)}装备 ×1 概率 = ${String(highPercent)}% × √占比；未得时 ${String(lowPercent)}% 概率得 ${qualityNameOf(others)}装备 ×1`;
 }
 
 /** 分解返还的矿石（最小单位）= 品质表的展示单位 × 1000。 */
