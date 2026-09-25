@@ -1,17 +1,21 @@
-name: Deploy to Cloudflare Workers
+name: Deploy
+
+# 推送 main 后按仓库变量（Settings → Secrets and variables → Actions → Variables）决定部署到哪：
+#   DEPLOY_CF      默认部署；设为 false 关闭 Cloudflare 部署
+#   DEPLOY_SERVER  设为 true 部署到自己的服务器（Node + SQLite，见 deploy/server/README.md）
 
 on:
   push:
     branches: [main]
 
 concurrency:
-  group: cloudflare-production
+  group: production-deploy
   cancel-in-progress: false
 
 jobs:
   deploy:
     # 只在原仓库部署：通过「Deploy to Cloudflare」按钮或 fork 复制出的仓库没有这些 secret，跳过而不是报错
-    if: github.repository_owner == 'hong-zhijun'
+    if: github.repository_owner == 'hong-zhijun' && vars.DEPLOY_CF != 'false'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -42,3 +46,37 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+  deploy-server:
+    if: vars.DEPLOY_SERVER == 'true'
+    runs-on: ubuntu-latest
+    env:
+      SERVER_HOST: ${{ secrets.SERVER_HOST }}
+      SERVER_PORT: ${{ secrets.SERVER_PORT || '22' }}
+      SERVER_USER: ${{ secrets.SERVER_USER }}
+      APP_HOME: ${{ vars.SERVER_APP_DIR || '/www/wwwroot/xiuxian' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # 前端 + 打包成单文件的 Node 服务端（服务器上不需要 npm install）
+      - run: npm run build:node
+
+      - name: 配置 SSH
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "${{ secrets.SERVER_SSH_KEY }}" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          ssh-keyscan -p "$SERVER_PORT" "$SERVER_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: 上传并部署
+        run: |
+          SSH="ssh -i $HOME/.ssh/id_deploy -p $SERVER_PORT $SERVER_USER@$SERVER_HOST"
+          tar czf - -C apps/server/dist-node . | $SSH "set -e; rm -rf '$APP_HOME/incoming'; mkdir -p '$APP_HOME/incoming'; tar xzf - -C '$APP_HOME/incoming'"
+          $SSH "bash '$APP_HOME/incoming/deploy.sh'"
