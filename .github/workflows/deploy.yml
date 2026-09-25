@@ -7,6 +7,8 @@ name: Deploy
 on:
   push:
     branches: [main]
+  # 手动运行（Actions → Deploy → Run workflow）：可选分支，只会部署到服务器，Cloudflare 只认 main
+  workflow_dispatch:
 
 concurrency:
   group: production-deploy
@@ -15,7 +17,7 @@ concurrency:
 jobs:
   deploy:
     # 只在原仓库部署：通过「Deploy to Cloudflare」按钮或 fork 复制出的仓库没有这些 secret，跳过而不是报错
-    if: github.repository_owner == 'hong-zhijun' && vars.DEPLOY_CF != 'false'
+    if: github.repository_owner == 'hong-zhijun' && vars.DEPLOY_CF != 'false' && github.ref == 'refs/heads/main' && github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
