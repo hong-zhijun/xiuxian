@@ -424,7 +424,7 @@ describe('世界 Boss 二期：出手', () => {
     expect(result.boss.hits).toHaveLength(1);
   });
 
-  it('冷却 10 秒：拒绝时给出剩余秒数，过了就能再打', async () => {
+  it('冷却 3 秒：拒绝时给出剩余秒数，过了就能再打', async () => {
     const fixture = await makeSect('cooldown');
     const now = dayAt(6, 10);
     await freezeDay(fixture.sectId, 6);
@@ -435,12 +435,12 @@ describe('世界 Boss 二期：出手', () => {
     await attackWorldBoss(env.DB, fixture.userId, { discipleIds }, now);
 
     const details = await errorDetailsOf(
-      attackWorldBoss(env.DB, fixture.userId, { discipleIds }, now + 3_000),
+      attackWorldBoss(env.DB, fixture.userId, { discipleIds }, now + 1_000),
     );
     expect(details).not.toBeNull();
-    expect(Number(details!.remainingSeconds)).toBe(7);
+    expect(Number(details!.remainingSeconds)).toBe(2);
     expect(
-      await errorCodeOf(attackWorldBoss(env.DB, fixture.userId, { discipleIds }, now + 3_000)),
+      await errorCodeOf(attackWorldBoss(env.DB, fixture.userId, { discipleIds }, now + 1_000)),
     ).toBe('COOLDOWN_ACTIVE');
 
     // 冷却结束后照常出手
@@ -497,7 +497,7 @@ describe('世界 Boss 二期：出手', () => {
     await freezeDay(fixture.sectId, 8);
     const member = fixture.discipleIds[0]!;
     await insertBoss({ dayKey: dateKeyUtc8(now), now });
-    // 第 1 个随机数给重伤（疲劳 0 → 概率 0，不会重伤），第 2 个给受伤（0.01 < 8% → 受伤）
+    // 第 1 个随机数给重伤（疲劳 0 → 概率 0，不会重伤），第 2 个给受伤（0.01 < 3% → 受伤）
     vi.spyOn(Math, 'random').mockReturnValue(0);
 
     const result = await attackWorldBoss(env.DB, fixture.userId, { discipleIds: [member] }, now);

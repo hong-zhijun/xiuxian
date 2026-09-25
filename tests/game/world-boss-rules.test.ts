@@ -215,14 +215,14 @@ describe('世界 Boss 二期：疲劳 · 受伤 · 重伤', () => {
     expect(severeInjuryChance(4, 50, true)).toBeCloseTo(1, 10);
     expect(severeInjuryChance(4, 100, true)).toBeCloseTo(1, 10);
     expect(severeInjuryChance(0, 50, true)).toBe(0);
-    expect(normalInjuryChance(50, true)).toBeCloseTo(0.16, 10);
+    expect(normalInjuryChance(50, true)).toBeCloseTo(0.06, 10);
   });
 
-  it('普通受伤概率 = 8% − (体魄 − 50)/10 × 1%，夹在 3%~15%', () => {
-    expect(normalInjuryChance(50, false)).toBeCloseTo(0.08, 10);
-    expect(normalInjuryChance(100, false)).toBeCloseTo(0.03, 10);
-    expect(normalInjuryChance(0, false)).toBeCloseTo(0.13, 10);
-    expect(normalInjuryChance(200, false)).toBeCloseTo(0.03, 10);
+  it('普通受伤概率 = 3% − (体魄 − 50)/10 × 1%，夹在 1%~8%', () => {
+    expect(normalInjuryChance(50, false)).toBeCloseTo(0.03, 10);
+    expect(normalInjuryChance(100, false)).toBeCloseTo(0.01, 10);
+    expect(normalInjuryChance(0, false)).toBeCloseTo(0.08, 10);
+    expect(normalInjuryChance(200, false)).toBeCloseTo(0.01, 10);
   });
 
   it('判定顺序：先重伤；重伤就不再取受伤那个随机数', () => {
@@ -230,9 +230,9 @@ describe('世界 Boss 二期：疲劳 · 受伤 · 重伤', () => {
     expect(rollOutcome({ fatigueCount: 3, physique: 50, berserk: false, random: sequence([0.1]) })).toEqual(
       { severe: true, injured: false },
     );
-    // 未重伤（roll 0.9 > 0.3）→ 再判受伤：roll 0.05 < 0.08 → 受伤
+    // 未重伤（roll 0.9 > 0.3）→ 再判受伤：roll 0.02 < 0.03 → 受伤
     expect(
-      rollOutcome({ fatigueCount: 3, physique: 50, berserk: false, random: sequence([0.9, 0.05]) }),
+      rollOutcome({ fatigueCount: 3, physique: 50, berserk: false, random: sequence([0.9, 0.02]) }),
     ).toEqual({ severe: false, injured: true });
     // 都不触发（roll 0.9 与 0.9）
     expect(
@@ -292,7 +292,7 @@ describe('世界 Boss 二期：奖励', () => {
   });
 
   it('冷却与疲劳窗口常量', () => {
-    expect(WORLD_BOSS_COOLDOWN_MS).toBe(10_000);
+    expect(WORLD_BOSS_COOLDOWN_MS).toBe(3_000);
     expect(WORLD_BOSS_FATIGUE_WINDOW_MS).toBe(60 * 60 * 1000);
   });
 });

@@ -7553,7 +7553,7 @@ async function buildWorldBossView(input: {
       : todayStart + 86_400_000 + WORLD_BOSS_OPEN_HOUR * 3_600_000;
   const remainingSeconds = now >= closesAt ? 0 : Math.max(0, Math.ceil((closesAt - now) / 1000));
 
-  // 冷却：该宗门最近一条出手记录 + 10 秒（走 (sect_id, created_at DESC) 索引）。
+  // 冷却：该宗门最近一条出手记录 + 3 秒（走 (sect_id, created_at DESC) 索引）。
   const lastHitAt = await repo.lastHitAtBySect(input.sectId);
   const cooldownSeconds =
     lastHitAt === null
@@ -7823,7 +7823,7 @@ export async function attackWorldBoss(
     throw new AppError('INVALID_STATUS', '本关已经结束，请刷新面板');
   }
 
-  // 冷却 10 秒：按该宗门最近一条出手记录算（跨关卡同样生效），拒绝时给出剩余秒数。
+  // 冷却 3 秒：按该宗门最近一条出手记录算（跨关卡同样生效），拒绝时给出剩余秒数。
   const lastHitAt = await repo.lastHitAtBySect(draft.sect.id);
   if (lastHitAt !== null) {
     const remainingMs = lastHitAt + WORLD_BOSS_COOLDOWN_MS - now;
@@ -8104,7 +8104,7 @@ async function spawnWorldBoss(db: D1Database, now: number): Promise<void> {
 
   await broadcastWorldBoss(
     db,
-    `【讨伐】${bossDisplayName(created.boss_index, stage)}（${affixNameOf(created.affix)}）降临！全服共讨，每宗门每 10 秒可出手一次`,
+    `【讨伐】${bossDisplayName(created.boss_index, stage)}（${affixNameOf(created.affix)}）降临！全服共讨，每宗门每 3 秒可出手一次`,
     now,
   );
 }

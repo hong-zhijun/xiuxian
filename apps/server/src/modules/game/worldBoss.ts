@@ -10,7 +10,7 @@ import { ARENA_COMBAT_BONUS_BP_PER_LEVEL } from './realms';
  * 二期的三处结构性变化：
  * - **连战**：一天从第 1 关开始，打死一关立刻出下一关；血量按关卡翻倍。
  * - **随机词缀**：每关生成时随机一个，整关不变，给弟子属性加成与额外风险。
- * - **不限出手次数**：靠「冷却 10 秒 + 弟子疲劳/受伤/重伤」自然约束。
+ * - **不限出手次数**：靠「冷却 3 秒 + 弟子疲劳/受伤/重伤」自然约束。
  *   一期的「阶（level）」「每日 3 次」「参与奖」「打破奖池按伤害占比分」全部去掉。
  *
  * 金额一律是最小单位（1 展示单位 = 1000 最小单位）。
@@ -51,7 +51,7 @@ export const WORLD_BOSS_FLED_THRESHOLD = 0.7;
 export const WORLD_BOSS_FLED_POOL_FACTOR = 0.5;
 
 /** 同一宗门的出手冷却（不限次数之后的唯一节奏约束）。 */
-export const WORLD_BOSS_COOLDOWN_MS = 10_000;
+export const WORLD_BOSS_COOLDOWN_MS = 3_000;
 
 /** 疲劳统计窗口：最近 60 分钟内已出战讨伐的次数。 */
 export const WORLD_BOSS_FATIGUE_WINDOW_MS = 60 * 60 * 1000;
@@ -59,10 +59,10 @@ export const WORLD_BOSS_FATIGUE_WINDOW_MS = 60 * 60 * 1000;
 /** 普通受伤持续 30 分钟（沿用 disciples.injured_until）。 */
 export const WORLD_BOSS_INJURY_DURATION_MS = 30 * 60 * 1000;
 
-/** 普通受伤概率 = 8% − (体魄 − 50)/10 × 1%，夹在 3%~15%。 */
-export const WORLD_BOSS_INJURY_BASE_RATE = 0.08;
-export const WORLD_BOSS_INJURY_RATE_MIN = 0.03;
-export const WORLD_BOSS_INJURY_RATE_MAX = 0.15;
+/** 普通受伤概率 = 3% − (体魄 − 50)/10 × 1%，夹在 1%~8%。 */
+export const WORLD_BOSS_INJURY_BASE_RATE = 0.03;
+export const WORLD_BOSS_INJURY_RATE_MIN = 0.01;
+export const WORLD_BOSS_INJURY_RATE_MAX = 0.08;
 export const WORLD_BOSS_INJURY_PHYSIQUE_STEP = 0.01;
 
 /** 重伤概率表：本次是这一小时第 n+1 次出手。 */
@@ -379,7 +379,7 @@ export function severeInjuryChance(
   return berserk ? Math.min(1, rate * 2) : rate;
 }
 
-/** 普通受伤概率：15% − (体魄 − 50)/10 × 1.5%，夹在 5%~25%；「狂暴」×2。 */
+/** 普通受伤概率：3% − (体魄 − 50)/10 × 1%，夹在 1%~8%；「狂暴」×2。 */
 export function normalInjuryChance(physique: number, berserk: boolean): number {
   const raw =
     WORLD_BOSS_INJURY_BASE_RATE - ((physique - 50) / 10) * WORLD_BOSS_INJURY_PHYSIQUE_STEP;
