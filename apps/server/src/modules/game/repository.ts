@@ -2191,9 +2191,11 @@ export class ChatMessageRepository extends ParamRepository {
 
   async findAfterId(afterId: string, limit: number): Promise<ChatMessageRow[]> {
     return this.all<ChatMessageRow>({
+      // 外层用 created_at >= 锚点 走 idx_chat_messages_created_at 做范围扫描；
+      // 原来整条 WHERE 是 OR，SQLite 用不上索引，每次轮询都全表扫描。
       sql: `SELECT id, user_id, sect_name, content, created_at FROM chat_messages
-            WHERE created_at > (SELECT created_at FROM chat_messages WHERE id = ?)
-               OR (created_at = (SELECT created_at FROM chat_messages WHERE id = ?) AND id > ?)
+            WHERE created_at >= (SELECT created_at FROM chat_messages WHERE id = ?)
+              AND (created_at > (SELECT created_at FROM chat_messages WHERE id = ?) OR id > ?)
             ORDER BY created_at ASC, id ASC LIMIT ?`,
       params: [afterId, afterId, afterId, limit],
     });
@@ -2590,13 +2592,18 @@ export class WorldBossRepository extends ParamRepository {
     });
   }
 
-  /** 历史最强一击（全表）。 */
+  /**
+   * 历史最强一击（全表）。
+   * 先用 damage 索引取 MAX（只读 1 行），再按等值取同伤害里最早的那次；
+   * 原来的「JOIN + ORDER BY damage DESC, created_at ASC」会全表扫描 + 排序，D1 读行数随出手次数线性增长。
+   */
   async topHit(): Promise<WorldBossTopHitRow | null> {
     return this.one<WorldBossTopHitRow>({
       sql: `SELECT h.*, b.day_key, b.stage, b.boss_index
               FROM world_boss_hits h
               JOIN world_bosses b ON b.id = h.boss_id
-             ORDER BY h.damage DESC, h.created_at ASC
+             WHERE h.damage = (SELECT MAX(damage) FROM world_boss_hits)
+             ORDER BY h.created_at ASC
              LIMIT 1`,
       params: [],
     });

@@ -8381,8 +8381,12 @@ async function rewardWorldBoss(
   }
 }
 
-/** 疲劳记录只留 2 天（Cron 顺带清理，防表无限增长）。 */
+/**
+ * 疲劳记录只留 2 天（Cron 顺带清理，防表无限增长）。
+ * DELETE 按 created_at 过滤没有索引、每次都扫全表：只在每小时的第一个 10 分钟 tick 执行一次。
+ */
 async function cleanupWorldBossBattles(db: D1Database, now: number): Promise<void> {
+  if (new Date(now).getUTCMinutes() >= 10) return;
   const repo = new WorldBossRepository(db);
   await repo.deleteBattlesBefore(now - WORLD_BOSS_BATTLE_RETENTION_MS);
 }

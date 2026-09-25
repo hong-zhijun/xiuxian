@@ -830,7 +830,7 @@ describe('世界 Boss 二期：Cron 逃走与发奖', () => {
 
   it('Cron 顺带清理 2 天前的疲劳记录', async () => {
     const fixture = await makeSect('cleanup');
-    const now = dayAt(50, 10);
+    const now = dayAt(50, 10, 0); // 清理只在每小时第一个 10 分钟 tick 执行
     await freezeDay(fixture.sectId, 50);
     const member = fixture.discipleIds[0]!;
 
