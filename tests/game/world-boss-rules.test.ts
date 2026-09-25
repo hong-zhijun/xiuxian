@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  BOSS_MERIT_RESOURCE_ID,
   WORLD_BOSS_AFFIXES,
   WORLD_BOSS_COOLDOWN_MS,
   WORLD_BOSS_FATIGUE_WINDOW_MS,
+  WORLD_BOSS_MERIT_SHOP,
+  WORLD_BOSS_MERIT_XUANTIE_MAX,
   WORLD_BOSS_MIN_HP,
   WORLD_BOSS_POOL_RESOURCES,
   WORLD_BOSS_ROUNDS_PER_STAGE,
@@ -18,6 +21,7 @@ import {
   discipleContribution,
   expectedPartyDamage,
   findAffix,
+  findMeritShopItem,
   isFledByDamage,
   isWorldBossAttackable,
   lastHitReward,
@@ -33,6 +37,7 @@ import {
   stageResourceRewards,
   stageRewardMultiplier,
   worldBossPhaseOf,
+  worldBossMeritFor,
 } from '../../apps/server/src/modules/game/worldBoss';
 
 function sequence(values: number[], fallback = 0.5): () => number {
@@ -294,5 +299,52 @@ describe('世界 Boss 二期：奖励', () => {
   it('冷却与疲劳窗口常量', () => {
     expect(WORLD_BOSS_COOLDOWN_MS).toBe(3_000);
     expect(WORLD_BOSS_FATIGUE_WINDOW_MS).toBe(60 * 60 * 1000);
+  });
+});
+
+describe('世界 Boss 三期：功勋与功勋兑换（计划 2.3、2.4）', () => {
+  it('功勋 = max(2, round(10 × 关卡系数 × √占比))；击退减半（至少 1）', () => {
+    // 计划 2.3 的参考值表逐条断言。
+    expect(worldBossMeritFor({ stage: 1, damageShare: 1, repelled: false })).toBe(10);
+    expect(worldBossMeritFor({ stage: 1, damageShare: 1, repelled: true })).toBe(5);
+    expect(worldBossMeritFor({ stage: 1, damageShare: 0.25, repelled: false })).toBe(5);
+    expect(worldBossMeritFor({ stage: 1, damageShare: 0.25, repelled: true })).toBe(2);
+    expect(worldBossMeritFor({ stage: 1, damageShare: 0.01, repelled: false })).toBe(2);
+    expect(worldBossMeritFor({ stage: 1, damageShare: 0.01, repelled: true })).toBe(1);
+    expect(worldBossMeritFor({ stage: 2, damageShare: 1, repelled: false })).toBe(15);
+    expect(worldBossMeritFor({ stage: 2, damageShare: 1, repelled: true })).toBe(7);
+    expect(worldBossMeritFor({ stage: 3, damageShare: 0.25, repelled: false })).toBe(10);
+    expect(worldBossMeritFor({ stage: 3, damageShare: 0.25, repelled: true })).toBe(5);
+    expect(worldBossMeritFor({ stage: 5, damageShare: 0.55, repelled: false })).toBe(22);
+    expect(worldBossMeritFor({ stage: 5, damageShare: 0.55, repelled: true })).toBe(11);
+    // 没造成伤害就什么也没有（击杀与击退都一样）。
+    expect(worldBossMeritFor({ stage: 2, damageShare: 0, repelled: false })).toBe(0);
+    expect(worldBossMeritFor({ stage: 2, damageShare: 0, repelled: true })).toBe(0);
+  });
+
+  it('功勋兑换价目表：四项 4 / 25 / 70 / 200，玄铁单项上限 100', () => {
+    expect(BOSS_MERIT_RESOURCE_ID).toBe('bossMerit');
+    expect(WORLD_BOSS_MERIT_SHOP.map((item) => item.id)).toEqual([
+      'xuantie',
+      'spirit',
+      'treasure',
+      'immortal',
+    ]);
+    expect(WORLD_BOSS_MERIT_SHOP.map((item) => item.name)).toEqual([
+      '玄铁',
+      '灵品装备',
+      '宝品装备',
+      '仙品装备',
+    ]);
+    expect(WORLD_BOSS_MERIT_SHOP.map((item) => item.cost)).toEqual([4, 25, 70, 200]);
+    expect(WORLD_BOSS_MERIT_SHOP.map((item) => item.quality)).toEqual([
+      null,
+      'spirit',
+      'treasure',
+      'immortal',
+    ]);
+    expect(WORLD_BOSS_MERIT_XUANTIE_MAX).toBe(100);
+    expect(findMeritShopItem('xuantie')).toMatchObject({ name: '玄铁', cost: 4, quality: null });
+    expect(findMeritShopItem('xxx')).toBeUndefined();
   });
 });

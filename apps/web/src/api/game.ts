@@ -1684,9 +1684,27 @@ export interface WorldBossView {
     tiers: { rank: number; multiplier: number; resources: Record<string, number>; topDamagePill: boolean }[];
     lastHitStone: number;
     dropDescription: string;
-    /** 本关击杀的玄铁：伤害占比 ≥ minSharePercent% 才有，第 1 名拿 top。 */
-    xuantie: { top: number; others: number; minSharePercent: number };
+    /** 三期：本关伤害占比 100% 时的功勋（展示单位）；实际按 √占比 折算，保底 2。 */
+    meritFullShare: number;
+    /** 本关击杀的玄铁：伤害占比 ≥ minSharePercent% 才有，第 1 名拿 top；below = 不足门槛时的数量。 */
+    xuantie: { top: number; others: number; below: number; minSharePercent: number };
   } | null;
+  /**
+   * 三期：本宗门在当前关的掉落概率（boss 为 null 时为 null）。
+   * 伤害占比与概率都由服务端算好（高档 = 75% × √占比），前端只渲染，不复制公式。
+   */
+  myDrop: {
+    /** 本宗门对本关的伤害占比（0~1；还没出手为 0）。 */
+    damageShare: number;
+    /** 击杀时掉高档装备的概率（0~1）。 */
+    highChance: number;
+    /** 高档品质名（第 1～2 关灵品、第 3～4 关宝品、第 5 关起仙品）。 */
+    highQualityName: string;
+    /** 低档品质名。 */
+    lowQualityName: string;
+  } | null;
+  /** 三期：功勋兑换价目（服务端唯一一份，前端只渲染）。cost 为展示单位。 */
+  meritShop: { id: string; name: string; cost: number; quality: string | null }[];
 }
 
 export interface WorldBossAttackResultView {
@@ -1717,6 +1735,45 @@ export async function attackWorldBoss(discipleIds: string[]): Promise<{
     result: WorldBossAttackResultView;
     boss: WorldBossView;
   }>('/api/v1/game/world-boss/attack', { method: 'POST', body: { discipleIds } });
+}
+
+/**
+ * 三期功勋兑换入参（与后端 worldBossExchangeRequestSchema 一一对应；多余字段会被服务端 400 拒绝）。
+ * 部位 / 主属性的组合合法性（法器必须选身法 / 幸运等）由服务端校验。
+ */
+export interface BossMeritExchangeInput {
+  /** xuantie（玄铁）| spirit（灵品）| treasure（宝品）| immortal（仙品）。 */
+  itemId: string;
+  /** 换玄铁时的个数（1~100）；换装备只能缺省或 1。 */
+  quantity?: number;
+  /** 换装备时的部位（weapon / armor / artifact）；换玄铁不许带。 */
+  slot?: string;
+  /** 法器必须带（speed / luck）；其它部位不许带。 */
+  mainAttr?: string;
+}
+
+/** 功勋兑换回执（POST /game/world-boss/exchange 的 outcome，与后端 service.ts 的 BossMeritExchangeOutcome 一一对应）。 */
+export interface BossMeritExchangeOutcome {
+  itemId: string;
+  /** 花掉的功勋（最小单位）。 */
+  cost: number;
+  /** 兑换到的玄铁（最小单位）；兑换装备时为 0。 */
+  xuantie: number;
+  /** 兑换到的装备；兑换玄铁时为 null。 */
+  equipment: { id: string; name: string; quality: string; slot: string; slotName: string } | null;
+}
+
+/**
+ * 三期功勋兑换（POST /game/world-boss/exchange）：价格、余额、背包与部位都最终由服务端裁决，
+ * 必定成功、不需要炼器坊；成功返回写库后的完整状态与兑换回执。
+ */
+export async function exchangeBossMerit(
+  input: BossMeritExchangeInput,
+): Promise<{ state: SectStateView; outcome: BossMeritExchangeOutcome }> {
+  return apiRequest<{ state: SectStateView; outcome: BossMeritExchangeOutcome }>(
+    '/api/v1/game/world-boss/exchange',
+    { method: 'POST', body: input },
+  );
 }
 
 /* ---------- 0028 装备（炼器 / 背包 / 穿戴 / 分解） ---------- */

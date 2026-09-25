@@ -20,14 +20,14 @@ import type { GameConfigContent } from '@xiuxian/game-core';
  */
 
 /** 版本号：内容变化时必须同步更新版本与 payloadHash（见 03 第 12 节）。 */
-export const GAME_CONFIG_VERSION = 'v6.0.0';
+export const GAME_CONFIG_VERSION = 'v7.0.0';
 
 /**
  * 内容哈希（sha256:，覆盖规范化后的 JSON）。
  * 修改 content 后必须重新计算，否则 Worker 启动与 config:hash 校验都会失败。
  */
 export const GAME_CONFIG_PAYLOAD_HASH =
-  'sha256:70aa861d59eb0ea02ea44616e49bb7cf0b9cb8e9ea949b4caa94be94c2302a7e';
+  'sha256:19889cbf92c327384145dff702b9aedad741f67630e3bd1afdf5023e655c3728';
 
 export const GAME_CONFIG_CONTENT: GameConfigContent = {
   server: {
@@ -75,6 +75,16 @@ export const GAME_CONFIG_CONTENT: GameConfigContent = {
       name: '玄铁',
       startAmount: '0',
       capacity: '999000',
+      baseRatePerHour: '0',
+      visibility: 'public',
+    },
+    {
+      // 世界 Boss 三期：功勋（讨伐按伤害占比发放，用于功勋兑换）。
+      // 没有产速；不可在坊市买卖、不可下注（坊市与赌坊都有资源白名单）。
+      id: 'bossMerit',
+      name: '功勋',
+      startAmount: '0',
+      capacity: '9999000',
       baseRatePerHour: '0',
       visibility: 'public',
     },

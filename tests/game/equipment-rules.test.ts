@@ -4,6 +4,7 @@ import {
   ARTIFACT_MAIN_ATTRS,
   BAG_CAPACITY,
   BOSS_DROP_CHANCE_OTHERS,
+  BOSS_HIGH_DROP_FACTOR,
   EMPTY_ATTRS,
   EQUIPMENT_ATTRS,
   EQUIPMENT_QUALITIES,
@@ -18,6 +19,8 @@ import {
   bagFullReason,
   bossDropDescription,
   bossDropQualities,
+  bossHighDropChance,
+  rollBossDrop,
   findQuality,
   forgeUnlockBlockedReason,
   gearBonusOf,
@@ -185,7 +188,7 @@ describe('装备规则 · 生成装备（计划 1.1）', () => {
   });
 });
 
-describe('装备规则 · 世界 Boss 掉落（计划 1.4）', () => {
+describe('装备规则 · 世界 Boss 掉落（三期 2.1）', () => {
   it('掉落品质按关卡分段：1~2 / 3~4 / 5 及以上', () => {
     expect(bossDropQualities(1)).toEqual({ top: 'spirit', others: 'common' });
     expect(bossDropQualities(2)).toEqual({ top: 'spirit', others: 'common' });
@@ -195,10 +198,42 @@ describe('装备规则 · 世界 Boss 掉落（计划 1.4）', () => {
     expect(bossDropQualities(9)).toEqual({ top: 'immortal', others: 'treasure' });
   });
 
+  it('高档概率 = 75% × √伤害占比（占比夹在 0~1：负数与 >1 都不放大）', () => {
+    expect(BOSS_HIGH_DROP_FACTOR).toBe(0.75);
+    expect(bossHighDropChance(1)).toBeCloseTo(0.75);
+    expect(bossHighDropChance(0.25)).toBeCloseTo(0.375);
+    expect(bossHighDropChance(0.04)).toBeCloseTo(0.15);
+    expect(bossHighDropChance(0)).toBe(0);
+    expect(bossHighDropChance(-0.5)).toBe(0);
+    expect(bossHighDropChance(1.5)).toBeCloseTo(0.75);
+  });
+
+  it('先判高档、未中再判低档；都没中返回 null', () => {
+    // 占比 100% → 高档 75%：0.74 中高档（第 5 关 = 仙品）。
+    expect(rollBossDrop({ stage: 5, damageShare: 1, random: sequence([0.74]) })).toBe('immortal');
+    // 0.76 未中高档 → 再取一个随机数判低档：0.39 < 0.4 得宝品。
+    expect(rollBossDrop({ stage: 5, damageShare: 1, random: sequence([0.76, 0.39]) })).toBe('treasure');
+    // 0.4 不满足「< 0.4」→ 不掉。
+    expect(rollBossDrop({ stage: 5, damageShare: 1, random: sequence([0.76, 0.4]) })).toBeNull();
+    // 第 1 关、占比 25% → 高档 37.5%：0.37 中高档（灵品）；0.38 未中 → 低档凡品。
+    expect(rollBossDrop({ stage: 1, damageShare: 0.25, random: sequence([0.37]) })).toBe('spirit');
+    expect(rollBossDrop({ stage: 1, damageShare: 0.25, random: sequence([0.38, 0.1]) })).toBe('common');
+  });
+
+  it('伤害占比 ≤ 0 不掉，且一次随机数都不取', () => {
+    let calls = 0;
+    const random = (): number => {
+      calls += 1;
+      return 0;
+    };
+    expect(rollBossDrop({ stage: 5, damageShare: 0, random })).toBeNull();
+    expect(calls).toBe(0);
+  });
+
   it('掉落说明文案与计划的示例一字不差', () => {
-    expect(bossDropDescription(1)).toBe('伤害第 1 名必得 灵品装备 ×1；其他参与者 40% 概率得 凡品装备 ×1');
-    expect(bossDropDescription(3)).toBe('伤害第 1 名必得 宝品装备 ×1；其他参与者 40% 概率得 灵品装备 ×1');
-    expect(bossDropDescription(5)).toBe('伤害第 1 名必得 仙品装备 ×1；其他参与者 40% 概率得 宝品装备 ×1');
+    expect(bossDropDescription(1)).toBe('按本关伤害占比各自判定：灵品装备 ×1 概率 = 75% × √占比；未得时 40% 概率得 凡品装备 ×1');
+    expect(bossDropDescription(3)).toBe('按本关伤害占比各自判定：宝品装备 ×1 概率 = 75% × √占比；未得时 40% 概率得 灵品装备 ×1');
+    expect(bossDropDescription(5)).toBe('按本关伤害占比各自判定：仙品装备 ×1 概率 = 75% × √占比；未得时 40% 概率得 宝品装备 ×1');
   });
 });
 
@@ -240,8 +275,10 @@ describe('装备规则 · 分解与加成', () => {
 });
 
 describe('装备二期：玄铁 · 炼器坊', () => {
-  it('世界 Boss 玄铁：占比 <15% 没有；按关卡给量，第 1 名更多；击退减半向下取整', () => {
-    expect(bossXuantieFor({ stage: 1, damageShare: 0.14, isTop: false, repelled: false })).toBe(0);
+  it('世界 Boss 玄铁：占比 <15% 每关 1 个（击退减半向下取整 = 0）；按关卡给量，第 1 名更多', () => {
+    expect(bossXuantieFor({ stage: 1, damageShare: 0.14, isTop: false, repelled: false })).toBe(1);
+    expect(bossXuantieFor({ stage: 1, damageShare: 0.14, isTop: false, repelled: true })).toBe(0);
+    expect(bossXuantieFor({ stage: 1, damageShare: 0, isTop: false, repelled: false })).toBe(0);
     expect(bossXuantieFor({ stage: 1, damageShare: 0.15, isTop: false, repelled: false })).toBe(2);
     expect(bossXuantieFor({ stage: 1, damageShare: 0.5, isTop: true, repelled: false })).toBe(3);
     expect(bossXuantieFor({ stage: 4, damageShare: 0.3, isTop: false, repelled: false })).toBe(6);

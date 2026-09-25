@@ -42,6 +42,7 @@ import {
   usePillRequestSchema,
   wheelSpinRequestSchema,
   worldBossAttackRequestSchema,
+  worldBossExchangeRequestSchema,
 } from './schema';
 import {
   abandonRealmExplore,
@@ -69,6 +70,7 @@ import {
   getSectState,
   healDisciplesBatch,
   attackWorldBoss,
+  exchangeBossMerit,
   getRaceHistory,
   getRaceState,
   getWorldBoss,
@@ -594,6 +596,14 @@ export function createGameRoutes(): Hono<AppEnv> {
     const body = await parseStrictJson(worldBossAttackRequestSchema, c);
     const result = await attackWorldBoss(getDb(c.env), userId, body, Date.now());
     return respondOk(c, { state: result.state, result: result.result, boss: result.boss });
+  });
+
+  // 世界 Boss 三期：功勋兑换（结算 → 价目 / 余额 / 背包校验 → 扣功勋 + 发玄铁或装备，一次受保护 batch）。
+  routes.post('/game/world-boss/exchange', async (c) => {
+    const userId = requireUserId(c);
+    const body = await parseStrictJson(worldBossExchangeRequestSchema, c);
+    const result = await exchangeBossMerit(getDb(c.env), userId, body, Date.now());
+    return respondOk(c, { state: result.state, outcome: result.outcome });
   });
 
   // 坊市：买入材料（结算 → 白名单 / 灵石余额 / 材料容量校验 → 扣灵石、加材料，一次受保护 batch）。

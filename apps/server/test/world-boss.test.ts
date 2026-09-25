@@ -3,8 +3,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createApp } from '../src/app';
 import { SEVERE_INJURY_MS, dateKeyUtc8, dayStartMs } from '../src/modules/game/constants';
-import { attackWorldBoss, getWorldBoss, processWorldBoss } from '../src/modules/game/service';
+import { attackWorldBoss, exchangeBossMerit, getWorldBoss, processWorldBoss } from '../src/modules/game/service';
+import { BOSS_XUANTIE_MIN_SHARE } from '../src/modules/game/equipment';
 import {
+  BOSS_MERIT_RESOURCE_ID,
   WORLD_BOSS_COOLDOWN_MS,
   WORLD_BOSS_INJURY_DURATION_MS,
   WORLD_BOSS_KILL_POOL_RATE_FACTOR,
@@ -17,6 +19,7 @@ import {
   rewardFloor,
   stageMaxHp,
   stageRewardMultiplier,
+  worldBossMeritFor,
 } from '../src/modules/game/worldBoss';
 
 import { dataOf, errorOf, TestClient } from './support/authClient';
@@ -345,6 +348,30 @@ describe('世界 Boss 二期：面板', () => {
     expect(panel.boss.ranks).toEqual([]);
     expect(panel.boss.hits).toEqual([]);
     expect(panel.boss.boss!.phase).toBe('open');
+
+    // 三期：功勋兑换价目（服务端唯一一份）+ 本人的掉落概率（还没出手 → 占比 0、高档概率 0）。
+    expect(panel.boss.meritShop.map((item) => item.id)).toEqual([
+      'xuantie',
+      'spirit',
+      'treasure',
+      'immortal',
+    ]);
+    expect(panel.boss.meritShop.map((item) => item.cost)).toEqual([4, 25, 70, 200]);
+    expect(panel.boss.myDrop).toEqual({
+      damageShare: 0,
+      highChance: 0,
+      // 第 2 关：高档灵品、低档凡品。
+      highQualityName: '灵品',
+      lowQualityName: '凡品',
+    });
+    expect(panel.boss.rewardPreview!.meritFullShare).toBe(
+      worldBossMeritFor({ stage: 2, damageShare: 1, repelled: false }),
+    );
+    // 新建宗门就带功勋余额（0），但资源栏不展示它。
+    const meritResource = panel.state.resources.find(
+      (resource) => resource.id === BOSS_MERIT_RESOURCE_ID,
+    );
+    expect(meritResource?.balance).toBe('0');
     // view 里的角标与面板一致
     expect(panel.state.worldBoss.attackable).toBe(true);
 
@@ -638,6 +665,7 @@ describe('世界 Boss 二期：Cron 逃走与发奖', () => {
       spiritStone: await balanceOf(fixture.sectId, 'spiritStone'),
       herb: await balanceOf(fixture.sectId, 'herb'),
       ore: await balanceOf(fixture.sectId, 'ore'),
+      bossMerit: await balanceOf(fixture.sectId, BOSS_MERIT_RESOURCE_ID),
       cultivationPill: await pillCount(fixture.sectId, 'cultivationPill'),
       bodyTemperingPill: await pillCount(fixture.sectId, 'bodyTemperingPill'),
     };
@@ -655,6 +683,8 @@ describe('世界 Boss 二期：Cron 逃走与发奖', () => {
     expect(rewardLogs.results[0]!.description).toContain('伤害第 1 名');
     expect(rewardLogs.results[0]!.description).toContain('聚气丹');
     expect(Number(JSON.parse(rewardLogs.results[0]!.effects).spiritStone)).toBeGreaterThan(0);
+    // 三期：第 2 关、单宗门（占比 100%）→ 功勋 = max(2, round(10 × 1.5 × 1)) = 15 展示单位 = 15000 最小单位。
+    expect(JSON.parse(rewardLogs.results[0]!.effects).bossMerit).toBe('15000');
 
     // 只有一个参与宗门 → 排名 1（×1.5），第 2 关（×1.2）：factor = 1.8
     const factor = stageRewardMultiplier(2) * rankRewardMultiplier(1);
@@ -671,6 +701,7 @@ describe('世界 Boss 二期：Cron 逃走与发奖', () => {
     expect((await balanceOf(fixture.sectId, 'ore')) - before.ore).toBe(share(rates.ore ?? 0));
     expect((await pillCount(fixture.sectId, 'cultivationPill')) - before.cultivationPill).toBe(1);
     expect((await pillCount(fixture.sectId, 'bodyTemperingPill')) - before.bodyTemperingPill).toBe(1);
+    expect((await balanceOf(fixture.sectId, BOSS_MERIT_RESOURCE_ID)) - before.bossMerit).toBe(15_000);
     expect((await bossRow(dayKey, 2))!.rewarded_at).not.toBeNull();
 
     // 再跑两次 Cron：rewarded_at 已写 → 不再发
@@ -683,6 +714,7 @@ describe('世界 Boss 二期：Cron 逃走与发奖', () => {
     expect(Number(rewardLogsAgain?.n)).toBe(1);
     expect(await pillCount(fixture.sectId, 'cultivationPill')).toBe(before.cultivationPill + 1);
     expect(await balanceOf(fixture.sectId, 'herb')).toBe(before.herb + share(rates.herb ?? 0));
+    expect(await balanceOf(fixture.sectId, BOSS_MERIT_RESOURCE_ID)).toBe(before.bossMerit + 15_000);
   });
 
   it('排名倍数按「对该关的总伤害」分配：伤害高的拿 ×1.5', async () => {
@@ -777,6 +809,7 @@ describe('世界 Boss 二期：Cron 逃走与发奖', () => {
       herb: await balanceOf(fixture.sectId, 'herb'),
       cultivationPill: await pillCount(fixture.sectId, 'cultivationPill'),
       bodyTemperingPill: await pillCount(fixture.sectId, 'bodyTemperingPill'),
+      bossMerit: await balanceOf(fixture.sectId, BOSS_MERIT_RESOURCE_ID),
     };
 
     await processWorldBoss(env.DB, dayAt(40, 23));
@@ -800,6 +833,8 @@ describe('世界 Boss 二期：Cron 逃走与发奖', () => {
     );
     expect(await pillCount(fixture.sectId, 'cultivationPill')).toBe(before.cultivationPill);
     expect(await pillCount(fixture.sectId, 'bodyTemperingPill')).toBe(before.bodyTemperingPill);
+    // 三期：击退也发功勋，但减半（第 1 关、占比 100% → base 10 → 5 展示单位 = 5000 最小单位）。
+    expect((await balanceOf(fixture.sectId, BOSS_MERIT_RESOURCE_ID)) - before.bossMerit).toBe(5_000);
   });
 
   it('不足 70% 逃走：什么也不发', async () => {
@@ -816,6 +851,7 @@ describe('世界 Boss 二期：Cron 逃走与发奖', () => {
       spiritStone: await balanceOf(fixture.sectId, 'spiritStone'),
       herb: await balanceOf(fixture.sectId, 'herb'),
       cultivationPill: await pillCount(fixture.sectId, 'cultivationPill'),
+      bossMerit: await balanceOf(fixture.sectId, BOSS_MERIT_RESOURCE_ID),
     };
     await processWorldBoss(env.DB, dayAt(41, 23));
     const row = (await bossRow(dayKey, 1))!;
@@ -826,6 +862,53 @@ describe('世界 Boss 二期：Cron 逃走与发奖', () => {
     expect(await balanceOf(fixture.sectId, 'spiritStone')).toBe(before.spiritStone);
     expect(await balanceOf(fixture.sectId, 'herb')).toBe(before.herb);
     expect(await pillCount(fixture.sectId, 'cultivationPill')).toBe(before.cultivationPill);
+    // 三期：单纯逃走（<70%）不发功勋。
+    expect(await balanceOf(fixture.sectId, BOSS_MERIT_RESOURCE_ID)).toBe(before.bossMerit);
+  });
+
+  it('占比不足 15% 的参与者每关也能得 1 个玄铁（击杀）', async () => {
+    const small = await makeSect('xuantie-small');
+    const big = await makeSect('xuantie-big');
+    const now = dayAt(59, 9);
+    await freezeDay(small.sectId, 59);
+    await freezeDay(big.sectId, 59);
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    const dayKey = dateKeyUtc8(now);
+
+    // 血量给足：小宗门 1 人打 1 次、大宗门 3 人打 8 次。
+    // 出手间隔 > 1 小时 → 每名弟子的疲劳都回到 1，不会触发重伤（重伤会让这一刀不计伤害）。
+    const bossId = await insertBoss({ dayKey, now, maxHp: 10_000_000_000, roundDamage: 20_000 });
+    await attackWorldBoss(env.DB, small.userId, { discipleIds: [small.discipleIds[0]!] }, now);
+    for (let hour = 0; hour < 8; hour += 1) {
+      await attackWorldBoss(
+        env.DB,
+        big.userId,
+        { discipleIds: big.discipleIds },
+        dayAt(59, 10 + hour, 1 + hour),
+      );
+    }
+    // 最后一刀：把血量压到 1，让大宗门击杀。
+    await env.DB.prepare('UPDATE world_bosses SET hp = 1 WHERE id = ?').bind(bossId).run();
+    await attackWorldBoss(env.DB, big.userId, { discipleIds: big.discipleIds }, dayAt(59, 19, 10));
+
+    // 占比按 world_boss_hits 里的实际伤害算出来，不猜。
+    const hits = await hitsOf(bossId);
+    const totalDamage = hits.reduce((sum, hit) => sum + Number(hit.damage), 0);
+    const smallDamage = hits
+      .filter((hit) => hit.sect_id === small.sectId)
+      .reduce((sum, hit) => sum + Number(hit.damage), 0);
+    const smallShare = smallDamage / totalDamage;
+    expect(smallShare).toBeGreaterThan(0);
+    expect(smallShare).toBeLessThan(BOSS_XUANTIE_MIN_SHARE);
+
+    const beforeSmall = await balanceOf(small.sectId, 'xuantie');
+    const beforeBig = await balanceOf(big.sectId, 'xuantie');
+    await processWorldBoss(env.DB, dayAt(59, 20));
+
+    // 小宗门：占比不足 15% → 三期新规则每关 1 个（展示单位 1 = 1000 最小单位）。
+    expect((await balanceOf(small.sectId, 'xuantie')) - beforeSmall).toBe(1_000);
+    // 大宗门：占比 ≥15% 且伤害第 1 → 第 1 关按表取 top = 3 个 = 3000 最小单位。
+    expect((await balanceOf(big.sectId, 'xuantie')) - beforeBig).toBe(3_000);
   });
 
   it('Cron 顺带清理 2 天前的疲劳记录', async () => {
@@ -846,5 +929,192 @@ describe('世界 Boss 二期：Cron 逃走与发奖', () => {
     const left = await battleRows(fixture.sectId);
     expect(left).toHaveLength(1);
     expect(Number(left[0]!.created_at)).toBeGreaterThan(now - 2 * DAY_MS);
+  });
+});
+
+/* ---------- 三期：功勋兑换的夹具 ---------- */
+
+/** 直接写功勋余额（兑换用例只需要余额，不必真的打 Boss）。 */
+async function setMerit(sectId: string, balance: number): Promise<void> {
+  const updated = await env.DB.prepare(
+    'UPDATE resource_balances SET balance = ?, remainder = 0 WHERE sect_id = ? AND resource_id = ?',
+  )
+    .bind(balance, sectId, BOSS_MERIT_RESOURCE_ID)
+    .run();
+  expect(Number(updated.meta.changes)).toBe(1);
+}
+
+interface EquipmentRowFixture {
+  id: string;
+  disciple_id: string | null;
+  slot: string;
+  quality: string;
+  name: string;
+  source: string;
+}
+
+async function equipmentRows(sectId: string): Promise<EquipmentRowFixture[]> {
+  const result = await env.DB.prepare(
+    `SELECT id, disciple_id, slot, quality, name, source
+       FROM equipment WHERE sect_id = ? ORDER BY created_at DESC, id DESC`,
+  )
+    .bind(sectId)
+    .all<EquipmentRowFixture>();
+  return result.results ?? [];
+}
+
+/** 直接塞未穿戴装备（把背包填满；背包 = disciple_id IS NULL）。 */
+async function fillBag(sectId: string, count: number): Promise<void> {
+  for (let index = 0; index < count; index += 1) {
+    const id = crypto.randomUUID();
+    await env.DB.prepare(
+      `INSERT INTO equipment
+         (id, sect_id, disciple_id, slot, quality, name, main_attr, main_value,
+          sub_attr, sub_value, source, created_at)
+       VALUES (?, ?, NULL, 'weapon', 'common', ?, 'attack', 4, 'speed', 1, 'boss', ?)`,
+    )
+      .bind(id, sectId, `测试·${id.slice(0, 8)}`, Date.now())
+      .run();
+  }
+}
+
+describe('世界 Boss 三期：功勋兑换（计划 2.4）', () => {
+  it('功勋不足：INSUFFICIENT_RESOURCE，什么都不扣', async () => {
+    const fixture = await makeSect('merit-poor');
+    const now = dayAt(70, 12, 0);
+    await freezeDay(fixture.sectId, 70);
+    await setMerit(fixture.sectId, 0);
+
+    expect(
+      await errorCodeOf(
+        exchangeBossMerit(env.DB, fixture.userId, { itemId: 'xuantie', quantity: 1 }, now),
+      ),
+    ).toBe('INSUFFICIENT_RESOURCE');
+    expect(await balanceOf(fixture.sectId, BOSS_MERIT_RESOURCE_ID)).toBe(0);
+    expect(await balanceOf(fixture.sectId, 'xuantie')).toBe(0);
+  });
+
+  it('玄铁 ×3：功勋 −12000、玄铁 +3000（价目 4 个功勋 / 个）', async () => {
+    const fixture = await makeSect('merit-xuantie');
+    const now = dayAt(71, 12, 0);
+    await freezeDay(fixture.sectId, 71);
+    await setMerit(fixture.sectId, 100_000);
+
+    const result = await exchangeBossMerit(
+      env.DB,
+      fixture.userId,
+      { itemId: 'xuantie', quantity: 3 },
+      now,
+    );
+    expect(result.outcome).toEqual({
+      itemId: 'xuantie',
+      cost: 12_000,
+      xuantie: 3_000,
+      equipment: null,
+    });
+    expect(await balanceOf(fixture.sectId, BOSS_MERIT_RESOURCE_ID)).toBe(88_000);
+    expect(await balanceOf(fixture.sectId, 'xuantie')).toBe(3_000);
+    // 随命令返回的 state 立刻就是新余额（不用等下一次 sync）。
+    const merit = result.state.resources.find((resource) => resource.id === BOSS_MERIT_RESOURCE_ID);
+    expect(merit?.balance).toBe('88000');
+  });
+
+  it('灵品兵器：功勋 −25000，装备进背包（source = boss、未穿戴）', async () => {
+    const fixture = await makeSect('merit-weapon');
+    const now = dayAt(72, 12, 0);
+    await freezeDay(fixture.sectId, 72);
+    await setMerit(fixture.sectId, 100_000);
+
+    const result = await exchangeBossMerit(
+      env.DB,
+      fixture.userId,
+      { itemId: 'spirit', slot: 'weapon' },
+      now,
+    );
+    expect(result.outcome.cost).toBe(25_000);
+    expect(result.outcome.xuantie).toBe(0);
+    expect(result.outcome.equipment).toMatchObject({
+      slot: 'weapon',
+      slotName: '兵器',
+      quality: 'spirit',
+    });
+    expect(await balanceOf(fixture.sectId, BOSS_MERIT_RESOURCE_ID)).toBe(75_000);
+
+    const rows = await equipmentRows(fixture.sectId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.quality).toBe('spirit');
+    expect(rows[0]!.slot).toBe('weapon');
+    expect(rows[0]!.source).toBe('boss');
+    expect(rows[0]!.disciple_id).toBeNull();
+    expect(rows[0]!.name.startsWith('灵品·')).toBe(true);
+  });
+
+  it('法器不带主属性 / 兵器带主属性 / 玄铁带部位 / 装备 quantity 2：一律 VALIDATION_ERROR', async () => {
+    const fixture = await makeSect('merit-invalid');
+    const now = dayAt(73, 12, 0);
+    await freezeDay(fixture.sectId, 73);
+    await setMerit(fixture.sectId, 1_000_000);
+
+    const cases = [
+      { itemId: 'spirit', slot: 'artifact' },
+      { itemId: 'spirit', slot: 'weapon', mainAttr: 'attack' },
+      { itemId: 'xuantie', quantity: 1, slot: 'weapon' },
+      { itemId: 'spirit', slot: 'weapon', quantity: 2 },
+    ];
+    for (const input of cases) {
+      expect(await errorCodeOf(exchangeBossMerit(env.DB, fixture.userId, input, now))).toBe(
+        'VALIDATION_ERROR',
+      );
+    }
+    // 一次都没成功 → 功勋没动、背包里也没有东西。
+    expect(await balanceOf(fixture.sectId, BOSS_MERIT_RESOURCE_ID)).toBe(1_000_000);
+    expect(await equipmentRows(fixture.sectId)).toHaveLength(0);
+  });
+
+  it('背包满（50 件）：INVALID_STATUS，功勋未扣', async () => {
+    const fixture = await makeSect('merit-full');
+    const now = dayAt(74, 12, 0);
+    await freezeDay(fixture.sectId, 74);
+    await setMerit(fixture.sectId, 100_000);
+    await fillBag(fixture.sectId, 50);
+
+    expect(
+      await errorCodeOf(
+        exchangeBossMerit(env.DB, fixture.userId, { itemId: 'spirit', slot: 'armor' }, now),
+      ),
+    ).toBe('INVALID_STATUS');
+    expect(await balanceOf(fixture.sectId, BOSS_MERIT_RESOURCE_ID)).toBe(100_000);
+    expect(await equipmentRows(fixture.sectId)).toHaveLength(50);
+  });
+
+  it('兑得仙品：额外全服广播一条「以功勋兑换」', async () => {
+    const fixture = await makeSect('merit-immortal');
+    const now = dayAt(75, 12, 0);
+    await freezeDay(fixture.sectId, 75);
+    await setMerit(fixture.sectId, 300_000);
+
+    const result = await exchangeBossMerit(
+      env.DB,
+      fixture.userId,
+      { itemId: 'immortal', slot: 'artifact', mainAttr: 'luck' },
+      now,
+    );
+    expect(result.outcome.equipment!.quality).toBe('immortal');
+    const gains = (await systemMessages()).filter((text) => text.includes('以功勋兑换'));
+    expect(gains).toHaveLength(1);
+    expect(gains[0]).toContain(fixture.sectName);
+    expect(gains[0]).toContain(result.outcome.equipment!.name);
+  });
+
+  it('路由层：多余字段 / 未知兑换项一律 400', async () => {
+    const fixture = await makeSect('merit-route');
+    const extra = await fixture.api.post('/api/v1/game/world-boss/exchange', {
+      itemId: 'xuantie',
+      extra: 1,
+    });
+    expect(extra.status).toBe(400);
+    expect(errorOf(extra).code).toBe('VALIDATION_ERROR');
+    const unknown = await fixture.api.post('/api/v1/game/world-boss/exchange', { itemId: 'xxx' });
+    expect(unknown.status).toBe(400);
   });
 });

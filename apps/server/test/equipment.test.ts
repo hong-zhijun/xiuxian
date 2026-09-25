@@ -857,7 +857,8 @@ async function systemMessages(): Promise<string[]> {
 
 /**
  * 两个宗门打同一关并把它打死：A 派 1 人（伤害低）、B 派 3 人补刀（总伤害更高 → 排名第 1）。
- * 随机源固定成 randomValue，掉落概率的判定就跟着它走（0.3 → 非第 1 名也掉；0.5 → 不掉）。
+ * 随机源固定成 randomValue，掉落判定就跟着它走（三期：两家各自按 √占比 判高档，未中再判低档）：
+ * 随机数 0 时两家都掉高档；0.99 同时高于高档与低档阈值 → 两家都不掉。
  */
 async function killBossWithTwoSects(input: {
   prefix: string;
@@ -903,22 +904,22 @@ async function killBossWithTwoSects(input: {
   return { first, second, now };
 }
 
-describe('世界 Boss 装备掉落（计划 1.4）', () => {
-  it('击杀掉落：第 1 名必掉本关段的头名品质，其他参与者按 40% 概率掉低一档', async () => {
-    // 0.3 < 0.4 → 非第 1 名也会掉；第 2 关的头名品质是灵品、其他是凡品。
+describe('世界 Boss 装备掉落（三期 2.1：人人有份）', () => {
+  it('击杀掉落：每个参与宗门按 √伤害占比各自判定 —— 随机数 0 时两家都掉高档', async () => {
+    // 第 2 关的高档是灵品：随机数 0 小于两家的高档概率（75% × √占比）→ 两家各掉 1 件灵品。
     const { first, second } = await killBossWithTwoSects({
       prefix: 'drop',
       dayOffset: 40,
       stage: 2,
-      randomValue: 0.3,
+      randomValue: 0,
     });
 
     const firstItems = await equipmentRows(first.sectId);
     expect(firstItems).toHaveLength(1);
-    expect(firstItems[0]!.quality).toBe('common');
+    expect(firstItems[0]!.quality).toBe('spirit');
     expect(firstItems[0]!.source).toBe('boss');
     expect(firstItems[0]!.disciple_id).toBeNull();
-    expect(firstItems[0]!.name.startsWith('凡品·')).toBe(true);
+    expect(firstItems[0]!.name.startsWith('灵品·')).toBe(true);
     // 副属性区间与主属性不同（与规则测试同一口径）。
     expect(firstItems[0]!.sub_attr).not.toBe(firstItems[0]!.main_attr);
 
@@ -934,16 +935,15 @@ describe('世界 Boss 装备掉落（计划 1.4）', () => {
     expect(await equipmentRows(second.sectId)).toHaveLength(1);
   });
 
-  it('其他参与者 40% 概率：随机数落在阈值之上就不掉（第 1 名仍然必掉）', async () => {
+  it('随机数 0.99 同时高于高档与低档阈值：两家都不掉', async () => {
     const { first, second } = await killBossWithTwoSects({
       prefix: 'drop-miss',
       dayOffset: 41,
       stage: 2,
-      randomValue: 0.5,
+      randomValue: 0.99,
     });
     expect(await equipmentRows(first.sectId)).toHaveLength(0);
-    expect(await equipmentRows(second.sectId)).toHaveLength(1);
-    expect((await equipmentRows(second.sectId))[0]!.quality).toBe('spirit');
+    expect(await equipmentRows(second.sectId)).toHaveLength(0);
   });
 
   it('击退（23:00 逃走且血量掉 ≥70%）不掉装备', async () => {

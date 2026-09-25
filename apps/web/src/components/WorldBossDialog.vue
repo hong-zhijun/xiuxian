@@ -3,13 +3,16 @@ import { computed, onMounted, onUnmounted, ref } from 'vue';
 import type { CSSProperties } from 'vue';
 
 import type {
+  BossMeritExchangeInput,
+  EquipmentMainAttr,
+  EquipmentSlotId,
   SectStateView,
   WorldBossHitView,
   WorldBossMemberOutcomeView,
   WorldBossView,
 } from '../api/game';
-import { attackWorldBoss, fetchWorldBoss } from '../api/game';
-import { formatAmount } from '../utils/format';
+import { attackWorldBoss, exchangeBossMerit, fetchWorldBoss } from '../api/game';
+import { formatAmount, toDisplayUnits } from '../utils/format';
 import { severeRiskPercent } from '../utils/worldBossRisk';
 import { selectionBlockReason } from '../utils/discipleFilter';
 import DisciplePicker from './DisciplePicker.vue';
@@ -38,15 +41,31 @@ const selected = ref<string[]>([]);
 const showRules = ref(false);
 /** 奖励说明：各名次能拿到什么（数字由服务端按本宗门产出算好）。 */
 const showRewards = ref(false);
+/** 三期功勋兑换（余额 + 价目，与「奖励」「说明」三者互斥）。 */
+const showMerit = ref(false);
 
 function toggleRules(): void {
   showRules.value = !showRules.value;
-  if (showRules.value) showRewards.value = false;
+  if (showRules.value) {
+    showRewards.value = false;
+    showMerit.value = false;
+  }
 }
 
 function toggleRewards(): void {
   showRewards.value = !showRewards.value;
-  if (showRewards.value) showRules.value = false;
+  if (showRewards.value) {
+    showRules.value = false;
+    showMerit.value = false;
+  }
+}
+
+function toggleMerit(): void {
+  showMerit.value = !showMerit.value;
+  if (showMerit.value) {
+    showRules.value = false;
+    showRewards.value = false;
+  }
 }
 
 function rankLabel(rank: number): string {
@@ -214,6 +233,19 @@ const visibleRanks = computed(() => {
   return showAllRanks.value ? ranks : ranks.slice(0, 3);
 });
 
+/**
+ * 三期：本关掉落概率一行（Boss 在讨伐中才有意义，与伤害榜一起显示；与出手同一套「还没结束」判定）。
+ * 占比与概率都来自服务端 myDrop，这里只把 0~1 的小数四舍五入成整数百分比。
+ */
+const dropLine = computed<string | null>(() => {
+  const current = boss.value;
+  const drop = panel.value?.myDrop ?? null;
+  if (current === null || current.status !== 'active' || remaining.value <= 0 || drop === null) return null;
+  const percent = (value: number) => `${String(Math.round(value * 100))}%`;
+  // 括注里的 40% 是计划里的固定低档概率（服务端的掉落说明文案同口径），前端只照抄。
+  return `本关伤害占比 ${percent(drop.damageShare)}，击杀时 ${drop.highQualityName}装备概率 ${percent(drop.highChance)}（未得时 40% 得 ${drop.lowQualityName}装备）`;
+});
+
 async function refresh(): Promise<void> {
   if (loading.value) return;
   loading.value = true;
@@ -330,6 +362,138 @@ async function submit(): Promise<void> {
   }
 }
 
+/* ---------- 三期：功勋兑换 ---------- */
+
+/**
+ * 兑换装备的部位与法器主属性：id 与服务端 equipment.ts 同口径。
+ * 讨伐面板只下发价目（meritShop），所以这里只放展示用的名字，规则仍由服务端裁决。
+ */
+const MERIT_SLOT_OPTIONS: readonly { id: EquipmentSlotId; name: string }[] = [
+  { id: 'weapon', name: '兵器' },
+  { id: 'armor', name: '护甲' },
+  { id: 'artifact', name: '法器' },
+];
+
+const MERIT_MAIN_ATTR_OPTIONS: readonly { id: EquipmentMainAttr; name: string }[] = [
+  { id: 'speed', name: '身法' },
+  { id: 'luck', name: '幸运' },
+];
+
+/** 单次兑换玄铁的个数上限（与服务端 WORLD_BOSS_MERIT_XUANTIE_MAX 同口径）。 */
+const MERIT_XUANTIE_MAX = 100;
+
+/** 兑换提交中（与出手的 submitting 分开，免得点兑换时出手按钮显示成「讨伐中…」）。 */
+const exchanging = ref(false);
+
+/** 功勋余额（最小单位）；没有该资源时按 0 处理 —— 按钮自然不可点，不伪造余额。 */
+const meritBalance = computed(() =>
+  Number(props.state.resources.find((resource) => resource.id === 'bossMerit')?.balance ?? 0),
+);
+
+/** 功勋价目（服务端唯一一份；前端只渲染，不复制价格表）。 */
+const meritShop = computed(() => panel.value?.meritShop ?? []);
+
+/** 玄铁一行的数量输入（字符串输入，照坊市的写法）。 */
+const meritXuantieInput = ref('1');
+
+/** 数量（1~100 的整数）；写错时返回 null，不替玩家改成别的数字。 */
+const meritXuantieQuantity = computed<number | null>(() => {
+  const value = Number(meritXuantieInput.value);
+  if (!Number.isInteger(value) || value < 1 || value > MERIT_XUANTIE_MAX) return null;
+  return value;
+});
+
+/** 玄铁一行的合计价（功勋，展示单位）；数量不合法时为 null。 */
+const meritXuantieTotal = computed<number | null>(() => {
+  const item = meritShop.value.find((entry) => entry.id === 'xuantie');
+  if (item === undefined || meritXuantieQuantity.value === null) return null;
+  return item.cost * meritXuantieQuantity.value;
+});
+
+/**
+ * 每个装备行各自记部位 / 主属性（行与行互不影响），没选过时默认兵器 / 身法。
+ * 只作展示与请求参数；组合合法性（法器必须选主属性等）仍由服务端最终校验。
+ */
+const meritSlotById = ref<Record<string, EquipmentSlotId>>({});
+const meritMainAttrById = ref<Record<string, EquipmentMainAttr>>({});
+
+function meritSlotOf(itemId: string): EquipmentSlotId {
+  return meritSlotById.value[itemId] ?? 'weapon';
+}
+
+function meritMainAttrOf(itemId: string): EquipmentMainAttr {
+  return meritMainAttrById.value[itemId] ?? 'speed';
+}
+
+/** 下拉值 → 部位（只认白名单，其余按兵器处理；服务端还会再校验一次）。 */
+function onMeritSlotChange(itemId: string, event: Event): void {
+  const value = (event.target as HTMLSelectElement).value;
+  const slot: EquipmentSlotId = value === 'armor' || value === 'artifact' ? value : 'weapon';
+  meritSlotById.value = { ...meritSlotById.value, [itemId]: slot };
+}
+
+/** 下拉值 → 法器主属性（只认身法 / 幸运）。 */
+function onMeritMainAttrChange(itemId: string, event: Event): void {
+  const value = (event.target as HTMLSelectElement).value;
+  meritMainAttrById.value = { ...meritMainAttrById.value, [itemId]: value === 'luck' ? 'luck' : 'speed' };
+}
+
+/** 余额够不够：价目是展示单位、余额是最小单位，先换算再比。 */
+function meritAffordable(cost: number): boolean {
+  return toDisplayUnits(meritBalance.value) >= cost;
+}
+
+/** 兑换按钮是否可点：余额够 + 输入合法 + 没有别的请求在飞（最终以服务端校验为准）。 */
+const canExchangeXuantie = computed(
+  () =>
+    meritXuantieTotal.value !== null &&
+    meritAffordable(meritXuantieTotal.value) &&
+    !exchanging.value &&
+    !submitting.value &&
+    props.busy !== true,
+);
+
+function canExchangeEquipment(cost: number): boolean {
+  return meritAffordable(cost) && !exchanging.value && !submitting.value && props.busy !== true;
+}
+
+/** 兑换（POST /game/world-boss/exchange）：成功只回 state（价目与掉落概率不受影响，不用重拉面板）。 */
+async function submitExchange(input: BossMeritExchangeInput): Promise<void> {
+  if (exchanging.value) return;
+  exchanging.value = true;
+  try {
+    const data = await exchangeBossMerit(input);
+    emit('state-update', data.state);
+    const equipment = data.outcome.equipment;
+    if (equipment === null) {
+      emit('notify', 'success', '兑换成功', `玄铁 +${formatAmount(data.outcome.xuantie)}`);
+    } else {
+      emit('notify', 'success', `兑得 ${equipment.name}`, `${equipment.slotName} · 已放入背包。`);
+    }
+  } catch (error) {
+    emit('notify', 'warning', '兑换未成', error instanceof Error ? error.message : '兑换失败，请稍后再试');
+  } finally {
+    exchanging.value = false;
+  }
+}
+
+/** 玄铁行：个数由输入框决定（1~100）；不带部位与主属性。 */
+function exchangeXuantie(itemId: string): void {
+  if (!canExchangeXuantie.value || meritXuantieQuantity.value === null) return;
+  void submitExchange({ itemId, quantity: meritXuantieQuantity.value });
+}
+
+/** 装备行：法器必须带 mainAttr，其它部位不能带（与炼器同一校验）。 */
+function exchangeEquipment(itemId: string, cost: number): void {
+  if (!canExchangeEquipment(cost)) return;
+  const slot = meritSlotOf(itemId);
+  void submitExchange({
+    itemId,
+    slot,
+    ...(slot === 'artifact' ? { mainAttr: meritMainAttrOf(itemId) } : {}),
+  });
+}
+
 /** 点了别处就收掉词缀气泡。 */
 function onDocumentClick(): void {
   showAffixTip.value = false;
@@ -366,7 +530,9 @@ const RULES_TEXT = `讨伐 · 玩法说明
       每往后一关奖励 +50%；具体数字点「奖励」查看；
       击杀时每个参与宗门再得聚气丹 ×1、伤害第 1 名得淬体丹 ×1、最后一击另有灵石；
       击退时资源减半、没有丹药与最后一击；不足 70% 逃走则什么也不发。
-玄铁：每关击杀时，对本关伤害占比 ≥15% 的宗门才能获得，关卡越高越多，伤害第 1 名更多；击退减半。`;
+玄铁：本关伤害占比 ≥15% 按表发放（击退减半），不足则每关 1 个；
+掉落：每关击杀时，每个参与宗门按伤害占比各自判定 —— 高档装备概率 = 75% × √占比，未得时 40% 概率得低档装备；第 1～2 关 灵/凡、第 3～4 关 宝/灵、第 5 关起 仙/宝。
+功勋：每关按伤害占比发放 = max(2, 10 × 关卡系数 × √占比)，击退减半；可兑换 玄铁（4）、灵品（25）、宝品（70）、仙品（200）装备，装备自选部位。`;
 </script>
 
 <template>
@@ -382,6 +548,9 @@ const RULES_TEXT = `讨伐 · 玩法说明
         </span>
         <button class="boss-quiet-button" type="button" @click="toggleRewards">
           {{ showRewards ? '收起奖励' : '奖励' }}
+        </button>
+        <button class="boss-quiet-button" type="button" @click="toggleMerit">
+          {{ showMerit ? '收起功勋' : '功勋' }}
         </button>
         <button class="boss-quiet-button" type="button" @click="toggleRules">
           {{ showRules ? '收起说明' : '说明' }}
@@ -416,7 +585,9 @@ const RULES_TEXT = `讨伐 · 玩法说明
         </table>
         <ul class="boss-reward-notes">
           <li>最后一击：另得灵石 {{ formatAmount(String(panel.rewardPreview.lastHitStone)) }}</li>
-          <li>玄铁：本关伤害占比 ≥{{ panel.rewardPreview.xuantie.minSharePercent }}% 才能获得（表中为达标时的数量），击退减半</li>
+          <li>玄铁：本关伤害占比 ≥{{ panel.rewardPreview.xuantie.minSharePercent }}% 按表发放（击退减半），不足则每关 {{ panel.rewardPreview.xuantie.below }} 个</li>
+          <!-- 三期功勋：满占比能拿多少来自服务端 meritFullShare，实际按 √占比 折算、保底 2。 -->
+          <li>功勋：max(2, {{ panel.rewardPreview.meritFullShare }} × √伤害占比)，击退减半；可在「功勋」里兑换玄铁与装备</li>
           <li>每往后一关，奖励 +50%</li>
           <li>击退（打掉 70% 以上没打死）：资源减半，无丹药；不足 70% 逃走：无奖励</li>
           <!-- 0028 装备掉落说明：文案由服务端按当前关卡的品质表拼好，前端直接渲染。 -->
@@ -426,6 +597,94 @@ const RULES_TEXT = `讨伐 · 玩法说明
         </ul>
       </template>
       <p v-else class="boss-empty">奖励信息加载中…</p>
+    </div>
+
+    <!-- 三期功勋兑换：余额 + 价目（价格来自服务端 meritShop），部位 / 主属性由玩家选。 -->
+    <div v-else-if="showMerit" class="boss-rules">
+      <p class="boss-merit-balance">功勋 {{ formatAmount(meritBalance) }}</p>
+      <template v-if="panel">
+        <table class="boss-reward-table boss-merit-table">
+          <thead>
+            <tr><th>物品</th><th>价格</th><th>兑换</th></tr>
+          </thead>
+          <tbody>
+            <tr v-for="item in meritShop" :key="item.id">
+              <td>{{ item.name }}</td>
+              <td>{{ item.cost }} 功勋</td>
+              <td class="boss-merit-actions">
+                <div class="boss-merit-row">
+                  <!-- 玄铁：可以一次换多个（服务端上限 100），按钮旁显示合计功勋。 -->
+                  <template v-if="item.id === 'xuantie'">
+                    <input
+                      class="disciple-input boss-merit-quantity"
+                      type="number"
+                      inputmode="numeric"
+                      min="1"
+                      :max="MERIT_XUANTIE_MAX"
+                      step="1"
+                      :value="meritXuantieInput"
+                      :disabled="exchanging || busy === true"
+                      aria-label="玄铁数量"
+                      @input="meritXuantieInput = ($event.target as HTMLInputElement).value"
+                    />
+                    <button
+                      class="boss-quiet-button"
+                      type="button"
+                      :disabled="!canExchangeXuantie"
+                      @click="exchangeXuantie(item.id)"
+                    >
+                      兑换
+                    </button>
+                    <small v-if="meritXuantieTotal !== null">合计 {{ meritXuantieTotal }} 功勋</small>
+                  </template>
+                  <!-- 装备：自选部位；选法器时再选主属性（其它部位不许带主属性）。 -->
+                  <template v-else>
+                    <span class="disciple-select boss-merit-select">
+                      <select
+                        class="disciple-input"
+                        :value="meritSlotOf(item.id)"
+                        :disabled="exchanging || busy === true"
+                        :aria-label="`${item.name}部位`"
+                        @change="onMeritSlotChange(item.id, $event)"
+                      >
+                        <option v-for="slot in MERIT_SLOT_OPTIONS" :key="slot.id" :value="slot.id">
+                          {{ slot.name }}
+                        </option>
+                      </select>
+                    </span>
+                    <span
+                      v-if="meritSlotOf(item.id) === 'artifact'"
+                      class="disciple-select boss-merit-select"
+                    >
+                      <select
+                        class="disciple-input"
+                        :value="meritMainAttrOf(item.id)"
+                        :disabled="exchanging || busy === true"
+                        aria-label="法器主属性"
+                        @change="onMeritMainAttrChange(item.id, $event)"
+                      >
+                        <option v-for="attr in MERIT_MAIN_ATTR_OPTIONS" :key="attr.id" :value="attr.id">
+                          {{ attr.name }}
+                        </option>
+                      </select>
+                    </span>
+                    <button
+                      class="boss-quiet-button"
+                      type="button"
+                      :disabled="!canExchangeEquipment(item.cost)"
+                      @click="exchangeEquipment(item.id, item.cost)"
+                    >
+                      兑换
+                    </button>
+                  </template>
+                </div>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        <p class="boss-merit-footnote">装备自选部位，副属性随机；必定成功，不需要炼器坊。</p>
+      </template>
+      <p v-else class="boss-empty">功勋兑换加载中…</p>
     </div>
 
     <template v-else>
@@ -561,6 +820,8 @@ const RULES_TEXT = `讨伐 · 玩法说明
       <!-- 本关伤害榜 -->
       <section class="boss-section">
         <h4 class="boss-section-title">本关伤害榜</h4>
+        <!-- 三期：本关掉落概率（占比与概率都来自服务端 myDrop，只有 Boss 在讨伐中才显示）。 -->
+        <p v-if="dropLine !== null" class="boss-drop-line">{{ dropLine }}</p>
         <p v-if="panel === null || panel.ranks.length === 0" class="boss-empty">还没有人出手。</p>
         <template v-else>
           <ul class="boss-ranks">
@@ -795,6 +1056,51 @@ const RULES_TEXT = `讨伐 · 玩法说明
 /* 0028 装备掉落说明：与资源奖励区分开（掉落不是资源结算）。 */
 .boss-reward-drop {
   color: var(--gold-bright, #e0cd97);
+}
+
+/* 三期功勋兑换：价目表里塞了输入框 / 下拉与按钮，靠换行而不是横向溢出。 */
+.boss-merit-balance {
+  margin: 0 0 8px;
+  color: var(--gold, #caa96a);
+  font-size: 13px;
+}
+
+.boss-merit-actions {
+  white-space: normal;
+}
+
+.boss-merit-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.boss-merit-quantity {
+  width: 64px;
+  height: 26px;
+  padding: 0 6px;
+  font-size: 12px;
+}
+
+/* 复用全局 .disciple-select 的折角箭头，但去掉 116px 的固定最小宽度。 */
+.boss-merit-select {
+  min-width: 0;
+  flex: 1 1 76px;
+}
+
+.boss-merit-footnote {
+  margin: 8px 0 0;
+  color: #8fa79b;
+  font-size: 12px;
+}
+
+/* 三期：本关掉落概率（伤害榜上的一行小字）。 */
+.boss-drop-line {
+  margin: 0;
+  color: #9fb2a8;
+  font-size: 12px;
+  line-height: 1.6;
 }
 
 .boss-rules-text {
@@ -1148,6 +1454,25 @@ const RULES_TEXT = `讨伐 · 玩法说明
   font-size: 12px;
   line-height: 1.6;
   white-space: pre-wrap;
+}
+
+/* 三期：头部多了一个「功勋」按钮、功勋表里控件较多，窄屏一律换行，别撑出横向滚动。 */
+@media (max-width: 480px) {
+  .boss-head,
+  .boss-head-actions {
+    flex-wrap: wrap;
+  }
+
+  .boss-merit-table th,
+  .boss-merit-table td {
+    white-space: normal;
+  }
+
+  .boss-merit-quantity,
+  .boss-merit-select {
+    width: 100%;
+    flex: 0 0 100%;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

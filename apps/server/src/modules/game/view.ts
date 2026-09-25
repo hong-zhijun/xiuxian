@@ -1036,6 +1036,17 @@ export interface WorldBossView {
   topHit: WorldBossHitView | null;
   /** 奖励预览：当前关卡、按本宗门此刻产出算的各名次奖励（面板「奖励」按钮）。 */
   rewardPreview: WorldBossRewardPreviewView | null;
+  /** 三期：本宗门在当前关的掉落概率（boss 为 null 时为 null）。 */
+  myDrop: {
+    /** 本宗门对本关的伤害占比（0~1；还没出手为 0）。 */
+    damageShare: number;
+    /** 击杀时掉高档装备的概率（0~1）。 */
+    highChance: number;
+    highQualityName: string;
+    lowQualityName: string;
+  } | null;
+  /** 三期：功勋兑换价目（服务端唯一一份，前端只渲染）。cost 为展示单位。 */
+  meritShop: { id: string; name: string; cost: number; quality: string | null }[];
 }
 
 /** 奖励预览：rank 4 表示「第 4 名及以后」；资源为最小单位。 */
@@ -1045,8 +1056,10 @@ export interface WorldBossRewardPreviewView {
   /** 0028：当前关卡的装备掉落说明（服务端按 equipment.ts 的品质表拼好，前端只渲染）。 */
   dropDescription: string;
   lastHitStone: number;
-  /** 装备二期：本关击杀的玄铁（展示单位）；伤害占比 ≥ minSharePercent% 才有，第 1 名拿 top。 */
-  xuantie: { top: number; others: number; minSharePercent: number };
+  /** 装备二期：本关击杀的玄铁（展示单位）；伤害占比 ≥ minSharePercent% 才有，第 1 名拿 top。三期：不足门槛时每关 below 个。 */
+  xuantie: { top: number; others: number; minSharePercent: number; below: number };
+  /** 三期：本关伤害占比 100% 时的功勋（展示单位）；实际按 √占比 折算，保底 2。 */
+  meritFullShare: number;
 }
 
 /** 一次出手的结果（POST /game/world-boss/attack 的 result）。 */
