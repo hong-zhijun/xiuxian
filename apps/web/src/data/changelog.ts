@@ -19,6 +19,15 @@ export const MAX_ENTRIES = 5;
 
 export const CHANGELOG: readonly ChangelogEntry[] = [
   {
+    id: '2026-09-25-1',
+    time: '2026-09-25 11:45',
+    title: '悟道值不再超上限',
+    items: [
+      '弟子的悟道值（已分配 + 未分配）达到 50 后，不能再押属性或选悟道值奖励。',
+      '赢到的悟道值超出剩余额度时，超出部分按每点 180 灵石折算发放。',
+    ],
+  },
+  {
     id: '2026-09-24-9',
     time: '2026-09-24 23:36',
     title: '天骄榜可看弟子档案',

@@ -27,6 +27,8 @@ import {
   ATTRIBUTE_MAX,
   ATTRIBUTE_STAKES,
   DAO_INSIGHT_CAP,
+  DAO_INSIGHT_OVERFLOW_STONE,
+  daoInsightRoom,
   DEBATE_DAILY_LIMIT,
   DEGRADED_WIN_RATES,
   FREE_BET_MIN,
@@ -6490,7 +6492,7 @@ type DebatePlan =
 /** 写入 dao_debate_log.reward_detail 的 JSON（'none' = 败北无奖励）。 */
 type DebateRewardDetail =
   | { type: 'resource'; resourceId: string; amount: string }
-  | { type: 'insight'; insight: number }
+  | { type: 'insight'; insight: number; overflowStone?: string }
   | { type: 'none' };
 
 /**
@@ -6605,6 +6607,36 @@ export async function daoDebate(
     };
   }
 
+  const insightRoom = daoInsightRoom(Number(disciple.dao_insight), Number(disciple.dao_insight_used));
+  const winsInsight =
+    plan.mode === 'attribute' || (plan.mode === 'preset_spirit_stone' && plan.rewardType === 'insight');
+  if (winsInsight && insightRoom <= 0) {
+    throw new AppError(
+      'INVALID_STATUS',
+      `${disciple.name}的悟道值已满（已分配 ${String(Number(disciple.dao_insight_used))} + 未分配 ${String(Number(disciple.dao_insight))}，上限 ${String(DAO_INSIGHT_CAP)}），请改选灵石奖励`,
+    );
+  }
+
+  /** 发悟道值：超出剩余额度的部分按 DAO_INSIGHT_OVERFLOW_STONE 折成灵石。 */
+  const grantInsight = (reward: number): { detail: DebateRewardDetail; description: string } => {
+    const gain = Math.min(reward, insightRoom);
+    const overflow = reward - gain;
+    const nextInsight = Number(disciple.dao_insight) + gain;
+    disciple.dao_insight = nextInsight;
+    draft.addStatement(
+      updateDiscipleDaoInsightStatement(disciple.id, nextInsight, Number(disciple.dao_insight_used)),
+    );
+    if (overflow <= 0) {
+      return { detail: { type: 'insight', insight: gain }, description: `悟道值 +${String(gain)}` };
+    }
+    const stone = overflow * DAO_INSIGHT_OVERFLOW_STONE;
+    draft.grantResource('spiritStone', stone);
+    return {
+      detail: { type: 'insight', insight: gain, overflowStone: String(stone) },
+      description: `悟道值 +${String(gain)}（溢出 ${String(overflow)} 点折合灵石 +${displayAmount(stone)}）`,
+    };
+  };
+
   const attrs = debateAttributesOf(disciple);
   const revealHints = generateRevealHints(attrs, multiplier, Number(disciple.luck));
   const opponent = generateOpponentAttrs(attrs, multiplier);
@@ -6618,28 +6650,18 @@ export async function daoDebate(
   let rewardDescription: string;
   if (result === 'win') {
     if (plan.mode === 'preset_spirit_stone' && plan.rewardType === 'insight') {
-      const gain = PRESET_INSIGHT_REWARDS[multiplier];
-      const nextInsight = Number(disciple.dao_insight) + gain;
-      disciple.dao_insight = nextInsight;
-      draft.addStatement(
-        updateDiscipleDaoInsightStatement(disciple.id, nextInsight, Number(disciple.dao_insight_used)),
-      );
-      rewardDetail = { type: 'insight', insight: gain };
-      rewardDescription = `悟道值 +${String(gain)}`;
+      const granted = grantInsight(PRESET_INSIGHT_REWARDS[multiplier]);
+      rewardDetail = granted.detail;
+      rewardDescription = granted.description;
     } else if (plan.mode === 'free_resource') {
       const gain = freeBetReward(plan.amount, multiplier);
       draft.grantResource(plan.resourceId, gain);
       rewardDetail = { type: 'resource', resourceId: plan.resourceId, amount: String(gain) };
       rewardDescription = `${draft.resourceName(plan.resourceId)} +${displayAmount(gain)}`;
     } else if (plan.mode === 'attribute') {
-      const gain = ATTRIBUTE_INSIGHT_REWARDS[multiplier];
-      const nextInsight = Number(disciple.dao_insight) + gain;
-      disciple.dao_insight = nextInsight;
-      draft.addStatement(
-        updateDiscipleDaoInsightStatement(disciple.id, nextInsight, Number(disciple.dao_insight_used)),
-      );
-      rewardDetail = { type: 'insight', insight: gain };
-      rewardDescription = `悟道值 +${String(gain)}`;
+      const granted = grantInsight(ATTRIBUTE_INSIGHT_REWARDS[multiplier]);
+      rewardDetail = granted.detail;
+      rewardDescription = granted.description;
     } else {
       // 模式 A + 灵石奖励。
       const gain = PRESET_RESOURCE_REWARDS[multiplier];
