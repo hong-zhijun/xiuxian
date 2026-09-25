@@ -76,6 +76,8 @@ import {
   attrNameOf,
   forgeUnlockBlockedReason,
   gearBonusOfDisciple,
+  gearPowerBonusBpOfDisciple,
+  qualityPowerBonusBp,
   qualityColorOf,
   qualityNameOf,
   slotNameOf,
@@ -161,6 +163,8 @@ export interface DiscipleView {
   combatPower: number;
   /** 0028 装备加成（5 项属性各自一件件加起来的和）；没有装备时全 0。 */
   gear: AttrSet;
+  /** 0032 装备战力加成（基点）：身上装备按品质相加，战力再乘 (1 + 它 / 10000)；没有装备时 0。 */
+  gearPowerBonusBp: number;
   /**
    * 0016 综合评分：**当前**六项属性等权现算，固定一位小数（names.ts 的 attributeScore）。
    * 不是战力、也不是岗位效率：境界、修为、天赋、战力都不参与；不落库，
@@ -326,6 +330,8 @@ export interface EquipmentItemView {
   subValue: number;
   /** forge | boss。 */
   source: string;
+  /** 0032 穿在身上时给弟子的战力加成（基点，按品质：凡 200 / 灵 400 / 宝 700 / 仙 1000）。 */
+  powerBonusBp: number;
   /** 穿在谁身上；null = 在背包里（背包 = 本宗门未穿戴的装备）。 */
   discipleId: string | null;
   discipleName: string | null;
@@ -389,6 +395,7 @@ export function equipmentItemViewOf(row: EquipmentRow, discipleName: string | nu
     subAttrName: attrNameOf(row.sub_attr),
     subValue: Number(row.sub_value),
     source: row.source,
+    powerBonusBp: qualityPowerBonusBp(row.quality),
     discipleId: row.disciple_id,
     discipleName: row.disciple_id === null ? null : discipleName,
     createdAt: new Date(Number(row.created_at)).toISOString(),
@@ -1214,14 +1221,33 @@ export interface DiscipleLeaderboardEntryView {
   attributeScore: number;
   talent: string;
   talentName: string;
+  /** 0032 装备战力加成（基点）：身上装备按品质相加；没穿装备为 0。 */
+  gearPowerBonusBp: number;
+  /**
+   * 装备榜才有：三个部位各穿了什么品质（按 EQUIPMENT_SLOTS 的顺序；没穿的部位 quality 为 null）。
+   * 战力榜 / 综合榜不查装备表，这一项省略。
+   */
+  gearSlots?: DiscipleLeaderboardGearSlotView[];
   /** 是否属于当前用户的宗门。 */
   isMe: boolean;
 }
 
-/** 弟子榜单（GET /game/disciple-leaderboard）：战力 top 10 + 综合分 top 10。 */
+/** 装备榜一行里的一个部位。 */
+export interface DiscipleLeaderboardGearSlotView {
+  slot: string;
+  slotName: string;
+  quality: string | null;
+  qualityName: string | null;
+  /** 品质色；没穿为 null。 */
+  color: string | null;
+}
+
+/** 弟子榜单（GET /game/disciple-leaderboard）：战力 / 综合分 / 装备 各 top 10。 */
 export interface DiscipleLeaderboardView {
   byCombatPower: DiscipleLeaderboardEntryView[];
   byAttributeScore: DiscipleLeaderboardEntryView[];
+  /** 0032 装备榜：按装备战力加成排，同分比装备属性总和、再比战力；没穿装备的不上榜。 */
+  byEquipment: DiscipleLeaderboardEntryView[];
 }
 
 /** 天骄榜点开的弟子公开档案：只含公开字段（不含掌门备注、修为数值、差遣与历练）。 */
@@ -1648,8 +1674,10 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
         battleAttrs.defense,
         battleAttrs.speed,
         disciple.talent,
+        gearPowerBonusBpOfDisciple(disciple),
       ),
       gear,
+      gearPowerBonusBp: gearPowerBonusBpOfDisciple(disciple),
       // 六项属性等权现算：与招贤卡共用 names.ts 的同一个纯函数（服务端唯一评分口径）。
       attributeScore: attributeScore({
         aptitude: Number(disciple.aptitude),

@@ -38,6 +38,7 @@ import {
 import AssignmentSelect from './AssignmentSelect.vue';
 import DiscipleAvatar from './DiscipleAvatar.vue';
 import DiscipleRadarChart from './DiscipleRadarChart.vue';
+import HelpTip from './HelpTip.vue';
 import LoadingState from './LoadingState.vue';
 /**
  * 弟子详情（弹窗内容）：固定紧凑头部 + 五个 Tab（概览 / 修行 / 装备 / 历练 / 档案）。
@@ -839,18 +840,67 @@ function gearBonusOf(attribute: string): number {
 }
 
 /**
- * 属性展示：`攻击 60 (+12)`：括号里是该弟子的装备加成（DiscipleView.gear），为 0 时不显示。
+ * 只要数值：`60 (+12)`（「当前 xx」这一类文案用）：括号里是该弟子的装备加成（DiscipleView.gear），为 0 时不显示。
  * 基础属性仍是服务端给的 attack/defense/...（最高 100）；战力已由服务端计入装备，前端不自己加。
  */
-function attributeWithGear(label: string, attribute: string, value: number): string {
-  const bonus = gearBonusOf(attribute);
-  return bonus > 0 ? `${label} ${String(value)} (+${String(bonus)})` : `${label} ${String(value)}`;
-}
-
-/** 只要数值：`60 (+12)`（「当前 xx」这一类文案用）。 */
 function valueWithGear(attribute: string, value: number): string {
   const bonus = gearBonusOf(attribute);
   return bonus > 0 ? `${String(value)} (+${String(bonus)})` : String(value);
+}
+
+/**
+ * 概览里各个问号的说明：只写「怎么算、影响什么」，不写这名弟子的具体数值。
+ * 公式与服务端（realms.ts 的战力、names.ts 的综合评分、equipment.ts 的品质表）保持一致，改规则时同步改这里。
+ */
+const ATTRIBUTE_HELP = {
+  aptitude: [
+    '影响修炼速度：资质越高，修为涨得越快。',
+    '单人定时历练的修为收获也随资质提高。',
+    '不计入战力，没有装备加成。',
+  ].join('\n'),
+  attack: [
+    '计入战力，权重 0.4（攻防身法里最高）。',
+    '括号里是装备加成，同样计入战力。',
+    '讨伐遇到「蛮力」词缀时，攻击越高伤害越高。',
+  ].join('\n'),
+  defense: [
+    '计入战力，权重 0.35。',
+    '括号里是装备加成，同样计入战力。',
+    '讨伐遇到「铁甲」词缀时，防御越高伤害越高。',
+  ].join('\n'),
+  speed: [
+    '计入战力，权重 0.25。',
+    '括号里是装备加成，同样计入战力。',
+    '讨伐遇到「迅捷」词缀时，身法越高伤害越高。',
+  ].join('\n'),
+  luck: [
+    '不计入战力。',
+    '单人定时历练：幸运越高，额外收获的概率越高（只看基础幸运）。',
+    '讨伐：出战弟子的平均幸运决定暴击率（含装备加成）。',
+  ].join('\n'),
+  physique: [
+    '不计入战力。',
+    '单人定时历练：体魄越高，受伤概率越低（只看基础体魄）。',
+    '讨伐：体魄越高，受伤、重伤的概率越低（含装备加成）。',
+  ].join('\n'),
+};
+
+const SCORE_HELP = [
+  '综合评分 =（资质 + 攻击 + 防御 + 身法 + 幸运 + 体魄）÷ 6，保留一位小数。',
+  '只看六项基础属性：不含装备加成，也与境界、修为、天赋、战力无关。',
+].join('\n');
+
+const POWER_HELP = [
+  '战力 = 境界基数 ×（1 + 属性加权）×（1 + 装备战力加成）',
+  '境界基数 =（境界序号 × 3 + 层数）× 10：炼气一层为 10，每升一层 +10。',
+  '属性加权 =（攻击 × 0.4 + 防御 × 0.35 + 身法 × 0.25）÷ 100，攻防身法都含装备加成。',
+  '装备战力加成：每件穿着的装备按品质 凡 2% / 灵 4% / 宝 7% / 仙 10%，三件相加。',
+  '战斗天赋：最后再 × 1.15。',
+].join('\n');
+
+/** 装备的战力加成（基点 → 百分数）：品质表都是 100 基点的整数倍。 */
+function powerBonusPercent(bp: number): string {
+  return `${String(bp / 100)}%`;
 }
 
 /** 三个装备格：部位顺序由服务端给；worn 是该弟子在此部位已穿的那件（没有则 null）。 */
@@ -959,7 +1009,7 @@ function unequipGear(item: EquipmentItemView | null): void {
 
           <!-- 综合评分是服务端按「当前」六项属性等权现算的展示值，前端不复制公式、不做二次取整。 -->
           <div class="disciple-score">
-            <span class="disciple-score-label">综合评分</span>
+            <span class="disciple-score-label">综合评分 <HelpTip label="综合评分说明" :text="SCORE_HELP" /></span>
             <strong class="disciple-score-value">{{ disciple.attributeScore.toFixed(1) }}</strong>
             <span class="disciple-score-note">当前六项属性的等权平均，随淬体等属性变化更新；不含境界、修为、天赋与战力。</span>
           </div>
@@ -977,30 +1027,17 @@ function unequipGear(item: EquipmentItemView | null): void {
             :luck="disciple.luck"
             :physique="disciple.physique"
             :gear="disciple.gear"
+            :help="ATTRIBUTE_HELP"
           />
 
           <div class="disciple-stats">
             <span class="stat-tag stat-talent">天赋 {{ disciple.talentName }}</span>
             <span class="stat-tag stat-power">战力 {{ disciple.combatPower }}</span>
+            <HelpTip label="战力说明" :text="POWER_HELP" />
           </div>
 
-          <!--
-            幸运 / 体魄只作用于单人定时历练，这里把「实际作用」写在数值旁边，避免被当成战力属性；
-            属性一律按 `名称 基础 (+装备)` 显示（装备加成为 0 时不显示括号）。
-          -->
-          <dl class="disciple-attribute-effects">
-            <div>
-              <dt>{{ attributeWithGear('幸运', 'luck', disciple.luck) }}</dt>
-              <dd>只作用于单人定时历练：影响该次历练的额外收获概率。</dd>
-            </div>
-            <div>
-              <dt>{{ attributeWithGear('体魄', 'physique', disciple.physique) }}</dt>
-              <dd>只作用于单人定时历练：影响该次历练的受伤概率。</dd>
-            </div>
-          </dl>
-
           <p class="disciple-detail-hint">
-            资质影响修炼速度；攻 / 防 / 身法 决定战力。战力由服务端按攻防速与境界算出，与综合评分是两个独立数值。
+            括号里是装备加成。点属性、综合评分、战力旁的「?」查看各自的作用与算法。
           </p>
         </section>
 
@@ -1241,7 +1278,8 @@ function unequipGear(item: EquipmentItemView | null): void {
                     <strong class="gear-slot-name" :style="{ color: slot.worn.color }">{{ slot.worn.name }}</strong>
                     <span class="gear-slot-attrs">
                       主属性 {{ slot.worn.mainAttrName }} +{{ slot.worn.mainValue }} · 副属性
-                      {{ slot.worn.subAttrName }} +{{ slot.worn.subValue }}
+                      {{ slot.worn.subAttrName }} +{{ slot.worn.subValue }} · 战力
+                      +{{ powerBonusPercent(slot.worn.powerBonusBp) }}
                     </span>
                   </template>
                   <span v-else class="gear-slot-empty">未装备</span>
@@ -1262,6 +1300,7 @@ function unequipGear(item: EquipmentItemView | null): void {
             </ul>
 
             <p class="disciple-detail-hint">
+              装备战力加成合计 +{{ powerBonusPercent(disciple.gearPowerBonusBp) }}（凡 2% / 灵 4% / 宝 7% / 仙 10%，三件相加）。
               点格子从背包里挑一件同部位的装备穿上；换下来的那件自动回背包（穿在身上的不占背包）。
             </p>
           </template>
@@ -1751,6 +1790,7 @@ function unequipGear(item: EquipmentItemView | null): void {
               <strong :style="{ color: item.color }">{{ item.name }}</strong>
               <p>
                 主属性 {{ item.mainAttrName }} +{{ item.mainValue }} · 副属性 {{ item.subAttrName }} +{{ item.subValue }}
+                · 战力 +{{ powerBonusPercent(item.powerBonusBp) }}
               </p>
             </div>
             <button

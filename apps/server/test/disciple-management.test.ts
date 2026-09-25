@@ -1080,6 +1080,8 @@ describe('0018 迁移：disciples 重建后结构与约束完好', () => {
       'gear_speed',
       'gear_luck',
       'gear_physique',
+      // 0032 装备战力加成：第 6 个冗余列（NOT NULL DEFAULT 0）。
+      'gear_power_bp',
     ]);
   });
 
@@ -1135,6 +1137,8 @@ describe('0018 迁移：disciples 重建后结构与约束完好', () => {
       'gear_speed|INTEGER|1|0',
       'gear_luck|INTEGER|1|0',
       'gear_physique|INTEGER|1|0',
+      // 0032 装备战力加成（基点），NOT NULL DEFAULT 0。
+      'gear_power_bp|INTEGER|1|0',
     ]);
   });
 

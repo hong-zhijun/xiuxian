@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 
+import HelpTip from './HelpTip.vue';
+
 /**
  * 弟子六轴雷达图（资质 / 攻击 / 防御 / 身法 / 幸运 / 体魄）：轻量 SVG，不引图表库。
  *
@@ -23,6 +25,8 @@ const props = defineProps<{
    * 六轴仍按基础属性绘制 —— 加成后可以超过 100，不能进比例尺。
    */
   gear?: { attack: number; defense: number; speed: number; luck: number; physique: number };
+  /** 每项属性的说明（给了就在名称后面加一个问号）；公开档案不传，不显示问号。 */
+  help?: Partial<Record<'aptitude' | 'attack' | 'defense' | 'speed' | 'luck' | 'physique', string>>;
 }>();
 
 /** viewBox 尺寸：留出六个轴标签的空间，宽度由 CSS 控制（响应式）。 */
@@ -158,9 +162,12 @@ const ariaLabel = computed(
       </g>
     </svg>
 
-    <dl class="radar-values">
+    <dl class="radar-values" :class="{ 'has-help': help !== undefined }">
       <div v-for="point in axisPoints" :key="point.key" class="radar-value-row">
-        <dt>{{ point.label }}</dt>
+        <dt>
+          {{ point.label }}
+          <HelpTip v-if="help?.[point.key]" :label="`${point.label}说明`" :text="help[point.key] ?? ''" />
+        </dt>
         <dd>
           <span class="radar-value-number">{{ point.value }}</span>
           <!-- 0028 装备加成：`60 (+12)`；为 0 时不显示，也不进绘图比例尺。 -->

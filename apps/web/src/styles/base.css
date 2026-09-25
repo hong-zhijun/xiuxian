@@ -2620,39 +2620,6 @@ ul {
   line-height: 1.5;
 }
 
-/* 幸运 / 体魄：数值 + 实际作用成对出现，只作用于单人定时历练。 */
-.disciple-attribute-effects {
-  display: grid;
-  gap: 6px;
-  margin: 0;
-}
-
-.disciple-attribute-effects > div {
-  display: grid;
-  min-width: 0;
-  grid-template-columns: 82px minmax(0, 1fr);
-  align-items: baseline;
-  gap: 8px;
-  padding: 8px 11px;
-  border: 1px solid var(--line);
-  border-radius: 3px;
-  background: rgba(255, 255, 255, 0.014);
-}
-
-.disciple-attribute-effects dt {
-  color: #93a99e;
-  font-size: 12px;
-  white-space: nowrap;
-}
-
-.disciple-attribute-effects dd {
-  min-width: 0;
-  margin: 0;
-  color: #7d9186;
-  font-size: 12px;
-  line-height: 1.5;
-}
-
 .disciple-break-button {
   width: 100%;
   min-height: 42px;
@@ -3368,6 +3335,17 @@ ul {
 .radar-value-row dt {
   color: #93a99e;
   font-size: 12px;
+}
+
+/* 自家门人详情：名称后面带问号说明，名称列加宽放下问号 */
+.radar-values.has-help .radar-value-row {
+  grid-template-columns: 50px minmax(0, 1fr);
+}
+
+.radar-values.has-help .radar-value-row dt {
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .radar-value-row dd {
@@ -6721,12 +6699,6 @@ h2.public-sect-name {
 
   .disciple-card-meta {
     gap: 2px 6px;
-  }
-
-  /* 详情里的「幸运 / 体魄」说明在极窄屏改成上下两行，避免左侧标签列占掉一半宽度。 */
-  .disciple-attribute-effects > div {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 2px;
   }
 }
 

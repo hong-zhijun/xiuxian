@@ -197,6 +197,7 @@ function confirmSalvage(): void {
               </div>
               <p class="equipment-card-attrs">
                 主属性 {{ item.mainAttrName }} +{{ item.mainValue }} · 副属性 {{ item.subAttrName }} +{{ item.subValue }}
+                · 战力 +{{ item.powerBonusBp / 100 }}%
               </p>
               <p class="equipment-card-owner">
                 {{ isSalvageable(item) ? '背包' : `穿在 ${item.discipleName ?? '弟子'}身上` }}

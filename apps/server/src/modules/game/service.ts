@@ -160,6 +160,7 @@ import {
   BOSS_XUANTIE_MIN_SHARE,
   forgeRecipeOf,
   forgeWorkshopUpgradeFrom,
+  qualityColorOf,
   qualityNameOf,
   forgeFailRefund,
   forgeOddsOf,
@@ -173,6 +174,8 @@ import {
   forgeUnlockBlockedReason,
   gearBonusOf,
   gearBonusOfDisciple,
+  gearPowerBonusBpOf,
+  gearPowerBonusBpOfDisciple,
   generateEquipment,
   isEquipmentQuality,
   isEquipmentSlot,
@@ -1721,12 +1724,13 @@ export async function createSect(
       name: randomDiscipleName(),
       gender: randomGender(),
       ...attributes,
-      // 0028 装备：新弟子还没有装备，5 个冗余列都是 0。
+      // 0028 装备：新弟子还没有装备，6 个冗余列都是 0。
       gear_attack: 0,
       gear_defense: 0,
       gear_speed: 0,
       gear_luck: 0,
       gear_physique: 0,
+      gear_power_bp: 0,
       talent: generateTalent(Math.random),
       realm_id: template.realm,
       stage: template.stage,
@@ -2063,12 +2067,13 @@ export async function recruitDisciple(
     speed: candidate.speed,
     luck: candidate.luck,
     physique: candidate.physique,
-    // 0028 装备：新招募的弟子还没有装备，5 个冗余列都是 0。
+    // 0028 装备：新招募的弟子还没有装备，6 个冗余列都是 0。
     gear_attack: 0,
     gear_defense: 0,
     gear_speed: 0,
     gear_luck: 0,
     gear_physique: 0,
+    gear_power_bp: 0,
     talent: candidate.talent,
     realm_id: 'qiRefining',
     stage: 1,
@@ -3128,6 +3133,7 @@ export async function exploreSectRealm(
     defense: number;
     speed: number;
     talent: string;
+    gearPowerBonusBp: number;
     name: string;
   }[] = [];
   for (const id of discipleIds) {
@@ -3146,6 +3152,7 @@ export async function exploreSectRealm(
       defense: attrs.defense,
       speed: attrs.speed,
       talent: disciple.talent,
+      gearPowerBonusBp: gearPowerBonusBpOfDisciple(disciple),
       name: disciple.name,
     });
   }
@@ -3331,7 +3338,10 @@ function battleAttrsOf(disciple: DiscipleRow): AttrSet {
   );
 }
 
-/** 0028：弟子战力（**计入装备**）——把「基础属性 + 装备加成」传给 realms.ts 的战力函数。 */
+/**
+ * 0028：弟子战力（**计入装备**）——把「基础属性 + 装备加成」与 0032 的装备战力加成
+ * 一起传给 realms.ts 的战力函数。
+ */
 function gearedCombatPower(disciple: DiscipleRow): number {
   const attrs = battleAttrsOf(disciple);
   return discipleCombatPower(
@@ -3341,6 +3351,7 @@ function gearedCombatPower(disciple: DiscipleRow): number {
     attrs.defense,
     attrs.speed,
     disciple.talent,
+    gearPowerBonusBpOfDisciple(disciple),
   );
 }
 
@@ -3407,10 +3418,11 @@ export async function listLeaderboard(
 const DISCIPLE_LEADERBOARD_SIZE = 10;
 
 /**
- * 弟子榜单：战力 top 10 + 综合分 top 10，只读、不结算、不写库。
+ * 弟子榜单：战力 / 综合分 / 装备 各 top 10，只读、不结算、不写库。
  *
  * 遍历所有宗门的弟子，服务端现算战力与综合评分（与 sync 视图同一口径），
- * 分别按两个维度取 top 10 返回。规模小（几十个弟子）不需要 SQL 层面优化。
+ * 分别按三个维度取 top 10 返回。规模小（几十个弟子）不需要 SQL 层面优化。
+ * 装备榜只读弟子表上的冗余列排名，最后再为榜上 10 人查一次各部位品质。
  */
 export async function listDiscipleLeaderboard(
   db: D1Database,
@@ -3430,16 +3442,22 @@ export async function listDiscipleLeaderboard(
     sectId: string;
     combatPower: number;
     score: number;
+    gearPowerBonusBp: number;
+    /** 装备加的 5 项属性点之和（装备榜同分时比它）。 */
+    gearAttrTotal: number;
   }
   const all: RankedDisciple[] = [];
   for (const sect of sects) {
     const disciples = await discipleRepository.findBySectId(sect.id);
     for (const d of disciples) {
       // 0028 装备：天骄榜的「战力」计入装备；「综合评分」不计入（计划 1.2 明列）。
+      const gear = gearBonusOfDisciple(d);
       all.push({
         row: d,
         sectId: sect.id,
         combatPower: gearedCombatPower(d),
+        gearPowerBonusBp: gearPowerBonusBpOfDisciple(d),
+        gearAttrTotal: gear.attack + gear.defense + gear.speed + gear.luck + gear.physique,
         score: attributeScore({
           aptitude: Number(d.aptitude),
           attack: Number(d.attack),
@@ -3472,6 +3490,7 @@ export async function listDiscipleLeaderboard(
       attributeScore: item.score,
       talent: item.row.talent,
       talentName: findTalent(item.row.talent)?.name ?? '无',
+      gearPowerBonusBp: item.gearPowerBonusBp,
       isMe: item.sectId === mySectId,
     };
   }
@@ -3486,7 +3505,35 @@ export async function listDiscipleLeaderboard(
     .slice(0, DISCIPLE_LEADERBOARD_SIZE)
     .map((item, i) => toEntry(item, i + 1));
 
-  return { byCombatPower, byAttributeScore };
+  // 0032 装备榜：没穿装备（加成 0）的不上榜；按装备战力加成 → 装备属性总和 → 战力排序。
+  const equipmentTop = all
+    .filter((item) => item.gearPowerBonusBp > 0)
+    .sort(
+      (a, b) =>
+        b.gearPowerBonusBp - a.gearPowerBonusBp ||
+        b.gearAttrTotal - a.gearAttrTotal ||
+        b.combatPower - a.combatPower,
+    )
+    .slice(0, DISCIPLE_LEADERBOARD_SIZE);
+  const worn = await new EquipmentRepository(db).findWornQualitiesByDiscipleIds(
+    equipmentTop.map((item) => item.row.id),
+  );
+  const byEquipment = equipmentTop.map((item, i) => ({
+    ...toEntry(item, i + 1),
+    gearSlots: EQUIPMENT_SLOTS.map((slot) => {
+      const quality =
+        worn.find((row) => row.disciple_id === item.row.id && row.slot === slot.id)?.quality ?? null;
+      return {
+        slot: slot.id,
+        slotName: slot.name,
+        quality,
+        qualityName: quality === null ? null : qualityNameOf(quality),
+        color: quality === null ? null : qualityColorOf(quality),
+      };
+    }),
+  }));
+
+  return { byCombatPower, byAttributeScore, byEquipment };
 }
 
 /** 天骄榜点开的弟子公开档案（只读、不结算、不写库；任何登录玩家都能看，弟子不存在 404）。 */
@@ -4161,6 +4208,7 @@ export async function challengeSect(
       name: disciple.name,
       power: discipleCombatPower(
         disciple.realm_id, stage, attrs.attack, attrs.defense, attrs.speed, disciple.talent,
+        gearPowerBonusBpOfDisciple(disciple),
       ),
       realmName: findStage(disciple.realm_id, stage).name,
       stage,
@@ -4206,6 +4254,7 @@ export async function challengeSect(
       name: disciple.name,
       power: discipleCombatPower(
         disciple.realm_id, stage, attrs.attack, attrs.defense, attrs.speed, disciple.talent,
+        gearPowerBonusBpOfDisciple(disciple),
       ),
       realmName: findStage(disciple.realm_id, stage).name,
       stage,
@@ -4806,12 +4855,14 @@ function applyGearRefresh(
   if (row === undefined) {
     return;
   }
-  const gear = gearBonusOf(items.filter((item) => item.disciple_id === discipleId));
+  const worn = items.filter((item) => item.disciple_id === discipleId);
+  const gear = gearBonusOf(worn);
   row.gear_attack = gear.attack;
   row.gear_defense = gear.defense;
   row.gear_speed = gear.speed;
   row.gear_luck = gear.luck;
   row.gear_physique = gear.physique;
+  row.gear_power_bp = gearPowerBonusBpOf(worn);
 }
 
 /**
@@ -6148,6 +6199,7 @@ export async function chooseRealmExplore(
         defense: attrs.defense,
         speed: attrs.speed,
         talent: disciple.talent,
+        gearPowerBonusBp: gearPowerBonusBpOfDisciple(disciple),
       };
     }),
   );
@@ -7899,6 +7951,7 @@ export async function attackWorldBoss(
         attrs.defense,
         attrs.speed,
         member.talent,
+        gearPowerBonusBpOfDisciple(member),
       ),
       affix,
       {

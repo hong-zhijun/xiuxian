@@ -1,6 +1,7 @@
 import { ParamRepository, type ParameterizedQuery } from '../../infra/db/repository';
 
 import type { PillAttribute } from './alchemy';
+import { EQUIPMENT_QUALITIES } from './equipment';
 import type { BettableAttribute } from './gambling';
 
 /**
@@ -68,6 +69,8 @@ export interface DiscipleRow {
   gear_speed: number;
   gear_luck: number;
   gear_physique: number;
+  /** 0032 装备战力加成（基点）：身上装备按品质的战力加成之和，与上面 5 列同一套写回。 */
+  gear_power_bp: number;
   talent: string;
   realm_id: string;
   stage: number;
@@ -244,7 +247,7 @@ export class DiscipleRepository extends ParamRepository {
   async findBySectId(sectId: string): Promise<DiscipleRow[]> {
     return this.all<DiscipleRow>({
       sql: `SELECT id, sect_id, name, gender, aptitude, attack, defense, speed, luck, physique, talent,
-                   gear_attack, gear_defense, gear_speed, gear_luck, gear_physique,
+                   gear_attack, gear_defense, gear_speed, gear_luck, gear_physique, gear_power_bp,
                    realm_id, stage, cultivation, cultivation_remainder,
                    assignment, injured_until, severe_injured_until, body_tempering_count, note, avatar_frame_id, dao_insight, dao_insight_used, created_at
             FROM disciples WHERE sect_id = ? ORDER BY created_at ASC, id ASC`,
@@ -255,7 +258,7 @@ export class DiscipleRepository extends ParamRepository {
   async findById(discipleId: string): Promise<DiscipleRow | null> {
     return this.one<DiscipleRow>({
       sql: `SELECT id, sect_id, name, gender, aptitude, attack, defense, speed, luck, physique, talent,
-                   gear_attack, gear_defense, gear_speed, gear_luck, gear_physique,
+                   gear_attack, gear_defense, gear_speed, gear_luck, gear_physique, gear_power_bp,
                    realm_id, stage, cultivation, cultivation_remainder,
                    assignment, injured_until, severe_injured_until, body_tempering_count, note, avatar_frame_id, dao_insight, dao_insight_used, created_at
             FROM disciples WHERE id = ?`,
@@ -2830,6 +2833,20 @@ export class EquipmentRepository extends ParamRepository {
     });
   }
 
+  /** 天骄榜「装备榜」：几名弟子身上各部位的品质（只取榜上的人，不扫全表）。 */
+  async findWornQualitiesByDiscipleIds(
+    discipleIds: readonly string[],
+  ): Promise<{ disciple_id: string; slot: string; quality: string }[]> {
+    if (discipleIds.length === 0) {
+      return [];
+    }
+    return this.all<{ disciple_id: string; slot: string; quality: string }>({
+      sql: `SELECT disciple_id, slot, quality FROM equipment
+            WHERE disciple_id IN (${discipleIds.map(() => '?').join(', ')})`,
+      params: [...discipleIds],
+    });
+  }
+
   /** 背包件数（disciple_id IS NULL），走 equipment_sect_idx；背包上限判断用。 */
   async countBagBySectId(sectId: string): Promise<number> {
     const row = await this.one<{ total: number }>({
@@ -2913,11 +2930,18 @@ export function deleteEquipmentStatement(equipmentId: string, sectId: string): P
 }
 
 /**
- * 按**装备表重新求和**写回这名弟子的 5 个冗余列（计划 2.2）。
+ * 品质 → 战力加成（基点）的 SQL CASE 表达式：由 EQUIPMENT_QUALITIES 生成（常量，不含请求数据），
+ * 0032 迁移里手写的是同一张表。
+ */
+const GEAR_POWER_BP_CASE =
+  `CASE quality ${EQUIPMENT_QUALITIES.map((quality) => `WHEN '${quality.id}' THEN ${String(quality.powerBonusBp)}`).join(' ')} ELSE 0 END`;
+
+/**
+ * 按**装备表重新求和**写回这名弟子的 6 个冗余列（计划 2.2；0032 起多一列 gear_power_bp）。
  *
  * 不在内存里加减，避免多次穿戴 / 卸下把误差累积起来；必须与改动装备的语句放在同一个
  * batch 里，且排在它们**之后** —— D1 的 batch 按数组顺序执行，SUM 才看得到新归属。
- * 参数顺序：5 个 SET 子查询各一个 disciple_id，最后 WHERE 一个。
+ * 参数顺序：6 个 SET 子查询各一个 disciple_id，最后 WHERE 一个。
  */
 export function refreshDiscipleGearStatement(discipleId: string): ParameterizedQuery {
   const sumOf = (attr: string): string =>
@@ -2927,9 +2951,10 @@ export function refreshDiscipleGearStatement(discipleId: string): ParameterizedQ
   return {
     sql:
       `UPDATE disciples SET gear_attack = ${sumOf('attack')}, gear_defense = ${sumOf('defense')},` +
-      ` gear_speed = ${sumOf('speed')}, gear_luck = ${sumOf('luck')}, gear_physique = ${sumOf('physique')}` +
+      ` gear_speed = ${sumOf('speed')}, gear_luck = ${sumOf('luck')}, gear_physique = ${sumOf('physique')},` +
+      ` gear_power_bp = COALESCE((SELECT SUM(${GEAR_POWER_BP_CASE}) FROM equipment WHERE disciple_id = ?), 0)` +
       ` WHERE id = ?`,
-    params: [discipleId, discipleId, discipleId, discipleId, discipleId, discipleId],
+    params: [discipleId, discipleId, discipleId, discipleId, discipleId, discipleId, discipleId],
   };
 }
 

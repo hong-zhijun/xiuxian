@@ -22,7 +22,10 @@ import {
   forgeUnlockBlockedReason,
   gearBonusOf,
   gearBonusOfDisciple,
+  gearPowerBonusBpOf,
+  gearPowerBonusBpOfDisciple,
   generateEquipment,
+  qualityPowerBonusBp,
   qualityColorOf,
   qualityNameOf,
   resolveMainAttr,
@@ -41,6 +44,7 @@ import {
   realmXuantieDrop,
   salvageXuantieUnits,
 } from '../../apps/server/src/modules/game/equipment';
+import { discipleCombatPower } from '../../apps/server/src/modules/game/realms';
 
 /** 依次吐出给定随机值（用完之后固定 0.5），与其它规则测试同一写法。 */
 function sequence(values: number[], fallback = 0.5): () => number {
@@ -59,6 +63,8 @@ describe('装备规则 · 品质与部位（计划 1.1）', () => {
     expect(EQUIPMENT_QUALITIES.map((q) => q.subMax)).toEqual([4, 8, 10, 16]);
     // 分解返还矿石（展示单位）：50 / 120 / 250 / 500。
     expect(EQUIPMENT_QUALITIES.map((q) => q.salvageOre)).toEqual([50, 120, 250, 500]);
+    // 0032 装备战力加成（基点）：凡 2% / 灵 4% / 宝 7% / 仙 10%。
+    expect(EQUIPMENT_QUALITIES.map((q) => q.powerBonusBp)).toEqual([200, 400, 700, 1000]);
   });
 
   it('三个装备格：兵器攻击 / 护甲防御 / 法器（身法或幸运）', () => {
@@ -288,5 +294,30 @@ describe('装备二期：炼器成功率', () => {
       spiritStone: 125000,
       ore: 200000,
     });
+  });
+});
+
+describe('装备战力加成（0032）', () => {
+  it('按品质逐件相加；脏品质按 0', () => {
+    expect(qualityPowerBonusBp('immortal')).toBe(1000);
+    expect(qualityPowerBonusBp('weird')).toBe(0);
+    expect(gearPowerBonusBpOf([])).toBe(0);
+    expect(gearPowerBonusBpOf([{ quality: 'spirit' }, { quality: 'spirit' }, { quality: 'treasure' }])).toBe(1500);
+    expect(gearPowerBonusBpOf([{ quality: 'immortal' }, { quality: 'immortal' }, { quality: 'immortal' }])).toBe(3000);
+    expect(gearPowerBonusBpOfDisciple({ gear_power_bp: 700 })).toBe(700);
+  });
+
+  it('战力 = 原公式 ×（1 + 加成）：元婴初期、攻 116 / 防 112 / 身法 97', () => {
+    // 境界基数 (3×3+1)×10 = 100；属性加权 (46.4 + 39.2 + 24.25) / 100 = 1.0985 → 209.85
+    expect(discipleCombatPower('nascentSoul', 1, 116, 112, 97, 'mining')).toBe(209);
+    // 灵 + 灵 + 宝 = +15%：209.85 × 1.15 = 241.3
+    expect(discipleCombatPower('nascentSoul', 1, 116, 112, 97, 'mining', 1500)).toBe(241);
+    // 不传加成与传 0 完全一致（历练、关卡血量预估走这条）
+    expect(discipleCombatPower('nascentSoul', 1, 116, 112, 97, 'mining', 0)).toBe(209);
+  });
+
+  it('战斗天赋在装备加成之后再 ×1.15', () => {
+    // 金丹后期：基数 90；属性 50/50/50 → ×1.5 = 135；+30% → 175.5 → 175；×1.15 → 201.25 → 201
+    expect(discipleCombatPower('goldenCore', 3, 50, 50, 50, 'combat', 3000)).toBe(201);
   });
 });

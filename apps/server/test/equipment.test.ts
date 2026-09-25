@@ -250,6 +250,49 @@ describe('战力计入装备（计划 1.2）', () => {
     expect(top?.attributeScore).toBe(before.attributeScore);
   });
 
+  it('天骄榜 · 装备榜（0032）：按装备战力加成排，带各部位品质，没穿装备的不上榜', async () => {
+    const { fixture, now } = await frozenSect('eq-board-gear');
+    const [full, single, bare] = fixture.discipleIds as [string, string, string];
+    // full：一身仙品（+30%）；single：只穿一件灵品兵器（+4%）；bare：什么都不穿。
+    for (const slot of ['weapon', 'armor', 'artifact']) {
+      const item = await insertEquipment(fixture.sectId, {
+        slot,
+        quality: 'immortal',
+        mainAttr: slot === 'weapon' ? 'attack' : slot === 'armor' ? 'defense' : 'speed',
+        mainValue: 24,
+        subAttr: 'luck',
+        subValue: 8,
+      });
+      await equipItem(env.DB, fixture.userId, item, full, now);
+    }
+    const spiritWeapon = await insertEquipment(fixture.sectId, { quality: 'spirit', mainValue: 16 });
+    await equipItem(env.DB, fixture.userId, spiritWeapon, single, now);
+
+    const board = await listDiscipleLeaderboard(env.DB, fixture.userId);
+    // 同一个库里其它用例也穿过装备，这里只看本宗门的三名弟子。
+    const mine = board.byEquipment.filter((entry) => entry.sectId === fixture.sectId);
+    expect(mine.map((entry) => entry.discipleId)).toEqual([full, single]);
+    expect(board.byEquipment.some((entry) => entry.discipleId === bare)).toBe(false);
+    expect(board.byEquipment.every((entry) => entry.gearPowerBonusBp > 0)).toBe(true);
+
+    const [top, second] = mine as [(typeof mine)[number], (typeof mine)[number]];
+    expect(top.gearPowerBonusBp).toBe(3000);
+    expect(top.isMe).toBe(true);
+    expect(top.gearSlots?.map((slot) => slot.quality)).toEqual(['immortal', 'immortal', 'immortal']);
+    expect(top.gearSlots?.map((slot) => slot.slotName)).toEqual(['兵器', '护甲', '法器']);
+    expect(second.gearPowerBonusBp).toBe(400);
+    expect(second.gearSlots?.map((slot) => slot.quality)).toEqual(['spirit', null, null]);
+    expect(second.gearSlots?.[1]?.color).toBeNull();
+    // 名次连续、按加成降序。
+    expect(board.byEquipment.map((entry) => entry.rank)).toEqual(
+      board.byEquipment.map((_, index) => index + 1),
+    );
+    const bonuses = board.byEquipment.map((entry) => entry.gearPowerBonusBp);
+    expect([...bonuses].sort((a, b) => b - a)).toEqual(bonuses);
+    // 战力榜 / 综合榜不查装备表，不带部位明细。
+    expect(board.byCombatPower.every((entry) => entry.gearSlots === undefined)).toBe(true);
+  });
+
   it('挑战：战报里的每轮战力就是含装备的战力（攻方）', async () => {
     const attacker = await makeSect('eq-challenge-a');
     const defender = await makeSect('eq-challenge-b');
@@ -441,6 +484,14 @@ async function gearOf(discipleId: string): Promise<GearBonusFixture> {
     luck: Number(row?.gear_luck ?? 0),
     physique: Number(row?.gear_physique ?? 0),
   };
+}
+
+/** 0032：弟子表上的装备战力加成列（基点）。 */
+async function gearPowerBpOf(discipleId: string): Promise<number> {
+  const row = await env.DB.prepare('SELECT gear_power_bp FROM disciples WHERE id = ?')
+    .bind(discipleId)
+    .first<{ gear_power_bp: number }>();
+  return Number(row?.gear_power_bp ?? 0);
 }
 
 interface NewEquipmentFixture {
@@ -638,7 +689,7 @@ describe('装备接口：炼器 / 背包（计划 1.3、1.5）', () => {
 });
 
 describe('装备接口：穿戴 / 卸下 / 分解 / 驱逐（计划 1.5）', () => {
-  it('穿戴 / 换装 / 跨弟子转移：5 列加成按装备表重新求和', async () => {
+  it('穿戴 / 换装 / 跨弟子转移：6 列加成（含 0032 战力加成）按装备表重新求和', async () => {
     const { fixture, now } = await frozenSect('eq-equip');
     const [a, b] = fixture.discipleIds as [string, string];
     const weaponA = await insertEquipment(fixture.sectId, {
@@ -657,11 +708,16 @@ describe('装备接口：穿戴 / 卸下 / 分解 / 驱逐（计划 1.5）', () 
     expect(first.outcome.discipleId).toBe(a);
     expect(first.outcome.replacedName).toBeNull();
     expect(await gearOf(a)).toEqual({ attack: 4, defense: 0, speed: 2, luck: 0, physique: 0 });
+    // 凡品 +2%
+    expect(await gearPowerBpOf(a)).toBe(200);
+    expect(first.state.disciples.find((item) => item.id === a)!.gearPowerBonusBp).toBe(200);
     expect(await bagCountOf(fixture.sectId)).toBe(1);
 
     const swapped = await equipItem(env.DB, fixture.userId, weaponB, a, now);
     expect(swapped.outcome.replacedName).toBe(`测试·${weaponA.slice(0, 8)}`);
     expect(await gearOf(a)).toEqual({ attack: 12, defense: 5, speed: 0, luck: 0, physique: 0 });
+    // 换成宝品：+7%（按装备表重算，不是 200 + 700）
+    expect(await gearPowerBpOf(a)).toBe(700);
     expect(
       (await equipmentRows(fixture.sectId)).find((row) => row.id === weaponA)!.disciple_id,
     ).toBeNull();
@@ -670,9 +726,12 @@ describe('装备接口：穿戴 / 卸下 / 分解 / 驱逐（计划 1.5）', () 
     await equipItem(env.DB, fixture.userId, weaponB, b, now);
     expect(await gearOf(a)).toEqual({ attack: 0, defense: 0, speed: 0, luck: 0, physique: 0 });
     expect(await gearOf(b)).toEqual({ attack: 12, defense: 5, speed: 0, luck: 0, physique: 0 });
+    expect(await gearPowerBpOf(a)).toBe(0);
+    expect(await gearPowerBpOf(b)).toBe(700);
     expect(await bagCountOf(fixture.sectId)).toBe(1);
     const bView = discipleOf(await fixture.state(), b);
     expect(bView.gear).toEqual({ attack: 12, defense: 5, speed: 0, luck: 0, physique: 0 });
+    expect(bView.gearPowerBonusBp).toBe(700);
     expect(bView.combatPower).toBe(
       discipleCombatPower(
         bView.realmId,
@@ -681,6 +740,7 @@ describe('装备接口：穿戴 / 卸下 / 分解 / 驱逐（计划 1.5）', () 
         Number(bView.defense) + 5,
         Number(bView.speed),
         bView.talent,
+        700,
       ),
     );
 

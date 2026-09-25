@@ -40,15 +40,20 @@ export interface EquipmentQualityDef {
   subMax: number;
   /** 分解返还的矿石（展示单位；1 展示单位 = 1000 最小单位）。 */
   salvageOre: number;
+  /**
+   * 装备战力加成（基点，10000 = +100%）：穿在身上时，弟子战力再乘 (1 + 各件之和 / 10000)。
+   * 与属性加成分开算 —— 属性加成照旧进攻 / 防 / 身法，这一项只放大战力。
+   */
+  powerBonusBp: number;
   /** 面板颜色（前端只渲染，不做品质判断）。 */
   color: string;
 }
 
 export const EQUIPMENT_QUALITIES: readonly EquipmentQualityDef[] = [
-  { id: 'common', name: '凡品', mainValue: 8, subMin: 2, subMax: 4, salvageOre: 50, color: '#b9c0c9' },
-  { id: 'spirit', name: '灵品', mainValue: 16, subMin: 4, subMax: 8, salvageOre: 120, color: '#4ade80' },
-  { id: 'treasure', name: '宝品', mainValue: 20, subMin: 6, subMax: 10, salvageOre: 250, color: '#60a5fa' },
-  { id: 'immortal', name: '仙品', mainValue: 24, subMin: 8, subMax: 16, salvageOre: 500, color: '#fbbf24' },
+  { id: 'common', name: '凡品', mainValue: 8, subMin: 2, subMax: 4, salvageOre: 50, powerBonusBp: 200, color: '#b9c0c9' },
+  { id: 'spirit', name: '灵品', mainValue: 16, subMin: 4, subMax: 8, salvageOre: 120, powerBonusBp: 400, color: '#4ade80' },
+  { id: 'treasure', name: '宝品', mainValue: 20, subMin: 6, subMax: 10, salvageOre: 250, powerBonusBp: 700, color: '#60a5fa' },
+  { id: 'immortal', name: '仙品', mainValue: 24, subMin: 8, subMax: 16, salvageOre: 500, powerBonusBp: 1000, color: '#fbbf24' },
 ];
 
 /** 3 个装备格（计划 1.1）：兵器 = 攻击、护甲 = 防御，法器的主属性由玩家 / 随机二选一。 */
@@ -415,6 +420,24 @@ export function gearBonusOfDisciple(row: {
     luck: Number(row.gear_luck),
     physique: Number(row.gear_physique),
   };
+}
+
+/** 单件装备的战力加成（基点）；脏品质按 0。 */
+export function qualityPowerBonusBp(qualityId: string): number {
+  return findQuality(qualityId)?.powerBonusBp ?? 0;
+}
+
+/** 一组装备的战力加成之和（基点）：按品质逐件相加。 */
+export function gearPowerBonusBpOf(items: readonly { quality: string }[]): number {
+  return items.reduce((sum, item) => sum + qualityPowerBonusBp(item.quality), 0);
+}
+
+/**
+ * 弟子表上第 6 个冗余列 `gear_power_bp`（0032）：身上装备的战力加成之和（基点）。
+ * 与 5 个属性列同一套写回（refreshDiscipleGearStatement），战斗计算只读这一列。
+ */
+export function gearPowerBonusBpOfDisciple(row: { gear_power_bp: number }): number {
+  return Number(row.gear_power_bp) || 0;
 }
 
 /** 基础属性 + 装备加成（加成后可以超过 100；基础属性本身仍最高 100）。 */

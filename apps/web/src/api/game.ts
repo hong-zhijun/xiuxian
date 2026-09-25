@@ -78,6 +78,8 @@ export interface DiscipleView {
     luck: number;
     physique: number;
   };
+  /** 0032 装备战力加成（基点，10000 = +100%）：身上装备按品质相加；战力已计入，前端只展示。 */
+  gearPowerBonusBp: number;
   /**
    * 0016 综合评分：**当前**六项属性等权现算，固定一位小数（服务端 names.ts 的
    * attributeScore）。不是战力：境界、修为、天赋都不参与；服务端不落库，
@@ -713,12 +715,26 @@ export interface DiscipleLeaderboardEntryView {
   attributeScore: number;
   talent: string;
   talentName: string;
+  /** 0032 装备战力加成（基点）；没穿装备为 0。 */
+  gearPowerBonusBp: number;
+  /** 装备榜才有：三个部位各穿了什么品质（没穿的部位 quality 为 null）。 */
+  gearSlots?: DiscipleLeaderboardGearSlotView[];
   isMe: boolean;
+}
+
+export interface DiscipleLeaderboardGearSlotView {
+  slot: string;
+  slotName: string;
+  quality: string | null;
+  qualityName: string | null;
+  color: string | null;
 }
 
 export interface DiscipleLeaderboardView {
   byCombatPower: DiscipleLeaderboardEntryView[];
   byAttributeScore: DiscipleLeaderboardEntryView[];
+  /** 0032 装备榜：没穿装备的不上榜。 */
+  byEquipment: DiscipleLeaderboardEntryView[];
 }
 
 export async function fetchDiscipleLeaderboard(): Promise<DiscipleLeaderboardView> {
@@ -1750,6 +1766,8 @@ export interface EquipmentItemView {
   subAttrName: string;
   subValue: number;
   source: 'forge' | 'boss';
+  /** 0032 穿在身上时给弟子的战力加成（基点，按品质）。 */
+  powerBonusBp: number;
   /** 穿在谁身上；null = 在背包里（背包 = 本宗未穿戴的装备）。 */
   discipleId: string | null;
   discipleName: string | null;

@@ -9,7 +9,7 @@ import LoadingState from './LoadingState.vue';
 
 const props = defineProps<{ busy: boolean }>();
 
-type Tab = 'combatPower' | 'attributeScore';
+type Tab = 'combatPower' | 'attributeScore' | 'equipment';
 const activeTab = ref<Tab>('combatPower');
 
 const data = ref<DiscipleLeaderboardView | null>(null);
@@ -40,15 +40,16 @@ load();
 
 function entries(): DiscipleLeaderboardEntryView[] {
   if (data.value === null) return [];
-  return activeTab.value === 'combatPower'
-    ? data.value.byCombatPower
-    : data.value.byAttributeScore;
+  if (activeTab.value === 'combatPower') return data.value.byCombatPower;
+  if (activeTab.value === 'attributeScore') return data.value.byAttributeScore;
+  return data.value.byEquipment;
 }
 
 function valueLabel(entry: DiscipleLeaderboardEntryView): string {
-  return activeTab.value === 'combatPower'
-    ? `战力 ${entry.combatPower}`
-    : `综合 ${entry.attributeScore}`;
+  if (activeTab.value === 'combatPower') return `战力 ${entry.combatPower}`;
+  if (activeTab.value === 'attributeScore') return `综合 ${entry.attributeScore}`;
+  // 装备榜：战力加成是 100 基点的整数倍，直接换成百分数显示。
+  return `装备 +${entry.gearPowerBonusBp / 100}%`;
 }
 </script>
 
@@ -76,6 +77,13 @@ function valueLabel(entry: DiscipleLeaderboardEntryView): string {
         :aria-selected="activeTab === 'attributeScore'"
         @click="activeTab = 'attributeScore'"
       >综合榜</button>
+      <button
+        class="dlb-tab"
+        :class="{ active: activeTab === 'equipment' }"
+        role="tab"
+        :aria-selected="activeTab === 'equipment'"
+        @click="activeTab = 'equipment'"
+      >装备榜</button>
     </div>
 
     <LoadingState v-if="loading" label="正在读取弟子榜" detail="天下英才，正在查阅。" />
@@ -114,6 +122,16 @@ function valueLabel(entry: DiscipleLeaderboardEntryView): string {
               <span v-if="entry.talentName !== '无'">天赋 {{ entry.talentName }}</span>
               <span class="dlb-value">{{ valueLabel(entry) }}</span>
             </span>
+            <!-- 装备榜：三个部位的品质（品质色边框；没穿的部位显示「空」）。 -->
+            <span v-if="activeTab === 'equipment' && entry.gearSlots" class="dlb-gear">
+              <span
+                v-for="slot in entry.gearSlots"
+                :key="slot.slot"
+                class="dlb-gear-slot"
+                :class="{ 'is-empty': slot.quality === null }"
+                :style="slot.color ? { borderColor: slot.color, color: slot.color } : undefined"
+              >{{ slot.slotName }} {{ slot.qualityName ?? '空' }}</span>
+            </span>
           </span>
           <span class="rank-arrow" aria-hidden="true">›</span>
         </button>
@@ -122,7 +140,7 @@ function valueLabel(entry: DiscipleLeaderboardEntryView): string {
 
     <div v-else-if="loadError === null" class="empty-state compact-empty">
       <span aria-hidden="true">榜</span>
-      <strong>暂无弟子上榜</strong>
+      <strong>{{ activeTab === 'equipment' ? '暂无弟子穿戴装备' : '暂无弟子上榜' }}</strong>
     </div>
 
     <DiscipleProfileDialog v-if="profileId" :disciple-id="profileId" @close="profileId = null" />
@@ -179,5 +197,25 @@ function valueLabel(entry: DiscipleLeaderboardEntryView): string {
 .dlb-value {
   color: var(--gold);
   font-weight: 600;
+}
+
+.dlb-gear {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.dlb-gear-slot {
+  padding: 1px 6px;
+  border: 1px solid currentColor;
+  border-radius: 2px;
+  font-size: 12px;
+  line-height: 18px;
+  white-space: nowrap;
+}
+
+.dlb-gear-slot.is-empty {
+  border-color: rgba(119, 184, 154, 0.16);
+  color: #6f8479;
 }
 </style>
