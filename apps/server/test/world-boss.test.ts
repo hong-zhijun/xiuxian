@@ -757,6 +757,44 @@ describe('世界 Boss 二期：Cron 逃走与发奖', () => {
     expect(await balanceOf(fixture.sectId, BOSS_MERIT_RESOURCE_ID)).toBe(before.bossMerit + 15_000);
   });
 
+  it('奖励入账不超过资源容量：溢出作废并记进天机录；本来就超容量的不往下压', async () => {
+    const fixture = await makeSect('reward-cap');
+    const now = dayAt(90, 10);
+    await freezeDay(fixture.sectId, 90);
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    const dayKey = dateKeyUtc8(now);
+
+    await insertBoss({ dayKey, now, stage: 1, hp: 100, maxHp: 1_000_000, roundDamage: 20_000 });
+    await attackWorldBoss(env.DB, fixture.userId, { discipleIds: [fixture.discipleIds[0]!] }, now);
+    await env.DB.prepare('DELETE FROM world_bosses WHERE day_key = ? AND stage = 2').bind(dayKey).run();
+
+    // 1 级宗门容量：灵石 5000000、药材 2000000（配置值 × 等级倍率 1）。
+    // 灵石只差 1000 就满；药材本来就顶过了容量（探索奖励允许）。
+    const setBalance = (resourceId: string, balance: number) =>
+      env.DB.prepare('UPDATE resource_balances SET balance = ? WHERE sect_id = ? AND resource_id = ?')
+        .bind(balance, fixture.sectId, resourceId)
+        .run();
+    await setBalance('spiritStone', 4_999_000);
+    await setBalance('herb', 2_500_000);
+
+    await processWorldBoss(env.DB, dayAt(90, 14));
+
+    expect(await balanceOf(fixture.sectId, 'spiritStone')).toBe(5_000_000);
+    expect(await balanceOf(fixture.sectId, 'herb')).toBe(2_500_000);
+    const log = await env.DB.prepare(
+      "SELECT description, effects FROM event_log WHERE sect_id = ? AND event_id = 'worldBossReward'",
+    )
+      .bind(fixture.sectId)
+      .first<{ description: string; effects: string }>();
+    expect(log!.description).toContain('仓库已满，溢出');
+    expect(log!.description).toContain('灵石');
+    expect(log!.description).toContain('药材');
+    // 天机录只记实际入账：灵石只进了 1000，药材一分没进。
+    const effects = JSON.parse(log!.effects) as Record<string, string>;
+    expect(effects.spiritStone).toBe('1000');
+    expect(effects.herb).toBeUndefined();
+  });
+
   it('排名倍数按「对该关的总伤害」分配：伤害高的拿 ×1.5', async () => {
     const first = await makeSect('rank-a');
     const second = await makeSect('rank-b');

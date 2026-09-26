@@ -94,12 +94,19 @@ export const WORLD_BOSS_SEVERE_PHYSIQUE_STEP = 0.03;
 export const WORLD_BOSS_REWARD_FLOOR_UNIT = 10 * 1000;
 /** 奖励涉及的资源（按资源分别算）。 */
 export const WORLD_BOSS_POOL_RESOURCES = ['spiritStone', 'herb', 'ore'] as const;
-/** 基础份的产量系数。 */
-export const WORLD_BOSS_KILL_POOL_RATE_FACTOR = 3.5;
+/** 基础份的产量系数（每关给几小时产出；防通胀由 3.5 下调）。 */
+export const WORLD_BOSS_KILL_POOL_RATE_FACTOR = 1.2;
 /** 最后一击奖的产量系数。 */
 export const WORLD_BOSS_LAST_HIT_RATE_FACTOR = 1.0;
-/** 关卡系数每关递增量：第 n 关 ×(1 + 0.5 × (n−1))。 */
-export const WORLD_BOSS_STAGE_REWARD_STEP = 0.5;
+/**
+ * 资源奖励的关卡系数：第 n 关 ×(1 + 0.2 × (min(n, 5) − 1))，第 5 关起不再递增（最高 ×1.8）。
+ * 防通胀：原来每关 +0.5 且不封顶，关数一多资源奖励按平方增长。
+ */
+export const WORLD_BOSS_STAGE_REWARD_STEP = 0.2;
+/** 资源奖励关卡系数封顶的关卡。 */
+export const WORLD_BOSS_STAGE_REWARD_MAX_STAGE = 5;
+/** 功勋的关卡系数每关递增量（与资源分开：功勋兑换价按它定，不随资源下调）。 */
+export const WORLD_BOSS_MERIT_STAGE_STEP = 0.5;
 /** 击杀时必发的丹药（每参与宗门）。 */
 export const WORLD_BOSS_KILL_PILL_ID = 'cultivationPill';
 /** 伤害第 1 名的额外丹药。 */
@@ -436,9 +443,15 @@ export function rewardFloor(sectLevel: number): number {
   return WORLD_BOSS_REWARD_FLOOR_UNIT * Math.max(1, Math.floor(sectLevel));
 }
 
-/** 关卡系数 = 1 + 0.5 × (关卡 − 1)。 */
+/** 资源奖励的关卡系数 = 1 + 0.2 × (min(关卡, 5) − 1)。 */
 export function stageRewardMultiplier(stage: number): number {
-  return 1 + WORLD_BOSS_STAGE_REWARD_STEP * (Math.max(1, Math.floor(stage)) - 1);
+  const capped = Math.min(WORLD_BOSS_STAGE_REWARD_MAX_STAGE, Math.max(1, Math.floor(stage)));
+  return 1 + WORLD_BOSS_STAGE_REWARD_STEP * (capped - 1);
+}
+
+/** 功勋的关卡系数 = 1 + 0.5 × (关卡 − 1)（三期原口径，不封顶）。 */
+export function meritStageMultiplier(stage: number): number {
+  return 1 + WORLD_BOSS_MERIT_STAGE_STEP * (Math.max(1, Math.floor(stage)) - 1);
 }
 
 /** 排名倍数：第 1 名 1.5、第 2 名 1.25、第 3 名 1.1，其余 1.0。 */
@@ -448,7 +461,7 @@ export function rankRewardMultiplier(rank: number): number {
 
 /**
  * 一个参与宗门在该关的基础资源奖励（灵石 / 药材 / 矿石分别算）：
- *   max(该宗门产出(r) × 1.0, 保底(L)) × 关卡系数 × 排名倍数 ×（击退时 ×0.5）
+ *   max(该宗门产出(r) × 1.2, 保底(L)) × 关卡系数 × 排名倍数 ×（击退时 ×0.5）
  * 「击退」= 23:00 逃走时血量已被打掉 ≥70%。
  */
 export function stageResourceRewards(input: {
@@ -518,14 +531,14 @@ export function isFledByDamage(maxHp: number, hp: number): boolean {
 
 /** 功勋资源 id（game-config 的第六种资源）。 */
 export const BOSS_MERIT_RESOURCE_ID = 'bossMerit';
-/** 功勋基数（展示单位）：base = max(WORLD_BOSS_MERIT_MIN, round(它 × 关卡系数 × √伤害占比))。 */
+/** 功勋基数（展示单位）：base = max(WORLD_BOSS_MERIT_MIN, round(它 × 功勋关卡系数 × √伤害占比))。 */
 export const WORLD_BOSS_MERIT_BASE = 10;
 /** 功勋保底（展示单位）：伤害占比再小也不低于它。 */
 export const WORLD_BOSS_MERIT_MIN = 2;
 
 /**
  * 一个参与宗门在该关获得的功勋（展示单位整数）：
- *   base = max(2, round(10 × 关卡系数 × √伤害占比))；击杀给 base，击退给 floor(base / 2)（至少 1）。
+ *   base = max(2, round(10 × 功勋关卡系数 × √伤害占比))；击杀给 base，击退给 floor(base / 2)（至少 1）。
  * 伤害占比先夹到 [0, 1]；占比 ≤ 0 直接返回 0（蹭不到伤害就没有功勋）。
  */
 export function worldBossMeritFor(input: {
@@ -537,7 +550,7 @@ export function worldBossMeritFor(input: {
   const share = Math.min(1, Math.max(0, input.damageShare));
   const base = Math.max(
     WORLD_BOSS_MERIT_MIN,
-    Math.round(WORLD_BOSS_MERIT_BASE * stageRewardMultiplier(input.stage) * Math.sqrt(share)),
+    Math.round(WORLD_BOSS_MERIT_BASE * meritStageMultiplier(input.stage) * Math.sqrt(share)),
   );
   return input.repelled ? Math.max(1, Math.floor(base / 2)) : base;
 }

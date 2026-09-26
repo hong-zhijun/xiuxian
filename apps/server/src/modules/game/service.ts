@@ -286,6 +286,7 @@ import {
   RaceRepository,
   insertRaceBetStatement,
   insertRaceRoundStatement,
+  resourceCreditCappedStatement,
   resourceDeltaStatement,
   settleRaceRoundStatement,
   updateRaceRoundPoolStatement,
@@ -8336,6 +8337,33 @@ async function rewardWorldBoss(
     entry.effects[resourceId] = (entry.effects[resourceId] ?? 0) + amount;
   };
 
+  // 防通胀：奖励入账不超过资源容量（与挂机产出同一口径），溢出部分丢弃并记进天机录。
+  // 余额按「上次结算」的库存算、同一宗门多笔入账累加；写库用 resourceCreditCappedStatement 在 SQL 里再夹一次。
+  const balancesBySect = new Map<string, Map<string, number>>();
+  const capacityMultiplierBySect = new Map<string, number>();
+  const overflowBySect = new Map<string, Record<string, number>>();
+  const credit = (sectId: string, resourceId: string, amount: number): void => {
+    if (amount <= 0) return;
+    const definition = gameConfig().resources.find((item) => item.id === resourceId);
+    const balances = balancesBySect.get(sectId) ?? new Map<string, number>();
+    const balance = balances.get(resourceId) ?? 0;
+    const capacity =
+      definition === undefined
+        ? Number.MAX_SAFE_INTEGER
+        : effectiveCapacity(definition.capacity, capacityMultiplierBySect.get(sectId) ?? 1);
+    const actual = Math.max(0, Math.min(amount, capacity - balance));
+    if (actual < amount) {
+      const overflow = overflowBySect.get(sectId) ?? {};
+      overflow[resourceId] = (overflow[resourceId] ?? 0) + (amount - actual);
+      overflowBySect.set(sectId, overflow);
+    }
+    if (actual <= 0) return;
+    balances.set(resourceId, balance + actual);
+    balancesBySect.set(sectId, balances);
+    statements.push(resourceCreditCappedStatement(sectId, resourceId, actual, capacity, now));
+    creditLedger(sectId, resourceId, actual);
+  };
+
   // 0028 装备：本关击杀掉落的装备（发奖成功后用它广播仙品）。
   const bossDrops: { sectId: string; name: string; quality: string }[] = [];
 
@@ -8345,15 +8373,18 @@ async function rewardWorldBoss(
     const levelById = new Map(sectRows.map((row) => [row.id, Number(row.level)]));
     const config = gameConfig();
 
-    // 只读参与宗门的弟子 / 建筑 / 在外记录（参与宗门最多几个，不做全表扫）。
+    // 只读参与宗门的弟子 / 建筑 / 在外记录 / 余额（参与宗门最多几个，不做全表扫）。
     const ratesById = new Map<string, Map<string, number>>();
     for (const [sectId] of participants) {
-      const [disciples, buildings, journeys] = await Promise.all([
+      const [disciples, buildings, journeys, balances] = await Promise.all([
         new DiscipleRepository(db).findBySectId(sectId),
         new BuildingRepository(db).findBySectId(sectId),
         new DiscipleJourneyRepository(db).findOpenBySectId(sectId),
+        new ResourceBalanceRepository(db).findBySectId(sectId),
       ]);
       ratesById.set(sectId, resourceRatesOfSect({ config, disciples, buildings, journeys, now }));
+      balancesBySect.set(sectId, new Map(balances.map((row) => [row.resource_id, Number(row.balance)])));
+      capacityMultiplierBySect.set(sectId, findSectLevel(levelById.get(sectId) ?? 1).capacityMultiplier);
     }
 
     const totalDamage = participants.reduce((sum, [, info]) => sum + info.damage, 0);
@@ -8366,20 +8397,14 @@ async function rewardWorldBoss(
         isTop: index === 0,
         repelled,
       });
-      if (xuantie > 0) {
-        statements.push(resourceDeltaStatement(sectId, XUANTIE_RESOURCE_ID, xuantie * 1000, now));
-        creditLedger(sectId, XUANTIE_RESOURCE_ID, xuantie * 1000);
-      }
+      credit(sectId, XUANTIE_RESOURCE_ID, xuantie * 1000);
       // 三期：功勋按本关伤害占比发（击杀给 base，击退减半），与玄铁一起进同一个 batch。
       const merit = worldBossMeritFor({
         stage,
         damageShare: totalDamage > 0 ? info.damage / totalDamage : 0,
         repelled,
       });
-      if (merit > 0) {
-        statements.push(resourceDeltaStatement(sectId, BOSS_MERIT_RESOURCE_ID, merit * 1000, now));
-        creditLedger(sectId, BOSS_MERIT_RESOURCE_ID, merit * 1000);
-      }
+      credit(sectId, BOSS_MERIT_RESOURCE_ID, merit * 1000);
       const rewards = stageResourceRewards({
         rates: ratesRecordOf(ratesById.get(sectId) ?? new Map()),
         sectLevel: levelById.get(sectId) ?? 1,
@@ -8388,10 +8413,7 @@ async function rewardWorldBoss(
         ...(repelled ? { repelled: true } : {}),
       });
       for (const [resourceId, amount] of Object.entries(rewards)) {
-        if (amount > 0) {
-          statements.push(resourceDeltaStatement(sectId, resourceId, amount, now));
-          creditLedger(sectId, resourceId, amount);
-        }
+        credit(sectId, resourceId, amount);
       }
     });
 
@@ -8419,10 +8441,7 @@ async function rewardWorldBoss(
             levelById.get(killerSectId) ?? 1,
             stage,
           );
-          if (amount > 0) {
-            statements.push(resourceDeltaStatement(killerSectId, 'spiritStone', amount, now));
-            creditLedger(killerSectId, 'spiritStone', amount);
-          }
+          credit(killerSectId, 'spiritStone', amount);
           const killerEntry = rewardLedger.get(killerSectId);
           if (killerEntry !== undefined) killerEntry.lastHit = true;
         }
@@ -8459,12 +8478,8 @@ async function rewardWorldBoss(
           bagUsed = await equipmentRepo.countBagBySectId(sectId);
         }
         if (bagUsed >= BAG_CAPACITY) {
-          statements.push(resourceDeltaStatement(sectId, 'ore', salvageOreUnits(quality), now));
-          creditLedger(sectId, 'ore', salvageOreUnits(quality));
-          if (salvageXuantieUnits(quality) > 0) {
-            statements.push(resourceDeltaStatement(sectId, XUANTIE_RESOURCE_ID, salvageXuantieUnits(quality), now));
-            creditLedger(sectId, XUANTIE_RESOURCE_ID, salvageXuantieUnits(quality));
-          }
+          credit(sectId, 'ore', salvageOreUnits(quality));
+          credit(sectId, XUANTIE_RESOURCE_ID, salvageXuantieUnits(quality));
           rewardLedger.get(sectId)?.items.push(`${generated.name}（背包已满，已分解）`);
           continue;
         }
@@ -8495,12 +8510,19 @@ async function rewardWorldBoss(
   for (const [sectId, entry] of rewardLedger) {
     const honors = [`伤害第 ${String(entry.rank)} 名`, ...(entry.lastHit ? ['最后一击'] : [])].join('、');
     const itemsText = entry.items.length > 0 ? `，获得 ${entry.items.join('、')}` : '';
+    const overflow = Object.entries(overflowBySect.get(sectId) ?? {});
+    const overflowText =
+      overflow.length > 0
+        ? `（仓库已满，溢出 ${overflow
+            .map(([resourceId, amount]) => `${gameConfig().resources.find((item) => item.id === resourceId)?.name ?? resourceId} ${displayAmount(amount)}`)
+            .join('、')}）`
+        : '';
     statements.push(
       insertEventLogStatement({
         id: crypto.randomUUID(),
         sectId,
         eventId: 'worldBossReward',
-        description: `讨伐${bossLabel}${killed ? '' : '（击退）'}：${honors}${itemsText}`,
+        description: `讨伐${bossLabel}${killed ? '' : '（击退）'}：${honors}${itemsText}${overflowText}`,
         effects: JSON.stringify(
           Object.fromEntries(Object.entries(entry.effects).map(([resourceId, amount]) => [resourceId, String(amount)])),
         ),

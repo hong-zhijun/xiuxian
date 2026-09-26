@@ -754,6 +754,25 @@ export function resourceDeltaStatement(
   };
 }
 
+/**
+ * 加资源但不超过容量（讨伐发奖用）：新余额 = min(余额 + 数量, max(余额, 容量))。
+ * 在 SQL 里夹，不依赖读到的旧余额（发奖与该宗门自己的结算可能交错）；
+ * 余额本来就高于容量（探索奖励允许顶过上限）时保持不变，不会被往下压。
+ */
+export function resourceCreditCappedStatement(
+  sectId: string,
+  resourceId: string,
+  amount: number,
+  capacity: number,
+  now: number,
+): ParameterizedQuery {
+  return {
+    sql: `UPDATE resource_balances SET balance = MIN(balance + ?, MAX(balance, ?)), updated_at = ?
+          WHERE sect_id = ? AND resource_id = ?`,
+    params: [amount, capacity, now, sectId, resourceId],
+  };
+}
+
 export function updateDiscipleAssignmentStatement(discipleId: string, assignment: string): ParameterizedQuery {
   return {
     sql: 'UPDATE disciples SET assignment = ? WHERE id = ?',
