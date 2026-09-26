@@ -58,6 +58,20 @@ export const WORLD_BOSS_FLED_POOL_FACTOR = 0.5;
 /** 同一宗门的出手冷却（不限次数之后的唯一节奏约束）。 */
 export const WORLD_BOSS_COOLDOWN_MS = 3_000;
 
+/**
+ * 每个宗门每天最多出手几次（防协议脚本全天刷）：默认 120，比最肝的真人玩家略多。
+ * 线上由环境变量 WORLD_BOSS_DAILY_ATTACK_LIMIT 覆盖（改 .env 后重启即可，不用改代码）；
+ * 0 = 不限次数。「一天」按 UTC+8 自然日算（讨伐只在 08:00–23:00 开放）。
+ */
+export const WORLD_BOSS_DAILY_ATTACK_LIMIT_DEFAULT = 120;
+
+/** 解析每日出手上限：非负整数原样用（0 = 不限）；没配、写错时用默认值。 */
+export function parseDailyAttackLimit(raw: string | undefined): number {
+  if (raw === undefined || raw.trim() === '') return WORLD_BOSS_DAILY_ATTACK_LIMIT_DEFAULT;
+  const value = Number(raw.trim());
+  return Number.isInteger(value) && value >= 0 ? value : WORLD_BOSS_DAILY_ATTACK_LIMIT_DEFAULT;
+}
+
 /** 疲劳统计窗口：最近 60 分钟内已出战讨伐的次数。 */
 export const WORLD_BOSS_FATIGUE_WINDOW_MS = 60 * 60 * 1000;
 

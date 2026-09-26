@@ -74,6 +74,7 @@ import {
   getRaceHistory,
   getRaceState,
   getWorldBoss,
+  worldBossDailyAttackLimit,
   placeRaceBet,
   listChallengeHistory,
   listLeaderboard,
@@ -586,7 +587,7 @@ export function createGameRoutes(): Hono<AppEnv> {
   // 0025 世界 Boss（讨伐）：面板数据（今天的 Boss、今日伤害榜、出手记录、史上最强一击）。
   routes.get('/game/world-boss', async (c) => {
     const userId = requireUserId(c);
-    const result = await getWorldBoss(getDb(c.env), userId, Date.now());
+    const result = await getWorldBoss(getDb(c.env), userId, Date.now(), worldBossDailyAttackLimit(c.env));
     return respondOk(c, { state: result.state, boss: result.boss });
   });
 
@@ -594,7 +595,13 @@ export function createGameRoutes(): Hono<AppEnv> {
   routes.post('/game/world-boss/attack', async (c) => {
     const userId = requireUserId(c);
     const body = await parseStrictJson(worldBossAttackRequestSchema, c);
-    const result = await attackWorldBoss(getDb(c.env), userId, body, Date.now());
+    const result = await attackWorldBoss(
+      getDb(c.env),
+      userId,
+      body,
+      Date.now(),
+      worldBossDailyAttackLimit(c.env),
+    );
     return respondOk(c, { state: result.state, result: result.result, boss: result.boss });
   });
 

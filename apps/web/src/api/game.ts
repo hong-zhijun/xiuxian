@@ -1687,7 +1687,12 @@ export interface WorldBossView {
   fatigue: Record<string, number>;
   /** 最近 60 分钟内每次出战讨伐的时间（毫秒，升序），用于「冒进冷却」倒计时。 */
   fatigueTimes: Record<string, number[]>;
+  /** 此刻能否出手：Boss 在讨伐中 + 开放时段 + 今日出手次数没用满。 */
   attackable: boolean;
+  /** 本宗门今天已出手次数。 */
+  attacksToday: number;
+  /** 每日出手上限（0 = 不限；由服务端配置）。 */
+  dailyAttackLimit: number;
   ranks: WorldBossRankView[];
   hits: WorldBossHitView[];
   topHit: WorldBossHitView | null;

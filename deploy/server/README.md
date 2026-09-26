@@ -113,6 +113,7 @@ Settings → Secrets and variables → Actions：
 
 - **更新**：推送 `main` 即可。服务器上会自动：备份数据库 → 切换新版本 → 执行迁移 → `pm2 reload` → 健康检查，失败自动切回旧版本。
 - **日志**：`pm2 logs xiuxian`
+- **讨伐每日出手上限**：在 `.env` 里写 `WORLD_BOSS_DAILY_ATTACK_LIMIT=120`（不写默认 120，`0` = 不限），改完 `pm2 restart xiuxian` 生效，不用重新部署。
 - **备份**：每次部署前自动备份到 `backups/`，保留最近 14 份。手动备份：`node app/server.mjs backup backups/manual.db`
 - **手动回滚代码**：
 

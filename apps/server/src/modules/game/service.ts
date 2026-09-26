@@ -314,6 +314,7 @@ import {
   WORLD_BOSS_AFFIX_NONE,
   WORLD_BOSS_CLOSE_HOUR,
   WORLD_BOSS_COOLDOWN_MS,
+  WORLD_BOSS_DAILY_ATTACK_LIMIT_DEFAULT,
   WORLD_BOSS_FATIGUE_WINDOW_MS,
   WORLD_BOSS_INJURY_DURATION_MS,
   WORLD_BOSS_KILL_PILL_ID,
@@ -335,6 +336,7 @@ import {
   isFledByDamage,
   isWorldBossAttackable,
   lastHitReward,
+  parseDailyAttackLimit,
   rollAffix,
   rollDamage,
   rollOutcome,
@@ -5690,6 +5692,11 @@ export function realmExploreEnabled(env: Env): boolean {
   return readStringVar(env.REALM_EXPLORE_ENABLED) === 'true';
 }
 
+/** 讨伐每日出手上限（环境变量 WORLD_BOSS_DAILY_ATTACK_LIMIT；没配 / 写错用默认 120，0 = 不限）。 */
+export function worldBossDailyAttackLimit(env: Env): number {
+  return parseDailyAttackLimit(readStringVar(env.WORLD_BOSS_DAILY_ATTACK_LIMIT));
+}
+
 /** 把入库的遭遇 JSON 还原成视图；脏数据返回 null（不让一条坏记录卡死整个 sync）。 */
 function encounterViewOf(json: string | null): EncounterView | null {
   if (json === null) {
@@ -7632,6 +7639,8 @@ async function buildWorldBossView(input: {
   rewardContext?: { rates: Record<string, number>; sectLevel: number };
   /** 已经读到的关卡行（出手后传刚读回来的那一行，省一次查询）。 */
   boss?: WorldBossRow | null;
+  /** 每日出手上限（0 = 不限），由路由按环境变量传入。 */
+  dailyAttackLimit: number;
 }): Promise<WorldBossView> {
   const repo = new WorldBossRepository(input.db);
   const { now } = input;
@@ -7669,19 +7678,21 @@ async function buildWorldBossView(input: {
       .sort((a, b) => a - b);
   }
 
-  const attackable = boss !== null && boss.status === 'active' && isWorldBossAttackable(phase);
+  const bossAttackable = boss !== null && boss.status === 'active' && isWorldBossAttackable(phase);
 
   const rankPromise: Promise<WorldBossSectDamageRow[]> =
     boss === null ? Promise.resolve([]) : repo.sectDamageRows(boss.id);
   const hitPromise: Promise<WorldBossHitRow[]> =
     boss === null ? Promise.resolve([]) : repo.recentHitsByBoss(boss.id, WORLD_BOSS_HIT_FEED_LIMIT);
-  const [rankRows, hitRows, topRow, killedToday, bestStage] = await Promise.all([
+  const [rankRows, hitRows, topRow, killedToday, bestStage, attacksToday] = await Promise.all([
     rankPromise,
     hitPromise,
     repo.topHit(),
     repo.countKilledByDayKey(dayKey),
     repo.maxKilledStage(),
+    repo.countHitsBySectSince(input.sectId, todayStart),
   ]);
+  const limitReached = input.dailyAttackLimit > 0 && attacksToday >= input.dailyAttackLimit;
 
   const ranks: WorldBossRankView[] = rankRows.map((row, index) => ({
     sectId: row.sect_id,
@@ -7728,7 +7739,10 @@ async function buildWorldBossView(input: {
     cooldownSeconds,
     fatigue,
     fatigueTimes,
-    attackable,
+    // 今日出手次数用满了也算「此刻不能出手」（面板按钮与 state 里的角标一起灭）。
+    attackable: bossAttackable && !limitReached,
+    attacksToday,
+    dailyAttackLimit: input.dailyAttackLimit,
     ranks,
     hits: hitRows.map(toWorldBossHitView),
     topHit: topRow === null ? null : toWorldBossHitView(topRow),
@@ -7787,6 +7801,7 @@ export async function getWorldBoss(
   db: D1Database,
   userId: string,
   now: number,
+  dailyAttackLimit: number = WORLD_BOSS_DAILY_ATTACK_LIMIT_DEFAULT,
 ): Promise<{ state: SectStateView; boss: WorldBossView }> {
   const draft = await draftFor(db, userId, now);
   const boss = await buildWorldBossView({
@@ -7794,6 +7809,7 @@ export async function getWorldBoss(
     sectId: draft.sect.id,
     now,
     rewardContext: worldBossRewardContext(draft.view()),
+    dailyAttackLimit,
   });
   // 面板已经算过「能不能出手」，顺手让 state 里的角标与它一致。
   draft.worldBossAttackable = boss.attackable;
@@ -7918,6 +7934,7 @@ export async function attackWorldBoss(
   userId: string,
   input: { discipleIds: readonly string[] },
   now: number,
+  dailyAttackLimit: number = WORLD_BOSS_DAILY_ATTACK_LIMIT_DEFAULT,
 ): Promise<{ state: SectStateView; result: WorldBossAttackResultView; boss: WorldBossView }> {
   const draft = await draftFor(db, userId, now);
   const repo = new WorldBossRepository(db);
@@ -7944,6 +7961,18 @@ export async function attackWorldBoss(
       throw new AppError('COOLDOWN_ACTIVE', '出手太快，妖王还没缓过神', {
         remainingSeconds: Math.ceil(remainingMs / 1000),
       });
+    }
+  }
+
+  // 每日出手上限（防协议脚本全天刷；0 = 不限）：按 UTC+8 自然日数本宗门的出手记录。
+  if (dailyAttackLimit > 0) {
+    const attacksToday = await repo.countHitsBySectSince(draft.sect.id, dayStartMs(now));
+    if (attacksToday >= dailyAttackLimit) {
+      throw new AppError(
+        'DAILY_LIMIT',
+        `今日出手次数已达上限（${String(attacksToday)}/${String(dailyAttackLimit)}），明日再战`,
+        { attacksToday, dailyAttackLimit },
+      );
     }
   }
 
@@ -8162,6 +8191,7 @@ export async function attackWorldBoss(
       now,
       boss: viewBoss,
       rewardContext: worldBossRewardContext(draft.view()),
+      dailyAttackLimit,
     }),
   };
 }

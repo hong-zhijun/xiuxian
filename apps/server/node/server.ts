@@ -38,6 +38,8 @@ const DEFAULT_VARS: Record<string, string> = {
   LOGIN_RATE_LIMIT_WINDOW_SECONDS: '60',
   ALLOWED_ORIGINS: '',
   REALM_EXPLORE_ENABLED: 'true',
+  /** 讨伐每日出手上限（0 = 不限）；改 .env 里的 WORLD_BOSS_DAILY_ATTACK_LIMIT 后重启即可。 */
+  WORLD_BOSS_DAILY_ATTACK_LIMIT: '120',
   OPENROUTER_API_KEY: '',
 };
 

@@ -19,6 +19,12 @@ export const MAX_ENTRIES = 5;
 
 export const CHANGELOG: readonly ChangelogEntry[] = [
   {
+    id: '2026-09-26-limit',
+    time: '2026-09-26 12:00',
+    title: '讨伐：每日出手次数上限',
+    items: ['每个宗门每天的讨伐出手次数设有上限，出手按钮下方显示「今日出手 已用 / 上限」，次日 0 点重置。'],
+  },
+  {
     id: '2026-09-26-gear',
     time: '2026-09-26 02:00',
     title: '装备更值钱了，天骄榜新增装备榜',

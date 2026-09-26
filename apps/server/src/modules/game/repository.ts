@@ -2562,6 +2562,15 @@ export class WorldBossRepository extends ParamRepository {
     return row?.created_at === null || row?.created_at === undefined ? null : Number(row.created_at);
   }
 
+  /** 该宗门自 since 起的出手次数（每日出手上限用；走 (sect_id, created_at DESC) 索引）。 */
+  async countHitsBySectSince(sectId: string, since: number): Promise<number> {
+    const row = await this.one<{ total: number }>({
+      sql: 'SELECT COUNT(*) AS total FROM world_boss_hits WHERE sect_id = ? AND created_at >= ?',
+      params: [sectId, since],
+    });
+    return Number(row?.total ?? 0);
+  }
+
   /** 某只 Boss 的全部出手记录（发奖排名用）。 */
   async hitsByBoss(bossId: string): Promise<WorldBossHitRow[]> {
     return this.all<WorldBossHitRow>({

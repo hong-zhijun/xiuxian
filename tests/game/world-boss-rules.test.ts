@@ -4,6 +4,7 @@ import {
   BOSS_MERIT_RESOURCE_ID,
   WORLD_BOSS_AFFIXES,
   WORLD_BOSS_COOLDOWN_MS,
+  WORLD_BOSS_DAILY_ATTACK_LIMIT_DEFAULT,
   WORLD_BOSS_FATIGUE_WINDOW_MS,
   WORLD_BOSS_MERIT_SHOP,
   WORLD_BOSS_MERIT_XUANTIE_MAX,
@@ -30,6 +31,7 @@ import {
   rewardFloor,
   rollAffix,
   rollDamage,
+  parseDailyAttackLimit,
   rollOutcome,
   severeInjuryChance,
   stageMaxHp,
@@ -346,5 +348,18 @@ describe('世界 Boss 三期：功勋与功勋兑换（计划 2.3、2.4）', () 
     expect(WORLD_BOSS_MERIT_XUANTIE_MAX).toBe(100);
     expect(findMeritShopItem('xuantie')).toMatchObject({ name: '玄铁', cost: 4, quality: null });
     expect(findMeritShopItem('xxx')).toBeUndefined();
+  });
+});
+
+describe('世界 Boss：每日出手上限', () => {
+  it('默认 120；环境变量给非负整数就用它（0 = 不限），没配或写错回到默认', () => {
+    expect(WORLD_BOSS_DAILY_ATTACK_LIMIT_DEFAULT).toBe(120);
+    expect(parseDailyAttackLimit(undefined)).toBe(120);
+    expect(parseDailyAttackLimit('')).toBe(120);
+    expect(parseDailyAttackLimit(' 80 ')).toBe(80);
+    expect(parseDailyAttackLimit('0')).toBe(0);
+    expect(parseDailyAttackLimit('-1')).toBe(120);
+    expect(parseDailyAttackLimit('1.5')).toBe(120);
+    expect(parseDailyAttackLimit('abc')).toBe(120);
   });
 });

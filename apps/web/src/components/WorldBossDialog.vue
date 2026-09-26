@@ -191,7 +191,14 @@ const canAttack = computed(
     props.busy !== true,
 );
 
+/** 今日出手次数已用满（上限由服务端下发；0 = 不限）。 */
+const attackLimitReached = computed(() => {
+  const limit = panel.value?.dailyAttackLimit ?? 0;
+  return limit > 0 && (panel.value?.attacksToday ?? 0) >= limit;
+});
+
 const attackButtonText = computed(() => {
+  if (attackLimitReached.value) return '今日出手次数已用完';
   if (cooldown.value > 0) return `冷却 ${String(cooldown.value)}s`;
   return `出手讨伐（已选 ${String(selected.value.length)} 人）`;
 });
@@ -514,7 +521,7 @@ const RULES_TEXT = `讨伐 · 玩法说明
 
 连战：每天 08:00 第 1 关降临，打死立刻出下一关（第 1 关血量 = 一轮伤害 × 2，之后每关 ×1.6）；
       23:00 当前关逃走，血量被打掉 70% 以上记为「击退」。
-出手：不限次数，但同一宗门每 3 秒只能出手一次；每次派 1~10 名弟子（可点「一键选人」）。
+出手：同一宗门每 3 秒只能出手一次，每天出手次数有上限（出手按钮下方可见）；每次派 1~10 名弟子（可点「一键选人」）。
 弟子：在外历练 / 疗伤中 / 重伤卧床的弟子不能出战。
 受伤：概率 = 3% −（体魄 − 50）/10 × 1%，夹在 1%~8%；受伤后疗伤 30 分钟，回春丹可治。
 重伤：本小时第 4 次出手 30%、第 5 次 70%、第 6 次起必定重伤（体魄每高 10 点让前两档下调 3 个百分点）；
@@ -816,6 +823,9 @@ const RULES_TEXT = `讨伐 · 玩法说明
         <span v-if="submitting">讨伐中…</span>
         <span v-else>{{ attackButtonText }}</span>
       </button>
+      <p v-if="panel && panel.dailyAttackLimit > 0" class="boss-attack-count">
+        今日出手 {{ panel.attacksToday }} / {{ panel.dailyAttackLimit }}
+      </p>
 
       <!-- 本关伤害榜 -->
       <section class="boss-section">
@@ -1358,6 +1368,14 @@ const RULES_TEXT = `讨伐 · 玩法说明
   font-size: 13px;
   cursor: pointer;
   transition: background-color 150ms ease, border-color 150ms ease;
+}
+
+.boss-attack-count {
+  /* 面板是 gap 12px 的纵向 flex：往上收一点，让它贴着出手按钮 */
+  margin: -6px 0 0;
+  color: var(--muted, #92a79d);
+  font-size: 12px;
+  text-align: center;
 }
 
 .boss-attack-button:hover:not(:disabled) {

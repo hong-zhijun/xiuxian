@@ -482,6 +482,46 @@ describe('世界 Boss 二期：出手', () => {
     expect(ok.boss.fatigue[discipleIds[0]!]).toBe(2);
   });
 
+  it('每日出手上限：用满后拒绝（DAILY_LIMIT），面板显示已用次数且不可出手；0 = 不限', async () => {
+    const fixture = await makeSect('daily-limit');
+    const now = dayAt(24, 10);
+    await freezeDay(fixture.sectId, 24);
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    await insertBoss({ dayKey: dateKeyUtc8(now), now, maxHp: 100_000_000 });
+    const discipleIds = [fixture.discipleIds[0]!];
+
+    // 上限 2：前两刀照常，第三刀（冷却已过）被拒
+    await attackWorldBoss(env.DB, fixture.userId, { discipleIds }, now, 2);
+    const second = await attackWorldBoss(
+      env.DB,
+      fixture.userId,
+      { discipleIds },
+      now + WORLD_BOSS_COOLDOWN_MS,
+      2,
+    );
+    expect(second.boss.attacksToday).toBe(2);
+    expect(second.boss.dailyAttackLimit).toBe(2);
+    expect(second.boss.attackable).toBe(false);
+
+    const later = now + WORLD_BOSS_COOLDOWN_MS * 2;
+    expect(
+      await errorCodeOf(attackWorldBoss(env.DB, fixture.userId, { discipleIds }, later, 2)),
+    ).toBe('DAILY_LIMIT');
+    expect(await errorDetailsOf(attackWorldBoss(env.DB, fixture.userId, { discipleIds }, later, 2))).toEqual({
+      attacksToday: 2,
+      dailyAttackLimit: 2,
+    });
+    const panel = await getWorldBoss(env.DB, fixture.userId, later, 2);
+    expect(panel.boss.attacksToday).toBe(2);
+    expect(panel.boss.attackable).toBe(false);
+
+    // 上限调高或设为 0（不限）后立刻能继续打
+    const unlimited = await attackWorldBoss(env.DB, fixture.userId, { discipleIds }, later, 0);
+    expect(unlimited.boss.attacksToday).toBe(3);
+    expect(unlimited.boss.dailyAttackLimit).toBe(0);
+    expect(unlimited.boss.attackable).toBe(true);
+  });
+
   it('疲劳 3 次起会重伤：这一刀不计伤害、写库、广播、之后不能再出战', async () => {
     const fixture = await makeSect('severe');
     const now = dayAt(7, 10);
