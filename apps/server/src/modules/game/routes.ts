@@ -71,6 +71,7 @@ import {
   healDisciplesBatch,
   attackWorldBoss,
   exchangeBossMerit,
+  getMeritShop,
   getRaceHistory,
   getRaceState,
   getWorldBoss,
@@ -603,6 +604,12 @@ export function createGameRoutes(): Hono<AppEnv> {
       worldBossDailyAttackLimit(c.env),
     );
     return respondOk(c, { state: result.state, result: result.result, boss: result.boss });
+  });
+
+  // 功勋兑换弹窗的价目（纯配置）。
+  routes.get('/game/merit-shop', (c) => {
+    requireUserId(c);
+    return respondOk(c, { shop: getMeritShop() });
   });
 
   // 世界 Boss 三期：功勋兑换（结算 → 价目 / 余额 / 背包校验 → 扣功勋 + 发玄铁或装备，一次受保护 batch）。

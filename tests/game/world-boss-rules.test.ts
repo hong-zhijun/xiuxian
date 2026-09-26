@@ -254,13 +254,13 @@ describe('世界 Boss 二期：奖励', () => {
   it('保底、关卡系数、排名倍数', () => {
     expect(rewardFloor(1)).toBe(10_000);
     expect(rewardFloor(3)).toBe(30_000);
-    // 防通胀：每关 +0.2，第 5 关起封顶 ×1.8
+    // 防通胀：每关 +0.3，第 5 关起封顶 ×2.2
     expect(stageRewardMultiplier(1)).toBe(1);
-    expect(stageRewardMultiplier(2)).toBeCloseTo(1.2, 10);
-    expect(stageRewardMultiplier(5)).toBeCloseTo(1.8, 10);
-    expect(stageRewardMultiplier(6)).toBeCloseTo(1.8, 10);
-    expect(stageRewardMultiplier(12)).toBeCloseTo(1.8, 10);
-    expect(WORLD_BOSS_KILL_POOL_RATE_FACTOR).toBe(1.2);
+    expect(stageRewardMultiplier(2)).toBeCloseTo(1.3, 10);
+    expect(stageRewardMultiplier(5)).toBeCloseTo(2.2, 10);
+    expect(stageRewardMultiplier(6)).toBeCloseTo(2.2, 10);
+    expect(stageRewardMultiplier(12)).toBeCloseTo(2.2, 10);
+    expect(WORLD_BOSS_KILL_POOL_RATE_FACTOR).toBe(2.5);
     // 功勋保留三期口径（每关 +0.5、不封顶），兑换价按它定
     expect(meritStageMultiplier(2)).toBeCloseTo(1.5, 10);
     expect(meritStageMultiplier(6)).toBeCloseTo(3.5, 10);
@@ -271,7 +271,7 @@ describe('世界 Boss 二期：奖励', () => {
     expect(rankRewardMultiplier(9)).toBe(1);
   });
 
-  it('基础份 = max(产出 × 1.2, 保底) × 关卡系数 × 排名倍数（按资源分别算）', () => {
+  it('基础份 = max(产出 × 2.5, 保底) × 关卡系数 × 排名倍数（按资源分别算）', () => {
     const rewards = stageResourceRewards({
       rates: { spiritStone: 40_000, herb: 0, ore: 300_000 },
       sectLevel: 1,
@@ -279,20 +279,20 @@ describe('世界 Boss 二期：奖励', () => {
       rank: 1,
     });
     expect(Object.keys(rewards).sort()).toEqual([...WORLD_BOSS_POOL_RESOURCES].sort());
-    // 40000 × 1.2 × 1.5（第 1 名）
-    expect(rewards.spiritStone).toBe(72_000);
+    // 40000 × 2.5 × 1.5（第 1 名）
+    expect(rewards.spiritStone).toBe(150_000);
     // 没有这项产出时只吃保底
     expect(rewards.herb).toBe(15_000);
-    expect(rewards.ore).toBe(540_000);
+    expect(rewards.ore).toBe(1_125_000);
   });
 
   it('关卡系数与排名倍数叠乘；击退时资源减半', () => {
     const base = { rates: { spiritStone: 100_000, herb: 100_000, ore: 100_000 }, sectLevel: 1 };
-    // 第 3 关第 2 名：100000 × 1.2 × 1.4 × 1.25 = 210000
-    expect(stageResourceRewards({ ...base, stage: 3, rank: 2 }).spiritStone).toBe(210_000);
+    // 第 3 关第 2 名：100000 × 2.5 × 1.6 × 1.25 = 500000
+    expect(stageResourceRewards({ ...base, stage: 3, rank: 2 }).spiritStone).toBe(500_000);
     // 击退：再 ×0.5
     expect(stageResourceRewards({ ...base, stage: 3, rank: 2, repelled: true }).spiritStone).toBe(
-      105_000,
+      250_000,
     );
     // 第 5 关起封顶：第 9 关与第 5 关一样多
     expect(stageResourceRewards({ ...base, stage: 9, rank: 4 }).spiritStone).toBe(
@@ -303,7 +303,7 @@ describe('世界 Boss 二期：奖励', () => {
   it('最后一击奖 = max(产出 × 1, 保底) × 关卡系数', () => {
     expect(lastHitReward(0, 1, 1)).toBe(10_000);
     expect(lastHitReward(400_000, 1, 1)).toBe(400_000);
-    expect(lastHitReward(0, 1, 3)).toBe(14_000);
+    expect(lastHitReward(0, 1, 3)).toBe(16_000);
   });
 
   it('击退阈值 ≥70%', () => {

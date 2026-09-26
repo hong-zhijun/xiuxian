@@ -375,6 +375,36 @@ export interface EquipmentView {
   items: EquipmentItemView[];
 }
 
+/** 可选部位（炼器与功勋兑换共用）：法器的 mainAttrChoices 非空（必须选身法或幸运）。 */
+export function equipmentSlotViews(): { id: string; name: string; mainAttrChoices: { id: string; name: string }[] }[] {
+  return EQUIPMENT_SLOTS.map((slot) => ({
+    id: slot.id,
+    name: slot.name,
+    mainAttrChoices:
+      slot.id === 'artifact'
+        ? ARTIFACT_MAIN_ATTRS.map((attr) => ({ id: attr, name: attrNameOf(attr) }))
+        : [],
+  }));
+}
+
+/** 功勋兑换（GET /game/merit-shop）：分类、价目、可选部位都由服务端给，前端只渲染。 */
+export interface MeritShopView {
+  categories: { id: string; name: string }[];
+  items: {
+    id: string;
+    name: string;
+    /** 价格（功勋，展示单位）。 */
+    cost: number;
+    category: string;
+    /** 装备类的品质与品质色；资源类为 null。 */
+    quality: string | null;
+    color: string | null;
+  }[];
+  slots: { id: string; name: string; mainAttrChoices: { id: string; name: string }[] }[];
+  /** 资源类一次最多兑换几个。 */
+  maxResourceQuantity: number;
+}
+
 /** 装备行 → 视图（纯映射；discipleName 由调用方按本宗弟子表查好）。 */
 export function equipmentItemViewOf(row: EquipmentRow, discipleName: string | null): EquipmentItemView {
   return {
@@ -424,14 +454,7 @@ export function buildEquipmentView(input: {
       cost: { ...recipe.cost },
       odds: forgeOddsOf(recipe.quality, Math.max(input.workshopLevel, recipe.workshopLevel)),
     })),
-    slots: EQUIPMENT_SLOTS.map((slot) => ({
-      id: slot.id,
-      name: slot.name,
-      mainAttrChoices:
-        slot.id === 'artifact'
-          ? ARTIFACT_MAIN_ATTRS.map((attr) => ({ id: attr, name: attrNameOf(attr) }))
-          : [],
-    })),
+    slots: equipmentSlotViews(),
     salvageOre: Object.fromEntries(
       EQUIPMENT_QUALITIES.map((quality) => [quality.id, quality.salvageOre]),
     ),
@@ -1053,8 +1076,6 @@ export interface WorldBossView {
     highQualityName: string;
     lowQualityName: string;
   } | null;
-  /** 三期：功勋兑换价目（服务端唯一一份，前端只渲染）。cost 为展示单位。 */
-  meritShop: { id: string; name: string; cost: number; quality: string | null }[];
 }
 
 /** 奖励预览：rank 4 表示「第 4 名及以后」；资源为最小单位。 */

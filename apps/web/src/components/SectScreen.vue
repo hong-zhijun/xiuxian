@@ -66,6 +66,7 @@ import LeaderboardPanel from './LeaderboardPanel.vue';
 import RecruitDialog from './RecruitDialog.vue';
 import ShopDialog from './ShopDialog.vue';
 import WorldBossDialog from './WorldBossDialog.vue';
+import MeritDialog from './MeritDialog.vue';
 import ModalShell from './ModalShell.vue';
 
 /**
@@ -157,6 +158,7 @@ const openPanel = ref<
   | 'gambling'
   | 'shop'
   | 'world-boss'
+  | 'merit'
   | null
 >(null);
 
@@ -1035,7 +1037,7 @@ function openEquipment(): void {
 
 /**
  * 资源栏：四种常规资源走通用卡片；玄铁（装备二期，无产速）单独一个窄格；
- * 功勋（三期）只在讨伐面板里看，不上资源栏、也不占窄格。
+ * 功勋（三期）只在首页「功勋」弹窗里看，不上资源栏、也不占窄格。
  */
 const mainResources = computed(() =>
   props.state.resources.filter((resource) => resource.id !== 'xuantie' && resource.id !== 'bossMerit'),
@@ -1742,7 +1744,7 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
         class="action-chip"
         type="button"
         aria-label="讨伐：全服共讨妖王"
-        title="每日 12:00 妖王降临，全服共讨（每宗每日 3 次）"
+        title="每日 08:00 妖王降临，全服共讨"
         @click="openPanel = 'world-boss'"
       >
         <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -1750,6 +1752,12 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
         </svg>
         <span>讨伐</span>
         <span v-if="state.worldBoss?.attackable" class="chip-badge">!</span>
+      </button>
+      <button class="action-chip" type="button" aria-label="功勋兑换" @click="openPanel = 'merit'">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M8 3h8l-1.5 5h-5L8 3Zm4 5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13Zm0 3.2 1.1 2.2 2.4.35-1.75 1.7.4 2.4L12 16.7l-2.15 1.15.4-2.4-1.75-1.7 2.4-.35L12 11.2Z" />
+        </svg>
+        <span>功勋</span>
       </button>
       <button class="action-chip" type="button" @click="openPanel = 'gambling'">
         <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -2038,6 +2046,17 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
         @reveal="onGamblingRevealed"
       />
     </ModalShell>
+  <!-- 功勋兑换：价目打开时拉一次；兑换回执里的 state 交给 App，兑到装备顺手刷新背包件数。 -->
+  <ModalShell v-if="openPanel === 'merit'" :loading="busy" label="功勋" @close="openPanel = null">
+    <MeritDialog
+      :state="state"
+      :busy="busy"
+      @state-update="(s: SectStateView) => emit('recruited', s)"
+      @notify="onWorldBossNotify"
+      @equipment-changed="loadEquipment"
+    />
+  </ModalShell>
+
   <!-- 0025 世界 Boss（讨伐）：只在打开时 / 出手后 / 点刷新时请求，不做定时轮询。 -->
   <ModalShell
     v-if="openPanel === 'world-boss'"

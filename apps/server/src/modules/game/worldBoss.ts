@@ -95,14 +95,14 @@ export const WORLD_BOSS_REWARD_FLOOR_UNIT = 10 * 1000;
 /** 奖励涉及的资源（按资源分别算）。 */
 export const WORLD_BOSS_POOL_RESOURCES = ['spiritStone', 'herb', 'ore'] as const;
 /** 基础份的产量系数（每关给几小时产出；防通胀由 3.5 下调）。 */
-export const WORLD_BOSS_KILL_POOL_RATE_FACTOR = 1.2;
+export const WORLD_BOSS_KILL_POOL_RATE_FACTOR = 2.5;
 /** 最后一击奖的产量系数。 */
 export const WORLD_BOSS_LAST_HIT_RATE_FACTOR = 1.0;
 /**
- * 资源奖励的关卡系数：第 n 关 ×(1 + 0.2 × (min(n, 5) − 1))，第 5 关起不再递增（最高 ×1.8）。
+ * 资源奖励的关卡系数：第 n 关 ×(1 + 0.3 × (min(n, 5) − 1))，第 5 关起不再递增（最高 ×2.2）。
  * 防通胀：原来每关 +0.5 且不封顶，关数一多资源奖励按平方增长。
  */
-export const WORLD_BOSS_STAGE_REWARD_STEP = 0.2;
+export const WORLD_BOSS_STAGE_REWARD_STEP = 0.3;
 /** 资源奖励关卡系数封顶的关卡。 */
 export const WORLD_BOSS_STAGE_REWARD_MAX_STAGE = 5;
 /** 功勋的关卡系数每关递增量（与资源分开：功勋兑换价按它定，不随资源下调）。 */
@@ -443,7 +443,7 @@ export function rewardFloor(sectLevel: number): number {
   return WORLD_BOSS_REWARD_FLOOR_UNIT * Math.max(1, Math.floor(sectLevel));
 }
 
-/** 资源奖励的关卡系数 = 1 + 0.2 × (min(关卡, 5) − 1)。 */
+/** 资源奖励的关卡系数 = 1 + 0.3 × (min(关卡, 5) − 1)。 */
 export function stageRewardMultiplier(stage: number): number {
   const capped = Math.min(WORLD_BOSS_STAGE_REWARD_MAX_STAGE, Math.max(1, Math.floor(stage)));
   return 1 + WORLD_BOSS_STAGE_REWARD_STEP * (capped - 1);
@@ -461,7 +461,7 @@ export function rankRewardMultiplier(rank: number): number {
 
 /**
  * 一个参与宗门在该关的基础资源奖励（灵石 / 药材 / 矿石分别算）：
- *   max(该宗门产出(r) × 1.2, 保底(L)) × 关卡系数 × 排名倍数 ×（击退时 ×0.5）
+ *   max(该宗门产出(r) × 2.5, 保底(L)) × 关卡系数 × 排名倍数 ×（击退时 ×0.5）
  * 「击退」= 23:00 逃走时血量已被打掉 ≥70%。
  */
 export function stageResourceRewards(input: {
@@ -557,12 +557,28 @@ export function worldBossMeritFor(input: {
 
 export type BossMeritShopItemId = 'xuantie' | 'spirit' | 'treasure' | 'immortal';
 
-/** 功勋兑换价目表（唯一一份，前端只渲染）：cost 是展示单位，扣款时 × 1000；quality 为 null = 给玄铁。 */
-export const WORLD_BOSS_MERIT_SHOP: readonly { id: BossMeritShopItemId; name: string; cost: number; quality: EquipmentQuality | null }[] = [
-  { id: 'xuantie', name: '玄铁', cost: 4, quality: null },
-  { id: 'spirit', name: '灵品装备', cost: 25, quality: 'spirit' },
-  { id: 'treasure', name: '宝品装备', cost: 70, quality: 'treasure' },
-  { id: 'immortal', name: '仙品装备', cost: 200, quality: 'immortal' },
+/** 功勋兑换的分类（弹窗里一类一个标签页；以后开放新的兑换物，在这里加分类、在价目表里加条目即可）。 */
+export type MeritShopCategory = 'resource' | 'equipment';
+export const MERIT_SHOP_CATEGORIES: readonly { id: MeritShopCategory; name: string }[] = [
+  { id: 'resource', name: '资源' },
+  { id: 'equipment', name: '装备' },
+];
+
+/**
+ * 功勋兑换价目表（唯一一份，前端只渲染）：cost 是展示单位，扣款时 × 1000。
+ * resource 类给 resourceId 对应的资源（按个数兑换）；equipment 类给一件 quality 品质的装备（自选部位）。
+ */
+export const WORLD_BOSS_MERIT_SHOP: readonly {
+  id: BossMeritShopItemId;
+  name: string;
+  cost: number;
+  category: MeritShopCategory;
+  quality: EquipmentQuality | null;
+}[] = [
+  { id: 'xuantie', name: '玄铁', cost: 4, category: 'resource', quality: null },
+  { id: 'spirit', name: '灵品装备', cost: 25, category: 'equipment', quality: 'spirit' },
+  { id: 'treasure', name: '宝品装备', cost: 70, category: 'equipment', quality: 'treasure' },
+  { id: 'immortal', name: '仙品装备', cost: 200, category: 'equipment', quality: 'immortal' },
 ];
 
 /** 一次最多兑换多少个玄铁。 */

@@ -349,14 +349,25 @@ describe('世界 Boss 二期：面板', () => {
     expect(panel.boss.hits).toEqual([]);
     expect(panel.boss.boss!.phase).toBe('open');
 
-    // 三期：功勋兑换价目（服务端唯一一份）+ 本人的掉落概率（还没出手 → 占比 0、高档概率 0）。
-    expect(panel.boss.meritShop.map((item) => item.id)).toEqual([
-      'xuantie',
-      'spirit',
-      'treasure',
-      'immortal',
+    // 三期：功勋兑换价目改由 GET /game/merit-shop 下发（分类 → 标签页）。
+    const shopRes = await fixture.api.get('/api/v1/game/merit-shop');
+    expect(shopRes.status).toBe(200);
+    const shop = (dataOf(shopRes) as { shop: Record<string, any> }).shop;
+    expect(shop.categories).toEqual([
+      { id: 'resource', name: '资源' },
+      { id: 'equipment', name: '装备' },
     ]);
-    expect(panel.boss.meritShop.map((item) => item.cost)).toEqual([4, 25, 70, 200]);
+    expect(shop.items.map((item: { id: string }) => item.id)).toEqual(['xuantie', 'spirit', 'treasure', 'immortal']);
+    expect(shop.items.map((item: { cost: number }) => item.cost)).toEqual([4, 25, 70, 200]);
+    expect(shop.items.map((item: { category: string }) => item.category)).toEqual([
+      'resource',
+      'equipment',
+      'equipment',
+      'equipment',
+    ]);
+    expect(shop.slots.map((slot: { id: string }) => slot.id)).toEqual(['weapon', 'armor', 'artifact']);
+    expect(shop.maxResourceQuantity).toBe(100);
+    // 本人的掉落概率（还没出手 → 占比 0、高档概率 0）。
     expect(panel.boss.myDrop).toEqual({
       damageShare: 0,
       highChance: 0,

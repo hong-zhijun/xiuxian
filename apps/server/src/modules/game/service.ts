@@ -317,6 +317,7 @@ import {
   WORLD_BOSS_INJURY_DURATION_MS,
   WORLD_BOSS_KILL_PILL_ID,
   WORLD_BOSS_MAX_PARTY,
+  MERIT_SHOP_CATEGORIES,
   WORLD_BOSS_MERIT_SHOP,
   WORLD_BOSS_MERIT_XUANTIE_MAX,
   WORLD_BOSS_MIN_PARTY,
@@ -374,6 +375,7 @@ import {
   breakthroughChanceBp,
   buildSectStateView,
   buildEquipmentView,
+  equipmentSlotViews,
   equipmentItemViewOf,
   eventLogViewFromRow,
   upgradeCost,
@@ -424,6 +426,7 @@ import {
   type WorldBossHitView,
   type WorldBossRankView,
   type WorldBossView,
+  type MeritShopView,
   type WorldBossDefView,
   type WorldBossAffixView,
   type WorldBossMemberOutcomeView,
@@ -7744,13 +7747,6 @@ async function buildWorldBossView(input: {
     topHit: topRow === null ? null : toWorldBossHitView(topRow),
     // 三期：本宗门在当前关的掉落概率（面板与奖励说明都读它，前端不复制公式）。
     myDrop: myDropView({ boss: bossView, rankRows, sectId: input.sectId }),
-    // 三期：功勋兑换价目（服务端唯一一份，前端只渲染）。
-    meritShop: WORLD_BOSS_MERIT_SHOP.map((item) => ({
-      id: item.id,
-      name: item.name,
-      cost: item.cost,
-      quality: item.quality,
-    })),
     rewardPreview:
       input.rewardContext === undefined
         ? null
@@ -8567,6 +8563,23 @@ async function cleanupWorldBossBattles(db: D1Database, now: number): Promise<voi
 }
 
 /* ---------- 三期：功勋兑换（POST /game/world-boss/exchange） ---------- */
+
+/** GET /game/merit-shop：功勋兑换弹窗的分类、价目与可选部位（纯配置，不读库）。 */
+export function getMeritShop(): MeritShopView {
+  return {
+    categories: MERIT_SHOP_CATEGORIES.map((category) => ({ id: category.id, name: category.name })),
+    items: WORLD_BOSS_MERIT_SHOP.map((item) => ({
+      id: item.id,
+      name: item.name,
+      cost: item.cost,
+      category: item.category,
+      quality: item.quality,
+      color: item.quality === null ? null : qualityColorOf(item.quality),
+    })),
+    slots: equipmentSlotViews(),
+    maxResourceQuantity: WORLD_BOSS_MERIT_XUANTIE_MAX,
+  };
+}
 
 /** 功勋兑换回执（纯命令结果）；不属于任何公开视图。 */
 export interface BossMeritExchangeOutcome {

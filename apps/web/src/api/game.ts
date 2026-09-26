@@ -1724,8 +1724,6 @@ export interface WorldBossView {
     /** 低档品质名。 */
     lowQualityName: string;
   } | null;
-  /** 三期：功勋兑换价目（服务端唯一一份，前端只渲染）。cost 为展示单位。 */
-  meritShop: { id: string; name: string; cost: number; quality: string | null }[];
 }
 
 export interface WorldBossAttackResultView {
@@ -1762,6 +1760,29 @@ export async function attackWorldBoss(discipleIds: string[]): Promise<{
  * 三期功勋兑换入参（与后端 worldBossExchangeRequestSchema 一一对应；多余字段会被服务端 400 拒绝）。
  * 部位 / 主属性的组合合法性（法器必须选身法 / 幸运等）由服务端校验。
  */
+/** 功勋兑换（GET /game/merit-shop）：分类（标签页）、价目、可选部位都由服务端给。 */
+export interface MeritShopView {
+  categories: { id: string; name: string }[];
+  items: {
+    id: string;
+    name: string;
+    /** 价格（功勋，展示单位）。 */
+    cost: number;
+    category: string;
+    /** 装备类的品质与品质色；资源类为 null。 */
+    quality: string | null;
+    color: string | null;
+  }[];
+  slots: EquipmentSlotView[];
+  /** 资源类一次最多兑换几个。 */
+  maxResourceQuantity: number;
+}
+
+export async function fetchMeritShop(): Promise<MeritShopView> {
+  const data = await apiRequest<{ shop: MeritShopView }>('/api/v1/game/merit-shop');
+  return data.shop;
+}
+
 export interface BossMeritExchangeInput {
   /** xuantie（玄铁）| spirit（灵品）| treasure（宝品）| immortal（仙品）。 */
   itemId: string;
