@@ -182,11 +182,12 @@ function submitEquipment(): void {
   <section class="merit-dialog" aria-labelledby="merit-dialog-title">
     <header class="merit-head">
       <h2 id="merit-dialog-title" class="merit-title">功勋兑换</h2>
-      <p class="merit-balance">
-        <span>现有功勋</span>
-        <strong>{{ formatAmount(balanceOf('bossMerit')) }}</strong>
-      </p>
     </header>
+
+    <p class="merit-balance">
+      <span>现有功勋</span>
+      <strong>{{ formatAmount(balanceOf('bossMerit')) }}</strong>
+    </p>
 
     <LoadingState v-if="shop === null && loadError === null" label="正在读取功勋兑换" detail="" />
     <p v-else-if="loadError" class="blocked-hint">{{ loadError }}</p>
@@ -380,10 +381,6 @@ function submitEquipment(): void {
 }
 
 .merit-head {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 12px;
   /* 右上角是弹窗的关闭按钮（绝对定位）：与其它弹窗的 .section-heading 一样让出 40px */
   padding: 0 40px 12px 0;
   border-bottom: 1px solid var(--line);
@@ -398,13 +395,19 @@ function submitEquipment(): void {
   letter-spacing: 0.1em;
 }
 
+/* 现有功勋：标题下单独一行（与门人详情的「综合评分」同一种金边底框） */
 .merit-balance {
   display: flex;
   align-items: baseline;
+  justify-content: space-between;
   gap: 8px;
-  margin: 0;
+  margin: 14px 0 0;
+  padding: 10px 14px;
+  border: 1px solid rgba(202, 169, 106, 0.22);
+  border-radius: 3px;
+  background: rgba(202, 169, 106, 0.05);
   color: var(--muted, #92a79d);
-  font-size: 12px;
+  font-size: 13px;
   letter-spacing: 0.08em;
 }
 
