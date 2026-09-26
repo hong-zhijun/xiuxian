@@ -384,7 +384,8 @@ function submitEquipment(): void {
   align-items: flex-end;
   justify-content: space-between;
   gap: 12px;
-  padding-bottom: 12px;
+  /* 右上角是弹窗的关闭按钮（绝对定位）：与其它弹窗的 .section-heading 一样让出 40px */
+  padding: 0 40px 12px 0;
   border-bottom: 1px solid var(--line);
 }
 
