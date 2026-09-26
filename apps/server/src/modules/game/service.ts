@@ -103,10 +103,7 @@ import {
   IDLE_ASSIGNMENT,
   RECRUIT_REFRESH_PER_LEVEL,
   SPIRITUAL_ARRAY_BUILDING_ID,
-  STONE_MINING_ASSIGNMENT,
-  STONE_MINING_LIMIT_HIGH,
-  STONE_MINING_LIMIT_LOW,
-  STONE_MINING_UNLOCK_SECT_LEVEL,
+  assignmentLimitOf,
   breakthroughEnergyCost,
   dateKeyUtc8,
   effectiveCapacity,
@@ -2254,18 +2251,16 @@ function assignmentBlocker(
   const away = unavailableBlocker(draft, disciple, '转岗');
   if (away !== null) return away;
 
-  // V5.1 改动三：采灵岗位有人数上限（宗门 6 级前 1 人、6 级起 2 人）。
-  // item.id !== disciple.id：弟子本来就在采灵岗位时，重复派工不该算占位。
-  if (assignment === STONE_MINING_ASSIGNMENT) {
-    const limit =
-      Number(draft.sect.level) >= STONE_MINING_UNLOCK_SECT_LEVEL
-        ? STONE_MINING_LIMIT_HIGH
-        : STONE_MINING_LIMIT_LOW;
+  // 有人数上限的岗位（采灵：宗门 6 级前 1 人、6 级起 2 人；吐纳：2 人）。
+  // item.id !== disciple.id：弟子本来就在该岗位时，重复派工不该算占位。
+  const limit = assignmentLimitOf(assignment, Number(draft.sect.level));
+  if (limit !== null) {
     const currentCount = draft.disciples.filter(
-      (item) => item.assignment === STONE_MINING_ASSIGNMENT && item.id !== disciple.id,
+      (item) => item.assignment === assignment && item.id !== disciple.id,
     ).length;
     if (currentCount >= limit) {
-      const message = `采灵岗位已满（上限 ${limit} 人）`;
+      const name = draft.config.positions.find((position) => position.id === assignment)?.name ?? assignment;
+      const message = `${name}岗位已满（上限 ${limit} 人）`;
       return { error: new AppError('CAPACITY_FULL', message), reason: message };
     }
   }

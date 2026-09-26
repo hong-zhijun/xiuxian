@@ -19,6 +19,15 @@ export const MAX_ENTRIES = 5;
 
 export const CHANGELOG: readonly ChangelogEntry[] = [
   {
+    id: '2026-09-26-energy',
+    time: '2026-09-26 21:30',
+    title: '灵气更好攒了',
+    items: [
+      '新岗位「吐纳」：派弟子吐纳，每人每小时产 10 灵气，最多 2 人。',
+      '聚灵阵加成提高：每级灵气基础产出 +20% → +40%（满级翻到 3 倍）。',
+    ],
+  },
+  {
     id: '2026-09-26-limit',
     time: '2026-09-26 12:00',
     title: '讨伐：每日出手次数上限',

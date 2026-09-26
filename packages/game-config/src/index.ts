@@ -20,14 +20,14 @@ import type { GameConfigContent } from '@xiuxian/game-core';
  */
 
 /** 版本号：内容变化时必须同步更新版本与 payloadHash（见 03 第 12 节）。 */
-export const GAME_CONFIG_VERSION = 'v7.0.0';
+export const GAME_CONFIG_VERSION = 'v8.0.0';
 
 /**
  * 内容哈希（sha256:，覆盖规范化后的 JSON）。
  * 修改 content 后必须重新计算，否则 Worker 启动与 config:hash 校验都会失败。
  */
 export const GAME_CONFIG_PAYLOAD_HASH =
-  'sha256:19889cbf92c327384145dff702b9aedad741f67630e3bd1afdf5023e655c3728';
+  'sha256:7c795b90d69375f5f49b6f3d70133e1ef0cc6fd5ac811d30bb0a9cee0fccce64';
 
 export const GAME_CONFIG_CONTENT: GameConfigContent = {
   server: {
@@ -160,6 +160,13 @@ export const GAME_CONFIG_CONTENT: GameConfigContent = {
       id: 'stoneMining',
       name: '采灵',
       outputPerHourPerDisciple: { spiritStone: '15000' },
+      visibility: 'public',
+    },
+    {
+      // v8：吐纳岗位（每小时 10000 最小单位 = 10 展示单位灵气/人），人数上限见服务端 ENERGY_GATHERING_LIMIT。
+      id: 'energyGathering',
+      name: '吐纳',
+      outputPerHourPerDisciple: { spiritualEnergy: '10000' },
       visibility: 'public',
     },
   ],

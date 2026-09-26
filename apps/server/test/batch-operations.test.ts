@@ -170,6 +170,36 @@ describe('批量转岗', () => {
     expect(await guardRowCount()).toBe(0);
   });
 
+  it('吐纳岗位：每人每小时 10 灵气，上限 2 人；聚灵阵每级 +40% 灵气基础产出', async () => {
+    const fixture = await makeSect('assign-energy');
+    const a = await seedDisciple(fixture.sectId);
+    const b = await seedDisciple(fixture.sectId);
+    const c = await seedDisciple(fixture.sectId);
+    await freezeSettlement(fixture.sectId);
+
+    const toEnergy = await fixture.api.post('/api/v1/game/assign-batch', {
+      discipleIds: [a, b, c],
+      assignment: 'energyGathering',
+    });
+    expect(toEnergy.status).toBe(200);
+    const data = dataOf(toEnergy) as Record<string, any>;
+    expect(data.outcome.assignmentName).toBe('吐纳');
+    expect(data.outcome.assigned.map((item: { discipleId: string }) => item.discipleId)).toEqual([a, b]);
+    expect(data.outcome.skipped).toEqual([
+      { discipleId: c, discipleName: expect.any(String), reason: '吐纳岗位已满（上限 2 人）' },
+    ]);
+
+    const state = data.state as Record<string, any>;
+    const post = (state.assignments as { id: string; currentCount: number | null; maxCount: number | null }[])
+      .find((item) => item.id === 'energyGathering');
+    expect(post).toMatchObject({ currentCount: 2, maxCount: 2 });
+    // 灵气产速 = 基础 20 × (1 + 聚灵阵 1 级 40%) + 吐纳 2 人 × 10 = 48（最小单位 48000）
+    const energy = (state.resources as { id: string; ratePerHour: string }[]).find(
+      (item) => item.id === 'spiritualEnergy',
+    );
+    expect(energy?.ratePerHour).toBe('48000');
+  });
+
   it('一个都转不了时整批报错、不写库', async () => {
     const fixture = await makeSect('assign-none');
     const [a] = fixture.discipleIds as [string];

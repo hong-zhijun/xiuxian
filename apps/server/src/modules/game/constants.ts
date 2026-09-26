@@ -84,8 +84,8 @@ export const BREAKTHROUGH_ARRAY_BONUS_BP_PER_LEVEL = 500;
 /** 聚灵阵的建筑定义 id（加成来源）。 */
 export const SPIRITUAL_ARRAY_BUILDING_ID = 'spiritualArray';
 
-/** 聚灵阵每级给灵气基础产出的加成（基点，2000 = +20%）。 */
-export const SPIRITUAL_ARRAY_ENERGY_BONUS_BP_PER_LEVEL = 2000;
+/** 聚灵阵每级给灵气基础产出的加成（基点，4000 = +40%；v8 由 +20% 提高）。 */
+export const SPIRITUAL_ARRAY_ENERGY_BONUS_BP_PER_LEVEL = 4000;
 
 /** 空闲岗位 id（不在配置里，属于弟子状态的枚举值）。 */
 export const IDLE_ASSIGNMENT = 'idle';
@@ -328,6 +328,26 @@ export const STONE_MINING_LIMIT_HIGH = 2;
 
 /** 采灵岗位人数上限提到 high 的宗门等级门槛。 */
 export const STONE_MINING_UNLOCK_SECT_LEVEL = 6;
+
+/** 吐纳（产灵气）岗位 id：对应配置里的 positions.id（v8）。 */
+export const ENERGY_GATHERING_ASSIGNMENT = 'energyGathering';
+
+/** 吐纳岗位人数上限（不分宗门等级）。 */
+export const ENERGY_GATHERING_LIMIT = 2;
+
+/**
+ * 有人数上限的岗位：返回该宗门等级下的上限；不限人数的岗位返回 null。
+ * 派工校验（service）与岗位列表视图（view）共用这一份。
+ */
+export function assignmentLimitOf(assignment: string, sectLevel: number): number | null {
+  if (assignment === STONE_MINING_ASSIGNMENT) {
+    return sectLevel >= STONE_MINING_UNLOCK_SECT_LEVEL ? STONE_MINING_LIMIT_HIGH : STONE_MINING_LIMIT_LOW;
+  }
+  if (assignment === ENERGY_GATHERING_ASSIGNMENT) {
+    return ENERGY_GATHERING_LIMIT;
+  }
+  return null;
+}
 
 /**
  * 天赋定义（V4 第二节）。天赋是代码常量，不进 game-config：

@@ -38,10 +38,7 @@ import {
   IDLE_ASSIGNMENT,
   SPIRITUAL_ARRAY_BUILDING_ID,
   SCRIPTURE_LIBRARY_BUILDING_ID,
-  STONE_MINING_ASSIGNMENT,
-  STONE_MINING_LIMIT_HIGH,
-  STONE_MINING_LIMIT_LOW,
-  STONE_MINING_UNLOCK_SECT_LEVEL,
+  assignmentLimitOf,
   breakthroughEnergyCost,
   effectiveCapacity,
   findRealm,
@@ -1944,15 +1941,10 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
     assignments: [
       { id: IDLE_ASSIGNMENT, name: '闲置', currentCount: null, maxCount: null },
       ...config.positions.map((position) => {
-        if (position.id === STONE_MINING_ASSIGNMENT) {
-          // 采灵岗位有人数上限：宗门 6 级前 1 人、6 级起 2 人（与 service 的派工判定同一套常量）。
-          const limit =
-            Number(sect.level) >= STONE_MINING_UNLOCK_SECT_LEVEL
-              ? STONE_MINING_LIMIT_HIGH
-              : STONE_MINING_LIMIT_LOW;
-          const count = disciples.filter(
-            (disciple) => disciple.assignment === STONE_MINING_ASSIGNMENT,
-          ).length;
+        // 有人数上限的岗位（采灵 / 吐纳）：与 service 的派工判定共用 assignmentLimitOf。
+        const limit = assignmentLimitOf(position.id, Number(sect.level));
+        if (limit !== null) {
+          const count = disciples.filter((disciple) => disciple.assignment === position.id).length;
           return { id: position.id, name: position.name, currentCount: count, maxCount: limit };
         }
         return { id: position.id, name: position.name, currentCount: null, maxCount: null };
