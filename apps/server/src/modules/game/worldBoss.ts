@@ -23,12 +23,16 @@ import { ARENA_COMBAT_BONUS_BP_PER_LEVEL } from './realms';
 export const WORLD_BOSS_MIN_PARTY = 1;
 export const WORLD_BOSS_MAX_PARTY = 10;
 
-/** 时间线（UTC+8 小时）：08:00 开放、22:00 力竭、23:00 逃走。 */
+/**
+ * 时间线（UTC+8 小时）：08:00 开放、23:00 力竭、24:00（次日 0 点）逃走。
+ * 逃走时刻取 24：当天之内永远到不了 closed；过了 0 点关卡已属于「前一天」，
+ * 由 0 点后的第一次 Cron 按隔夜残留收口（逃走 + 发奖），0~8 点本来就不能出手。
+ */
 export const WORLD_BOSS_OPEN_HOUR = 8;
-export const WORLD_BOSS_FRENZY_HOUR = 22;
-export const WORLD_BOSS_CLOSE_HOUR = 23;
+export const WORLD_BOSS_FRENZY_HOUR = 23;
+export const WORLD_BOSS_CLOSE_HOUR = 24;
 
-/** 力竭期伤害倍率（22:00~23:00）。 */
+/** 力竭期伤害倍率（23:00~24:00）。 */
 export const WORLD_BOSS_FRENZY_MULTIPLIER = 1.5;
 
 /** 暴击倍率与暴击率上限（luck 1~100 → 最高 20%）。 */
@@ -61,7 +65,7 @@ export const WORLD_BOSS_COOLDOWN_MS = 3_000;
 /**
  * 每个宗门每天最多出手几次（防协议脚本全天刷）：默认 120，比最肝的真人玩家略多。
  * 线上由环境变量 WORLD_BOSS_DAILY_ATTACK_LIMIT 覆盖（改 .env 后重启即可，不用改代码）；
- * 0 = 不限次数。「一天」按 UTC+8 自然日算（讨伐只在 08:00–23:00 开放）。
+ * 0 = 不限次数。「一天」按 UTC+8 自然日算（讨伐只在 08:00–24:00 开放）。
  */
 export const WORLD_BOSS_DAILY_ATTACK_LIMIT_DEFAULT = 120;
 
@@ -260,7 +264,7 @@ export type WorldBossPhase = 'before' | 'open' | 'frenzy' | 'closed';
 
 /**
  * 阶段判定（UTC+8 小时整数）：
- * 08:00 前 before；08:00~22:00 open；22:00~23:00 frenzy；23:00 起 closed。
+ * 08:00 前 before；08:00~23:00 open；23:00~24:00 frenzy（CLOSE_HOUR = 24，当天不会出现 closed）。
  */
 export function worldBossPhaseOf(now: number): WorldBossPhase {
   const hour = new Date(now + 8 * 3_600_000).getUTCHours();
@@ -353,7 +357,7 @@ export function rollDamage(input: {
   arenaLevel: number;
   /** 出战弟子（本次派出的全部成员）的 luck 平均值。 */
   avgLuck: number;
-  /** 是否处于力竭期（22:00~23:00）。 */
+  /** 是否处于力竭期（23:00~24:00）。 */
   frenzy: boolean;
   /** 「邪祟」词缀时传 2（暴击率翻倍）。 */
   critRateMultiplier?: number;
@@ -462,7 +466,7 @@ export function rankRewardMultiplier(rank: number): number {
 /**
  * 一个参与宗门在该关的基础资源奖励（灵石 / 药材 / 矿石分别算）：
  *   max(该宗门产出(r) × 2.5, 保底(L)) × 关卡系数 × 排名倍数 ×（击退时 ×0.5）
- * 「击退」= 23:00 逃走时血量已被打掉 ≥70%。
+ * 「击退」= 0 点逃走时血量已被打掉 ≥70%。
  */
 export function stageResourceRewards(input: {
   rates: Readonly<Record<string, number>>;

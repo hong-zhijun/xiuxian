@@ -19,6 +19,12 @@ export const MAX_ENTRIES = 5;
 
 export const CHANGELOG: readonly ChangelogEntry[] = [
   {
+    id: '2026-09-27-boss-time',
+    time: '2026-09-27 22:57',
+    title: '讨伐延长到 0 点',
+    items: ['妖王改为 0 点逃走（原 23:00），力竭期（伤害 ×1.5）顺延为 23:00–0:00。'],
+  },
+  {
     id: '2026-09-26-boss-reward-2',
     time: '2026-09-26 23:00',
     title: '讨伐资源奖励调整',

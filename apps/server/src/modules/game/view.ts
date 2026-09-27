@@ -1041,7 +1041,7 @@ export interface WorldBossView {
   phase: WorldBossPhase;
   /** 今天的 Boss 出现时间点（毫秒），用于「08:00 降临」提示。 */
   opensAt: number;
-  /** 距离 23:00 结束的秒数（已结束为 0）。 */
+  /** 距离 24:00（次日 0 点）结束的秒数（已结束为 0）。 */
   remainingSeconds: number;
   /** 今日已连斩 N 只。 */
   killedToday: number;

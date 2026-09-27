@@ -58,9 +58,11 @@ describe('世界 Boss 二期：阶段判定（UTC+8）', () => {
   it('07:59 before、08:00 open、22:00 frenzy、23:00 closed', () => {
     expect(worldBossPhaseOf(utc8(2026, 9, 23, 7, 59))).toBe('before');
     expect(worldBossPhaseOf(utc8(2026, 9, 23, 8, 0))).toBe('open');
-    expect(worldBossPhaseOf(utc8(2026, 9, 23, 21, 59))).toBe('open');
-    expect(worldBossPhaseOf(utc8(2026, 9, 23, 22, 0))).toBe('frenzy');
-    expect(worldBossPhaseOf(utc8(2026, 9, 23, 23, 0))).toBe('closed');
+    expect(worldBossPhaseOf(utc8(2026, 9, 23, 22, 59))).toBe('open');
+    expect(worldBossPhaseOf(utc8(2026, 9, 23, 23, 0))).toBe('frenzy');
+    // 逃走在 0 点：当天最后一刻仍是力竭期，过了 0 点就是次日的 before
+    expect(worldBossPhaseOf(utc8(2026, 9, 23, 23, 59))).toBe('frenzy');
+    expect(worldBossPhaseOf(utc8(2026, 9, 24, 0, 0))).toBe('before');
     expect(worldBossPhaseOf(utc8(2026, 9, 24, 0, 30))).toBe('before');
   });
 

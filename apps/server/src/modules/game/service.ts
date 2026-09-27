@@ -7933,7 +7933,7 @@ export async function attackWorldBoss(
   const phase = worldBossPhaseOf(now);
 
   if (!isWorldBossAttackable(phase)) {
-    throw new AppError('INVALID_STATUS', '讨伐每日 08:00–23:00 开放（UTC+8）');
+    throw new AppError('INVALID_STATUS', '讨伐每日 08:00–24:00 开放（UTC+8）');
   }
 
   const dayKey = dateKeyUtc8(now);
@@ -8246,7 +8246,7 @@ async function spawnWorldBoss(db: D1Database, now: number): Promise<void> {
 }
 
 /**
- * 逃走：今天的关卡过了 23:00 仍 active → 逃走；隔夜残留（Cron 漏跑）一并收口，
+ * 逃走：过了 0 点仍 active 的前一天关卡 → 逃走（也收口 Cron 漏跑的隔夜残留），
  * 否则那条记录永远不会进入发奖。血掉 ≥70% 记为「已击退」。
  */
 async function fleeExpiredWorldBosses(db: D1Database, now: number): Promise<void> {

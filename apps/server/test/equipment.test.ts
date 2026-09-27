@@ -1015,7 +1015,7 @@ describe('世界 Boss 装备掉落（三期 2.1：人人有份）', () => {
     await attackWorldBoss(env.DB, sect.userId, { discipleIds: [sect.discipleIds[0]!] }, now);
     // 模拟别的宗门把它打到剩 20% 血：逃走时按「已击退」处理（资源 ×0.5），但一件装备都不掉。
     await env.DB.prepare('UPDATE world_bosses SET hp = ? WHERE id = ?').bind(200_000, bossId).run();
-    await processWorldBoss(env.DB, dayAt(42, 23, 30));
+    await processWorldBoss(env.DB, dayAt(43, 0, 1));
 
     expect(await equipmentRows(sect.sectId)).toHaveLength(0);
     expect((await systemMessages()).some((text) => text.includes('获得 '))).toBe(false);

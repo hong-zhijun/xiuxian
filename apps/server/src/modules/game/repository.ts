@@ -2781,7 +2781,7 @@ export function markWorldBossHitLastHitStatement(hitId: string): ParameterizedQu
   };
 }
 
-/** 逃走（23:00 窗口结束仍未击杀）；只对仍 active 的行生效。 */
+/** 逃走（0 点窗口结束仍未击杀）；只对仍 active 的行生效。 */
 export function markWorldBossFledStatement(bossId: string, now: number): ParameterizedQuery {
   return {
     sql: "UPDATE world_bosses SET status = 'fled', ended_at = ? WHERE id = ? AND status = 'active'",

@@ -392,11 +392,10 @@ describe('世界 Boss 二期：面板', () => {
     expect(early.boss.attackable).toBe(false);
     expect(early.boss.opensAt).toBe(dayStartMs(dayAt(4, 7)) + 8 * HOUR_MS);
 
-    // 23:00 之后：closed、不能再出手
-    const closed = await getWorldBoss(env.DB, fixture.userId, dayAt(3, 23));
-    expect(closed.boss.phase).toBe('closed');
-    expect(closed.boss.attackable).toBe(false);
-    expect(closed.boss.remainingSeconds).toBe(0);
+    // 23:00 起力竭，距 0 点结束还剩 1 小时
+    const late = await getWorldBoss(env.DB, fixture.userId, dayAt(3, 23, 0));
+    expect(late.boss.phase).toBe('frenzy');
+    expect(late.boss.remainingSeconds).toBe(3600);
   });
 
   it('出手入参校验：1~10 名、去重、多余字段一律 400', async () => {
@@ -669,9 +668,9 @@ describe('世界 Boss 二期：连战', () => {
     expect(await countBossRows(dayKey)).toBe(2);
   });
 
-  it('22:30 力竭期打死仍然会立刻开下一关（伤害 ×1.5）', async () => {
+  it('23:30 力竭期打死仍然会立刻开下一关（伤害 ×1.5）', async () => {
     const fixture = await makeSect('chain-late');
-    const now = dayAt(11, 22, 30);
+    const now = dayAt(11, 23, 30);
     await freezeDay(fixture.sectId, 11);
     vi.spyOn(Math, 'random').mockReturnValue(0.5);
     const dayKey = dateKeyUtc8(now);
@@ -901,13 +900,13 @@ describe('世界 Boss 二期：Cron 逃走与发奖', () => {
       bossMerit: await balanceOf(fixture.sectId, BOSS_MERIT_RESOURCE_ID),
     };
 
-    await processWorldBoss(env.DB, dayAt(40, 23));
+    // 当天 23:30 还没逃（逃走在 0 点）；0 点后的第一次 Cron 才让它逃走并发奖。
+    await processWorldBoss(env.DB, dayAt(40, 23, 30));
+    expect((await bossRow(dayKey, 1))!.status).toBe('active');
+    await processWorldBoss(env.DB, dayAt(41, 0, 1));
     const row = (await bossRow(dayKey, 1))!;
     expect(row.status).toBe('fled');
     expect(row.rewarded_at).not.toBeNull();
-
-    const panel = await getWorldBoss(env.DB, fixture.userId, dayAt(40, 23));
-    expect(panel.boss.boss!.fledOutcome).toBe('repelled');
 
     const halved = (rate: number): number =>
       Math.floor(
@@ -942,7 +941,7 @@ describe('世界 Boss 二期：Cron 逃走与发奖', () => {
       cultivationPill: await pillCount(fixture.sectId, 'cultivationPill'),
       bossMerit: await balanceOf(fixture.sectId, BOSS_MERIT_RESOURCE_ID),
     };
-    await processWorldBoss(env.DB, dayAt(41, 23));
+    await processWorldBoss(env.DB, dayAt(42, 0, 1));
     const row = (await bossRow(dayKey, 1))!;
     expect(row.status).toBe('fled');
     expect(row.rewarded_at).not.toBeNull();
