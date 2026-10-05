@@ -358,7 +358,7 @@ describe('世界 Boss 二期：面板', () => {
       { id: 'equipment', name: '装备' },
     ]);
     expect(shop.items.map((item: { id: string }) => item.id)).toEqual(['xuantie', 'spirit', 'treasure', 'immortal']);
-    expect(shop.items.map((item: { cost: number }) => item.cost)).toEqual([4, 25, 70, 200]);
+    expect(shop.items.map((item: { cost: number }) => item.cost)).toEqual([4, 25, 70, 400]);
     expect(shop.items.map((item: { category: string }) => item.category)).toEqual([
       'resource',
       'equipment',
@@ -1179,7 +1179,7 @@ describe('世界 Boss 三期：功勋兑换（计划 2.4）', () => {
     const fixture = await makeSect('merit-immortal');
     const now = dayAt(75, 12, 0);
     await freezeDay(fixture.sectId, 75);
-    await setMerit(fixture.sectId, 300_000);
+    await setMerit(fixture.sectId, 500_000);
 
     const result = await exchangeBossMerit(
       env.DB,

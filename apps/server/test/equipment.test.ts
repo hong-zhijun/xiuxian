@@ -1028,6 +1028,8 @@ describe('世界 Boss 掉落：仙品广播与背包已满', () => {
     prefix: string;
     dayOffset: number;
     stage: number;
+    /** 结算掉落时的随机数（默认沿用出手时的 0.5）。 */
+    dropRandom?: number;
   }): Promise<SectFixture> {
     const sect = await makeSect(input.prefix);
     const now = dayAt(input.dayOffset, 10);
@@ -1044,12 +1046,16 @@ describe('世界 Boss 掉落：仙品广播与背包已满', () => {
     await env.DB.prepare('DELETE FROM world_bosses WHERE day_key = ? AND stage = ?')
       .bind(dayKey, input.stage + 1)
       .run();
+    if (input.dropRandom !== undefined) {
+      vi.spyOn(Math, 'random').mockReturnValue(input.dropRandom);
+    }
     await processWorldBoss(env.DB, dayAt(input.dayOffset, 14));
     return sect;
   }
 
   it('第 5 关及以上掉仙品，并额外全服广播一次（只播一次）', async () => {
-    const sect = await killBossSolo({ prefix: 'drop-immortal', dayOffset: 43, stage: 5 });
+    // 仙品档高档概率 25% × √1 = 25%：0.2 中仙品。
+    const sect = await killBossSolo({ prefix: 'drop-immortal', dayOffset: 43, stage: 5, dropRandom: 0.2 });
     const rows = await equipmentRows(sect.sectId);
     expect(rows).toHaveLength(1);
     expect(rows[0]!.quality).toBe('immortal');
@@ -1263,6 +1269,37 @@ describe('装备二期：炼器坊 · 玄铁', () => {
     expect(await balanceOf(fixture.sectId, 'spiritStone')).toBe(stoneBefore - 125_000);
     expect(await balanceOf(fixture.sectId, 'ore')).toBe(oreBefore - 200_000);
     expect(await balanceOf(fixture.sectId, 'xuantie')).toBe(7_000);
+  });
+
+  it('仙品保底：没出仙品叠一层、概率随之上调，出仙品清零', async () => {
+    // 宗门 7 级：容量 ×7，够炼两次仙品（每次矿石 2500）。
+    const { fixture, now } = await frozenSect('eq-v2-pity', 7);
+    await addWorkshop(fixture.sectId, 4);
+    await setBalance(fixture.sectId, 'ore', 6_000_000);
+    await setBalance(fixture.sectId, 'xuantie', 100_000);
+
+    // 0 层：仙品不会失败，降级区间 = [0, 0.4)，0.3 → 降级为宝品
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0.3);
+    const first = await forgeEquipment(env.DB, fixture.userId, 'weapon', undefined, now, 'immortal');
+    expect(first.outcome.result).toBe('downgrade');
+    expect(first.outcome.quality).toBe('treasure');
+    expect(first.outcome.forgePity).toBe(1);
+    let panel = await getEquipment(env.DB, fixture.userId, now);
+    expect(panel.equipment.forgePity).toBe(1);
+    expect(panel.equipment.forgeOptions.find((option) => option.quality === 'immortal')?.odds).toEqual({
+      success: 0.7,
+      downgrade: 0.3,
+      fail: 0,
+    });
+
+    // 1 层时降级 = [0, 0.3)，同一个 0.3 就成功了 → 清零
+    const second = await forgeEquipment(env.DB, fixture.userId, 'weapon', undefined, now, 'immortal');
+    random.mockRestore();
+    expect(second.outcome.result).toBe('success');
+    expect(second.outcome.quality).toBe('immortal');
+    expect(second.outcome.forgePity).toBe(0);
+    panel = await getEquipment(env.DB, fixture.userId, now);
+    expect(panel.equipment.forgePity).toBe(0);
   });
 
   it('分解灵品返还玄铁', async () => {

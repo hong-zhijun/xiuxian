@@ -1069,7 +1069,9 @@ async function onForgeEquipment(
     if (outcome.result === 'fail') {
       emit('notify', 'error', '炼器失败', '炉火失控，返还一半灵石与矿石，玄铁已损耗。');
     } else if (outcome.result === 'downgrade') {
-      emit('notify', 'success', `火候偏差，炼得 ${outcome.name ?? ''}`, `${outcome.slotName} · 品质降了一档，已放入背包。`);
+      // 仙品没炼成会叠保底：提示一下当前层数，玩家知道下次更稳。
+      const pityText = quality === 'immortal' ? `仙品保底 ${String(outcome.forgePity)} 层，下次成功率更高。` : '';
+      emit('notify', 'success', `火候偏差，炼得 ${outcome.name ?? ''}`, `${outcome.slotName} · 品质降了一档，已放入背包。${pityText}`);
     } else {
       emit('notify', 'success', `炼得 ${outcome.name ?? ''}`, `${outcome.slotName} · 已放入背包。`);
     }

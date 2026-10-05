@@ -340,7 +340,7 @@ describe('世界 Boss 三期：功勋与功勋兑换（计划 2.3、2.4）', () 
     expect(worldBossMeritFor({ stage: 2, damageShare: 0, repelled: true })).toBe(0);
   });
 
-  it('功勋兑换价目表：四项 4 / 25 / 70 / 200，玄铁单项上限 100', () => {
+  it('功勋兑换价目表：四项 4 / 25 / 70 / 400，玄铁单项上限 100', () => {
     expect(BOSS_MERIT_RESOURCE_ID).toBe('bossMerit');
     expect(WORLD_BOSS_MERIT_SHOP.map((item) => item.id)).toEqual([
       'xuantie',
@@ -354,7 +354,7 @@ describe('世界 Boss 三期：功勋与功勋兑换（计划 2.3、2.4）', () 
       '宝品装备',
       '仙品装备',
     ]);
-    expect(WORLD_BOSS_MERIT_SHOP.map((item) => item.cost)).toEqual([4, 25, 70, 200]);
+    expect(WORLD_BOSS_MERIT_SHOP.map((item) => item.cost)).toEqual([4, 25, 70, 400]);
     expect(WORLD_BOSS_MERIT_SHOP.map((item) => item.quality)).toEqual([
       null,
       'spirit',

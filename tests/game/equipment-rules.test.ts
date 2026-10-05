@@ -5,6 +5,7 @@ import {
   BAG_CAPACITY,
   BOSS_DROP_CHANCE_OTHERS,
   BOSS_HIGH_DROP_FACTOR,
+  BOSS_IMMORTAL_DROP_FACTOR,
   EMPTY_ATTRS,
   EQUIPMENT_ATTRS,
   EQUIPMENT_QUALITIES,
@@ -41,6 +42,7 @@ import {
   forgeFailRefund,
   forgeOddsOf,
   lowerQuality,
+  nextForgePity,
   rollForgeResult,
   forgeRecipeOf,
   forgeWorkshopUpgradeFrom,
@@ -206,21 +208,30 @@ describe('装备规则 · 世界 Boss 掉落（三期 2.1）', () => {
 
   it('高档概率 = 75% × √伤害占比（占比夹在 0~1：负数与 >1 都不放大）', () => {
     expect(BOSS_HIGH_DROP_FACTOR).toBe(0.75);
-    expect(bossHighDropChance(1)).toBeCloseTo(0.75);
-    expect(bossHighDropChance(0.25)).toBeCloseTo(0.375);
-    expect(bossHighDropChance(0.04)).toBeCloseTo(0.15);
-    expect(bossHighDropChance(0)).toBe(0);
-    expect(bossHighDropChance(-0.5)).toBe(0);
-    expect(bossHighDropChance(1.5)).toBeCloseTo(0.75);
+    expect(bossHighDropChance(1, 1)).toBeCloseTo(0.75);
+    expect(bossHighDropChance(0.25, 3)).toBeCloseTo(0.375);
+    expect(bossHighDropChance(0.04, 4)).toBeCloseTo(0.15);
+    expect(bossHighDropChance(0, 1)).toBe(0);
+    expect(bossHighDropChance(-0.5, 1)).toBe(0);
+    expect(bossHighDropChance(1.5, 1)).toBeCloseTo(0.75);
+  });
+
+  it('高档是仙品（第 5 关起）时改为 25% × √伤害占比', () => {
+    expect(BOSS_IMMORTAL_DROP_FACTOR).toBe(0.25);
+    expect(bossHighDropChance(1, 5)).toBeCloseTo(0.25);
+    expect(bossHighDropChance(0.25, 9)).toBeCloseTo(0.125);
+    expect(bossHighDropChance(1.5, 5)).toBeCloseTo(0.25);
   });
 
   it('先判高档、未中再判低档；都没中返回 null', () => {
-    // 占比 100% → 高档 75%：0.74 中高档（第 5 关 = 仙品）。
-    expect(rollBossDrop({ stage: 5, damageShare: 1, random: sequence([0.74]) })).toBe('immortal');
-    // 0.76 未中高档 → 再取一个随机数判低档：0.39 < 0.4 得宝品。
-    expect(rollBossDrop({ stage: 5, damageShare: 1, random: sequence([0.76, 0.39]) })).toBe('treasure');
+    // 第 5 关（仙品）占比 100% → 高档 25%：0.24 中仙品。
+    expect(rollBossDrop({ stage: 5, damageShare: 1, random: sequence([0.24]) })).toBe('immortal');
+    // 0.26 未中高档 → 再取一个随机数判低档：0.39 < 0.4 得宝品。
+    expect(rollBossDrop({ stage: 5, damageShare: 1, random: sequence([0.26, 0.39]) })).toBe('treasure');
     // 0.4 不满足「< 0.4」→ 不掉。
-    expect(rollBossDrop({ stage: 5, damageShare: 1, random: sequence([0.76, 0.4]) })).toBeNull();
+    expect(rollBossDrop({ stage: 5, damageShare: 1, random: sequence([0.26, 0.4]) })).toBeNull();
+    // 第 3 关（宝品）占比 100% → 高档仍是 75%：0.74 中宝品。
+    expect(rollBossDrop({ stage: 3, damageShare: 1, random: sequence([0.74]) })).toBe('treasure');
     // 第 1 关、占比 25% → 高档 37.5%：0.37 中高档（灵品）；0.38 未中 → 低档凡品。
     expect(rollBossDrop({ stage: 1, damageShare: 0.25, random: sequence([0.37]) })).toBe('spirit');
     expect(rollBossDrop({ stage: 1, damageShare: 0.25, random: sequence([0.38, 0.1]) })).toBe('common');
@@ -239,7 +250,7 @@ describe('装备规则 · 世界 Boss 掉落（三期 2.1）', () => {
   it('掉落说明文案与计划的示例一字不差', () => {
     expect(bossDropDescription(1)).toBe('按本关伤害占比各自判定：灵品装备 ×1 概率 = 75% × √占比；未得时 40% 概率得 凡品装备 ×1');
     expect(bossDropDescription(3)).toBe('按本关伤害占比各自判定：宝品装备 ×1 概率 = 75% × √占比；未得时 40% 概率得 灵品装备 ×1');
-    expect(bossDropDescription(5)).toBe('按本关伤害占比各自判定：仙品装备 ×1 概率 = 75% × √占比；未得时 40% 概率得 宝品装备 ×1');
+    expect(bossDropDescription(5)).toBe('按本关伤害占比各自判定：仙品装备 ×1 概率 = 25% × √占比；未得时 40% 概率得 宝品装备 ×1');
   });
 });
 
@@ -317,7 +328,23 @@ describe('装备二期：炼器成功率', () => {
     expect(forgeOddsOf('spirit', 4)).toEqual({ success: 0.9, downgrade: 0.1, fail: 0 });
     expect(forgeOddsOf('treasure', 3)).toEqual({ success: 0.65, downgrade: 0.25, fail: 0.1 });
     expect(forgeOddsOf('treasure', 4)).toEqual({ success: 0.75, downgrade: 0.25, fail: 0 });
-    expect(forgeOddsOf('immortal', 4)).toEqual({ success: 0.5, downgrade: 0.3, fail: 0.2 });
+    expect(forgeOddsOf('immortal', 4)).toEqual({ success: 0.6, downgrade: 0.4, fail: 0 });
+  });
+
+  it('仙品保底：每层 +10%（抵降级率），4 层必成；只对仙品生效，脏值夹取', () => {
+    expect(forgeOddsOf('immortal', 4, 1)).toEqual({ success: 0.7, downgrade: 0.3, fail: 0 });
+    expect(forgeOddsOf('immortal', 4, 3)).toEqual({ success: 0.9, downgrade: 0.1, fail: 0 });
+    expect(forgeOddsOf('immortal', 4, 4)).toEqual({ success: 1, downgrade: 0, fail: 0 });
+    expect(forgeOddsOf('immortal', 4, 99)).toEqual({ success: 1, downgrade: 0, fail: 0 });
+    expect(forgeOddsOf('immortal', 4, -3)).toEqual({ success: 0.6, downgrade: 0.4, fail: 0 });
+    expect(forgeOddsOf('treasure', 3, 4)).toEqual({ success: 0.65, downgrade: 0.25, fail: 0.1 });
+
+    expect(nextForgePity('immortal', 'downgrade', 0)).toBe(1);
+    expect(nextForgePity('immortal', 'fail', 2)).toBe(3);
+    expect(nextForgePity('immortal', 'downgrade', 4)).toBe(4);
+    expect(nextForgePity('immortal', 'success', 3)).toBe(0);
+    expect(nextForgePity('treasure', 'downgrade', 2)).toBe(2);
+    expect(nextForgePity('treasure', 'success', 2)).toBe(2);
   });
 
   it('判定、降一档与失败返还', () => {

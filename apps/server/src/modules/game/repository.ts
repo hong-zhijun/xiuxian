@@ -2883,6 +2883,26 @@ export class EquipmentRepository extends ParamRepository {
     });
     return Number(row?.total ?? 0);
   }
+
+  /** 炼器仙品保底层数（0033 sects.forge_pity）；不进 SectRow，只有炼器与装备面板读。 */
+  async findForgePity(sectId: string): Promise<number> {
+    const row = await this.one<{ forge_pity: number }>({
+      sql: 'SELECT forge_pity FROM sects WHERE id = ?',
+      params: [sectId],
+    });
+    return Number(row?.forge_pity ?? 0);
+  }
+}
+
+/**
+ * 炼器仙品保底写回（0033）：绝对值写入。与扣资源同一次受保护 batch ——
+ * 资源余额守卫保证同一快照只会有一次炼器落库，所以不必再单独守卫这一列。
+ */
+export function updateForgePityStatement(sectId: string, pity: number): ParameterizedQuery {
+  return {
+    sql: 'UPDATE sects SET forge_pity = ? WHERE id = ?',
+    params: [pity, sectId],
+  };
 }
 
 export interface NewEquipment {

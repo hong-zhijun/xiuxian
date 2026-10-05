@@ -161,6 +161,7 @@ import {
   forgeFailRefund,
   forgeOddsOf,
   lowerQuality,
+  nextForgePity,
   rollForgeResult,
   realmXuantieDrop,
   realmXuantieDropText,
@@ -211,6 +212,7 @@ import {
   insertChallengeLogStatement,
   insertDiscipleStatement,
   insertEquipmentStatement,
+  updateForgePityStatement,
   insertEventLogStatement,
   insertExplorationStatement,
   insertResourceBalanceStatement,
@@ -4802,6 +4804,8 @@ export interface ForgeEquipmentOutcome {
   refund: Record<string, number>;
   /** 本次消耗（最小单位），与 equipment.ts 的 FORGE_COST 同一份。 */
   cost: Record<string, string>;
+  /** 炼完后的仙品保底层数（0~4；只有炼仙品会变）。 */
+  forgePity: number;
 }
 
 /** 穿戴 / 卸下回执。 */
@@ -4932,7 +4936,11 @@ export async function forgeEquipment(
   }
   // 计划 1.3：部位由玩家选；法器**必须**选身法 / 幸运，其它部位**不许**给主属性（与功勋兑换共用）。
   const requested = resolveRequestedEquipment(slot, mainAttr);
-  const { bagCount } = await loadEquipment(db, draft.sect.id);
+  const repo = new EquipmentRepository(db);
+  const [bagCount, pity] = await Promise.all([
+    repo.countBagBySectId(draft.sect.id),
+    repo.findForgePity(draft.sect.id),
+  ]);
   if (bagCount >= BAG_CAPACITY) {
     throw new AppError('INVALID_STATUS', bagFullReason(bagCount));
   }
@@ -4940,8 +4948,12 @@ export async function forgeEquipment(
     draft.requireResource(resourceId, Number(amount));
   }
 
-  // 装备二期：先判定成功 / 降级 / 失败（永远不会高于所选品质）。
-  const result = rollForgeResult(forgeOddsOf(recipe.quality, workshopLevel), Math.random);
+  // 装备二期：先判定成功 / 降级 / 失败（永远不会高于所选品质）；炼仙品时叠加保底层数。
+  const result = rollForgeResult(forgeOddsOf(recipe.quality, workshopLevel, pity), Math.random);
+  const forgePity = nextForgePity(recipe.quality, result, pity);
+  if (forgePity !== pity) {
+    draft.addStatement(updateForgePityStatement(draft.sect.id, forgePity));
+  }
   if (result === 'fail') {
     const refund = forgeFailRefund(recipe.cost);
     for (const [resourceId, amount] of Object.entries(refund)) {
@@ -4959,6 +4971,7 @@ export async function forgeEquipment(
         quality: null,
         refund,
         cost: { ...recipe.cost },
+        forgePity,
       },
     };
   }
@@ -5000,6 +5013,7 @@ export async function forgeEquipment(
       quality: generated.quality,
       refund: {},
       cost: { ...recipe.cost },
+      forgePity,
     },
   };
 }
@@ -5184,13 +5198,17 @@ export async function getEquipment(
   now: number,
 ): Promise<{ state: SectStateView; equipment: EquipmentView }> {
   const draft = await draftFor(db, userId, now);
-  const { items, bagCount } = await loadEquipment(db, draft.sect.id);
+  const [{ items, bagCount }, forgePity] = await Promise.all([
+    loadEquipment(db, draft.sect.id),
+    new EquipmentRepository(db).findForgePity(draft.sect.id),
+  ]);
   const discipleNames = new Map(draft.disciples.map((row) => [row.id, row.name]));
   return {
     state: draft.view(),
     equipment: buildEquipmentView({
       sectLevel: Number(draft.sect.level),
       workshopLevel: draft.buildings.find((row) => row.def_id === FORGE_WORKSHOP_ID)?.level ?? 1,
+      forgePity,
       items,
       bagCount,
       discipleNames,
@@ -7620,7 +7638,7 @@ function myDropView(input: {
   const { top, others } = bossDropQualities(input.boss.stage);
   return {
     damageShare,
-    highChance: bossHighDropChance(damageShare),
+    highChance: bossHighDropChance(damageShare, input.boss.stage),
     highQualityName: qualityNameOf(top),
     lowQualityName: qualityNameOf(others),
   };

@@ -582,7 +582,8 @@ export const WORLD_BOSS_MERIT_SHOP: readonly {
   { id: 'xuantie', name: '玄铁', cost: 4, category: 'resource', quality: null },
   { id: 'spirit', name: '灵品装备', cost: 25, category: 'equipment', quality: 'spirit' },
   { id: 'treasure', name: '宝品装备', cost: 70, category: 'equipment', quality: 'treasure' },
-  { id: 'immortal', name: '仙品装备', cost: 200, category: 'equipment', quality: 'immortal' },
+  // 原 200：满勤约两天一件，仙品太多；提到 400。
+  { id: 'immortal', name: '仙品装备', cost: 400, category: 'equipment', quality: 'immortal' },
 ];
 
 /** 一次最多兑换多少个玄铁。 */

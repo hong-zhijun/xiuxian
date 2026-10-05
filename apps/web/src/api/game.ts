@@ -1712,7 +1712,7 @@ export interface WorldBossView {
   } | null;
   /**
    * 三期：本宗门在当前关的掉落概率（boss 为 null 时为 null）。
-   * 伤害占比与概率都由服务端算好（高档 = 75% × √占比），前端只渲染，不复制公式。
+   * 伤害占比与概率都由服务端算好（高档 = 75% × √占比，仙品档 25% × √占比），前端只渲染，不复制公式。
    */
   myDrop: {
     /** 本宗门对本关的伤害占比（0~1；还没出手为 0）。 */
@@ -1881,6 +1881,9 @@ export interface EquipmentView {
   forgeQualityName: string;
   /** 装备二期：炼器坊等级（决定可炼的最高品质）。 */
   workshopLevel: number;
+  /** 仙品保底：当前层数（每层下次仙品成功率 +10%，出仙品清零）与上限。 */
+  forgePity: number;
+  forgePityMax: number;
   /** 装备二期：各品质炼造选项（消耗为最小单位；unlocked = 炼器坊等级已够）。 */
   forgeOptions: {
     quality: string;
@@ -1910,6 +1913,8 @@ export interface ForgeEquipmentOutcome {
   quality: string | null;
   refund: Record<string, number>;
   cost: Record<string, string>;
+  /** 炼完后的仙品保底层数（只有炼仙品会变）。 */
+  forgePity: number;
 }
 
 /** 穿戴 / 卸下回执（POST /game/equip、/game/unequip 的 outcome）。 */

@@ -123,19 +123,34 @@ const FORGE_BASE_ODDS: Readonly<Record<EquipmentQuality, ForgeOdds>> = {
   common: { success: 1, downgrade: 0, fail: 0 },
   spirit: { success: 0.7, downgrade: 0.2, fail: 0.1 },
   treasure: { success: 0.65, downgrade: 0.25, fail: 0.1 },
-  immortal: { success: 0.5, downgrade: 0.3, fail: 0.2 },
+  // 仙品不会失败（最差降为宝品）：原 50% / 30% / 20% 期望要炼 2 次、玄铁约 60 个，比功勋直接兑换还贵。
+  immortal: { success: 0.6, downgrade: 0.4, fail: 0 },
 };
 
 /** 炼器坊每比该品质的要求高 1 级，成功率 +10%（先抵消失败率，再抵消降级率）。 */
 export const FORGE_SURPLUS_BONUS = 0.1;
+/** 仙品保底：只有炼仙品计层。 */
+export const FORGE_PITY_QUALITY: EquipmentQuality = 'immortal';
+/** 仙品保底：每层成功率 +10%（与炼器坊加成同一抵扣顺序）。 */
+export const FORGE_PITY_BONUS = 0.1;
+/** 仙品保底最多 4 层：60% + 40% = 100%，即最迟第 5 次必出仙品。 */
+export const FORGE_PITY_MAX = 4;
 /** 失败时返还灵石、矿石的比例（玄铁不返还）。 */
 export const FORGE_FAIL_REFUND_RATIO = 0.5;
 
 const round2 = (value: number): number => Math.round(value * 100) / 100;
 
-export function forgeOddsOf(quality: EquipmentQuality, workshopLevel: number): ForgeOdds {
+/** 保底层数夹到 [0, FORGE_PITY_MAX]（脏值不会把概率放大到 100% 以上）。 */
+function clampPity(pity: number): number {
+  return Math.min(FORGE_PITY_MAX, Math.max(0, Math.floor(Number(pity) || 0)));
+}
+
+/** 炼器概率：炼器坊加成 +（仅仙品）保底加成，先抵消失败率，再抵消降级率。 */
+export function forgeOddsOf(quality: EquipmentQuality, workshopLevel: number, pity = 0): ForgeOdds {
   const base = FORGE_BASE_ODDS[quality];
-  let bonus = FORGE_SURPLUS_BONUS * Math.max(0, workshopLevel - (forgeRecipeOf(quality)?.workshopLevel ?? 1));
+  let bonus =
+    FORGE_SURPLUS_BONUS * Math.max(0, workshopLevel - (forgeRecipeOf(quality)?.workshopLevel ?? 1)) +
+    (quality === FORGE_PITY_QUALITY ? FORGE_PITY_BONUS * clampPity(pity) : 0);
   const fail = round2(Math.max(0, base.fail - bonus));
   bonus -= base.fail - fail;
   const downgrade = round2(Math.max(0, base.downgrade - bonus));
@@ -148,6 +163,12 @@ export function rollForgeResult(odds: ForgeOdds, random: () => number): ForgeRes
   if (roll < odds.fail) return 'fail';
   if (roll < round2(odds.fail + odds.downgrade)) return 'downgrade';
   return 'success';
+}
+
+/** 炼完后的保底层数：只有炼仙品才变 —— 出仙品清零，否则 +1（封顶 FORGE_PITY_MAX）。 */
+export function nextForgePity(quality: EquipmentQuality, result: ForgeResult, pity: number): number {
+  if (quality !== FORGE_PITY_QUALITY) return clampPity(pity);
+  return result === 'success' ? 0 : clampPity(clampPity(pity) + 1);
 }
 
 /** 低一档品质（凡品已是最低，保持凡品）。 */
@@ -235,6 +256,11 @@ export function realmXuantieDrop(realmId: string, random: () => number): number 
 export const BAG_CAPACITY = 50;
 /** 世界 Boss 掉落：击杀时掉高档装备的概率系数（概率 = 它 × √伤害占比）。 */
 export const BOSS_HIGH_DROP_FACTOR = 0.75;
+/**
+ * 高档是仙品（第 5 关起）时改用这个系数：每天都能打到第 5 关以后，按 0.75 算
+ * 活跃宗门一天能掉一件多仙品，仙品泛滥。灵 / 宝两档仍按 BOSS_HIGH_DROP_FACTOR。
+ */
+export const BOSS_IMMORTAL_DROP_FACTOR = 0.25;
 /** 世界 Boss 掉落：未中高档时掉低档的概率。 */
 export const BOSS_DROP_CHANCE_OTHERS = 0.4;
 /** 分解返还矿石的换算：1 展示单位 = 1000 最小单位。 */
@@ -375,13 +401,18 @@ export function bossDropQualities(stage: number): { top: EquipmentQuality; other
   return { top: 'immortal', others: 'treasure' };
 }
 
+/** 该关高档掉落的系数：高档是仙品时用 BOSS_IMMORTAL_DROP_FACTOR，否则 BOSS_HIGH_DROP_FACTOR。 */
+export function bossHighDropFactor(stage: number): number {
+  return bossDropQualities(stage).top === 'immortal' ? BOSS_IMMORTAL_DROP_FACTOR : BOSS_HIGH_DROP_FACTOR;
+}
+
 /**
- * 击杀时掉高档装备的概率 = BOSS_HIGH_DROP_FACTOR × √伤害占比。
+ * 击杀时掉高档装备的概率 = 该关系数（bossHighDropFactor）× √伤害占比。
  * 伤害占比先夹到 [0, 1]（负数与 >1 的脏值都不会把概率放大）。
  */
-export function bossHighDropChance(damageShare: number): number {
+export function bossHighDropChance(damageShare: number, stage: number): number {
   const share = Math.min(1, Math.max(0, damageShare));
-  return BOSS_HIGH_DROP_FACTOR * Math.sqrt(share);
+  return bossHighDropFactor(stage) * Math.sqrt(share);
 }
 
 /**
@@ -397,7 +428,7 @@ export function rollBossDrop(input: {
 }): EquipmentQuality | null {
   if (input.damageShare <= 0) return null;
   const { top, others } = bossDropQualities(input.stage);
-  if (input.random() < bossHighDropChance(input.damageShare)) {
+  if (input.random() < bossHighDropChance(input.damageShare, input.stage)) {
     return top;
   }
   return input.random() < BOSS_DROP_CHANCE_OTHERS ? others : null;
@@ -406,7 +437,7 @@ export function rollBossDrop(input: {
 /** 「奖励」预览里的掉落说明（与发奖同一套判定，前端不复制公式）。 */
 export function bossDropDescription(stage: number): string {
   const { top, others } = bossDropQualities(stage);
-  const highPercent = Math.round(BOSS_HIGH_DROP_FACTOR * 100);
+  const highPercent = Math.round(bossHighDropFactor(stage) * 100);
   const lowPercent = Math.round(BOSS_DROP_CHANCE_OTHERS * 100);
   return `按本关伤害占比各自判定：${qualityNameOf(top)}装备 ×1 概率 = ${String(highPercent)}% × √占比；未得时 ${String(lowPercent)}% 概率得 ${qualityNameOf(others)}装备 ×1`;
 }

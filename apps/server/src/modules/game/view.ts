@@ -69,6 +69,7 @@ import {
   FORGE_RECIPES,
   FORGE_WORKSHOP_ID,
   forgeOddsOf,
+  FORGE_PITY_MAX,
   forgeWorkshopUpgradeFrom,
   attrNameOf,
   forgeUnlockBlockedReason,
@@ -352,6 +353,9 @@ export interface EquipmentView {
   forgeQualityName: string;
   /** 装备二期：炼器坊等级（决定可炼的最高品质）。 */
   workshopLevel: number;
+  /** 仙品保底：当前层数（每层下次仙品成功率 +10%）与上限。 */
+  forgePity: number;
+  forgePityMax: number;
   /** 装备二期：各品质的炼造选项（消耗为最小单位；unlocked = 炼器坊等级已够）。 */
   forgeOptions: {
     quality: string;
@@ -360,7 +364,7 @@ export interface EquipmentView {
     workshopLevel: number;
     unlocked: boolean;
     cost: Record<string, string>;
-    /** 按当前炼器坊等级算的成功 / 降级 / 失败概率（0~1）。 */
+    /** 按当前炼器坊等级（仙品再叠保底层数）算的成功 / 降级 / 失败概率（0~1）。 */
     odds: { success: number; downgrade: number; fail: number };
   }[];
   /** 可炼部位；法器的 mainAttrChoices 非空（玩家必须选身法或幸运）。 */
@@ -432,6 +436,7 @@ export function equipmentItemViewOf(row: EquipmentRow, discipleName: string | nu
 export function buildEquipmentView(input: {
   sectLevel: number;
   workshopLevel: number;
+  forgePity: number;
   items: readonly EquipmentRow[];
   bagCount: number;
   discipleNames: ReadonlyMap<string, string>;
@@ -445,6 +450,8 @@ export function buildEquipmentView(input: {
     forgeQuality: FORGE_QUALITY,
     forgeQualityName: qualityNameOf(FORGE_QUALITY),
     workshopLevel: input.workshopLevel,
+    forgePity: input.forgePity,
+    forgePityMax: FORGE_PITY_MAX,
     forgeOptions: FORGE_RECIPES.map((recipe) => ({
       quality: recipe.quality,
       name: qualityNameOf(recipe.quality),
@@ -452,7 +459,7 @@ export function buildEquipmentView(input: {
       workshopLevel: recipe.workshopLevel,
       unlocked: input.workshopLevel >= recipe.workshopLevel,
       cost: { ...recipe.cost },
-      odds: forgeOddsOf(recipe.quality, Math.max(input.workshopLevel, recipe.workshopLevel)),
+      odds: forgeOddsOf(recipe.quality, Math.max(input.workshopLevel, recipe.workshopLevel), input.forgePity),
     })),
     slots: equipmentSlotViews(),
     salvageOre: Object.fromEntries(

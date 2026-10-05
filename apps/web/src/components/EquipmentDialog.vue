@@ -90,8 +90,17 @@ const oddsText = computed(() => {
   const odds = currentOption.value?.odds;
   if (odds === undefined || odds.success >= 1) return '必定成功';
   const pct = (value: number) => `${String(Math.round(value * 100))}%`;
-  return `成功 ${pct(odds.success)} · 降级 ${pct(odds.downgrade)} · 失败 ${pct(odds.fail)}`;
+  const parts = [`成功 ${pct(odds.success)}`, `降级 ${pct(odds.downgrade)}`];
+  if (odds.fail > 0) parts.push(`失败 ${pct(odds.fail)}`);
+  return parts.join(' · ');
 });
+
+/** 仙品保底：只在选仙品时显示（概率里已经叠上了保底层数）。 */
+const pityText = computed(() =>
+  forgeQuality.value === 'immortal'
+    ? `${String(props.equipment.forgePity)} / ${String(props.equipment.forgePityMax)} 层（未出仙品每次 +10%，出仙品清零）`
+    : null,
+);
 
 /** 单次消耗（最小单位 → 展示单位）。 */
 const forgeCostText = computed(() =>
@@ -203,6 +212,10 @@ function onForge(): void {
         <div>
           <dt>成功率</dt>
           <dd>{{ oddsText }}</dd>
+        </div>
+        <div v-if="pityText !== null">
+          <dt>仙品保底</dt>
+          <dd>{{ pityText }}</dd>
         </div>
         <div>
           <dt>单次消耗</dt>
