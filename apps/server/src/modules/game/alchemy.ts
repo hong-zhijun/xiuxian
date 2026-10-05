@@ -42,7 +42,7 @@ export interface PillRecipe {
  * - 回春丹：清除一名弟子的当前疗伤状态；
  * - 聚气丹：增加 120 点当前阶段修为（不越过突破门槛）；
  * - 淬体丹：自动补最明显的战斗属性短板（每名弟子最多 10 次）。
- * - 洗髓丹（天赋重构）：洗出一个新天赋，玩家二选一（每名弟子最多 4 次，见 talents.ts）。
+ * - 洗髓丹（天赋重构）：洗出一个新天赋，玩家二选一（每名弟子最多 5 次，见 talents.ts）。
  */
 export const PILL_RECIPES: readonly PillRecipe[] = [
   {
@@ -66,7 +66,7 @@ export const PILL_RECIPES: readonly PillRecipe[] = [
   {
     id: 'talentPill',
     name: '洗髓丹',
-    description: '洗出一个新天赋（不会与当前相同），可选择保留原天赋或换成新天赋；每名弟子最多服用 4 次。',
+    description: '洗出一个新天赋（不会与当前相同），可选择保留原天赋或换成新天赋；每名弟子最多服用 5 次。',
     cost: { herb: '300000', spiritStone: '300000', xuantie: '5000' },
   },
 ];

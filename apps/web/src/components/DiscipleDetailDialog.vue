@@ -41,6 +41,7 @@ import DiscipleRadarChart from './DiscipleRadarChart.vue';
 import HelpTip from './HelpTip.vue';
 import LoadingState from './LoadingState.vue';
 import TalentCatalogDialog from './TalentCatalogDialog.vue';
+import TalentRerollDialog from './TalentRerollDialog.vue';
 /**
  * 弟子详情（弹窗内容）：固定紧凑头部 + 五个 Tab（概览 / 修行 / 装备 / 历练 / 档案）。
  *
@@ -617,7 +618,8 @@ const journal = computed<JournalEntry[]>(() =>
 /* ---------- 丹药：详情只保留入口，点击后打开选择弹窗 ---------- */
 
 const ATTRIBUTE_NAMES: Record<string, string> = { attack: '攻击', defense: '防御', speed: '身法' };
-const PILL_ORDER = ['healingPill', 'cultivationPill', 'bodyTemperingPill', 'talentPill'] as const;
+// 洗髓丹不在这里：它走天赋旁的「更换」入口（确认 → 二选一）。
+const PILL_ORDER = ['healingPill', 'cultivationPill', 'bodyTemperingPill'] as const;
 const showPillPicker = ref(false);
 
 interface PillOption {
@@ -694,14 +696,6 @@ const pillOptions = computed<PillOption[]>(() => {
           fullNote = `最后一颗只生效 ${lastGain} 点`;
         }
       }
-    } else if (pillId === 'talentPill') {
-      // 天赋重构 · 洗髓丹：有待决定的候选天赋时不能再服；次数由服务端下发。
-      available = disciple.talentRerollRemaining > 0 && disciple.talentCandidate === null;
-      preview = `洗出一个新天赋，可选择保留或替换（已服 ${disciple.talentRerollUses} 次 · 剩余 ${disciple.talentRerollRemaining} 次）`;
-      reason =
-        disciple.talentCandidate !== null
-          ? '还有一个新天赋没有决定，先在概览里选择保留或替换'
-          : '洗髓次数已用尽';
     } else {
       const target = disciple.bodyTemperingTarget;
       available = target !== null;
@@ -909,11 +903,26 @@ const POWER_HELP = [
   '战意天赋：最后再 ×（1 + 战意加成），加成随境界提高（金丹 +15%、化神 +25%）。',
 ].join('\n');
 
-/* ---------- 天赋：效果随境界、总表弹窗、洗髓丹二选一 ---------- */
+/* ---------- 天赋：效果随境界、总表弹窗、「更换」（洗髓丹确认 → 二选一） ---------- */
 
+const TALENT_PILL_ID = 'talentPill';
 const showTalentCatalog = ref(false);
+const showTalentReroll = ref(false);
 /** 执事 / 交接期的状态标（不能出战的原因，服务端算好）。 */
 const stewardTag = computed(() => props.disciple.combatBlockedReason);
+const talentPillRecipe = computed(() =>
+  props.state.alchemy.recipes.find((recipe) => recipe.id === TALENT_PILL_ID),
+);
+/** 服洗髓丹的前置：炼丹已开启、不在外历练、不重伤（最终裁决在服务端）。 */
+const talentRerollBlocked = computed<string | null>(() => {
+  if (!props.state.alchemy.unlocked) return props.state.alchemy.blockedReason ?? '炼丹尚未开启';
+  return actionBlockHint.value;
+});
+
+function useTalentPill(): void {
+  if (props.busy) return;
+  emit('usePill', TALENT_PILL_ID, props.disciple.id, 1);
+}
 
 function chooseTalent(accept: boolean): void {
   if (props.busy) return;
@@ -1058,46 +1067,38 @@ function unequipGear(item: EquipmentItemView | null): void {
             <span v-if="disciple.talentEffect !== ''" class="stat-tag stat-talent-effect">
               {{ disciple.talentEffect }}
             </span>
+            <!-- 与页面其它「?」同一个样式（help-tip-button），点开是天赋一览表而不是气泡。 -->
             <button
-              class="quiet-button dao-insight-help"
+              class="help-tip-button talent-help-button"
               type="button"
               aria-label="查看全部天赋及作用"
               @click="showTalentCatalog = true"
+            >?</button>
+            <button
+              class="quiet-button talent-reroll-button"
+              :class="{ 'is-pending': disciple.talentCandidate !== null }"
+              type="button"
+              :disabled="busy"
+              @click="showTalentReroll = true"
             >
-              ?
+              {{ disciple.talentCandidate === null ? '更换' : '待选择' }}
             </button>
             <span v-if="stewardTag" class="stat-tag stat-steward">{{ stewardTag }}</span>
             <span class="stat-tag stat-power">战力 {{ disciple.combatPower }}</span>
             <HelpTip label="战力说明" :text="POWER_HELP" />
           </div>
 
-          <!-- 洗髓丹洗出的新天赋：二选一（决定前不能再服洗髓丹）。 -->
-          <div v-if="disciple.talentCandidate" class="talent-candidate" role="group" aria-label="洗髓结果">
-            <p class="talent-candidate-title">洗髓丹洗出了新天赋，选择保留哪一个：</p>
-            <div class="talent-candidate-options">
-              <div class="talent-candidate-option">
-                <span class="eyebrow">原天赋</span>
-                <strong>{{ disciple.talentName }}</strong>
-                <small>{{ disciple.talentEffect || '—' }}</small>
-              </div>
-              <div class="talent-candidate-option is-new">
-                <span class="eyebrow">新天赋</span>
-                <strong>{{ disciple.talentCandidate.name }}</strong>
-                <small>{{ disciple.talentCandidate.effect }}</small>
-              </div>
-            </div>
-            <p v-if="disciple.stewardOffice" class="blocked-hint">
-              {{ disciple.name }}正在任执事：换成新天赋会同时卸任，进入交接期。
-            </p>
-            <div class="talent-candidate-actions">
-              <button class="upgrade-button" type="button" :disabled="busy" @click="chooseTalent(false)">
-                保留原天赋
-              </button>
-              <button class="action-button primary-action" type="button" :disabled="busy" @click="chooseTalent(true)">
-                换成新天赋
-              </button>
-            </div>
-          </div>
+          <TalentRerollDialog
+            v-if="showTalentReroll"
+            :disciple="disciple"
+            :owned="talentPillRecipe?.owned ?? 0"
+            :pill-name="talentPillRecipe?.name ?? '洗髓丹'"
+            :blocked-reason="talentRerollBlocked"
+            :busy="busy"
+            @use="useTalentPill"
+            @choose="chooseTalent"
+            @close="showTalentReroll = false"
+          />
 
           <TalentCatalogDialog
             v-if="showTalentCatalog"

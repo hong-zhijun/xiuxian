@@ -731,7 +731,7 @@ function onUsePill(pillId: string, discipleId: string, count = 1): void {
       } else if (effect?.kind === 'cultivation') {
         message = `${name} 修为 +${String(effect.gain ?? 0)}。`;
       } else if (effect?.kind === 'talentReroll') {
-        message = `${name} 洗出新天赋「${effect.candidate?.name ?? ''}」（${effect.candidate?.effect ?? ''}），到弟子详情里选择保留或替换。`;
+        message = `${name} 洗出新天赋「${effect.candidate?.name ?? ''}」（${effect.candidate?.effect ?? ''}），请选择保留哪一个。`;
       } else if (effect?.kind === 'bodyTempering') {
         const gains = Object.entries(effect.gains ?? {})
           .map(([attribute, gain]) => `${PILL_ATTRIBUTE_NAMES[attribute] ?? '属性'} +${String(gain)}`)

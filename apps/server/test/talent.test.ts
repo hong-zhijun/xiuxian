@@ -120,7 +120,7 @@ describe('天赋视图', () => {
     const disciple = discipleOf(state, discipleId);
     expect(disciple.talentName).toBe('矿脉');
     expect(disciple.talentEffect).toBe('矿石产出 +30%');
-    expect(disciple.talentRerollRemaining).toBe(4);
+    expect(disciple.talentRerollRemaining).toBe(5);
     expect(disciple.talentCandidate).toBeNull();
     expect(disciple.combatBlockedReason).toBeNull();
     expect(state.talents).toHaveLength(11);
@@ -183,14 +183,14 @@ describe('洗髓丹：洗出新天赋后二选一', () => {
     expect(errorOf(none).code).toBe('INVALID_STATUS');
   });
 
-  it('每名弟子最多 4 次', async () => {
+  it('每名弟子最多 5 次', async () => {
     const sect = await makeSect('talent-limit');
     const discipleId = sect.discipleIds[0]!;
     await setPillStock(sect.sectId, 'talentPill', 2);
-    await env.DB.prepare('UPDATE disciples SET talent_reroll_count = 4 WHERE id = ?').bind(discipleId).run();
+    await env.DB.prepare('UPDATE disciples SET talent_reroll_count = 5 WHERE id = ?').bind(discipleId).run();
     const used = await sect.api.post('/api/v1/game/use-pill', { pillId: 'talentPill', discipleId });
     expect(errorOf(used).code).toBe('INVALID_STATUS');
-    expect(errorOf(used).message).toContain('4 次');
+    expect(errorOf(used).message).toContain('5 次');
   });
 
   it('功勋兑换洗髓丹：进丹库', async () => {

@@ -222,7 +222,7 @@ export function generateTalent(random: () => number): string {
 /** 洗髓丹的丹药 id。 */
 export const TALENT_PILL_ID = 'talentPill';
 /** 每名弟子最多服用洗髓丹的次数。 */
-export const TALENT_REROLL_MAX_USES = 4;
+export const TALENT_REROLL_MAX_USES = 5;
 
 /** 洗出的候选天赋：从「除当前天赋外」的天赋里等概率抽一个。 */
 export function rollTalentCandidate(currentTalent: string, random: () => number): string {

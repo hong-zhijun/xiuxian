@@ -129,26 +129,9 @@ onBeforeUnmount(close);
   vertical-align: middle;
 }
 
+/* 问号按钮本身的样式在 base.css 的 .help-tip-button（全局）：弟子详情天赋旁的「?」也用它。 */
 .help-tip-button {
-  display: inline-grid;
-  width: 16px;
-  height: 16px;
-  place-items: center;
-  padding: 0;
-  border: 1px solid var(--line-strong);
-  border-radius: 50%;
-  color: var(--gold);
-  background: transparent;
-  font-size: 11px;
-  font-weight: 600;
-  line-height: 1;
   cursor: help;
-}
-
-.help-tip-button:hover,
-.help-tip-button[aria-expanded='true'] {
-  border-color: var(--gold);
-  background: rgba(202, 169, 106, 0.12);
 }
 
 .help-tip-bubble {
