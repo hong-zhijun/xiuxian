@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { findTalent } from '../../apps/server/src/modules/game/constants';
+import { findTalent, TALENT_IDS } from '../../apps/server/src/modules/game/talents';
 import {
   ATTRIBUTE_MAX,
   ATTRIBUTE_MIN,
@@ -275,7 +275,7 @@ describe('招贤候选人：预览确定性与评分口径', () => {
     for (const candidate of generateCandidates('sect-1', '2026-01-01', 0, 0)) {
       expect(['male', 'female']).toContain(candidate.gender);
       expect(candidate.name.length).toBeGreaterThanOrEqual(2);
-      expect(['herbGathering', 'mining', 'cultivation', 'combat']).toContain(candidate.talent);
+      expect(TALENT_IDS).toContain(candidate.talent);
       expect(candidate.talentName).toBe(findTalent(candidate.talent)?.name ?? candidate.talent);
     }
   });

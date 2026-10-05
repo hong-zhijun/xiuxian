@@ -270,7 +270,7 @@ function autoPick(): void {
     return disciple.combatPower * (1 + value * 0.005);
   };
   selected.value = props.state.disciples
-    .filter((disciple) => selectionBlockReason(disciple, now, { blockInjured: true, blockAway: true }) === null)
+    .filter((disciple) => selectionBlockReason(disciple, now, { blockInjured: true, blockAway: true, blockSteward: true }) === null)
     .filter((disciple) => (panel.value?.fatigue[disciple.id] ?? 0) < 3)
     .sort((a, b) => score(b) - score(a))
     .slice(0, 10)
@@ -288,7 +288,12 @@ const riskyPicks = computed(() =>
     .filter((disciple): disciple is NonNullable<typeof disciple> => disciple !== undefined)
     .map((disciple) => ({
       name: disciple.name,
-      risk: severeRiskPercent(panel.value?.fatigue[disciple.id] ?? 0, disciple.physique, isBerserk.value),
+      risk: severeRiskPercent(
+        panel.value?.fatigue[disciple.id] ?? 0,
+        disciple.physique,
+        isBerserk.value,
+        disciple.bossInjuryReductionBp,
+      ),
     }))
     .filter((pick) => pick.risk > 0),
 );

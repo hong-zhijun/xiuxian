@@ -14,7 +14,14 @@
  * 集成 + 降级胜率决定），本文件只提供降级胜率常量。
  */
 
-import { PILL_IDS, type PillId } from './alchemy';
+import { type PillId } from './alchemy';
+
+/**
+ * 天机轮的丹药奖池：固定为最初的三种丹药。
+ * 洗髓丹（天赋重构）不进奖池 —— 否则转盘能低价批量拿到洗天赋的丹药，
+ * 而且奖池长度一变，所有宗门已经生成的格局都会跟着变。
+ */
+export const WHEEL_PILL_IDS: readonly PillId[] = ['healingPill', 'cultivationPill', 'bodyTemperingPill'];
 import { dateKeyUtc8 } from './constants';
 
 /** 赌坊解锁：宗门等级下限（不依赖建筑）。 */
@@ -532,7 +539,7 @@ export function generateWheelSlots(seed: number): WheelSlot[] {
       return {
         type,
         multiplier,
-        pillId: PILL_IDS[wheelInt(random, 0, PILL_IDS.length - 1)] ?? null,
+        pillId: WHEEL_PILL_IDS[wheelInt(random, 0, WHEEL_PILL_IDS.length - 1)] ?? null,
       };
     }
     return { type, multiplier, pillId: null };

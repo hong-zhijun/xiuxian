@@ -20,9 +20,10 @@ import { describe, expect, it } from 'vitest';
  * 不依赖 workerd/D1，跑在根级 node 测试里（vitest.config.ts）。
  */
 describe('丹药配方定义', () => {
-  it('第一版只有三种丹药，id 与文档一致', () => {
-    expect(PILL_IDS).toEqual(['healingPill', 'cultivationPill', 'bodyTemperingPill']);
-    expect(PILL_RECIPES).toHaveLength(3);
+  it('三种基础丹药 + 天赋重构的洗髓丹，id 与文档一致', () => {
+    expect(PILL_IDS).toEqual(['healingPill', 'cultivationPill', 'bodyTemperingPill', 'talentPill']);
+    expect(PILL_RECIPES).toHaveLength(4);
+    expect(findPillRecipe('talentPill')?.cost).toEqual({ herb: '300000', spiritStone: '300000', xuantie: '5000' });
   });
 
   it('配方成本与文档基线一致（最小单位字符串）', () => {

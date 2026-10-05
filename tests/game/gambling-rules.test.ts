@@ -50,9 +50,9 @@ import {
   wheelSlotLabel,
   wheelSpinCost,
   type WheelSlot,
+  WHEEL_PILL_IDS,
 } from '../../apps/server/src/modules/game/gambling';
 
-import { PILL_IDS } from '../../apps/server/src/modules/game/alchemy';
 import { describe, expect, it } from 'vitest';
 
 /**
@@ -426,7 +426,7 @@ describe('generateWheelSlots：确定性 8 格格局（计划 2.1）', () => {
     expect([...smallCounts].sort((a, b) => a - b)).toEqual([2, 3, 4]);
   });
 
-  it('倍率：资源 / 丹药格都在 0.8~1.5 且一位小数，nothing 为 0；丹药 id 来自 alchemy', () => {
+  it('倍率：资源 / 丹药格都在 0.8~1.5 且一位小数，nothing 为 0；丹药 id 来自固定奖池（不含洗髓丹）', () => {
     const multipliers = new Set<number>();
     const pillIds = new Set<string>();
     for (let seed = 0; seed < 2_000; seed += 1) {
@@ -443,7 +443,7 @@ describe('generateWheelSlots：确定性 8 格格局（计划 2.1）', () => {
         expect(Math.round(slot.multiplier * 10) / 10).toBeCloseTo(slot.multiplier, 10);
         if (slot.type === 'pill') {
           expect(slot.pillId).not.toBeNull();
-          expect(PILL_IDS).toContain(slot.pillId);
+          expect(WHEEL_PILL_IDS).toContain(slot.pillId);
           pillIds.add(slot.pillId as string);
         } else {
           expect(slot.pillId).toBeNull();
@@ -454,7 +454,8 @@ describe('generateWheelSlots：确定性 8 格格局（计划 2.1）', () => {
       0.8, 0.9, 1, 1.1, 1.2, 1.3, 1.4, 1.5,
     ]);
     // 样本里真的出现过丹药格（且三种丹药都出现过），上面的白名单断言才不是空转。
-    expect([...pillIds].sort()).toEqual([...PILL_IDS].sort());
+    expect([...pillIds].sort()).toEqual([...WHEEL_PILL_IDS].sort());
+    expect(WHEEL_PILL_IDS).toEqual(['healingPill', 'cultivationPill', 'bodyTemperingPill']);
   });
 });
 

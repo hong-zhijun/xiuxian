@@ -65,6 +65,7 @@ import DiscipleLeaderboardPanel from './DiscipleLeaderboardPanel.vue';
 import LeaderboardPanel from './LeaderboardPanel.vue';
 import RecruitDialog from './RecruitDialog.vue';
 import ShopDialog from './ShopDialog.vue';
+import StewardDialog from './StewardDialog.vue';
 import WorldBossDialog from './WorldBossDialog.vue';
 import MeritDialog from './MeritDialog.vue';
 import ModalShell from './ModalShell.vue';
@@ -120,6 +121,11 @@ const emit = defineEmits<{
   'batch-heal': [discipleIds: string[], autoCraft?: boolean];
   'craft-pill': [pillId: string, quantity: number];
   'use-pill': [pillId: string, discipleId: string, count: number];
+  /** 天赋重构：洗髓丹二选一。 */
+  'choose-talent': [discipleId: string, accept: boolean];
+  /** 天赋重构：执事堂任命 / 卸任。 */
+  'appoint-steward': [office: string, discipleId: string];
+  'dismiss-steward': [office: string];
   notify: [tone: ToastTone, title: string, message: string];
   /** 详情里保存私有备注（note 为空串 = 清空）；App.vue 绑定了这个名字。 */
   'save-note': [discipleId: string, note: string];
@@ -160,6 +166,7 @@ const openPanel = ref<
   | 'shop'
   | 'world-boss'
   | 'merit'
+  | 'steward'
   | null
 >(null);
 
@@ -1177,6 +1184,12 @@ function onUsePill(pillId: string, discipleId: string, count: number): void {
   emit('use-pill', pillId, discipleId, count);
 }
 
+/** 天赋重构：弟子详情里的洗髓丹二选一，转发给上层调接口。 */
+function onChooseTalent(discipleId: string, accept: boolean): void {
+  if (props.busy) return;
+  emit('choose-talent', discipleId, accept);
+}
+
 /* ---------- 弟子详情：只存 discipleId，每次渲染都从最新 state.disciples 取对象 ---------- */
 
 const detailId = ref<string | null>(null);
@@ -1797,6 +1810,12 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
         </svg>
         <span>功勋</span>
       </button>
+      <button class="action-chip" type="button" aria-label="执事堂：任命宗门执事" @click="openPanel = 'steward'">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M4 20h16M6 20V10m12 10V10M3 10l9-6 9 6M10 20v-5h4v5" />
+        </svg>
+        <span>执事堂</span>
+      </button>
       <button class="action-chip" type="button" @click="openPanel = 'gambling'">
         <svg viewBox="0 0 24 24" aria-hidden="true">
           <path d="M5 5h14v14H5zM8.5 9h.01M12 12h.01M15.5 15h.01" />
@@ -2086,6 +2105,16 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
       />
     </ModalShell>
   <!-- 功勋兑换：价目打开时拉一次；兑换回执里的 state 交给 App，兑到装备顺手刷新背包件数。 -->
+  <!-- 天赋重构 · 执事堂：任命 / 卸任都走上层 runAction，返回的 state 一到职位视图即更新。 -->
+  <ModalShell v-if="openPanel === 'steward'" :loading="busy" label="执事堂" @close="openPanel = null">
+    <StewardDialog
+      :state="state"
+      :busy="busy"
+      @appoint="(office: string, discipleId: string) => emit('appoint-steward', office, discipleId)"
+      @dismiss="(office: string) => emit('dismiss-steward', office)"
+    />
+  </ModalShell>
+
   <ModalShell v-if="openPanel === 'merit'" :loading="busy" label="功勋" @close="openPanel = null">
     <MeritDialog
       :state="state"
@@ -2201,6 +2230,7 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
         @assign="onDetailAssign"
         @breakthrough="onDetailBreakthrough"
         @use-pill="onUsePill"
+        @choose-talent="onChooseTalent"
         @save-note="onDetailSaveNote"
         @expel="onDetailExpel"
         @request-journey-preview="onDetailRequestJourneyPreview"

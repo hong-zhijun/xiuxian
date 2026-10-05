@@ -4,7 +4,9 @@ import {
   alchemyUnlockBlockedReason,
   bodyTemperingPlan,
   bodyTemperingTarget,
+  cultivationPillGainOf,
   cultivationPillsToFull,
+  discountedPillCost,
   firstInsufficientResource,
   type BodyTemperingStep,
   BODY_TEMPERING_MAX_USES,
@@ -40,11 +42,11 @@ import {
   SCRIPTURE_LIBRARY_BUILDING_ID,
   assignmentLimitOf,
   breakthroughEnergyCost,
+  dateKeyUtc8,
   effectiveCapacity,
   findRealm,
   findSectLevel,
   findStage,
-  findTalent,
   nextSectLevel,
   realmIndex,
   isSeverelyInjured,
@@ -91,8 +93,22 @@ import type {
   PillInventoryRow,
   ResourceBalanceRow,
   SectRow,
+  SectStewardRow,
   DiscipleJourneyRow,
 } from './repository';
+import {
+  findStewardOffice,
+  findTalent,
+  stewardBonusBp,
+  talentBonusBp,
+  talentCatalog,
+  talentEffectText,
+  talentNameOf,
+  STEWARD_HANDOVER_MS,
+  STEWARD_OFFICES,
+  TALENT_REROLL_MAX_USES,
+  type TalentCatalogEntry,
+} from './talents';
 import {
   JOURNEY_HISTORY_LIMIT,
   JOURNEY_MAX_CONCURRENT,
@@ -154,6 +170,23 @@ export interface DiscipleView {
   /** 天赋 id 与展示名（无/未知天赋时 talentName 为「无」）。 */
   talent: string;
   talentName: string;
+  /** 天赋重构：当前境界下的天赋效果，如「矿石产出 +25%」；无天赋为空串。 */
+  talentEffect: string;
+  /** 天赋重构：已服 / 剩余洗髓丹次数（上限 TALENT_REROLL_MAX_USES）。 */
+  talentRerollUses: number;
+  talentRerollRemaining: number;
+  /** 天赋重构：洗髓丹洗出、待二选一的候选天赋（效果按当前境界）；null = 没有。 */
+  talentCandidate: { id: string; name: string; effect: string } | null;
+  /** 天赋重构：所任执事职位 id（forging / alchemy / treasure）；不是执事为 null。 */
+  stewardOffice: string | null;
+  /** 天赋重构：执事交接期结束时间（ISO）；不在交接期为 null。 */
+  stewardHandoverUntil: string | null;
+  /** 天赋重构：不能出战的短原因（「任炼器执事」「执事交接中」）；能出战为 null。前端选人器据此禁选。 */
+  combatBlockedReason: string | null;
+  /** 天赋重构 · 丹心：这名弟子每颗聚气丹的修为（无丹心 = 基础 120）。 */
+  cultivationPillGain: number;
+  /** 天赋重构 · 铁骨：讨伐受伤 / 重伤概率减免（基点）；前端算冒进风险用。 */
+  bossInjuryReductionBp: number;
   /**
    * 当前战力（展示用，由 realms.ts 的 discipleCombatPower 现算）。
    * 0028 起**计入装备**：属性用的是「基础属性 + 装备加成」（见下面的 gear）。
@@ -300,6 +333,33 @@ export interface AlchemyView {
   cultivationPillGain: number;
   /** 单次炼制的数量上限（= alchemy.ts 的 MAX_CRAFT_QUANTITY），前端步进器据此封顶。 */
   maxCraftQuantity: number;
+  /** 天赋重构：丹房执事的折扣文案（如「丹房执事：消耗 −15%」）；配方 cost 已是折后价。没有为 null。 */
+  costDiscountText: string | null;
+}
+
+/** 天赋重构 · 执事堂：一个职位的视图（全部服务端算好）。 */
+export interface StewardOfficeView {
+  office: string;
+  name: string;
+  /** 职位要求的天赋。 */
+  talentId: string;
+  talentName: string;
+  /** 现任执事；空缺为 null。 */
+  discipleId: string | null;
+  discipleName: string | null;
+  realmName: string | null;
+  /** 现任执事带来的效果，如「全宗炼器成功率 +8%」；空缺为 null。 */
+  effect: string | null;
+  /** 执事在外历练：加成暂停。 */
+  paused: boolean;
+  /** 今天还能不能任命（每职位每天一次）。 */
+  canAppointToday: boolean;
+}
+
+export interface StewardsView {
+  offices: StewardOfficeView[];
+  /** 卸任后的交接期（小时）。 */
+  handoverHours: number;
 }
 
 /* ---------- 0028 装备（一期的装备面板视图；明细不进 /game/sync） ---------- */
@@ -356,6 +416,8 @@ export interface EquipmentView {
   /** 仙品保底：当前层数（每层下次仙品成功率 +10%）与上限。 */
   forgePity: number;
   forgePityMax: number;
+  /** 天赋重构：炼器执事的成功率加成文案（如「炼器执事 +7.5%」）；没有执事 / 暂停时为 null。 */
+  stewardBonusText: string | null;
   /** 装备二期：各品质的炼造选项（消耗为最小单位；unlocked = 炼器坊等级已够）。 */
   forgeOptions: {
     quality: string;
@@ -364,7 +426,7 @@ export interface EquipmentView {
     workshopLevel: number;
     unlocked: boolean;
     cost: Record<string, string>;
-    /** 按当前炼器坊等级（仙品再叠保底层数）算的成功 / 降级 / 失败概率（0~1）。 */
+    /** 按当前炼器坊等级、炼器执事（仙品再叠保底层数）算的成功 / 降级 / 失败概率（0~1）。 */
     odds: { success: number; downgrade: number; fail: number };
   }[];
   /** 可炼部位；法器的 mainAttrChoices 非空（玩家必须选身法或幸运）。 */
@@ -402,6 +464,8 @@ export interface MeritShopView {
     category: string;
     /** 装备类的品质与品质色；资源类为 null。 */
     quality: string | null;
+    /** 丹药类（天赋重构：洗髓丹）兑换得到的丹药 id；其它类为 null。 */
+    pillId: string | null;
     color: string | null;
   }[];
   slots: { id: string; name: string; mainAttrChoices: { id: string; name: string }[] }[];
@@ -437,6 +501,8 @@ export function buildEquipmentView(input: {
   sectLevel: number;
   workshopLevel: number;
   forgePity: number;
+  /** 炼器执事此刻的加成（基点）；没有执事为 0。 */
+  forgingStewardBonusBp: number;
   items: readonly EquipmentRow[];
   bagCount: number;
   discipleNames: ReadonlyMap<string, string>;
@@ -452,6 +518,10 @@ export function buildEquipmentView(input: {
     workshopLevel: input.workshopLevel,
     forgePity: input.forgePity,
     forgePityMax: FORGE_PITY_MAX,
+    stewardBonusText:
+      input.forgingStewardBonusBp > 0
+        ? `炼器执事 +${String(Number((input.forgingStewardBonusBp / 100).toFixed(1)))}%`
+        : null,
     forgeOptions: FORGE_RECIPES.map((recipe) => ({
       quality: recipe.quality,
       name: qualityNameOf(recipe.quality),
@@ -459,7 +529,12 @@ export function buildEquipmentView(input: {
       workshopLevel: recipe.workshopLevel,
       unlocked: input.workshopLevel >= recipe.workshopLevel,
       cost: { ...recipe.cost },
-      odds: forgeOddsOf(recipe.quality, Math.max(input.workshopLevel, recipe.workshopLevel), input.forgePity),
+      odds: forgeOddsOf(
+        recipe.quality,
+        Math.max(input.workshopLevel, recipe.workshopLevel),
+        input.forgePity,
+        input.forgingStewardBonusBp,
+      ),
     })),
     slots: equipmentSlotViews(),
     salvageOre: Object.fromEntries(
@@ -1154,6 +1229,10 @@ export interface SectStateView {
   sectUpgrade: SectUpgradeView | null;
   /** 炼丹面板（配方、库存、解锁状态；解锁判断只在服务端）。 */
   alchemy: AlchemyView;
+  /** 天赋重构：天赋总表（弟子详情「?」弹窗）。 */
+  talents: TalentCatalogEntry[];
+  /** 天赋重构：执事堂。 */
+  stewards: StewardsView;
   /** 主动挑战的当日次数（0012：每日 3 次；失败/零奖励同样消耗）。 */
   challenge: {
     dailyLimit: number;
@@ -1560,6 +1639,8 @@ export interface SectStateInput {
    * 其他接口一律不给（默认 false）。前端据此在「讨伐」按钮上显示角标。
    */
   worldBossAttackable?: boolean;
+  /** 0034 执事堂：本宗职位行。 */
+  stewards: readonly SectStewardRow[];
 }
 
 export function buildSectStateView(input: SectStateInput): SectStateView {
@@ -1578,6 +1659,7 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
     recentJourneys,
     recentEventRows,
     capacityMultiplier,
+    stewards,
   } = input;
   // 速率按「当前状态」现算，而不是沿用本次结算用的旧状态：派工 / 升级藏经阁返回的那一帧里，
   // 前端看到的「每时产出」与静修速率就已经是新值（结算本身仍只用旧状态计已经过去的那段时间）。
@@ -1684,6 +1766,18 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
           )
         : null;
 
+    // 天赋重构：执事 / 交接期 → 不能出战（与 service 的 stewardBlocker 同一口径）；丹心的每颗增益。
+    const stewardRow = stewards.find((row) => row.disciple_id === disciple.id);
+    const handoverUntil =
+      disciple.steward_handover_until === null ? null : Number(disciple.steward_handover_until);
+    let combatBlockedReason: string | null = null;
+    if (stewardRow !== undefined) {
+      combatBlockedReason = `任${findStewardOffice(stewardRow.office)?.name ?? '执事'}`;
+    } else if (handoverUntil !== null && handoverUntil > now) {
+      combatBlockedReason = '执事交接中';
+    }
+    const pillGain = cultivationPillGainOf(disciple.talent, disciple.realm_id);
+
     // 0028 装备：战斗属性 = 基础属性 + 装备加成（加成后可以超过 100；基础属性本身仍最高 100）。
     const gear = gearBonusOfDisciple(disciple);
     const battleAttrs = withGear(
@@ -1708,7 +1802,24 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
       luck: Number(disciple.luck),
       physique: Number(disciple.physique),
       talent: disciple.talent,
-      talentName: findTalent(disciple.talent)?.name ?? '无',
+      talentName: talentNameOf(disciple.talent),
+      talentEffect: talentEffectText(disciple.talent, disciple.realm_id),
+      talentRerollUses: Number(disciple.talent_reroll_count) || 0,
+      talentRerollRemaining: Math.max(0, TALENT_REROLL_MAX_USES - (Number(disciple.talent_reroll_count) || 0)),
+      talentCandidate:
+        disciple.talent_candidate === null || findTalent(disciple.talent_candidate) === undefined
+          ? null
+          : {
+              id: disciple.talent_candidate,
+              name: talentNameOf(disciple.talent_candidate),
+              effect: talentEffectText(disciple.talent_candidate, disciple.realm_id),
+            },
+      stewardOffice: stewardRow?.office ?? null,
+      stewardHandoverUntil:
+        handoverUntil !== null && handoverUntil > now ? new Date(handoverUntil).toISOString() : null,
+      combatBlockedReason,
+      cultivationPillGain: pillGain,
+      bossInjuryReductionBp: talentBonusBp(disciple.talent, disciple.realm_id, 'ironBody'),
       combatPower: discipleCombatPower(
         disciple.realm_id,
         Number(disciple.stage),
@@ -1757,6 +1868,7 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
       cultivationPillsToFull: cultivationPillsToFull(
         Number(disciple.cultivation),
         stage.requiredCultivation,
+        pillGain,
       ),
       bodyTemperingPlan: bodyTemperingPlan(
         Number(disciple.attack),
@@ -1855,15 +1967,22 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
     buildings.map((building) => [building.def_id, building.level]),
   );
   const alchemyLockedReason = alchemyUnlockBlockedReason(Number(sect.level), buildingLevelsForAlchemy);
+  // 天赋重构 · 丹道：配方价按丹房执事折后下发（与 craftPill 扣款同一个函数）。
+  const alchemyDiscountBp = stewardBonusBp({ office: 'alchemy', stewards, disciples, awayIds });
   const alchemyView: AlchemyView = {
     unlocked: alchemyLockedReason === null,
     cultivationPillGain: CULTIVATION_PILL_GAIN,
     maxCraftQuantity: MAX_CRAFT_QUANTITY,
+    costDiscountText:
+      alchemyDiscountBp > 0
+        ? `丹房执事：消耗 −${String(Number((alchemyDiscountBp / 100).toFixed(1)))}%`
+        : null,
     blockedReason: alchemyLockedReason,
     recipes: PILL_RECIPES.map((recipe) => {
       const ownedRow = pillInventories.find((row) => row.pill_id === recipe.id);
+      const cost = discountedPillCost(recipe.cost, alchemyDiscountBp);
       const lacking = alchemyLockedReason === null
-        ? firstInsufficientResource(recipe.cost, (resourceId) => balancesByResource.get(resourceId) ?? 0)
+        ? firstInsufficientResource(cost, (resourceId) => balancesByResource.get(resourceId) ?? 0)
         : null;
       const lackingName =
         lacking === undefined || lacking === null
@@ -1873,7 +1992,7 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
         id: recipe.id,
         name: recipe.name,
         description: recipe.description,
-        cost: { ...recipe.cost },
+        cost,
         owned: ownedRow === undefined ? 0 : Number(ownedRow.quantity),
         canCraft: alchemyLockedReason === null && lacking === null,
         blockedReason:
@@ -1987,6 +2106,29 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
     },
     sectUpgrade,
     alchemy: alchemyView,
+    talents: talentCatalog(),
+    stewards: {
+      offices: STEWARD_OFFICES.map((office) => {
+        const row = stewards.find((item) => item.office === office.id);
+        const steward =
+          row === undefined || row.disciple_id === null
+            ? undefined
+            : disciples.find((item) => item.id === row.disciple_id);
+        return {
+          office: office.id,
+          name: office.name,
+          talentId: office.talentId,
+          talentName: talentNameOf(office.talentId),
+          discipleId: steward?.id ?? null,
+          discipleName: steward?.name ?? null,
+          realmName: steward === undefined ? null : findRealm(steward.realm_id).name,
+          effect: steward === undefined ? null : talentEffectText(steward.talent, steward.realm_id),
+          paused: steward !== undefined && awayIds.has(steward.id),
+          canAppointToday: row === undefined || row.appointed_date_key !== dateKeyUtc8(now),
+        };
+      }),
+      handoverHours: STEWARD_HANDOVER_MS / 3_600_000,
+    },
     journey: journeySlot,
     activeExploration: input.activeExploration ?? null,
     worldBoss: { attackable: input.worldBossAttackable ?? false },

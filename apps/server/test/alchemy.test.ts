@@ -333,15 +333,18 @@ describe('丹药系统：解锁与配方', () => {
     expect(errorOf(use).code).toBe('INVALID_STATUS');
   });
 
-  it('解锁后 sync 返回三种配方、库存 0、canCraft 按余额判定', async () => {
+  it('解锁后 sync 返回四种配方、库存 0、canCraft 按余额判定', async () => {
     const sect = await makeSect();
     await unlockAlchemy(sect.sectId);
 
     const state = await sect.state();
     expect(state.alchemy.unlocked).toBe(true);
     expect(state.alchemy.blockedReason).toBeNull();
-    expect(state.alchemy.recipes).toHaveLength(3);
-    for (const pillId of PILL_IDS) {
+    expect(state.alchemy.recipes).toHaveLength(4);
+    // 洗髓丹要玄铁：新宗门没有玄铁，炼不了。
+    expect(recipeOf(state, 'talentPill').canCraft).toBe(false);
+    expect(recipeOf(state, 'talentPill').blockedReason).toContain('不足');
+    for (const pillId of PILL_IDS.filter((id) => id !== 'talentPill')) {
       const recipe = recipeOf(state, pillId);
       expect(recipe.owned).toBe(0);
       // 初始资源足够每种丹药炼一颗
@@ -798,8 +801,9 @@ describe('丹药系统：服到满（count）', () => {
     await setPillStock(sect.sectId, 'cultivationPill', 2);
 
     const discipleId = sect.discipleIds[0] as string;
+    // 天赋固定为战意：丹心会改变每颗聚气丹的修为。
     await env.DB.prepare(
-      "UPDATE disciples SET realm_id = 'foundationEstablishment', stage = 1, cultivation = 0 WHERE id = ?",
+      "UPDATE disciples SET realm_id = 'foundationEstablishment', stage = 1, cultivation = 0, talent = 'combat' WHERE id = ?",
     )
       .bind(discipleId)
       .run();

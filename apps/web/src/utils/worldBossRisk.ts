@@ -5,12 +5,19 @@
  * fatigueCount = 该弟子最近 60 分钟内已出战次数（不含本次）；
  * 3 次 → 30%、4 次 → 70%（这两档按体魄每高于 50 的 10 点下调 3 个百分点，最低 0）；≥5 次必定重伤；
  * 「狂暴」词缀再 ×2，封顶 100%。服务端改规则时这里要同步。
+ * 天赋重构 · 铁骨：不足 100% 时再 ×(1 − 减免)（减免基点由服务端按境界算好：bossInjuryReductionBp）。
  */
-export function severeRiskPercent(fatigueCount: number, physique: number, berserk: boolean): number {
+export function severeRiskPercent(
+  fatigueCount: number,
+  physique: number,
+  berserk: boolean,
+  injuryReductionBp = 0,
+): number {
   let chance = fatigueCount >= 5 ? 1 : fatigueCount === 4 ? 0.7 : fatigueCount === 3 ? 0.3 : 0;
   if (chance > 0 && chance < 1) {
     chance = Math.max(0, chance - (Math.max(0, physique - 50) / 10) * 0.03);
   }
   if (berserk) chance = Math.min(1, chance * 2);
+  if (chance < 1) chance *= 1 - Math.min(10_000, Math.max(0, injuryReductionBp)) / 10_000;
   return Math.round(chance * 100);
 }

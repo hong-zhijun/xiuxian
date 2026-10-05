@@ -40,6 +40,7 @@ import DiscipleAvatar from './DiscipleAvatar.vue';
 import DiscipleRadarChart from './DiscipleRadarChart.vue';
 import HelpTip from './HelpTip.vue';
 import LoadingState from './LoadingState.vue';
+import TalentCatalogDialog from './TalentCatalogDialog.vue';
 /**
  * 弟子详情（弹窗内容）：固定紧凑头部 + 五个 Tab（概览 / 修行 / 装备 / 历练 / 档案）。
  *
@@ -85,6 +86,8 @@ const emit = defineEmits<{
   breakthrough: [discipleId: string];
   /** count = 想服几颗（「服到满」传所需颗数，服务端按所需与库存截断）。 */
   usePill: [pillId: string, discipleId: string, count: number];
+  /** 天赋重构：洗髓丹二选一（accept = true 换成新天赋，false 保留原天赋）。 */
+  chooseTalent: [discipleId: string, accept: boolean];
   saveNote: [discipleId: string, note: string];
   /** 0017 保存头像框样式（frameId 只可能是白名单里的固定 id）。 */
   setAvatarFrame: [discipleId: string, frameId: AvatarFrameId];
@@ -614,7 +617,7 @@ const journal = computed<JournalEntry[]>(() =>
 /* ---------- 丹药：详情只保留入口，点击后打开选择弹窗 ---------- */
 
 const ATTRIBUTE_NAMES: Record<string, string> = { attack: '攻击', defense: '防御', speed: '身法' };
-const PILL_ORDER = ['healingPill', 'cultivationPill', 'bodyTemperingPill'] as const;
+const PILL_ORDER = ['healingPill', 'cultivationPill', 'bodyTemperingPill', 'talentPill'] as const;
 const showPillPicker = ref(false);
 
 interface PillOption {
@@ -647,8 +650,8 @@ const pillOptions = computed<PillOption[]>(() => {
   );
   const locked = !props.state.alchemy.unlocked;
   const lockedReason = props.state.alchemy.blockedReason ?? '炼丹尚未开启';
-  // 单次增益由服务端下发（view.alchemy.cultivationPillGain），前端不复制这个常量。
-  const gainPerPill = props.state.alchemy.cultivationPillGain;
+  // 单次增益由服务端按这名弟子的天赋（丹心）算好下发，前端不复制这个常量。
+  const gainPerPill = props.disciple.cultivationPillGain;
   const disciple = props.disciple;
   const options: PillOption[] = [];
 
@@ -691,6 +694,14 @@ const pillOptions = computed<PillOption[]>(() => {
           fullNote = `最后一颗只生效 ${lastGain} 点`;
         }
       }
+    } else if (pillId === 'talentPill') {
+      // 天赋重构 · 洗髓丹：有待决定的候选天赋时不能再服；次数由服务端下发。
+      available = disciple.talentRerollRemaining > 0 && disciple.talentCandidate === null;
+      preview = `洗出一个新天赋，可选择保留或替换（已服 ${disciple.talentRerollUses} 次 · 剩余 ${disciple.talentRerollRemaining} 次）`;
+      reason =
+        disciple.talentCandidate !== null
+          ? '还有一个新天赋没有决定，先在概览里选择保留或替换'
+          : '洗髓次数已用尽';
     } else {
       const target = disciple.bodyTemperingTarget;
       available = target !== null;
@@ -895,8 +906,19 @@ const POWER_HELP = [
   '境界基数 =（境界序号 × 3 + 层数）× 10：炼气一层为 10，每升一层 +10。',
   '属性加权 =（攻击 × 0.4 + 防御 × 0.35 + 身法 × 0.25）÷ 100，攻防身法都含装备加成。',
   '装备战力加成：每件穿着的装备按品质 凡 2% / 灵 4% / 宝 7% / 仙 10%，三件相加。',
-  '战斗天赋：最后再 × 1.15。',
+  '战意天赋：最后再 ×（1 + 战意加成），加成随境界提高（金丹 +15%、化神 +25%）。',
 ].join('\n');
+
+/* ---------- 天赋：效果随境界、总表弹窗、洗髓丹二选一 ---------- */
+
+const showTalentCatalog = ref(false);
+/** 执事 / 交接期的状态标（不能出战的原因，服务端算好）。 */
+const stewardTag = computed(() => props.disciple.combatBlockedReason);
+
+function chooseTalent(accept: boolean): void {
+  if (props.busy) return;
+  emit('chooseTalent', props.disciple.id, accept);
+}
 
 /** 装备的战力加成（基点 → 百分数）：品质表都是 100 基点的整数倍。 */
 function powerBonusPercent(bp: number): string {
@@ -1032,9 +1054,58 @@ function unequipGear(item: EquipmentItemView | null): void {
 
           <div class="disciple-stats">
             <span class="stat-tag stat-talent">天赋 {{ disciple.talentName }}</span>
+            <!-- 当前境界下的天赋加成（服务端按境界算好），境界提升后自动变强。 -->
+            <span v-if="disciple.talentEffect !== ''" class="stat-tag stat-talent-effect">
+              {{ disciple.talentEffect }}
+            </span>
+            <button
+              class="quiet-button dao-insight-help"
+              type="button"
+              aria-label="查看全部天赋及作用"
+              @click="showTalentCatalog = true"
+            >
+              ?
+            </button>
+            <span v-if="stewardTag" class="stat-tag stat-steward">{{ stewardTag }}</span>
             <span class="stat-tag stat-power">战力 {{ disciple.combatPower }}</span>
             <HelpTip label="战力说明" :text="POWER_HELP" />
           </div>
+
+          <!-- 洗髓丹洗出的新天赋：二选一（决定前不能再服洗髓丹）。 -->
+          <div v-if="disciple.talentCandidate" class="talent-candidate" role="group" aria-label="洗髓结果">
+            <p class="talent-candidate-title">洗髓丹洗出了新天赋，选择保留哪一个：</p>
+            <div class="talent-candidate-options">
+              <div class="talent-candidate-option">
+                <span class="eyebrow">原天赋</span>
+                <strong>{{ disciple.talentName }}</strong>
+                <small>{{ disciple.talentEffect || '—' }}</small>
+              </div>
+              <div class="talent-candidate-option is-new">
+                <span class="eyebrow">新天赋</span>
+                <strong>{{ disciple.talentCandidate.name }}</strong>
+                <small>{{ disciple.talentCandidate.effect }}</small>
+              </div>
+            </div>
+            <p v-if="disciple.stewardOffice" class="blocked-hint">
+              {{ disciple.name }}正在任执事：换成新天赋会同时卸任，进入交接期。
+            </p>
+            <div class="talent-candidate-actions">
+              <button class="upgrade-button" type="button" :disabled="busy" @click="chooseTalent(false)">
+                保留原天赋
+              </button>
+              <button class="action-button primary-action" type="button" :disabled="busy" @click="chooseTalent(true)">
+                换成新天赋
+              </button>
+            </div>
+          </div>
+
+          <TalentCatalogDialog
+            v-if="showTalentCatalog"
+            :talents="state.talents"
+            :current-talent="disciple.talent"
+            :current-realm-id="disciple.realmId"
+            @close="showTalentCatalog = false"
+          />
 
           <p class="disciple-detail-hint">
             括号里是装备加成。点属性、综合评分、战力旁的「?」查看各自的作用与算法。

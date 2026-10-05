@@ -1,4 +1,6 @@
-import { findTalent } from './constants';
+import { findTalent, generateTalent, talentEffectText } from './talents';
+
+export { generateTalent };
 
 /**
  * 弟子随机生成与属性规则（任务卡「2.4 弟子随机生成」+ V4 第五节的种子化版本 +
@@ -113,11 +115,6 @@ export function generateDiscipleName(random: () => number): string {
 
 export function generateGender(random: () => number): 'male' | 'female' {
   return random() < 0.5 ? 'male' : 'female';
-}
-
-export function generateTalent(random: () => number): string {
-  const talents = ['herbGathering', 'mining', 'cultivation', 'combat'];
-  return talents[Math.floor(random() * talents.length)] ?? 'combat';
 }
 
 /* ---------- 六项属性的生成与综合评分（计划 2.1 / 2.3） ---------- */
@@ -254,6 +251,8 @@ export interface RecruitCandidate extends DiscipleAttributes {
   gender: string;
   talent: string;
   talentName: string;
+  /** 天赋重构：入门时（炼气）的天赋效果，如「矿石产出 +20%」。 */
+  talentEffect: string;
   /** 六项属性等权现算的综合评分（一位小数）。 */
   attributeScore: number;
 }
@@ -285,6 +284,7 @@ export function generateCandidates(
       ...attributes,
       talent,
       talentName: findTalent(talent)?.name ?? talent,
+      talentEffect: talentEffectText(talent, 'qiRefining'),
       attributeScore: attributeScore(attributes),
     });
   }

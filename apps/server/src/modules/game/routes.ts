@@ -37,6 +37,9 @@ import {
   shopSellRequestSchema,
   startJourneyRequestSchema,
   startRealmExploreSchema,
+  stewardAppointRequestSchema,
+  stewardDismissRequestSchema,
+  talentChoiceRequestSchema,
   unequipRequestSchema,
   upgradeBuildingRequestSchema,
   usePillRequestSchema,
@@ -69,6 +72,9 @@ import {
   getEquipment,
   getSectState,
   healDisciplesBatch,
+  appointSteward,
+  chooseTalent,
+  dismissSteward,
   attackWorldBoss,
   exchangeBossMerit,
   getMeritShop,
@@ -610,6 +616,29 @@ export function createGameRoutes(): Hono<AppEnv> {
       worldBossDailyAttackLimit(c.env),
     );
     return respondOk(c, { state: result.state, result: result.result, boss: result.boss });
+  });
+
+  // 0034 执事堂：任命 / 卸任（结算 → 职位与天赋 / 每日一次 / 在外 / 守擂校验 → 一次受保护 batch）。
+  routes.post('/game/steward/appoint', async (c) => {
+    const userId = requireUserId(c);
+    const body = await parseStrictJson(stewardAppointRequestSchema, c);
+    const result = await appointSteward(getDb(c.env), userId, body.office, body.discipleId, Date.now());
+    return respondOk(c, { state: result.state });
+  });
+
+  routes.post('/game/steward/dismiss', async (c) => {
+    const userId = requireUserId(c);
+    const body = await parseStrictJson(stewardDismissRequestSchema, c);
+    const result = await dismissSteward(getDb(c.env), userId, body.office, Date.now());
+    return respondOk(c, { state: result.state });
+  });
+
+  // 0034 洗髓丹二选一：保留原天赋或换成新天赋（换掉天赋的执事同批卸任）。
+  routes.post('/game/talent-choice', async (c) => {
+    const userId = requireUserId(c);
+    const body = await parseStrictJson(talentChoiceRequestSchema, c);
+    const result = await chooseTalent(getDb(c.env), userId, body.discipleId, body.accept, Date.now());
+    return respondOk(c, { state: result.state, outcome: result.outcome });
   });
 
   // 功勋兑换弹窗的价目（纯配置）。

@@ -113,6 +113,23 @@ export const craftPillRequestSchema = z.strictObject({
  * 丹药服用：目标弟子必须属于当前宗门（服务端用 draft.discipleById 判定归属）。
  * count 是想服几颗（默认 1）；服务端按「服到满所需」与库存截断，实际颗数见 outcome.count。
  */
+/** 0034 执事堂：任命（职位与天赋是否对得上由服务端按 talents.ts 校验）。 */
+export const stewardAppointRequestSchema = z.strictObject({
+  office: z.string().min(1).max(32),
+  discipleId: z.string().min(1).max(64),
+});
+
+/** 0034 执事堂：卸任。 */
+export const stewardDismissRequestSchema = z.strictObject({
+  office: z.string().min(1).max(32),
+});
+
+/** 0034 洗髓丹二选一：accept = true 换成新天赋，false 保留原天赋。 */
+export const talentChoiceRequestSchema = z.strictObject({
+  discipleId: z.string().min(1).max(64),
+  accept: z.boolean(),
+});
+
 export const usePillRequestSchema = z.strictObject({
   pillId: z.string().min(1).max(64),
   discipleId: z.string().min(1).max(64),
@@ -341,7 +358,7 @@ export const worldBossAttackRequestSchema = z.strictObject({
  * 世界 Boss 三期：功勋兑换。合法性（部位 / 主属性 / 数量组合）由 service 校验，这里只做类型与长度。
  */
 export const worldBossExchangeRequestSchema = z.strictObject({
-  itemId: z.enum(['xuantie', 'spirit', 'treasure', 'immortal']),
+  itemId: z.enum(['xuantie', 'talentPill', 'spirit', 'treasure', 'immortal']),
   quantity: z.number().int().min(1).max(100).optional(),
   slot: z.string().min(1).max(16).optional(),
   mainAttr: z.string().min(1).max(16).optional(),

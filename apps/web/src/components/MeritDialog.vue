@@ -10,7 +10,7 @@ import LoadingState from './LoadingState.vue';
  * 功勋兑换（弹窗内容，外壳由 SectScreen 的 ModalShell 提供）。
  *
  * 分类（标签页）、价目、可选部位都来自 GET /game/merit-shop，前端不写死；以后开放新的兑换物，
- * 服务端加分类 / 条目即可。资源类按个数兑换，装备类一次一件、自选部位（法器再选主属性）。
+ * 服务端加分类 / 条目即可。资源类、丹药类按个数兑换（共用一个面板），装备类一次一件、自选部位（法器再选主属性）。
  * 余额取自 state，兑换成功把新 state 交给上层。
  */
 const props = defineProps<{
@@ -39,6 +39,15 @@ onMounted(async () => {
 
 function balanceOf(resourceId: string): number {
   return Number(props.state.resources.find((resource) => resource.id === resourceId)?.balance ?? 0);
+}
+
+/** 按个数兑换的条目的「现有」：丹药看丹库库存（颗），资源看余额（展示单位）。 */
+function ownedText(item: { id: string; pillId: string | null }): string {
+  if (item.pillId !== null) {
+    const owned = props.state.alchemy.recipes.find((recipe) => recipe.id === item.pillId)?.owned ?? 0;
+    return `${String(owned)} 颗`;
+  }
+  return formatAmount(balanceOf(item.id));
 }
 
 /** 功勋余额（展示单位）；价目也是展示单位，直接比。 */
@@ -76,9 +85,12 @@ function onTabKeydown(event: KeyboardEvent, current: string): void {
   void nextTick(() => tabButtons.value[target.id]?.focus());
 }
 
-/* ---------- 资源：按个数兑换 ---------- */
+/* ---------- 资源 / 丹药：按个数兑换（两个标签页共用同一个面板，列出当前标签页的条目） ---------- */
 
-const resourceItems = computed(() => shop.value?.items.filter((item) => item.category === 'resource') ?? []);
+/** 按个数兑换的分类。 */
+const QUANTITY_TABS = ['resource', 'pill'];
+const isQuantityTab = computed(() => QUANTITY_TABS.includes(tab.value));
+const resourceItems = computed(() => shop.value?.items.filter((item) => item.category === tab.value) ?? []);
 const resourceId = ref('');
 const quantityInput = ref('1');
 
@@ -150,7 +162,10 @@ async function submit(input: Parameters<typeof exchangeBossMerit>[0]): Promise<v
     const data = await exchangeBossMerit(input);
     emit('state-update', data.state);
     const equipment = data.outcome.equipment;
-    if (equipment === null) {
+    const pill = data.outcome.pill;
+    if (pill !== null) {
+      emit('notify', 'success', '兑换成功', `${pill.name} +${String(pill.quantity)}，已收入丹库。`);
+    } else if (equipment === null) {
       emit('notify', 'success', '兑换成功', `玄铁 +${formatAmount(data.outcome.xuantie)}`);
     } else {
       emit('notify', 'success', `兑得 ${equipment.name}`, `${equipment.slotName} · 已放入背包。`);
@@ -214,11 +229,11 @@ function submitEquipment(): void {
 
       <!-- ---------- 资源 ---------- -->
       <div
-        v-show="tab === 'resource'"
-        id="merit-panel-resource"
+        v-show="isQuantityTab"
+        :id="`merit-panel-${tab}`"
         class="merit-panel"
         role="tabpanel"
-        aria-labelledby="merit-tab-resource"
+        :aria-labelledby="`merit-tab-${tab}`"
         tabindex="0"
       >
         <div class="merit-choices" role="radiogroup" aria-label="兑换资源">
@@ -233,7 +248,7 @@ function submitEquipment(): void {
             @click="resourceId = item.id"
           >
             <strong>{{ item.name }}</strong>
-            <small>{{ item.cost }} 功勋 / 个 · 现有 {{ formatAmount(balanceOf(item.id)) }}</small>
+            <small>{{ item.cost }} 功勋 / 个 · 现有 {{ ownedText(item) }}</small>
           </button>
         </div>
 

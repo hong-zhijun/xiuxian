@@ -14,10 +14,11 @@ import {
   alchemyUnlockBlockedReason,
   bodyTemperingPlan,
   cultivationPillsToFull,
+  discountedPillCost,
   firstInsufficientResource,
   findPillRecipe,
   BODY_TEMPERING_MAX_USES,
-  CULTIVATION_PILL_GAIN,
+  cultivationPillGainOf,
   type PillAttribute,
   type PillId,
   type PillRecipe,
@@ -112,7 +113,6 @@ import {
   findRealm,
   findSectLevel,
   findStage,
-  findTalent,
   nextSectLevel,
   nextStageOf,
   realmIndex,
@@ -264,6 +264,15 @@ import {
 } from './repository';
 import type { DiscipleJourneyRow, RealmExplorationRow } from './repository';
 import {
+  StewardRepository,
+  updateDiscipleHandoverStatement,
+  updateDiscipleTalentRerollStatement,
+  updateDiscipleTalentStatement,
+  upsertStewardStatement,
+  vacateStewardByDiscipleStatement,
+  type SectStewardRow,
+} from './repository';
+import {
   RealmExplorationRepository,
   deleteRealmExploreSnapshotGuardStatement,
   insertRealmExplorationStatement,
@@ -310,6 +319,19 @@ import {
   type WorldBossSectDamageRow,
 } from './repository';
 import { settleEconomy, resourceRates, type SettleResult } from './settle';
+import {
+  findStewardOffice,
+  findTalent,
+  rollTalentCandidate,
+  stewardBonusBp,
+  talentBonusBp,
+  talentEffectText,
+  talentNameOf,
+  STEWARD_HANDOVER_MS,
+  TALENT_PILL_ID,
+  TALENT_REROLL_MAX_USES,
+  type StewardOffice,
+} from './talents';
 import {
   BOSS_MERIT_RESOURCE_ID,
   WORLD_BOSS_AFFIX_NONE,
@@ -466,6 +488,8 @@ export interface SectSnapshot {
   recentJourneys: DiscipleJourneyRow[];
   /** 0015：进行中的交互式秘境探索（每宗门同时最多一个）；null = 当前没有。 */
   activeExploration: RealmExplorationRow | null;
+  /** 0034 执事堂：本宗的职位行（最多 3 行）。 */
+  stewards: SectStewardRow[];
 }
 
 /** 全局唯一配置来源：启动期已校验过的配置内容（不在游戏模块里硬编码数值）。 */
@@ -637,6 +661,7 @@ async function loadSnapshot(
     journeys,
     recentJourneys,
     activeExploration,
+    stewards,
   ] = await Promise.all([
     new DiscipleRepository(db).findBySectId(sect.id),
     new BuildingRepository(db).findBySectId(sect.id),
@@ -649,6 +674,8 @@ async function loadSnapshot(
     new DiscipleJourneyRepository(db).findRecentBySectId(sect.id, JOURNEY_HISTORY_LIMIT),
     // 0015：进行中的交互式秘境探索（每宗门同时最多一个）。
     new RealmExplorationRepository(db).findActiveBySectId(sect.id),
+    // 0034 执事堂：职位行（按主键前缀，最多 3 行）。
+    new StewardRepository(db).findBySectId(sect.id),
   ]);
   // 0019 赌坊：论道当日次数（0019 是新表新列，没有需要按日志窗口兼容核对的旧记录）。
   const debateDay = debateDayStateOf(sect, now);
@@ -664,6 +691,7 @@ async function loadSnapshot(
     journeys,
     recentJourneys,
     activeExploration,
+    stewards,
   };
 }
 
@@ -689,6 +717,8 @@ class SectDraft {
   balances: ResourceBalanceRow[];
   /** 丹药库存（可变：炼制加、服用减；与写库语句一起在 commit 一次性提交）。 */
   pillInventories: PillInventoryRow[];
+  /** 0034 执事堂：职位行（可变：任命 / 卸任 / 驱逐后在本层更新，随 view() 返回）。 */
+  stewards: SectStewardRow[];
   /** 主动挑战的当日次数（可变：挑战受理后在本层更新，随 view() 返回新口径）。 */
   challengeDay: ChallengeDayState;
   /** 0019 赌坊：论道当日次数（可变：受理一次论道后在本层更新，随 view() 返回新口径）。 */
@@ -797,6 +827,7 @@ class SectDraft {
     });
     this.buildings = base.buildings.map((row) => ({ ...row }));
     this.pillInventories = base.pillInventories.map((row) => ({ ...row }));
+    this.stewards = base.stewards.map((row) => ({ ...row }));
     this.challengeDay = base.challengeDay;
     this.debateDay = base.debateDay;
 
@@ -1039,6 +1070,7 @@ class SectDraft {
       recentJourneys: this.recentRowsForView(),
       activeExploration: this.activeExplorationView(),
       worldBossAttackable: this.worldBossAttackable,
+      stewards: this.stewards,
     });
   }
 
@@ -1759,6 +1791,10 @@ export async function createSect(
       dao_insight: 0,
       dao_insight_used: 0,
       avatar_frame_id: 'classic',
+      // 0034 天赋重构：洗髓次数 / 候选 / 交接期都从空开始（列默认值也是这样）。
+      talent_reroll_count: 0,
+      talent_candidate: null,
+      steward_handover_until: null,
       created_at: now,
     };
     statements.push(
@@ -1870,6 +1906,7 @@ export async function createSect(
       journeys: [],
       recentJourneys: [],
       activeExploration: null,
+      stewards: [],
     },
     now,
   );
@@ -2102,6 +2139,10 @@ export async function recruitDisciple(
     // 0019：新招募的弟子悟道值为 0（只能通过赌坊获得；列默认值也是 0，这里显式写出）。
     dao_insight: 0,
     dao_insight_used: 0,
+    // 0034 天赋重构：洗髓次数 / 候选 / 交接期都从空开始（列默认值也是这样）。
+    talent_reroll_count: 0,
+    talent_candidate: null,
+    steward_handover_until: null,
     created_at: now,
   };
   draft.addDisciple(disciple);
@@ -2913,6 +2954,13 @@ export async function expelDisciple(
 
   draft.disciples = draft.disciples.filter((row) => row.id !== disciple.id);
   draft.addStatement(deleteDiscipleStatement(disciple.id, draft.sect.id));
+  // 0034 执事堂：驱逐执事时同批把职位置空（人走了，不需要交接期）。
+  if (stewardRowOf(draft, disciple.id) !== undefined) {
+    draft.addStatement(vacateStewardByDiscipleStatement(draft.sect.id, disciple.id, draft.now));
+    draft.stewards = draft.stewards.map((row) =>
+      row.disciple_id === disciple.id ? { ...row, disciple_id: null, updated_at: draft.now } : row,
+    );
+  }
   if (lineupCleared) {
     draft.addStatement(updateSectDefenseLineupStatement(draft.sect.id, null));
     draft.sect.defense_lineup = null;
@@ -3151,7 +3199,7 @@ export async function exploreSectRealm(
   for (const id of discipleIds) {
     const disciple = draft.discipleById(id);
     // 0014：在外弟子不能出战探索。
-    requireNotAway(draft, disciple, '出战');
+    requireCanFight(draft, disciple, '出战');
     if (disciple.injured_until !== null && Number(disciple.injured_until) > now) {
       throw new AppError('INVALID_STATUS', `${disciple.name}正在疗伤，无法出战`);
     }
@@ -3195,9 +3243,12 @@ export async function exploreSectRealm(
   const success = roll < chanceBp;
 
   // 9. 成功：发放奖励（不夹容量上限，见函数头说明）
+  // 天赋重构 · 寻宝执事：收获与玄铁掉落概率按比例提高。
+  const treasureBp = stewardBonusOf(draft, 'treasure');
   const actualRewards: Record<string, string> = {};
   if (success) {
-    for (const [resourceId, amount] of Object.entries(realm.rewards)) {
+    const rewards = treasureBp > 0 ? scaleRewards(realm.rewards, 10_000 + treasureBp) : realm.rewards;
+    for (const [resourceId, amount] of Object.entries(rewards)) {
       draft.addStatement(resourceDeltaStatement(draft.sect.id, resourceId, Number(amount), now));
       draft.balances = draft.balances.map((row) =>
         row.resource_id === resourceId
@@ -3207,7 +3258,7 @@ export async function exploreSectRealm(
       actualRewards[resourceId] = amount;
     }
     // 装备二期：高级秘境成功时低概率掉玄铁（与固定奖励同一批入账）。
-    const xuantie = realmXuantieDrop(realm.id, Math.random) * 1000;
+    const xuantie = realmXuantieDrop(realm.id, Math.random, treasureBp) * 1000;
     if (xuantie > 0) {
       draft.addStatement(resourceDeltaStatement(draft.sect.id, XUANTIE_RESOURCE_ID, xuantie, now));
       draft.balances = draft.balances.map((row) =>
@@ -3581,7 +3632,8 @@ export async function getDiscipleProfile(
     stageName: findStage(disciple.realm_id, Number(disciple.stage)).name,
     talent: disciple.talent,
     talentName: talent?.name ?? '无',
-    talentDescription: talent?.description ?? '',
+    // 天赋重构：公开档案里的「天赋描述」= 当前境界下的效果（如「战力 +15%」）。
+    talentDescription: talentEffectText(disciple.talent, disciple.realm_id),
     aptitude: Number(disciple.aptitude),
     attack: Number(disciple.attack),
     defense: Number(disciple.defense),
@@ -4129,7 +4181,7 @@ export async function setDefenseLineup(
     // 归属校验：只看自己的弟子，不存在（含不属于本宗）抛 NOT_FOUND。
     const member = draft.discipleById(id);
     // 0014：在外弟子不能进入新守擂阵容（服务端裁决，不只靠前端禁用）。
-    requireNotAway(draft, member, '进入守擂阵容');
+    requireCanFight(draft, member, '进入守擂阵容');
   }
 
   const lineupJson = JSON.stringify(discipleIds);
@@ -4208,7 +4260,7 @@ export async function challengeSect(
   for (const id of discipleIds) {
     const disciple = draft.discipleById(id);
     // 0014：在外弟子不能出战挑战。
-    requireNotAway(draft, disciple, '出战');
+    requireCanFight(draft, disciple, '出战');
     if (disciple.injured_until !== null && Number(disciple.injured_until) > now) {
       throw new AppError('INVALID_STATUS', `${disciple.name}正在疗伤，无法出战`);
     }
@@ -4498,9 +4550,11 @@ export interface UsePillOutcome {
   /** 实际服用颗数（请求颗数按「服到满所需」与库存截断后的结果）。 */
   count: number;
   effect: {
-    kind: 'heal' | 'cultivation' | 'bodyTempering';
+    kind: 'heal' | 'cultivation' | 'bodyTempering' | 'talentReroll';
     /** cultivation / bodyTempering 的总提升量。 */
     gain?: number;
+    /** talentReroll（洗髓丹）：洗出的候选天赋与它在当前境界的效果；原天赋待玩家二选一。 */
+    candidate?: { id: string; name: string; effect: string };
     /** bodyTempering 第一颗补的短板属性。 */
     attribute?: PillAttribute;
     /** bodyTempering 各属性的累计提升量（连服时可能补到不止一项）。 */
@@ -4549,9 +4603,10 @@ export async function craftPill(
   requireAlchemyUnlocked(draft);
   const recipe = requirePillRecipe(pillId);
 
-  // 单次成本 = 单颗成本 × quantity；requireResource 逐项检查并扣减（不足抛 INSUFFICIENT_RESOURCE）。
+  // 单次成本 = 单颗成本（丹房执事折后）× quantity；requireResource 逐项检查并扣减（不足抛 INSUFFICIENT_RESOURCE）。
+  const unitCost = discountedPillCost(recipe.cost, stewardBonusOf(draft, 'alchemy'));
   const cost: Record<string, string> = {};
-  for (const [resourceId, amount] of Object.entries(recipe.cost)) {
+  for (const [resourceId, amount] of Object.entries(unitCost)) {
     const total = Number(amount) * quantity;
     draft.requireResource(resourceId, total);
     cost[resourceId] = String(total);
@@ -4632,13 +4687,15 @@ export async function usePill(
       throw new AppError('INVALID_STATUS', `${disciple.name}修为已达突破门槛，请先突破再服用聚气丹`);
     }
     const remaining = stage.requiredCultivation - Number(disciple.cultivation);
+    // 天赋重构 · 丹心：每颗增益按这名弟子的天赋与境界算。
+    const gainPerPill = cultivationPillGainOf(disciple.talent, disciple.realm_id);
     const used = Math.min(
       count,
-      cultivationPillsToFull(Number(disciple.cultivation), stage.requiredCultivation),
+      cultivationPillsToFull(Number(disciple.cultivation), stage.requiredCultivation, gainPerPill),
       Math.max(1, draft.pillQuantity(recipe.id)),
     );
     // 最后一颗可能只生效一部分：总增益封顶到门槛。
-    const gain = Math.min(CULTIVATION_PILL_GAIN * used, remaining);
+    const gain = Math.min(gainPerPill * used, remaining);
     draft.removePill(recipe.id, used);
     const cultivation = Number(disciple.cultivation) + gain;
     // 修为余数保持不变：不因服药丢弃离线结算的小数余量。
@@ -4656,6 +4713,44 @@ export async function usePill(
         discipleName: disciple.name,
         count: used,
         effect: { kind: 'cultivation', gain },
+      },
+    };
+  }
+
+  // 天赋重构 · 洗髓丹：洗出一个候选天赋（不与当前相同），写进 talent_candidate 等玩家二选一。
+  if (recipe.id === TALENT_PILL_ID) {
+    const rerolls = Number(disciple.talent_reroll_count);
+    if (rerolls >= TALENT_REROLL_MAX_USES) {
+      throw new AppError(
+        'INVALID_STATUS',
+        `${disciple.name}已服用洗髓丹 ${String(TALENT_REROLL_MAX_USES)} 次，药力已满`,
+      );
+    }
+    if (disciple.talent_candidate !== null) {
+      throw new AppError('INVALID_STATUS', `${disciple.name}还有一个新天赋没有决定，先选择保留或替换`);
+    }
+    draft.requirePill(recipe.id);
+    const candidate = rollTalentCandidate(disciple.talent, Math.random);
+    draft.addStatement(updateDiscipleTalentRerollStatement(disciple.id, rerolls + 1, candidate));
+    disciple.talent_reroll_count = rerolls + 1;
+    disciple.talent_candidate = candidate;
+    await draft.commitAlchemy(recipe.id, [disciple.id]);
+    return {
+      state: draft.view(),
+      outcome: {
+        pillId: recipe.id,
+        pillName: recipe.name,
+        discipleId: disciple.id,
+        discipleName: disciple.name,
+        count: 1,
+        effect: {
+          kind: 'talentReroll',
+          candidate: {
+            id: candidate,
+            name: talentNameOf(candidate),
+            effect: talentEffectText(candidate, disciple.realm_id),
+          },
+        },
       },
     };
   }
@@ -4782,7 +4877,9 @@ export async function healDisciplesBatch(
   }
   const craftCost: Record<string, string> = {};
   if (shortfall > 0) {
-    for (const [resourceId, amount] of Object.entries(recipe.cost)) {
+    // 现炼与炼丹面板同价：丹房执事的折扣同样生效。
+    const unitCost = discountedPillCost(recipe.cost, stewardBonusOf(draft, 'alchemy'));
+    for (const [resourceId, amount] of Object.entries(unitCost)) {
       craftCost[resourceId] = String(Number(amount) * shortfall);
     }
     const lacking = firstInsufficientResource(craftCost, (resourceId) => draft.balanceOf(resourceId));
@@ -4982,7 +5079,10 @@ export async function forgeEquipment(
   }
 
   // 装备二期：先判定成功 / 降级 / 失败（永远不会高于所选品质）；炼仙品时叠加保底层数。
-  const result = rollForgeResult(forgeOddsOf(recipe.quality, workshopLevel, pity), Math.random);
+  const result = rollForgeResult(
+    forgeOddsOf(recipe.quality, workshopLevel, pity, stewardBonusOf(draft, 'forging')),
+    Math.random,
+  );
   const forgePity = nextForgePity(recipe.quality, result, pity);
   if (forgePity !== pity) {
     draft.addStatement(updateForgePityStatement(draft.sect.id, forgePity));
@@ -5242,6 +5342,7 @@ export async function getEquipment(
       sectLevel: Number(draft.sect.level),
       workshopLevel: draft.buildings.find((row) => row.def_id === FORGE_WORKSHOP_ID)?.level ?? 1,
       forgePity,
+      forgingStewardBonusBp: stewardBonusOf(draft, 'forging'),
       items,
       bagCount,
       discipleNames,
@@ -5303,6 +5404,229 @@ function unavailableBlocker(
   const away = awayBlocker(draft, disciple, action);
   if (away !== null) return away;
   return severeInjuryBlocker(draft, disciple);
+}
+
+/* ---------- 0034 执事堂：出战拦截与职位加成（规则见 talents.ts） ---------- */
+
+/** 这名弟子任的职位行；不是执事返回 undefined。 */
+function stewardRowOf(draft: SectDraft, discipleId: string): SectStewardRow | undefined {
+  return draft.stewards.find((row) => row.disciple_id === discipleId);
+}
+
+/** 执事不能出战；卸任后的交接期内也不能出战（单个命令抛错，批量命令据此跳过）。 */
+function stewardBlocker(draft: SectDraft, disciple: DiscipleRow): DiscipleBlocker | null {
+  const row = stewardRowOf(draft, disciple.id);
+  if (row !== undefined) {
+    const officeName = findStewardOffice(row.office)?.name ?? '执事';
+    return {
+      error: new AppError('INVALID_STATUS', `${disciple.name}任${officeName}，不能出战`),
+      reason: `任${officeName}`,
+    };
+  }
+  const until = disciple.steward_handover_until === null ? null : Number(disciple.steward_handover_until);
+  if (until !== null && until > draft.now) {
+    return {
+      error: new AppError(
+        'INVALID_STATUS',
+        `${disciple.name}刚卸任执事，交接中（还需${severeInjuryLeftText(until, draft.now)}），暂不能出战`,
+      ),
+      reason: '执事交接中',
+    };
+  }
+  return null;
+}
+
+/** 出战入口（讨伐 / 秘境 / 切磋 / 守擂）的统一校验：不在外、不重伤，且不是执事 / 不在交接期。 */
+function requireCanFight(draft: SectDraft, disciple: DiscipleRow, action: string): void {
+  requireNotAway(draft, disciple, action);
+  const blocker = stewardBlocker(draft, disciple);
+  if (blocker !== null) throw blocker.error;
+}
+
+/** 某职位此刻生效的加成（基点）：执事在外历练时暂停（返回 0）。 */
+function stewardBonusOf(draft: SectDraft, office: StewardOffice): number {
+  const row = draft.stewards.find((item) => item.office === office);
+  const steward =
+    row === undefined || row.disciple_id === null
+      ? undefined
+      : draft.disciples.find((item) => item.id === row.disciple_id);
+  const awayIds = new Set<string>();
+  if (steward !== undefined && awayBlocker(draft, steward, '') !== null) awayIds.add(steward.id);
+  return stewardBonusBp({ office, stewards: draft.stewards, disciples: draft.disciples, awayIds });
+}
+
+/**
+ * 让这名弟子离开他所在的职位（卸任 / 被替换 / 洗髓换掉天赋）：职位置空 + 写交接期。
+ * 不是执事时什么都不做。驱逐不走这里（驱逐不需要交接期，只把职位置空）。
+ */
+function leaveStewardOffice(draft: SectDraft, disciple: DiscipleRow): void {
+  const row = stewardRowOf(draft, disciple.id);
+  if (row === undefined) return;
+  const until = draft.now + STEWARD_HANDOVER_MS;
+  draft.addStatement(vacateStewardByDiscipleStatement(draft.sect.id, disciple.id, draft.now));
+  draft.addStatement(updateDiscipleHandoverStatement(disciple.id, until));
+  row.disciple_id = null;
+  row.updated_at = draft.now;
+  disciple.steward_handover_until = until;
+}
+
+/**
+ * 任命执事（POST /game/steward/appoint）：职位与天赋对得上、本职位今天还没任命过、
+ * 人不在外历练、不在守擂阵容里。原执事（如有）卸任并进入交接期。
+ * 一人一个天赋、天赋决定职位，所以被任命者不可能同时在别的职位上。
+ * 任命本身不要求出战资格（交接期内也能再次就任）。
+ */
+export async function appointSteward(
+  db: D1Database,
+  userId: string,
+  office: string,
+  discipleId: string,
+  now: number,
+): Promise<{ state: SectStateView }> {
+  const draft = await draftFor(db, userId, now);
+  const def = findStewardOffice(office);
+  if (def === undefined) {
+    throw new AppError('VALIDATION_ERROR', '未知职位');
+  }
+  const disciple = draft.discipleById(discipleId);
+  if (disciple.talent !== def.talentId) {
+    throw new AppError(
+      'INVALID_STATUS',
+      `${def.name}需要「${talentNameOf(def.talentId)}」天赋，${disciple.name}的天赋是「${talentNameOf(disciple.talent)}」`,
+    );
+  }
+  const row = draft.stewards.find((item) => item.office === def.id);
+  if (row?.disciple_id === disciple.id) {
+    throw new AppError('INVALID_STATUS', `${disciple.name}已经是${def.name}`);
+  }
+  const dateKey = dateKeyUtc8(now);
+  if (row !== undefined && row.appointed_date_key === dateKey) {
+    throw new AppError('INVALID_STATUS', `${def.name}今天已经任命过，明日再换`);
+  }
+  requireNotAway(draft, disciple, '就任执事');
+  if (lineupContainsDisciple(draft.sect.defense_lineup, disciple.id)) {
+    throw new AppError('INVALID_STATUS', `${disciple.name}在守擂阵容里，请先移出阵容再就任执事`);
+  }
+
+  const previousId = row?.disciple_id ?? null;
+  if (previousId !== null) {
+    const previous = draft.disciples.find((item) => item.id === previousId);
+    if (previous !== undefined) leaveStewardOffice(draft, previous);
+  }
+  draft.addStatement(
+    upsertStewardStatement({ sectId: draft.sect.id, office: def.id, discipleId: disciple.id, dateKey, now }),
+  );
+  if (row === undefined) {
+    draft.stewards = [
+      ...draft.stewards,
+      {
+        sect_id: draft.sect.id,
+        office: def.id,
+        disciple_id: disciple.id,
+        appointed_date_key: dateKey,
+        updated_at: now,
+      },
+    ];
+  } else {
+    row.disciple_id = disciple.id;
+    row.appointed_date_key = dateKey;
+    row.updated_at = now;
+  }
+  const touched = previousId === null ? [disciple.id] : [disciple.id, previousId];
+  // 守擂阵容进守卫（刚核对过不在阵容里）；被替换的原执事可能正在外历练 / 重伤，照样能卸任。
+  await draft.commitDisciple(touched.map((id) => ({ id })), draft.sect.defense_lineup, {
+    allowActiveJourney: true,
+    allowSevereInjury: true,
+  });
+  return { state: draft.view() };
+}
+
+/** 卸任执事（POST /game/steward/dismiss）：职位置空，原执事进入 12 小时交接期（期间不能出战）。 */
+export async function dismissSteward(
+  db: D1Database,
+  userId: string,
+  office: string,
+  now: number,
+): Promise<{ state: SectStateView }> {
+  const draft = await draftFor(db, userId, now);
+  const def = findStewardOffice(office);
+  if (def === undefined) {
+    throw new AppError('VALIDATION_ERROR', '未知职位');
+  }
+  const row = draft.stewards.find((item) => item.office === def.id);
+  const disciple =
+    row === undefined || row.disciple_id === null
+      ? undefined
+      : draft.disciples.find((item) => item.id === row.disciple_id);
+  if (disciple === undefined) {
+    throw new AppError('INVALID_STATUS', `${def.name}目前空缺`);
+  }
+  leaveStewardOffice(draft, disciple);
+  // 在外历练 / 重伤的执事也能卸任（卸任不需要本人在场）。
+  await draft.commitDisciple([{ id: disciple.id }], undefined, {
+    allowActiveJourney: true,
+    allowSevereInjury: true,
+  });
+  return { state: draft.view() };
+}
+
+/** 洗髓丹二选一回执。 */
+export interface TalentChoiceOutcome {
+  discipleId: string;
+  discipleName: string;
+  /** true = 换成了新天赋；false = 保留原天赋。 */
+  accepted: boolean;
+  talent: string;
+  talentName: string;
+  /** 因换掉天赋而卸任的职位名；没有为 null。 */
+  leftOffice: string | null;
+}
+
+/**
+ * 洗髓丹二选一（POST /game/talent-choice）：accept = 换成候选天赋，否则保留原天赋；两种都清空候选。
+ * 换掉天赋时若他是执事（职位要求的天赋没了），同批卸任并进入交接期。
+ */
+export async function chooseTalent(
+  db: D1Database,
+  userId: string,
+  discipleId: string,
+  accept: boolean,
+  now: number,
+): Promise<{ state: SectStateView; outcome: TalentChoiceOutcome }> {
+  const draft = await draftFor(db, userId, now);
+  const disciple = draft.discipleById(discipleId);
+  const candidate = disciple.talent_candidate;
+  if (candidate === null || findTalent(candidate) === undefined) {
+    throw new AppError('INVALID_STATUS', `${disciple.name}没有待决定的新天赋`);
+  }
+  const talent = accept ? candidate : disciple.talent;
+  let leftOffice: string | null = null;
+  if (accept && talent !== disciple.talent) {
+    const row = stewardRowOf(draft, disciple.id);
+    if (row !== undefined) {
+      leftOffice = findStewardOffice(row.office)?.name ?? null;
+      leaveStewardOffice(draft, disciple);
+    }
+  }
+  draft.addStatement(updateDiscipleTalentStatement(disciple.id, talent));
+  disciple.talent = talent;
+  disciple.talent_candidate = null;
+  // 决定保留哪个天赋不需要本人在场：在外 / 重伤时也能选。
+  await draft.commitDisciple([{ id: disciple.id }], undefined, {
+    allowActiveJourney: true,
+    allowSevereInjury: true,
+  });
+  return {
+    state: draft.view(),
+    outcome: {
+      discipleId: disciple.id,
+      discipleName: disciple.name,
+      accepted: accept,
+      talent,
+      talentName: talentNameOf(talent),
+      leftOffice,
+    },
+  };
 }
 
 /**
@@ -6139,7 +6463,7 @@ export async function startRealmExplore(
   }
   for (const id of discipleIds) {
     const disciple = draft.discipleById(id);
-    requireNotAway(draft, disciple, '出战');
+    requireCanFight(draft, disciple, '出战');
     if (disciple.injured_until !== null && Number(disciple.injured_until) > now) {
       throw new AppError('INVALID_STATUS', `${disciple.name}正在疗伤，无法出战`);
     }
@@ -6344,9 +6668,16 @@ export async function chooseRealmExplore(
     }
   }
 
+  // 天赋重构 · 寻宝执事：整场结束时的最终收获按比例提高（中段账本不动，只放大这次发放）。
+  const treasureBp = stewardBonusOf(draft, 'treasure');
+  if (status !== 'in_progress' && treasureBp > 0 && Object.keys(payout).length > 0) {
+    payout = scaleRewards(payout, 10_000 + treasureBp);
+    if (finalRewards !== null) finalRewards = payout;
+  }
+
   // 装备二期：高级秘境通关时低概率掉玄铁（只进本次发放，不写进中段账本）。
   if (status === 'completed') {
-    const xuantie = realmXuantieDrop(realm.id, Math.random) * 1000;
+    const xuantie = realmXuantieDrop(realm.id, Math.random, treasureBp) * 1000;
     if (xuantie > 0) {
       payout = { ...payout, [XUANTIE_RESOURCE_ID]: (payout[XUANTIE_RESOURCE_ID] ?? 0) + xuantie };
       finalRewards = payout;
@@ -7944,13 +8275,13 @@ async function worldBossRoundDamage(
           !awayIds.has(disciple.id) && !isSeverelyInjured(disciple.severe_injured_until, now),
       )
       .map((disciple) =>
+        // 天赋重构：血量估算与装备同理不计天赋（战意随境界变强后，不让 Boss 血量跟着涨）。
         discipleCombatPower(
           disciple.realm_id,
           Number(disciple.stage),
           Number(disciple.attack),
           Number(disciple.defense),
           Number(disciple.speed),
-          disciple.talent,
         ),
       )
       .sort((a, b) => b - a)
@@ -8029,7 +8360,7 @@ export async function attackWorldBoss(
   }
   const members = discipleIds.map((discipleId) => draft.discipleById(discipleId));
   for (const member of members) {
-    requireNotAway(draft, member, '讨伐');
+    requireCanFight(draft, member, '讨伐');
     if (member.injured_until !== null && Number(member.injured_until) > now) {
       throw new AppError('INVALID_STATUS', `${member.name}正在疗伤，无法讨伐`);
     }
@@ -8055,6 +8386,7 @@ export async function attackWorldBoss(
   const severeMembers: DiscipleRow[] = [];
   const injuredMembers: DiscipleRow[] = [];
   let partyBase = 0;
+  let critBonusBase = 0;
   let luckSum = 0;
   for (const member of members) {
     const attrs = battleAttrsOf(member);
@@ -8063,6 +8395,8 @@ export async function attackWorldBoss(
       fatigueCount: fatigueByDisciple.get(member.id) ?? 0,
       physique: attrs.physique,
       berserk,
+      // 天赋重构 · 铁骨：受伤 / 重伤概率按境界减免。
+      injuryReductionBp: talentBonusBp(member.talent, member.realm_id, 'ironBody'),
       random: Math.random,
     });
     if (verdict.severe) {
@@ -8076,7 +8410,7 @@ export async function attackWorldBoss(
     } else {
       outcomes.push({ discipleId: member.id, discipleName: member.name, outcome: 'normal' });
     }
-    partyBase += discipleContribution(
+    const contribution = discipleContribution(
       discipleCombatPower(
         member.realm_id,
         Number(member.stage),
@@ -8093,6 +8427,9 @@ export async function attackWorldBoss(
         speed: attrs.speed,
       },
     );
+    partyBase += contribution;
+    // 天赋重构 · 会心：暴击时这名弟子的伤害额外 + 会心加成。
+    critBonusBase += (contribution * talentBonusBp(member.talent, member.realm_id, 'critical')) / 10_000;
   }
 
   const { damage, crit } = rollDamage({
@@ -8102,6 +8439,7 @@ export async function attackWorldBoss(
     avgLuck: members.length === 0 ? 0 : luckSum / members.length,
     frenzy,
     ...(affix?.id === 'eerie' ? { critRateMultiplier: 2 } : {}),
+    critBonusBase,
     random: Math.random,
   });
   const actualDamage = Math.min(damage, Number(boss.hp));
@@ -8625,6 +8963,7 @@ export function getMeritShop(): MeritShopView {
       cost: item.cost,
       category: item.category,
       quality: item.quality,
+      pillId: item.pillId,
       color: item.quality === null ? null : qualityColorOf(item.quality),
     })),
     slots: equipmentSlotViews(),
@@ -8639,6 +8978,8 @@ export interface BossMeritExchangeOutcome {
   cost: number;
   /** 兑换到的玄铁（最小单位）；兑换装备时为 0。 */
   xuantie: number;
+  /** 兑换到的丹药；不是丹药时为 null。 */
+  pill: { pillId: string; name: string; quantity: number } | null;
   /** 兑换到的装备；兑换玄铁时为 null。 */
   equipment: { id: string; name: string; quality: string; slot: string; slotName: string } | null;
 }
@@ -8666,19 +9007,34 @@ export async function exchangeBossMerit(
   const costMinUnits = item.cost * 1000;
   const quality = item.quality;
 
-  // 玄铁：不许带部位 / 主属性；数量 1~WORLD_BOSS_MERIT_XUANTIE_MAX，缺省 1。
+  // 玄铁 / 丹药：不许带部位 / 主属性；数量 1~WORLD_BOSS_MERIT_XUANTIE_MAX，缺省 1。
   if (quality === null) {
     if (input.slot !== undefined || input.mainAttr !== undefined) {
-      throw new AppError('VALIDATION_ERROR', '兑换玄铁不需要选择部位');
+      throw new AppError('VALIDATION_ERROR', `兑换${item.name}不需要选择部位`);
     }
     const quantity = input.quantity ?? 1;
     if (!Number.isInteger(quantity) || quantity < 1 || quantity > WORLD_BOSS_MERIT_XUANTIE_MAX) {
       throw new AppError(
         'VALIDATION_ERROR',
-        `一次最多兑换 ${String(WORLD_BOSS_MERIT_XUANTIE_MAX)} 个玄铁`,
+        `一次最多兑换 ${String(WORLD_BOSS_MERIT_XUANTIE_MAX)} 个${item.name}`,
       );
     }
     draft.requireResource(BOSS_MERIT_RESOURCE_ID, costMinUnits * quantity);
+    // 天赋重构：丹药类（洗髓丹）直接进丹库，与炼制入库同一条 upsert。
+    if (item.pillId !== null) {
+      draft.addPill(item.pillId, quantity);
+      await draft.commit();
+      return {
+        state: draft.view(),
+        outcome: {
+          itemId: item.id,
+          cost: costMinUnits * quantity,
+          xuantie: 0,
+          pill: { pillId: item.pillId, name: item.name, quantity },
+          equipment: null,
+        },
+      };
+    }
     draft.addResource(XUANTIE_RESOURCE_ID, quantity * 1000);
     await draft.commit();
     return {
@@ -8687,6 +9043,7 @@ export async function exchangeBossMerit(
         itemId: item.id,
         cost: costMinUnits * quantity,
         xuantie: quantity * 1000,
+        pill: null,
         equipment: null,
       },
     };
@@ -8734,6 +9091,7 @@ export async function exchangeBossMerit(
       itemId: item.id,
       cost: costMinUnits,
       xuantie: 0,
+      pill: null,
       equipment: {
         id: equipmentId,
         name: generated.name,

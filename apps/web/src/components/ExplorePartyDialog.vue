@@ -36,7 +36,7 @@ function pickUpToMax(): void {
   selected.value = props.state.disciples
     .filter(
       (disciple) =>
-        selectionBlockReason(disciple, now, { blockInjured: true, blockAway: true }) === null,
+        selectionBlockReason(disciple, now, { blockInjured: true, blockAway: true, blockSteward: true }) === null,
     )
     .slice(0, props.realm.maxParty)
     .map((disciple) => disciple.id);

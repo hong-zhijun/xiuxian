@@ -29,6 +29,8 @@ const props = withDefaults(
     blockInjured?: boolean;
     /** 在外历练的弟子是否禁选（服务端 requireNotAway 会拒绝，默认禁）。 */
     blockAway?: boolean;
+    /** 执事 / 交接期的弟子是否禁选（出战入口默认禁；论道传 false）。 */
+    blockSteward?: boolean;
     /** 初始排序：realm = 大境界从高到低（默认）；power = 战力；luck = 幸运值。 */
     sort?: DiscipleSortKey;
     /** 显示点选顺序角标（顺序有意义时打开）。 */
@@ -60,6 +62,7 @@ const props = withDefaults(
     max: 3,
     blockInjured: true,
     blockAway: true,
+    blockSteward: true,
     sort: 'realm',
     showOrder: false,
     title: '选择弟子',
@@ -134,6 +137,7 @@ function blockReason(disciple: DiscipleView): string | null {
   return selectionBlockReason(disciple, nowTick.value, {
     blockInjured: props.blockInjured,
     blockAway: props.blockAway,
+    blockSteward: props.blockSteward,
   });
 }
 
@@ -186,7 +190,12 @@ function fatigueStatusText(disciple: DiscipleView): { text: string; danger: bool
   if (count <= 0) return null;
   if (count >= 3) {
     // 与二次确认弹窗同一个算法（含体魄减免与「狂暴」×2）
-    const risk = severeRiskPercent(count, disciple.physique, props.berserk === true);
+    const risk = severeRiskPercent(
+      count,
+      disciple.physique,
+      props.berserk === true,
+      disciple.bossInjuryReductionBp,
+    );
     return { text: risk >= 100 ? '必重伤' : `冒进 ${String(risk)}%`, danger: true };
   }
   return { text: `本小时 ${String(count)}/3`, danger: false };

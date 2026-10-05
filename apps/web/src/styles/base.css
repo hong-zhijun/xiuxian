@@ -4754,7 +4754,7 @@ ul {
 /* ---------- Action bar (single row) ---------- */
 .action-bar {
   display: grid;
-  grid-template-columns: repeat(9, minmax(0, 1fr));
+  grid-template-columns: repeat(10, minmax(0, 1fr));
   gap: 7px;
   margin-top: 14px;
 }
@@ -7140,5 +7140,288 @@ h2.public-sect-name {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+  }
+}
+
+/* ---------- 天赋重构：天赋效果标签、洗髓二选一、天赋总表、执事堂 ---------- */
+
+.stat-tag.stat-talent-effect {
+  border-color: rgba(202, 169, 106, 0.2);
+  color: var(--gold-bright);
+  background: rgba(202, 169, 106, 0.06);
+}
+
+.stat-tag.stat-steward {
+  border-color: rgba(146, 167, 157, 0.32);
+  color: #c8d6ce;
+}
+
+.disciple-status.is-steward {
+  border-color: rgba(202, 169, 106, 0.4);
+  color: var(--gold-bright);
+  background: rgba(202, 169, 106, 0.08);
+}
+
+.steward-bonus-note {
+  color: var(--gold);
+  font-size: 12px;
+}
+
+p.steward-bonus-note {
+  margin: 0 0 10px;
+}
+
+.talent-candidate {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid rgba(202, 169, 106, 0.32);
+  border-radius: 8px;
+  background: rgba(202, 169, 106, 0.05);
+}
+
+.talent-candidate-title {
+  margin: 0;
+  color: var(--ink-text);
+  font-size: 13px;
+}
+
+.talent-candidate-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.talent-candidate-option {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.talent-candidate-option strong {
+  color: var(--ink-text);
+  font-size: 15px;
+}
+
+.talent-candidate-option small {
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.talent-candidate-option.is-new {
+  border-color: rgba(202, 169, 106, 0.5);
+}
+
+.talent-candidate-option.is-new strong {
+  color: var(--gold-bright);
+}
+
+.talent-candidate-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.talent-catalog {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.talent-catalog-swipe {
+  display: none;
+  margin: 0;
+}
+
+.talent-catalog-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.talent-catalog-table {
+  width: 100%;
+  min-width: 560px;
+  border-collapse: collapse;
+  color: #c8d6ce;
+  font-size: 12px;
+}
+
+.talent-catalog-table th,
+.talent-catalog-table td {
+  padding: 7px 8px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+}
+
+.talent-catalog-table thead th {
+  color: var(--muted);
+  font-weight: 500;
+  white-space: nowrap;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.talent-catalog-table tbody tr:last-child th,
+.talent-catalog-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.talent-catalog-name {
+  color: var(--ink-text);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.talent-catalog-category {
+  white-space: nowrap;
+}
+
+.talent-catalog-table tr.is-steward .talent-catalog-category {
+  color: var(--gold);
+}
+
+.talent-catalog-condition {
+  color: var(--muted);
+}
+
+.talent-catalog-value {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.talent-catalog-table .talent-catalog-value.is-current {
+  color: var(--gold-bright);
+  background: rgba(202, 169, 106, 0.06);
+}
+
+.talent-catalog-table tbody tr.is-current {
+  background: rgba(119, 184, 154, 0.08);
+}
+
+.talent-catalog-table tbody tr.is-current .talent-catalog-name {
+  color: var(--jade-bright);
+}
+
+.steward-hall {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.steward-rules {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding-left: 18px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.steward-rules strong {
+  color: var(--red-bright);
+  font-weight: 600;
+}
+
+.steward-offices {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.steward-office {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.steward-office-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.steward-office-head strong {
+  color: var(--ink-text);
+  font-size: 15px;
+}
+
+.steward-current p {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+}
+
+.steward-current-name {
+  color: var(--ink-text);
+  font-weight: 600;
+}
+
+.steward-current .steward-effect {
+  margin-top: 4px;
+  color: var(--gold-bright);
+  font-size: 13px;
+}
+
+.steward-vacant {
+  margin: 0;
+  color: var(--faint);
+  font-size: 13px;
+}
+
+.steward-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.steward-actions .disciple-select {
+  min-width: 0;
+  flex: 1 1 180px;
+}
+
+.steward-actions .disciple-select .disciple-input {
+  width: 100%;
+}
+
+@media (max-width: 620px) {
+  .talent-catalog-swipe {
+    display: block;
+  }
+}
+
+@media (max-width: 420px) {
+  .talent-candidate-options {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .steward-actions .action-button,
+  .steward-actions .upgrade-button {
+    flex: 1 1 auto;
   }
 }

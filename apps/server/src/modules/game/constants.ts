@@ -349,39 +349,7 @@ export function assignmentLimitOf(assignment: string, sectLevel: number): number
   return null;
 }
 
-/**
- * 天赋定义（V4 第二节）。天赋是代码常量，不进 game-config：
- * 每个弟子的 talent 列存 id，这里的映射负责展示名与加成对象。
- *
- * 天赋与岗位的对应关系：
- * - `herbGathering` → 弟子在 `herbGathering` 岗位时产出 ×1.2
- * - `mining`        → 弟子在 `oreGathering` 岗位时产出 ×1.2
- * - `cultivation`   → 弟子在 `cultivating` 岗位时修炼速度 ×1.2
- * - `combat`        → 战力计算时 ×1.15
- */
-export interface TalentDef {
-  id: string;
-  name: string;
-  description: string;
-}
-
-export const TALENTS: readonly TalentDef[] = [
-  { id: 'herbGathering', name: '采药天赋', description: '采药岗位产出 +20%' },
-  { id: 'mining', name: '炼矿天赋', description: '采矿岗位产出 +20%' },
-  { id: 'cultivation', name: '修炼天赋', description: '修炼速度 +20%' },
-  { id: 'combat', name: '战斗天赋', description: '战斗力 +15%' },
-];
-
-export const TALENT_IDS = TALENTS.map((talent) => talent.id);
-
-export function findTalent(talentId: string): TalentDef | undefined {
-  return TALENTS.find((talent) => talent.id === talentId);
-}
-
-/** 天赋加成基点值（10000 = 1.0x）。 */
-export const TALENT_POSITION_BONUS_BP = 2000; // 岗位产出 +20%
-export const TALENT_CULTIVATION_BONUS_BP = 2000; // 修炼速度 +20%
-export const TALENT_COMBAT_BONUS_BP = 1500; // 战斗力 +15%
+/* 天赋定义与加成见 talents.ts（天赋重构）。 */
 
 /* ---------- V5 挑战系统 ---------- */
 /** 守擂阵容 / 出战阵容固定 3 人；顺序即对阵顺序（view 与 service 共用同一判定）。 */

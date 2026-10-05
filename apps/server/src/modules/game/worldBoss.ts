@@ -346,7 +346,8 @@ export function expectedPartyDamage(input: {
 /**
  * 一次出手的伤害与是否暴击。
  *
- * 伤害 = floor(队伍基础 × 演武场加成 × 浮动 × 暴击倍率 × 力竭倍率 × DAMAGE_SCALE)
+ * 伤害 = floor(伤害基数 × 演武场加成 × 浮动 × 力竭倍率 × DAMAGE_SCALE)
+ *   伤害基数：未暴击 = 队伍基础；暴击 = 队伍基础 × 暴击倍率 + 会心加成（critBonusBase）
  * 暴击率 = 出战弟子 luck 平均值 / 100 × 20% ×（「邪祟」词缀时 ×2），最高 100%。
  *
  * 随机源按固定顺序取用：先浮动、后暴击判定（测试可据此注入固定序列）。
@@ -361,6 +362,8 @@ export function rollDamage(input: {
   frenzy: boolean;
   /** 「邪祟」词缀时传 2（暴击率翻倍）。 */
   critRateMultiplier?: number;
+  /** 天赋重构 · 会心：Σ(会心弟子的贡献 × 会心加成)，只在暴击时加进伤害基数；缺省 0。 */
+  critBonusBase?: number;
   random: () => number;
 }): { damage: number; crit: boolean } {
   const fluctuation =
@@ -371,11 +374,14 @@ export function rollDamage(input: {
     (input.avgLuck / 100) * WORLD_BOSS_CRIT_RATE_MAX * (input.critRateMultiplier ?? 1),
   );
   const crit = input.random() < critRate;
+  const partyBase = Math.max(0, input.partyBase);
+  const base = crit
+    ? partyBase * WORLD_BOSS_CRIT_MULTIPLIER + Math.max(0, input.critBonusBase ?? 0)
+    : partyBase;
   const damage = Math.floor(
-    Math.max(0, input.partyBase) *
+    base *
       arenaCombatMultiplier(input.arenaLevel) *
       fluctuation *
-      (crit ? WORLD_BOSS_CRIT_MULTIPLIER : 1) *
       (input.frenzy ? WORLD_BOSS_FRENZY_MULTIPLIER : 1) *
       WORLD_BOSS_DAMAGE_SCALE,
   );
@@ -423,6 +429,8 @@ export function normalInjuryChance(physique: number, berserk: boolean): number {
 /**
  * 单名弟子的判定结果：先判重伤，未重伤再判受伤。
  * 随机源按固定顺序取用：先重伤、再受伤（重伤时不会取第二个随机数）。
+ * 天赋重构 · 铁骨：两种概率都在体魄、狂暴修正之后再 ×(1 − 铁骨加成)；
+ * 与体魄同理，「5 次起必重伤」（100%）那档不减免。
  */
 export function rollOutcome(input: {
   /** 该弟子最近 60 分钟内已出战讨伐的次数（不含本次）。 */
@@ -430,13 +438,17 @@ export function rollOutcome(input: {
   physique: number;
   /** 当前关卡词缀是否「狂暴」。 */
   berserk: boolean;
+  /** 铁骨减免（基点）；缺省 0。 */
+  injuryReductionBp?: number;
   random: () => number;
 }): { severe: boolean; injured: boolean } {
-  const severeRate = severeInjuryChance(input.fatigueCount, input.physique, input.berserk);
+  const keep = 1 - Math.min(10_000, Math.max(0, input.injuryReductionBp ?? 0)) / 10_000;
+  const severeBase = severeInjuryChance(input.fatigueCount, input.physique, input.berserk);
+  const severeRate = severeBase >= 1 ? 1 : severeBase * keep;
   if (input.random() < severeRate) {
     return { severe: true, injured: false };
   }
-  const injured = input.random() < normalInjuryChance(input.physique, input.berserk);
+  const injured = input.random() < normalInjuryChance(input.physique, input.berserk) * keep;
   return { severe: false, injured };
 }
 
@@ -559,18 +571,20 @@ export function worldBossMeritFor(input: {
   return input.repelled ? Math.max(1, Math.floor(base / 2)) : base;
 }
 
-export type BossMeritShopItemId = 'xuantie' | 'spirit' | 'treasure' | 'immortal';
+export type BossMeritShopItemId = 'xuantie' | 'talentPill' | 'spirit' | 'treasure' | 'immortal';
 
 /** 功勋兑换的分类（弹窗里一类一个标签页；以后开放新的兑换物，在这里加分类、在价目表里加条目即可）。 */
-export type MeritShopCategory = 'resource' | 'equipment';
+export type MeritShopCategory = 'resource' | 'pill' | 'equipment';
 export const MERIT_SHOP_CATEGORIES: readonly { id: MeritShopCategory; name: string }[] = [
   { id: 'resource', name: '资源' },
+  { id: 'pill', name: '丹药' },
   { id: 'equipment', name: '装备' },
 ];
 
 /**
  * 功勋兑换价目表（唯一一份，前端只渲染）：cost 是展示单位，扣款时 × 1000。
- * resource 类给 resourceId 对应的资源（按个数兑换）；equipment 类给一件 quality 品质的装备（自选部位）。
+ * resource 类给 resourceId 对应的资源、pill 类给 pillId 对应的丹药（都按个数兑换）；
+ * equipment 类给一件 quality 品质的装备（自选部位）。
  */
 export const WORLD_BOSS_MERIT_SHOP: readonly {
   id: BossMeritShopItemId;
@@ -578,15 +592,19 @@ export const WORLD_BOSS_MERIT_SHOP: readonly {
   cost: number;
   category: MeritShopCategory;
   quality: EquipmentQuality | null;
+  /** pill 类：兑换得到的丹药 id；其它类为 null。 */
+  pillId: string | null;
 }[] = [
-  { id: 'xuantie', name: '玄铁', cost: 4, category: 'resource', quality: null },
-  { id: 'spirit', name: '灵品装备', cost: 25, category: 'equipment', quality: 'spirit' },
-  { id: 'treasure', name: '宝品装备', cost: 70, category: 'equipment', quality: 'treasure' },
+  { id: 'xuantie', name: '玄铁', cost: 4, category: 'resource', quality: null, pillId: null },
+  // 天赋重构：洗髓丹（也可炼制）；功勋多了一个去处。
+  { id: 'talentPill', name: '洗髓丹', cost: 60, category: 'pill', quality: null, pillId: 'talentPill' },
+  { id: 'spirit', name: '灵品装备', cost: 25, category: 'equipment', quality: 'spirit', pillId: null },
+  { id: 'treasure', name: '宝品装备', cost: 70, category: 'equipment', quality: 'treasure', pillId: null },
   // 原 200：满勤约两天一件，仙品太多；提到 400。
-  { id: 'immortal', name: '仙品装备', cost: 400, category: 'equipment', quality: 'immortal' },
+  { id: 'immortal', name: '仙品装备', cost: 400, category: 'equipment', quality: 'immortal', pillId: null },
 ];
 
-/** 一次最多兑换多少个玄铁。 */
+/** 一次最多兑换多少个（玄铁、丹药等按个数兑换的项共用）。 */
 export const WORLD_BOSS_MERIT_XUANTIE_MAX = 100;
 
 /** 按 id 找价目表项；未知 id 返回 undefined（调用方报 VALIDATION_ERROR）。 */

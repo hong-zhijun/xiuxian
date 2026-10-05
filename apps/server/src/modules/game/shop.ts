@@ -50,13 +50,20 @@ export const SHOP_PILL_SELL_RATIO = SHOP_PILL_SELL_NUMERATOR / SHOP_PILL_SELL_DE
  * - 回春丹：herb 10000 × 0.5 + 灵石 15000 = 20000 → 14000
  * - 聚气丹：herb 25000 × 0.5 + 灵气 15000 × 0 + 灵石 10000 = 22500 → 15750
  * - 淬体丹：herb 40000 × 0.5 + 矿石 20000 × 0.5 + 灵石 30000 = 60000 → 42000
- * 新增丹方时必须同时补一条（tests/game/shop-rules.test.ts 会核对这张表的键与丹方一致）。
+ * 新增丹方时必须同时补一条，或者列进 SHOP_UNSELLABLE_PILL_IDS
+ * （tests/game/shop-rules.test.ts 会核对「价格表的键 + 不可回收」与丹方一致）。
  */
 export const SHOP_PILL_PRICES: Record<string, number> = {
   healingPill: 14_000,
   cultivationPill: 15_750,
   bodyTemperingPill: 42_000,
 };
+
+/**
+ * 坊市不回收的丹药（天赋重构）：洗髓丹 —— 它能用功勋兑换，回收的话功勋就能变相换成灵石；
+ * 配方里的玄铁也不可交易，没有折算口径。价格表里没有它，service 按未知丹药拒绝。
+ */
+export const SHOP_UNSELLABLE_PILL_IDS: readonly string[] = ['talentPill'];
 
 /** 单次买卖的材料数量上限（展示单位整数）：与 schema 同口径。 */
 export const SHOP_MAX_TRADE_AMOUNT = 10_000;

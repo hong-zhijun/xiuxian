@@ -75,6 +75,8 @@ function reward(
     durationSeconds,
     aptitude,
     talent,
+    // 历练门槛就是筑基：天赋按筑基系数 ×1.25（悟道 +20%、灵植 / 矿脉 +25%）。
+    realmId: 'foundationEstablishment',
     combatPower,
     luck,
     physique,
@@ -155,21 +157,25 @@ describe('奖励计算与取整口径', () => {
     expect(reward('gathering', 7_200, 100, 'combat', 0)?.cultivation).toBe(48);
   });
 
-  it('修炼天赋在系数之后再 +20%（分步取整）', () => {
+  it('悟道（筑基 +20%）在系数之后再加成（分步取整）', () => {
     // floor(648 × 1.2) = floor(777.6) = 777
     expect(reward('daoSeeking', 21_600, 100, 'cultivation', 0)?.cultivation).toBe(777);
     // floor(48 × 1.2) = floor(57.6) = 57
     expect(reward('gathering', 7_200, 100, 'cultivation', 0)?.cultivation).toBe(57);
   });
 
-  it('采药 / 炼矿天赋只加成对应的采集资源，访道不受影响', () => {
+  it('灵植 / 矿脉（筑基 +25%）只加成对应的采集资源，访道不受影响', () => {
     expect(reward('gathering', 21_600, 50, 'herbGathering', 0)?.resources).toEqual({
-      herb: 90_000,
+      herb: 93_750,
       ore: 60_000,
     });
     expect(reward('gathering', 21_600, 50, 'mining', 0)?.resources).toEqual({
       herb: 75_000,
-      ore: 72_000,
+      ore: 75_000,
+    });
+    // 聚灵：历练获得的灵石同样加成（筑基 +25%）。
+    expect(reward('daoSeeking', 21_600, 50, 'spiritGathering', 0)?.resources).toEqual({
+      spiritStone: 56_250,
     });
     expect(reward('daoSeeking', 21_600, 50, 'herbGathering', 0)?.resources).toEqual({
       spiritStone: 45_000,
@@ -189,6 +195,7 @@ describe('奖励计算与取整口径', () => {
         durationSeconds: 3_600,
         aptitude: 50,
         talent: 'combat',
+        realmId: 'foundationEstablishment',
         combatPower: 0,
         luck: 50,
         physique: 50,
@@ -227,7 +234,7 @@ describe('额外收获与受伤：独立判定', () => {
     const base = reward('gathering', 21_600, 50, 'herbGathering', 0)!;
     const extra = journeyExtraHarvestReward(base);
     expect(extra.cultivation).toBe(Math.floor(120 * 0.5));
-    expect(extra.resources).toEqual({ herb: 45_000, ore: 30_000 });
+    expect(extra.resources).toEqual({ herb: 46_875, ore: 30_000 });
   });
 
   it('额外未触发时就是保底值本身', () => {

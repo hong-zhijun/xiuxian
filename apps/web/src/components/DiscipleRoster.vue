@@ -131,6 +131,9 @@ const rows = computed<RosterRow[]>(() =>
     // 卡片只显示当前状态：重伤 > 疗伤 > 当前岗位（卧床期间什么都不产出，要最先被看到）。
     // 可破境由满环与头像按钮表达，不再重复占用状态标签。
     let rosterStatus: RosterStatus = { key: 'assignment', label: disciple.assignmentName };
+    // 天赋重构：执事 / 交接期不能出战，比岗位名更值得一眼看到（疗伤、重伤仍优先）。
+    if (disciple.stewardOffice !== null) rosterStatus = { key: 'steward', label: '执事' };
+    else if (disciple.stewardHandoverUntil !== null) rosterStatus = { key: 'steward', label: '交接中' };
     if (status.key === 'injured') rosterStatus = status;
     // 重伤剩余时间按 props.serverNowMs（服务器时间口径）倒算；key 会进 `is-severeInjured` 类名。
     const severeLabel = severeInjuryStatusLabel(disciple, props.serverNowMs);

@@ -145,12 +145,21 @@ function clampPity(pity: number): number {
   return Math.min(FORGE_PITY_MAX, Math.max(0, Math.floor(Number(pity) || 0)));
 }
 
-/** 炼器概率：炼器坊加成 +（仅仙品）保底加成，先抵消失败率，再抵消降级率。 */
-export function forgeOddsOf(quality: EquipmentQuality, workshopLevel: number, pity = 0): ForgeOdds {
+/**
+ * 炼器概率：炼器坊加成 +（仅仙品）保底加成 + 炼器执事加成（stewardBonusBp，天赋重构），
+ * 先抵消失败率，再抵消降级率。
+ */
+export function forgeOddsOf(
+  quality: EquipmentQuality,
+  workshopLevel: number,
+  pity = 0,
+  stewardBonusBp = 0,
+): ForgeOdds {
   const base = FORGE_BASE_ODDS[quality];
   let bonus =
     FORGE_SURPLUS_BONUS * Math.max(0, workshopLevel - (forgeRecipeOf(quality)?.workshopLevel ?? 1)) +
-    (quality === FORGE_PITY_QUALITY ? FORGE_PITY_BONUS * clampPity(pity) : 0);
+    (quality === FORGE_PITY_QUALITY ? FORGE_PITY_BONUS * clampPity(pity) : 0) +
+    Math.max(0, stewardBonusBp) / 10_000;
   const fail = round2(Math.max(0, base.fail - bonus));
   bonus -= base.fail - fail;
   const downgrade = round2(Math.max(0, base.downgrade - bonus));
@@ -246,10 +255,14 @@ export function realmXuantieDropText(realmId: string): string | null {
   return `玄铁 ${amount}（${String(Math.round(drop.chance * 100))}%）`;
 }
 
-/** 秘境玄铁掉落（展示单位整数，0 = 没掉）；random 注入便于测试。 */
-export function realmXuantieDrop(realmId: string, random: () => number): number {
+/**
+ * 秘境玄铁掉落（展示单位整数，0 = 没掉）；random 注入便于测试。
+ * chanceBonusBp（天赋重构 · 寻宝执事）：掉落概率 ×(1 + 它 / 10000)，封顶 100%。
+ */
+export function realmXuantieDrop(realmId: string, random: () => number, chanceBonusBp = 0): number {
   const drop = REALM_XUANTIE_DROPS[realmId];
-  if (drop === undefined || random() >= drop.chance) return 0;
+  const chance = drop === undefined ? 0 : Math.min(1, drop.chance * (1 + Math.max(0, chanceBonusBp) / 10_000));
+  if (drop === undefined || random() >= chance) return 0;
   return drop.min + Math.min(drop.max - drop.min, Math.floor(random() * (drop.max - drop.min + 1)));
 }
 /** 背包上限 = 本宗门**未穿戴**装备的件数上限（穿在身上的不占背包）。 */

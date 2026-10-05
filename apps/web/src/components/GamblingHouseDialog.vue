@@ -626,6 +626,7 @@ const RULES_TEXT = `论道赌局 · 玩法说明
           :min="1"
           :max="1"
           :busy="busy"
+          :block-steward="false"
           title="选择出战弟子"
         />
 

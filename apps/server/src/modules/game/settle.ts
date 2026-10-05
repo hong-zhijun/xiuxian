@@ -7,12 +7,22 @@ import {
   SCRIPTURE_LIBRARY_CULTIVATION_BONUS_BP_PER_LEVEL,
   SPIRITUAL_ARRAY_BUILDING_ID,
   SPIRITUAL_ARRAY_ENERGY_BONUS_BP_PER_LEVEL,
-  TALENT_CULTIVATION_BONUS_BP,
-  TALENT_POSITION_BONUS_BP,
   effectiveCapacity,
   findStage,
 } from './constants';
 import { triggerEvents, type TriggeredEvent } from './events';
+import { talentBonusBp } from './talents';
+
+/**
+ * 天赋重构：产出类天赋各自加成哪些岗位（灵植 → 药园、矿脉 → 采矿、聚灵 → 采灵 / 吐纳）。
+ * 历练采集的对应资源见 journey.ts 的 JOURNEY_GATHERING_TALENT_RESOURCES。
+ */
+export const POSITION_TALENTS: Readonly<Record<string, string>> = {
+  herbGathering: 'herbGathering',
+  oreGathering: 'mining',
+  stoneMining: 'spiritGathering',
+  energyGathering: 'spiritGathering',
+};
 
 /**
  * 离线结算（纯计算；规则来自 03 第 3、4 节 + P3 随机事件 + 0014 弟子历练）。
@@ -267,7 +277,7 @@ export function resourceBaseRates(
 
 /**
  * 单名弟子在当前岗位上的产出（最小单位/小时）；岗位不在配置里（例如闲置）返回空表。
- * V4 4.2：天赋匹配当前岗位时该弟子的产出 ×1.2（基点 12000 vs 10000）。
+ * 天赋重构：天赋匹配当前岗位（POSITION_TALENTS）时产出 ×(1 + 天赋加成)，加成随境界提高。
  */
 export function positionOutputPerHour(
   config: GameConfigContent,
@@ -279,10 +289,9 @@ export function positionOutputPerHour(
     return output;
   }
 
-  const talentMatch =
-    (disciple.talent === 'herbGathering' && disciple.assignment === 'herbGathering') ||
-    (disciple.talent === 'mining' && disciple.assignment === 'oreGathering');
-  const bonusMultiplier = talentMatch ? BP + TALENT_POSITION_BONUS_BP : BP;
+  const positionTalent = POSITION_TALENTS[disciple.assignment];
+  const bonusMultiplier =
+    BP + (positionTalent === undefined ? 0 : talentBonusBp(disciple.talent, disciple.realmId, positionTalent));
 
   for (const [resourceId, amountText] of Object.entries(position.outputPerHourPerDisciple)) {
     output.set(resourceId, Math.floor((Number(amountText) * bonusMultiplier) / BP));
@@ -328,11 +337,9 @@ export function cultivationRatePerHour(
   // 藏经阁加成：每级 +10%
   const libraryBonusBp = scriptureLibraryLevel * SCRIPTURE_LIBRARY_CULTIVATION_BONUS_BP_PER_LEVEL;
   const result = Math.floor((baseRate * (10_000 + libraryBonusBp)) / 10_000);
-  // V4 4.3：修炼天赋在藏经阁加成之后再 ×1.2。
-  if (disciple.talent === 'cultivation') {
-    return Math.floor((result * (10_000 + TALENT_CULTIVATION_BONUS_BP)) / 10_000);
-  }
-  return result;
+  // 天赋重构：悟道在藏经阁加成之后再 ×(1 + 加成)，加成随境界提高。
+  const talentBp = talentBonusBp(disciple.talent, disciple.realmId, 'cultivation');
+  return talentBp > 0 ? Math.floor((result * (10_000 + talentBp)) / 10_000) : result;
 }
 
 /**

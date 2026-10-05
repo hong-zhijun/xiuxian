@@ -91,6 +91,22 @@ export interface DiscipleRow {
   dao_insight: number;
   /** 0019 赌坊：累计已分配的悟道值（上限 DAO_INSIGHT_CAP = 50）。 */
   dao_insight_used: number;
+  /** 0034 天赋重构：已服用洗髓丹次数（上限 TALENT_REROLL_MAX_USES，见 talents.ts）。 */
+  talent_reroll_count: number;
+  /** 0034 天赋重构：洗髓丹洗出、尚未决定的候选天赋 id；null = 没有。 */
+  talent_candidate: string | null;
+  /** 0034 天赋重构：卸任执事后的交接期结束时间（UTC 毫秒）；期间不能出战；null = 无。 */
+  steward_handover_until: number | null;
+}
+
+/** 0034 执事堂：每宗门每个职位一行；disciple_id 为 null = 空缺（行保留，用来记当天是否已任命）。 */
+export interface SectStewardRow {
+  sect_id: string;
+  office: string;
+  disciple_id: string | null;
+  /** 最近一次任命的 UTC+8 日期键；'' = 从未任命。 */
+  appointed_date_key: string;
+  updated_at: number;
 }
 
 export interface BuildingRow {
@@ -249,7 +265,8 @@ export class DiscipleRepository extends ParamRepository {
       sql: `SELECT id, sect_id, name, gender, aptitude, attack, defense, speed, luck, physique, talent,
                    gear_attack, gear_defense, gear_speed, gear_luck, gear_physique, gear_power_bp,
                    realm_id, stage, cultivation, cultivation_remainder,
-                   assignment, injured_until, severe_injured_until, body_tempering_count, note, avatar_frame_id, dao_insight, dao_insight_used, created_at
+                   assignment, injured_until, severe_injured_until, body_tempering_count, note, avatar_frame_id, dao_insight, dao_insight_used,
+                   talent_reroll_count, talent_candidate, steward_handover_until, created_at
             FROM disciples WHERE sect_id = ? ORDER BY created_at ASC, id ASC`,
       params: [sectId],
     });
@@ -260,7 +277,8 @@ export class DiscipleRepository extends ParamRepository {
       sql: `SELECT id, sect_id, name, gender, aptitude, attack, defense, speed, luck, physique, talent,
                    gear_attack, gear_defense, gear_speed, gear_luck, gear_physique, gear_power_bp,
                    realm_id, stage, cultivation, cultivation_remainder,
-                   assignment, injured_until, severe_injured_until, body_tempering_count, note, avatar_frame_id, dao_insight, dao_insight_used, created_at
+                   assignment, injured_until, severe_injured_until, body_tempering_count, note, avatar_frame_id, dao_insight, dao_insight_used,
+                   talent_reroll_count, talent_candidate, steward_handover_until, created_at
             FROM disciples WHERE id = ?`,
       params: [discipleId],
     });
@@ -304,6 +322,76 @@ export interface PillInventoryRow {
   pill_id: string;
   quantity: number;
   updated_at: number;
+}
+
+/** 0034 执事堂：本宗的职位行（最多 3 行，按主键前缀查）。 */
+export class StewardRepository extends ParamRepository {
+  async findBySectId(sectId: string): Promise<SectStewardRow[]> {
+    return this.all<SectStewardRow>({
+      sql: `SELECT sect_id, office, disciple_id, appointed_date_key, updated_at
+            FROM sect_stewards WHERE sect_id = ? ORDER BY office ASC`,
+      params: [sectId],
+    });
+  }
+}
+
+/** 0034 任命：职位行 upsert（同一宗门同一职位永远只有一行），同时记下今天的日期键。 */
+export function upsertStewardStatement(row: {
+  sectId: string;
+  office: string;
+  discipleId: string;
+  dateKey: string;
+  now: number;
+}): ParameterizedQuery {
+  return {
+    sql: `INSERT INTO sect_stewards (sect_id, office, disciple_id, appointed_date_key, updated_at)
+          VALUES (?, ?, ?, ?, ?)
+          ON CONFLICT (sect_id, office) DO UPDATE SET
+            disciple_id = excluded.disciple_id,
+            appointed_date_key = excluded.appointed_date_key,
+            updated_at = excluded.updated_at`,
+    params: [row.sectId, row.office, row.discipleId, row.dateKey, row.now],
+  };
+}
+
+/** 0034 卸任 / 驱逐：把这名弟子所在的职位置空（不动日期键）；他不在任何职位上时不改任何行。 */
+export function vacateStewardByDiscipleStatement(
+  sectId: string,
+  discipleId: string,
+  now: number,
+): ParameterizedQuery {
+  return {
+    sql: 'UPDATE sect_stewards SET disciple_id = NULL, updated_at = ? WHERE sect_id = ? AND disciple_id = ?',
+    params: [now, sectId, discipleId],
+  };
+}
+
+/** 0034 交接期写回（卸任 / 被替换 / 洗髓换掉天赋时）。 */
+export function updateDiscipleHandoverStatement(discipleId: string, until: number | null): ParameterizedQuery {
+  return {
+    sql: 'UPDATE disciples SET steward_handover_until = ? WHERE id = ?',
+    params: [until, discipleId],
+  };
+}
+
+/** 0034 洗髓丹：服用后写回次数与候选天赋。 */
+export function updateDiscipleTalentRerollStatement(
+  discipleId: string,
+  count: number,
+  candidate: string,
+): ParameterizedQuery {
+  return {
+    sql: 'UPDATE disciples SET talent_reroll_count = ?, talent_candidate = ? WHERE id = ?',
+    params: [count, candidate, discipleId],
+  };
+}
+
+/** 0034 洗髓丹二选一：写回最终天赋并清空候选。 */
+export function updateDiscipleTalentStatement(discipleId: string, talent: string): ParameterizedQuery {
+  return {
+    sql: 'UPDATE disciples SET talent = ?, talent_candidate = NULL WHERE id = ?',
+    params: [talent, discipleId],
+  };
 }
 
 export class PillInventoryRepository extends ParamRepository {

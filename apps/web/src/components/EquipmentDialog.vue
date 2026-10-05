@@ -211,7 +211,11 @@ function onForge(): void {
       <dl class="equipment-facts">
         <div>
           <dt>成功率</dt>
-          <dd>{{ oddsText }}</dd>
+          <dd>
+            {{ oddsText }}
+            <!-- 天赋重构：炼器执事的加成已算进上面的概率，这里只说明来源。 -->
+            <span v-if="equipment.stewardBonusText" class="steward-bonus-note">（含{{ equipment.stewardBonusText }}）</span>
+          </dd>
         </div>
         <div v-if="pityText !== null">
           <dt>仙品保底</dt>

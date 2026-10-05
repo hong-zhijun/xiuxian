@@ -1082,6 +1082,10 @@ describe('0018 迁移：disciples 重建后结构与约束完好', () => {
       'gear_physique',
       // 0032 装备战力加成：第 6 个冗余列（NOT NULL DEFAULT 0）。
       'gear_power_bp',
+      // 0034 天赋重构：洗髓次数 / 候选天赋 / 执事交接期。
+      'talent_reroll_count',
+      'talent_candidate',
+      'steward_handover_until',
     ]);
   });
 
@@ -1139,6 +1143,10 @@ describe('0018 迁移：disciples 重建后结构与约束完好', () => {
       'gear_physique|INTEGER|1|0',
       // 0032 装备战力加成（基点），NOT NULL DEFAULT 0。
       'gear_power_bp|INTEGER|1|0',
+      // 0034 天赋重构：洗髓次数 NOT NULL DEFAULT 0；候选天赋与交接期可空、无 DEFAULT。
+      'talent_reroll_count|INTEGER|1|0',
+      'talent_candidate|TEXT|0|',
+      'steward_handover_until|INTEGER|0|',
     ]);
   });
 
@@ -1364,6 +1372,7 @@ describe('头像框：保存、幂等与校验', () => {
         'physique',
         'speed',
         'talent',
+        'talentEffect',
         'talentName',
       ]);
     }

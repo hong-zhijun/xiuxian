@@ -1,6 +1,7 @@
 import { findStage, realmIndex } from './constants';
 import { ATTRIBUTE_MAX, ATTRIBUTE_MIN, ATTRIBUTE_NEUTRAL } from './names';
 import { discipleCombatPower } from './realms';
+import { talentBonusBp } from './talents';
 
 /**
  * 弟子单人历练（0014 迁移）——不访问数据库的纯定义与纯计算。
@@ -122,16 +123,15 @@ export const JOURNEY_INJURY_DURATION_MS = 30 * 60 * 1000;
 /** 历练门槛：筑基初期起（按弟子本人的境界判定，与宗门等级无关）。 */
 export const JOURNEY_MIN_REALM_ID = 'foundationEstablishment';
 
-/** 修炼天赋对历练修为的加成（基点，+20%）。 */
-export const JOURNEY_CULTIVATION_TALENT_BP = 2_000;
-
-/** 采集天赋对采集资源的加成（基点，+20%）：采药 → 药材，炼矿 → 矿石。 */
-export const JOURNEY_GATHERING_TALENT_BP = 2_000;
-
-/** 采集方向下，天赋 → 受加成资源 id 的对应表。 */
-export const JOURNEY_GATHERING_TALENT_RESOURCE: Record<string, string> = {
+/**
+ * 天赋重构：产出类天赋 → 历练里受加成的资源（灵植 → 药材、矿脉 → 矿石、聚灵 → 灵石）。
+ * 不分方向：计划里有这项资源就加成；加成值随弟子境界（talents.ts 的 talentBonusBp）。
+ * 悟道对历练修为的加成同样随境界。
+ */
+export const JOURNEY_GATHERING_TALENT_RESOURCES: Readonly<Record<string, string>> = {
   herbGathering: 'herb',
   mining: 'ore',
+  spiritGathering: 'spiritStone',
 };
 
 const BP = 10_000;
@@ -221,6 +221,8 @@ export interface JourneyRewardInput {
   aptitude: number;
   /** 弟子天赋 id（出发时快照）。 */
   talent: string;
+  /** 弟子境界 id（出发时快照）：天赋加成随境界提高。 */
+  realmId: string;
   /** 出发时战力（discipleCombatPower），只用于下调受伤概率。 */
   combatPower: number;
   /** 弟子幸运（出发时快照，1..100）：只决定额外收获概率。 */
@@ -328,20 +330,17 @@ export function journeyBaseReward(input: JourneyRewardInput): JourneyBaseReward 
 
   const coefficientBp = journeyAptitudeCoefficientBp(input.aptitude);
   let cultivation = Math.floor((plan.cultivation * coefficientBp) / BP);
-  if (input.talent === 'cultivation') {
-    cultivation = Math.floor((cultivation * (BP + JOURNEY_CULTIVATION_TALENT_BP)) / BP);
+  const cultivationBp = talentBonusBp(input.talent, input.realmId, 'cultivation');
+  if (cultivationBp > 0) {
+    cultivation = Math.floor((cultivation * (BP + cultivationBp)) / BP);
   }
 
-  const talentResource =
-    input.direction === 'gathering'
-      ? JOURNEY_GATHERING_TALENT_RESOURCE[input.talent]
-      : undefined;
+  const talentResource = JOURNEY_GATHERING_TALENT_RESOURCES[input.talent];
+  const gatheringBp = talentResource === undefined ? 0 : talentBonusBp(input.talent, input.realmId);
   const resources: Record<string, number> = {};
   for (const [resourceId, amount] of Object.entries(plan.resources)) {
     resources[resourceId] =
-      resourceId === talentResource
-        ? Math.floor((amount * (BP + JOURNEY_GATHERING_TALENT_BP)) / BP)
-        : amount;
+      resourceId === talentResource ? Math.floor((amount * (BP + gatheringBp)) / BP) : amount;
   }
 
   return {
@@ -575,6 +574,7 @@ export function journeyBaseRewardForDisciple(
     durationSeconds,
     aptitude: disciple.aptitude,
     talent: disciple.talent,
+    realmId: disciple.realmId,
     // 0028 装备：历练**不计入装备**（计划 1.2 明列）—— 这里的战力 / 幸运 / 体魄都是基础属性，
     // 调用方（service.journeyRewardInputOf）传进来的就是弟子表上的基础属性，不含装备加成。
     combatPower: discipleCombatPower(

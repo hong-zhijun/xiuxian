@@ -65,6 +65,23 @@ export interface DiscipleView {
   physique: number;
   talent: string;
   talentName: string;
+  /** 天赋重构：当前境界下的天赋效果（如「矿石产出 +30%」）；无天赋为空串。 */
+  talentEffect: string;
+  /** 天赋重构：洗髓丹已服 / 剩余次数。 */
+  talentRerollUses: number;
+  talentRerollRemaining: number;
+  /** 天赋重构：洗髓丹洗出、待二选一的候选天赋；null = 没有。 */
+  talentCandidate: { id: string; name: string; effect: string } | null;
+  /** 天赋重构：所任执事职位 id；不是执事为 null。 */
+  stewardOffice: string | null;
+  /** 天赋重构：执事交接期结束时间（ISO）；不在交接期为 null。 */
+  stewardHandoverUntil: string | null;
+  /** 天赋重构：不能出战的短原因（「任炼器执事」「执事交接中」）；能出战为 null。 */
+  combatBlockedReason: string | null;
+  /** 天赋重构 · 丹心：这名弟子每颗聚气丹的修为。 */
+  cultivationPillGain: number;
+  /** 天赋重构 · 铁骨：讨伐受伤 / 重伤概率减免（基点）。 */
+  bossInjuryReductionBp: number;
   /** 当前战力（服务端按 realms.ts 公式算好）。 */
   combatPower: number;
   /**
@@ -199,6 +216,10 @@ export interface SectStateView {
   sectUpgrade: SectUpgradeView | null;
   /** 炼丹面板（配方/库存/解锁状态，canCraft 与短板预览都由服务端算好）。 */
   alchemy: AlchemyView;
+  /** 天赋重构：天赋总表（弟子详情「?」弹窗）。 */
+  talents: TalentCatalogEntry[];
+  /** 天赋重构：执事堂。 */
+  stewards: StewardsView;
   /** 主动挑战的当日次数（每日 3 次；失败/零奖励同样消耗）。 */
   challenge: {
     dailyLimit: number;
@@ -266,6 +287,41 @@ export interface AlchemyView {
   cultivationPillGain: number;
   /** 单次炼制的数量上限（服务端下发）。 */
   maxCraftQuantity: number;
+  /** 天赋重构：丹房执事的折扣文案；配方 cost 已是折后价。没有为 null。 */
+  costDiscountText: string | null;
+}
+
+/** 天赋总表的一行（服务端 talents.ts 的 talentCatalog）。 */
+export interface TalentCatalogEntry {
+  id: string;
+  name: string;
+  category: 'production' | 'cultivation' | 'combat' | 'steward';
+  categoryName: string;
+  condition: string;
+  effect: string;
+  values: { realmId: string; realmName: string; text: string }[];
+}
+
+/** 执事堂的一个职位（全部服务端算好）。 */
+export interface StewardOfficeView {
+  office: string;
+  name: string;
+  talentId: string;
+  talentName: string;
+  discipleId: string | null;
+  discipleName: string | null;
+  realmName: string | null;
+  /** 现任执事的效果；空缺为 null。 */
+  effect: string | null;
+  /** 执事在外历练，加成暂停。 */
+  paused: boolean;
+  /** 今天还能不能任命（每职位每天一次）。 */
+  canAppointToday: boolean;
+}
+
+export interface StewardsView {
+  offices: StewardOfficeView[];
+  handoverHours: number;
 }
 
 export interface BreakthroughOutcome {
@@ -288,7 +344,9 @@ export interface CraftPillOutcome {
 
 /** 服用效果（与后端 service.ts 的 UsePillOutcome['effect'] 一一对应）。 */
 export interface PillUseEffect {
-  kind: 'heal' | 'cultivation' | 'bodyTempering';
+  kind: 'heal' | 'cultivation' | 'bodyTempering' | 'talentReroll';
+  /** 洗髓丹洗出的候选天赋（待二选一）。 */
+  candidate?: { id: string; name: string; effect: string };
   /** 总提升量。 */
   gain?: number;
   /** 淬体丹第一颗补的属性。 */
@@ -874,6 +932,8 @@ export interface RecruitCandidate {
   physique: number;
   talent: string;
   talentName: string;
+  /** 天赋重构：入门时（炼气）的天赋效果。 */
+  talentEffect: string;
   /** 0016 综合评分：当前六项属性等权现算，一位小数（服务端算好，前端不另算）。 */
   attributeScore: number;
 }
@@ -934,6 +994,44 @@ export async function usePill(pillId: string, discipleId: string, count = 1): Pr
   return apiRequest<{ state: SectStateView; outcome: UsePillOutcome }>('/api/v1/game/use-pill', {
     method: 'POST',
     body: { pillId, discipleId, count },
+  });
+}
+
+/** 洗髓丹二选一回执（与后端 service.ts 的 TalentChoiceOutcome 一一对应）。 */
+export interface TalentChoiceOutcome {
+  discipleId: string;
+  discipleName: string;
+  accepted: boolean;
+  talent: string;
+  talentName: string;
+  /** 因换掉天赋而卸任的职位名；没有为 null。 */
+  leftOffice: string | null;
+}
+
+/** 天赋重构：洗髓丹二选一（accept = true 换成新天赋，false 保留原天赋）。 */
+export async function chooseTalent(
+  discipleId: string,
+  accept: boolean,
+): Promise<{ state: SectStateView; outcome: TalentChoiceOutcome }> {
+  return apiRequest<{ state: SectStateView; outcome: TalentChoiceOutcome }>('/api/v1/game/talent-choice', {
+    method: 'POST',
+    body: { discipleId, accept },
+  });
+}
+
+/** 天赋重构：任命执事（天赋 / 每日一次 / 在外 / 守擂都由服务端校验）。 */
+export async function appointSteward(office: string, discipleId: string): Promise<{ state: SectStateView }> {
+  return apiRequest<{ state: SectStateView }>('/api/v1/game/steward/appoint', {
+    method: 'POST',
+    body: { office, discipleId },
+  });
+}
+
+/** 天赋重构：卸任执事（原执事进入交接期，期间不能出战）。 */
+export async function dismissSteward(office: string): Promise<{ state: SectStateView }> {
+  return apiRequest<{ state: SectStateView }>('/api/v1/game/steward/dismiss', {
+    method: 'POST',
+    body: { office },
   });
 }
 
@@ -1779,6 +1877,8 @@ export interface MeritShopView {
     category: string;
     /** 装备类的品质与品质色；资源类为 null。 */
     quality: string | null;
+    /** 丹药类（洗髓丹）兑换得到的丹药 id；其它类为 null。 */
+    pillId: string | null;
     color: string | null;
   }[];
   slots: EquipmentSlotView[];
@@ -1809,6 +1909,8 @@ export interface BossMeritExchangeOutcome {
   cost: number;
   /** 兑换到的玄铁（最小单位）；兑换装备时为 0。 */
   xuantie: number;
+  /** 兑换到的丹药；不是丹药时为 null。 */
+  pill: { pillId: string; name: string; quantity: number } | null;
   /** 兑换到的装备；兑换玄铁时为 null。 */
   equipment: { id: string; name: string; quality: string; slot: string; slotName: string } | null;
 }
@@ -1892,6 +1994,8 @@ export interface EquipmentView {
   /** 仙品保底：当前层数（每层下次仙品成功率 +10%，出仙品清零）与上限。 */
   forgePity: number;
   forgePityMax: number;
+  /** 天赋重构：炼器执事的成功率加成文案；没有执事为 null（概率里已经算上）。 */
+  stewardBonusText: string | null;
   /** 装备二期：各品质炼造选项（消耗为最小单位；unlocked = 炼器坊等级已够）。 */
   forgeOptions: {
     quality: string;

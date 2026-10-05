@@ -8,6 +8,8 @@
  * 解锁判断、短板选择等服务端规则都集中在这里，复用于 sync 视图与 craft/use 写路径。
  */
 
+import { talentBonusBp } from './talents';
+
 /** 炼丹解锁：宗门等级下限。 */
 export const ALCHEMY_UNLOCK_SECT_LEVEL = 2;
 /** 炼丹解锁：附属建筑（灵药园）id；第一版不新增独立炼丹房。 */
@@ -23,7 +25,7 @@ export const MAX_PILL_USE_COUNT = 1000;
 /** 聚气丹每颗增加的当前阶段修为。 */
 export const CULTIVATION_PILL_GAIN = 120;
 
-export type PillId = 'healingPill' | 'cultivationPill' | 'bodyTemperingPill';
+export type PillId = 'healingPill' | 'cultivationPill' | 'bodyTemperingPill' | 'talentPill';
 
 export type PillAttribute = 'attack' | 'defense' | 'speed';
 
@@ -40,6 +42,7 @@ export interface PillRecipe {
  * - 回春丹：清除一名弟子的当前疗伤状态；
  * - 聚气丹：增加 120 点当前阶段修为（不越过突破门槛）；
  * - 淬体丹：自动补最明显的战斗属性短板（每名弟子最多 10 次）。
+ * - 洗髓丹（天赋重构）：洗出一个新天赋，玩家二选一（每名弟子最多 4 次，见 talents.ts）。
  */
 export const PILL_RECIPES: readonly PillRecipe[] = [
   {
@@ -60,9 +63,31 @@ export const PILL_RECIPES: readonly PillRecipe[] = [
     description: '自动补齐一名弟子最明显的战斗属性短板，每名弟子最多服用 10 次。',
     cost: { herb: '40000', ore: '20000', spiritStone: '30000' },
   },
+  {
+    id: 'talentPill',
+    name: '洗髓丹',
+    description: '洗出一个新天赋（不会与当前相同），可选择保留原天赋或换成新天赋；每名弟子最多服用 4 次。',
+    cost: { herb: '300000', spiritStone: '300000', xuantie: '5000' },
+  },
 ];
 
 export const PILL_IDS: readonly PillId[] = PILL_RECIPES.map((recipe) => recipe.id);
+
+/**
+ * 天赋重构 · 丹道：丹房执事让全宗炼丹消耗按比例降低（discountBp 基点）。
+ * 每项资源各自向下取整；discountBp ≤ 0 时原样返回。
+ */
+export function discountedPillCost(
+  cost: Readonly<Record<string, string>>,
+  discountBp: number,
+): Record<string, string> {
+  const keep = 10_000 - Math.min(10_000, Math.max(0, discountBp));
+  const out: Record<string, string> = {};
+  for (const [resourceId, amount] of Object.entries(cost)) {
+    out[resourceId] = String(Math.floor((Number(amount) * keep) / 10_000));
+  }
+  return out;
+}
 
 /** 按 id 查配方；未知 id（客户端乱传）返回 undefined，由调用方抛 NOT_FOUND。 */
 export function findPillRecipe(pillId: string): PillRecipe | undefined {
@@ -156,14 +181,27 @@ export function bodyTemperingTarget(
 }
 
 /**
- * 聚气丹「服到满」需要几颗：服到修为恰好达到突破门槛（最后一颗可能只生效一部分）。
- * 已达门槛或已是本版本最高阶段（门槛为 null）返回 0。
+ * 天赋重构 · 丹心：这名弟子每颗聚气丹的修为 = floor(120 × (1 + 丹心加成))，加成随境界提高；
+ * 没有丹心天赋时就是 CULTIVATION_PILL_GAIN。
  */
-export function cultivationPillsToFull(cultivation: number, requiredCultivation: number | null): number {
+export function cultivationPillGainOf(talent: string, realmId: string): number {
+  const bp = talentBonusBp(talent, realmId, 'pillAffinity');
+  return Math.floor((CULTIVATION_PILL_GAIN * (10_000 + bp)) / 10_000);
+}
+
+/**
+ * 聚气丹「服到满」需要几颗：服到修为恰好达到突破门槛（最后一颗可能只生效一部分）。
+ * 已达门槛或已是本版本最高阶段（门槛为 null）返回 0。gainPerPill 缺省为基础增益（无丹心）。
+ */
+export function cultivationPillsToFull(
+  cultivation: number,
+  requiredCultivation: number | null,
+  gainPerPill: number = CULTIVATION_PILL_GAIN,
+): number {
   if (requiredCultivation === null || cultivation >= requiredCultivation) {
     return 0;
   }
-  return Math.ceil((requiredCultivation - cultivation) / CULTIVATION_PILL_GAIN);
+  return Math.ceil((requiredCultivation - cultivation) / Math.max(1, gainPerPill));
 }
 
 export interface BodyTemperingStep {

@@ -120,6 +120,8 @@ function onCraft(recipe: AlchemyRecipeView): void {
     </div>
 
     <template v-else>
+      <!-- 天赋重构 · 丹房执事：下面的配方价已是折后价（服务端算好）。 -->
+      <p v-if="state.alchemy.costDiscountText" class="steward-bonus-note">{{ state.alchemy.costDiscountText }}</p>
       <ul class="alchemy-recipe-list">
         <li v-for="recipe in state.alchemy.recipes" :key="recipe.id" class="alchemy-recipe">
           <div class="alchemy-pill-glyph" aria-hidden="true">丹</div>

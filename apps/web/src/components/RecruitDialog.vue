@@ -63,7 +63,7 @@ const emit = defineEmits<{
           <div class="candidate-title">
             <strong>{{ candidate.name }}</strong>
             <span class="candidate-gender">{{ candidate.gender === 'female' ? '坤' : '乾' }}</span>
-            <span class="candidate-talent">{{ candidate.talentName }}</span>
+            <span class="candidate-talent" :title="candidate.talentEffect">{{ candidate.talentName }}</span>
           </div>
         </div>
 

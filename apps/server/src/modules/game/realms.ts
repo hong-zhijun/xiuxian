@@ -1,4 +1,5 @@
 import { realmIndex } from './constants';
+import { talentBonusBp } from './talents';
 
 /**
  * 秘境定义与战力/成功率计算（V2-2 第二、三节）。
@@ -139,8 +140,10 @@ export function discipleCombatPower(
   const base = (rIdx * 3 + stage) * 10;
   const attrBonus = (attack * 0.4 + defense * 0.35 + speed * 0.25) / 100;
   let power = Math.floor(base * (1 + attrBonus) * (1 + gearPowerBonusBp / 10_000));
-  if (talent === 'combat') {
-    power = Math.floor(power * 1.15);
+  // 天赋重构：战意 ×(1 + 加成)，加成随境界提高（金丹 +15% 与旧的战斗天赋持平）。
+  const combatBp = talent === undefined ? 0 : talentBonusBp(talent, realmId, 'combat');
+  if (combatBp > 0) {
+    power = Math.floor((power * (10_000 + combatBp)) / 10_000);
   }
   return power;
 }

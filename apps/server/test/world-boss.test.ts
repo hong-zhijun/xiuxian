@@ -355,12 +355,20 @@ describe('世界 Boss 二期：面板', () => {
     const shop = (dataOf(shopRes) as { shop: Record<string, any> }).shop;
     expect(shop.categories).toEqual([
       { id: 'resource', name: '资源' },
+      { id: 'pill', name: '丹药' },
       { id: 'equipment', name: '装备' },
     ]);
-    expect(shop.items.map((item: { id: string }) => item.id)).toEqual(['xuantie', 'spirit', 'treasure', 'immortal']);
-    expect(shop.items.map((item: { cost: number }) => item.cost)).toEqual([4, 25, 70, 400]);
+    expect(shop.items.map((item: { id: string }) => item.id)).toEqual([
+      'xuantie',
+      'talentPill',
+      'spirit',
+      'treasure',
+      'immortal',
+    ]);
+    expect(shop.items.map((item: { cost: number }) => item.cost)).toEqual([4, 60, 25, 70, 400]);
     expect(shop.items.map((item: { category: string }) => item.category)).toEqual([
       'resource',
+      'pill',
       'equipment',
       'equipment',
       'equipment',
@@ -1098,6 +1106,7 @@ describe('世界 Boss 三期：功勋兑换（计划 2.4）', () => {
       itemId: 'xuantie',
       cost: 12_000,
       xuantie: 3_000,
+      pill: null,
       equipment: null,
     });
     expect(await balanceOf(fixture.sectId, BOSS_MERIT_RESOURCE_ID)).toBe(88_000);

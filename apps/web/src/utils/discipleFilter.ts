@@ -213,6 +213,8 @@ export function severeInjuryStatusLabel(disciple: FilterableDisciple, serverNowM
 /** 选人控件需要的字段子集：比 FilterableDisciple 多一个历练状态（判断是否在外）。 */
 export interface SelectableDisciple extends FilterableDisciple {
   journey: { status: 'none' | 'active' | 'ready' };
+  /** 天赋重构：执事 / 交接期不能出战的短原因（服务端算好）；能出战为 null。 */
+  combatBlockedReason?: string | null;
 }
 
 /** 选人控件的禁用开关（默认全禁；守擂阵容允许带伤守阵）。 */
@@ -221,6 +223,8 @@ export interface SelectionBlockOptions {
   blockInjured: boolean;
   /** 在外历练的弟子是否禁选（服务端 requireNotAway 会拒绝这些操作）。 */
   blockAway: boolean;
+  /** 执事 / 交接期的弟子是否禁选（出战入口禁；论道不是出战，不禁）。缺省 false。 */
+  blockSteward?: boolean;
 }
 
 /**
@@ -240,6 +244,7 @@ export function selectionBlockReason(
   if (isSeverelyInjured(disciple, serverNowMs)) return '重伤';
   if (options.blockInjured && isInjured(disciple, serverNowMs)) return '疗伤中';
   if (options.blockAway && disciple.journey.status === 'active') return '在外历练';
+  if (options.blockSteward === true && disciple.combatBlockedReason) return disciple.combatBlockedReason;
   return null;
 }
 /**

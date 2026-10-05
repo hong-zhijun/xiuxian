@@ -32,6 +32,9 @@ import {
   upgradeBuilding,
   upgradeSect,
   usePill,
+  appointSteward,
+  chooseTalent,
+  dismissSteward,
   wheelReset,
   wheelSpin,
 } from './api/game';
@@ -55,6 +58,7 @@ import type {
   RecruitPreview,
   ResourceView,
   SectStateView,
+  TalentChoiceOutcome,
   UsePillOutcome,
   WheelSpinResult,
 } from './api/game';
@@ -726,6 +730,8 @@ function onUsePill(pillId: string, discipleId: string, count = 1): void {
         message = `${name} 伤势尽复，可以再度出战。`;
       } else if (effect?.kind === 'cultivation') {
         message = `${name} 修为 +${String(effect.gain ?? 0)}。`;
+      } else if (effect?.kind === 'talentReroll') {
+        message = `${name} 洗出新天赋「${effect.candidate?.name ?? ''}」（${effect.candidate?.effect ?? ''}），到弟子详情里选择保留或替换。`;
       } else if (effect?.kind === 'bodyTempering') {
         const gains = Object.entries(effect.gains ?? {})
           .map(([attribute, gain]) => `${PILL_ATTRIBUTE_NAMES[attribute] ?? '属性'} +${String(gain)}`)
@@ -735,6 +741,50 @@ function onUsePill(pillId: string, discipleId: string, count = 1): void {
       const used = outcome?.count ?? 1;
       const title = `服用${outcome?.pillName ?? '丹药'}${used > 1 ? ` × ${String(used)}` : ''}`;
       return { title, message };
+    },
+  );
+}
+
+/** 天赋重构：洗髓丹二选一（换掉天赋的执事由服务端同批卸任，提示里说明）。 */
+function onChooseTalent(discipleId: string, accept: boolean): void {
+  void runAction(
+    () => chooseTalent(discipleId, accept),
+    (data) => {
+      const outcome = data.outcome as TalentChoiceOutcome | undefined;
+      const name = outcome?.discipleName ?? '弟子';
+      if (outcome?.accepted !== true) {
+        return { title: '保留原天赋', message: `${name}保留天赋「${outcome?.talentName ?? ''}」。` };
+      }
+      const left = outcome.leftOffice === null ? '' : `已卸任${outcome.leftOffice}，进入交接期。`;
+      return { title: '天赋已更换', message: `${name}的天赋换成「${outcome.talentName}」。${left}` };
+    },
+  );
+}
+
+/** 天赋重构：执事堂任命（天赋 / 每日一次 / 在外 / 守擂都由服务端裁决）。 */
+function onAppointSteward(office: string, discipleId: string): void {
+  void runAction(
+    () => appointSteward(office, discipleId),
+    (data) => {
+      const view = data.state.stewards.offices.find((item) => item.office === office);
+      return {
+        title: `任命${view?.name ?? '执事'}`,
+        message: `${view?.discipleName ?? '弟子'}就任：${view?.effect ?? ''}。执事不能出战。`,
+      };
+    },
+  );
+}
+
+/** 天赋重构：执事堂卸任（原执事进入交接期，期间不能出战）。 */
+function onDismissSteward(office: string): void {
+  void runAction(
+    () => dismissSteward(office),
+    (data) => {
+      const view = data.state.stewards.offices.find((item) => item.office === office);
+      return {
+        title: `${view?.name ?? '执事'}已卸任`,
+        message: `原执事进入 ${String(data.state.stewards.handoverHours)} 小时交接期，期间不能出战。`,
+      };
     },
   );
 }
@@ -990,6 +1040,9 @@ onUnmounted(() => {
       @batch-heal="onBatchHeal"
       @craft-pill="onCraftPill"
       @use-pill="onUsePill"
+      @choose-talent="onChooseTalent"
+      @appoint-steward="onAppointSteward"
+      @dismiss-steward="onDismissSteward"
       @save-note="onSaveNote"
       @set-avatar-frame="onSetAvatarFrame"
       @rename-sect="onRenameSect"
