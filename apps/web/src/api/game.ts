@@ -444,6 +444,10 @@ export interface HealBatchOutcome {
   healed: { discipleId: string; discipleName: string }[];
   skipped: BatchSkippedDisciple[];
   pillsUsed: number;
+  /** autoCraft 时现炼并直接服下的颗数（库存够时为 0）。 */
+  crafted: number;
+  /** 现炼花掉的资源（最小单位）。 */
+  craftCost: Record<string, string>;
 }
 
 /** 批量换岗：按数组顺序逐个转，不符合条件的由服务端跳过并列出原因。 */
@@ -467,13 +471,17 @@ export async function breakthroughBatch(
   );
 }
 
-/** 批量疗伤（回春丹一人一颗）：无伤 / 重伤 / 在外的跳过；库存须够全部伤员，否则整批拒绝。 */
+/**
+ * 批量疗伤（回春丹一人一颗）：无伤 / 重伤 / 在外的跳过；库存须够全部伤员，否则整批拒绝。
+ * autoCraft = true（一键疗伤）：库存不够时服务端按配方现炼差额，资源也不够才拒绝。
+ */
 export async function healBatch(
   discipleIds: string[],
+  autoCraft = false,
 ): Promise<{ state: SectStateView; outcome: HealBatchOutcome }> {
   return apiRequest<{ state: SectStateView; outcome: HealBatchOutcome }>('/api/v1/game/heal-batch', {
     method: 'POST',
-    body: { discipleIds },
+    body: autoCraft ? { discipleIds, autoCraft } : { discipleIds },
   });
 }
 

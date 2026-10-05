@@ -672,18 +672,23 @@ function onBatchBreakthrough(discipleIds: string[]): void {
   );
 }
 
-/** 名册多选：批量疗伤（确认弹窗里已核对人数与库存；库存不够时服务端整批拒绝）。 */
-function onBatchHeal(discipleIds: string[]): void {
+/**
+ * 名册多选：批量疗伤（确认弹窗里已核对人数与库存；库存不够时服务端整批拒绝）。
+ * autoCraft = true 是名册「一键疗伤」：库存不够由服务端现炼差额，提示里说明现炼了几颗。
+ */
+function onBatchHeal(discipleIds: string[], autoCraft = false): void {
   void runAction(
-    () => healBatch(discipleIds),
+    () => healBatch(discipleIds, autoCraft),
     (data) => {
       const outcome = data.outcome as HealBatchOutcome | undefined;
       const healed = (outcome?.healed ?? []).map((item) => item.discipleName);
       const skipped = outcome?.skipped ?? [];
+      const crafted = outcome?.crafted ?? 0;
+      const craftedText = crafted > 0 ? `（库存不足，现炼 ${String(crafted)} 颗）` : '';
       return {
         tone: skipped.length > 0 ? 'info' : 'success',
-        title: `批量疗伤 · 服用回春丹 × ${String(outcome?.pillsUsed ?? healed.length)}`,
-        message: `${nameList(healed)} 伤势尽复${skippedSummary(skipped)}。`,
+        title: `${autoCraft ? '一键疗伤' : '批量疗伤'} · 服用回春丹 × ${String(outcome?.pillsUsed ?? healed.length)}`,
+        message: `${nameList(healed)} 伤势尽复${craftedText}${skippedSummary(skipped)}。`,
       };
     },
   );

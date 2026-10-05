@@ -14,6 +14,7 @@ import {
   alchemyUnlockBlockedReason,
   bodyTemperingPlan,
   cultivationPillsToFull,
+  firstInsufficientResource,
   findPillRecipe,
   BODY_TEMPERING_MAX_USES,
   CULTIVATION_PILL_GAIN,
@@ -4719,18 +4720,26 @@ export interface HealBatchOutcome {
   skipped: BatchSkippedDisciple[];
   /** 本次消耗的回春丹颗数（= healed.length）。 */
   pillsUsed: number;
+  /** autoCraft 时现炼的颗数（库存够时为 0）；现炼的直接服下，不进丹库。 */
+  crafted: number;
+  /** 现炼花掉的资源（最小单位）；没有现炼时为空对象。 */
+  craftCost: Record<string, string>;
 }
 
 /**
  * 批量疗伤（回春丹，一人一颗）：结算 → 解锁检查 → 逐个校验（重伤 / 在外 / 无伤的跳过并记原因）
  * → 库存须够全部伤员，不够就整批拒绝（不替玩家挑人）→ 扣库存 + 清伤势，一次 `commitAlchemy`。
  * 一个需要治的都没有时报 INVALID_STATUS，不写库。
+ *
+ * autoCraft（一键疗伤）：库存不够时按配方现炼差额（扣资源，炼出来直接服下、不进丹库），
+ * 资源也不够才整批拒绝。炼制与疗伤在同一次 batch 里，不会出现「炼了丹却没治」的半写。
  */
 export async function healDisciplesBatch(
   db: D1Database,
   userId: string,
   discipleIds: readonly string[],
   now: number,
+  autoCraft = false,
 ): Promise<{ state: SectStateView; outcome: HealBatchOutcome }> {
   const draft = await draftFor(db, userId, now);
   requireAlchemyUnlocked(draft);
@@ -4763,14 +4772,36 @@ export async function healDisciplesBatch(
   }
 
   const owned = draft.pillQuantity(recipe.id);
-  if (owned < eligible.length) {
+  const shortfall = Math.max(0, eligible.length - owned);
+  if (shortfall > 0 && !autoCraft) {
     throw new AppError(
       'INVALID_STATUS',
       `${recipe.name}不足：${String(eligible.length)} 名弟子疗伤共需 ${String(eligible.length)} 颗，当前库存 ${String(owned)} 颗，请减少人数或先炼制`,
       { required: eligible.length, owned },
     );
   }
-  draft.removePill(recipe.id, eligible.length);
+  const craftCost: Record<string, string> = {};
+  if (shortfall > 0) {
+    for (const [resourceId, amount] of Object.entries(recipe.cost)) {
+      craftCost[resourceId] = String(Number(amount) * shortfall);
+    }
+    const lacking = firstInsufficientResource(craftCost, (resourceId) => draft.balanceOf(resourceId));
+    if (lacking !== null) {
+      throw new AppError(
+        'INSUFFICIENT_RESOURCE',
+        `${recipe.name}还差 ${String(shortfall)} 颗，现炼所需${draft.resourceName(lacking)}不足`,
+        { required: eligible.length, owned, shortfall, resourceId: lacking },
+      );
+    }
+    for (const [resourceId, amount] of Object.entries(craftCost)) {
+      draft.requireResource(resourceId, Number(amount));
+    }
+  }
+  // 先用库存，差额由上面现炼的直接服下（不进丹库，所以只扣库存里的那部分）。
+  const fromStock = eligible.length - shortfall;
+  if (fromStock > 0) {
+    draft.removePill(recipe.id, fromStock);
+  }
 
   for (const disciple of eligible) {
     draft.addStatement(updateDiscipleInjuryStatement(disciple.id, null));
@@ -4784,6 +4815,8 @@ export async function healDisciplesBatch(
       healed: eligible.map((row) => ({ discipleId: row.id, discipleName: row.name })),
       skipped,
       pillsUsed: eligible.length,
+      crafted: shortfall,
+      craftCost,
     },
   };
 }

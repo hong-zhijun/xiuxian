@@ -1886,6 +1886,35 @@ ul {
   min-height: 30px;
 }
 
+.disciple-count-actions {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 6px;
+}
+
+.disciple-heal-all {
+  min-height: 30px;
+  border-color: rgba(224, 123, 104, 0.45);
+  color: var(--red-bright);
+  background: rgba(184, 81, 66, 0.1);
+}
+
+.disciple-heal-all:hover:not(:disabled) {
+  border-color: rgba(224, 123, 104, 0.7);
+  color: var(--red-bright);
+  background: rgba(184, 81, 66, 0.18);
+}
+
+.disciple-heal-all .disciple-more-count {
+  background: var(--red-bright);
+}
+
+.disciple-heal-all:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
 /* 多选模式：卡片可点选，已选卡片描金；勾选框压在卡片左上角。 */
 .disciple-row.is-selecting {
   cursor: pointer;
@@ -6290,6 +6319,11 @@ h2.public-sect-name {
   .disciple-more,
   .disciple-reset {
     width: 100%;
+  }
+
+  /* 匹配人数那一行的按钮保持自身宽度，两个按钮并排。 */
+  .disciple-count-actions .disciple-more {
+    width: auto;
   }
 
   .disciple-toolbar-extra {

@@ -116,7 +116,8 @@ const emit = defineEmits<{
   'batch-assign': [discipleIds: string[], assignment: string];
   'batch-breakthrough': [discipleIds: string[]];
   /** 名册「疗伤中」标签单个服丹走 use-pill；多选底栏的批量疗伤走这个（请求与提示都在 App.vue）。 */
-  'batch-heal': [discipleIds: string[]];
+  /** autoCraft = true：一键疗伤（回春丹不够时服务端现炼差额）。 */
+  'batch-heal': [discipleIds: string[], autoCraft?: boolean];
   'craft-pill': [pillId: string, quantity: number];
   'use-pill': [pillId: string, discipleId: string, count: number];
   notify: [tone: ToastTone, title: string, message: string];
@@ -1395,6 +1396,20 @@ function onQuickHeal(discipleId: string): void {
   emit('use-pill', HEALING_PILL_ID, discipleId, 1);
 }
 
+/**
+ * 名册「一键疗伤」：不弹确认，全宗伤员一次治好；库存不够由服务端按配方现炼差额
+ * （资源也不够时服务端整批拒绝，错误提示由 App.vue 统一展示）。
+ */
+function onHealAll(discipleIds: string[]): void {
+  if (props.busy || discipleIds.length === 0) return;
+  const reason = alchemyLockedReason();
+  if (reason !== null) {
+    emit('notify', 'warning', `暂不可服用${healingPillName.value}`, reason);
+    return;
+  }
+  emit('batch-heal', discipleIds, true);
+}
+
 /** 批量疗伤确认弹窗对应的已选弟子（null = 未打开）。 */
 const batchHealIds = ref<string[] | null>(null);
 /** 本弹窗已提交过：等这次请求结束（busy 回落）就关弹窗，结果由 App.vue 的提示展示。 */
@@ -1504,6 +1519,13 @@ function closeBreakthroughConfirm(): void {
   breakthroughConfirmId.value = null;
 }
 
+/** 已点「确认破境」时弟子的境界阶段（null = 没有等待中的请求）：请求结束后据此判断成败。 */
+let breakthroughSubmittedStage: string | null = null;
+
+function stageKeyOf(disciple: DiscipleView): string {
+  return `${disciple.realmId}:${String(disciple.stage)}`;
+}
+
 /**
  * 确认破境：复用既有 `/game/breakthrough`（App.vue 负责调接口与回填 state）。
  * busy 期间按钮禁用，避免重复提交；返回的 state 一到，资格与按钮状态立即跟着更新。
@@ -1511,8 +1533,22 @@ function closeBreakthroughConfirm(): void {
 function confirmBreakthrough(): void {
   const disciple = breakthroughTarget.value;
   if (props.busy || disciple === null || !disciple.canBreakthrough) return;
+  breakthroughSubmittedStage = stageKeyOf(disciple);
   emit('breakthrough', disciple.id);
 }
+
+// 请求结束（busy 回落）：境界阶段变了 = 破境成功，自动收起弹窗（结果看 App.vue 的提示）；
+// 失败则留着弹窗，让玩家看到调息原因。
+watch(
+  () => props.busy,
+  (busy) => {
+    if (busy || breakthroughSubmittedStage === null) return;
+    const before = breakthroughSubmittedStage;
+    breakthroughSubmittedStage = null;
+    const disciple = breakthroughTarget.value;
+    if (disciple !== null && stageKeyOf(disciple) !== before) closeBreakthroughConfirm();
+  },
+);
 
 /** 0017 保存头像框：只转发白名单 id，归属与合法性都由服务端裁决。 */
 function onDetailSetAvatarFrame(discipleId: string, frameId: AvatarFrameId): void {
@@ -1796,6 +1832,7 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
           @batch-assign="onBatchAssign"
           @quick-heal="onQuickHeal"
           @request-batch-heal="openBatchHeal"
+          @heal-all="onHealAll"
         />
       </section>
 

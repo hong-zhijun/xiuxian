@@ -70,6 +70,8 @@ const emit = defineEmits<{
   quickHeal: [discipleId: string];
   /** 多选底栏「批量疗伤」：只请求打开确认弹窗（按勾选顺序）。 */
   requestBatchHeal: [discipleIds: string[]];
+  /** 「一键疗伤」：全宗回春丹能治的伤员一次治好（缺丹由服务端现炼），不弹确认。 */
+  healAll: [discipleIds: string[]];
 }>();
 
 function loadSavedFilter(): DiscipleFilter {
@@ -288,6 +290,26 @@ function onBatchHeal(): void {
   emit('requestBatchHeal', [...selectedIds.value]);
 }
 
+/**
+ * 「一键疗伤」的对象：全宗（不看筛选）回春丹能治的伤员 —— 疗伤中、未重伤、不在外历练，
+ * 与服务端同一口径；最终仍由服务端逐人复核。
+ */
+const healableIds = computed(() =>
+  props.disciples
+    .filter(
+      (disciple) =>
+        isInjured(disciple, props.serverNowMs) &&
+        severeInjuryStatusLabel(disciple, props.serverNowMs) === null &&
+        disciple.journey.status !== 'active',
+    )
+    .map((disciple) => disciple.id),
+);
+
+function onHealAll(): void {
+  if (healableIds.value.length === 0 || props.busy) return;
+  emit('healAll', [...healableIds.value]);
+}
+
 function ringClass(row: RosterRow): string {
   if (row.disciple.canBreakthrough) return 'is-ready';
   if (row.progress.capped) return 'is-capped';
@@ -327,6 +349,29 @@ const rowButtons = ref<Record<string, HTMLButtonElement | null>>({});
 const avatarButtons = ref<Record<string, HTMLButtonElement | null>>({});
 const realmSelect = ref<HTMLSelectElement | null>(null);
 
+/**
+ * 弹窗关闭后的焦点归还：依次尝试候选按钮（还在页面上的第一个），都不在了才退回境界筛选框。
+ *
+ * - preventScroll：归还焦点不滚动页面（手机上长列表会被拽回顶部）；
+ * - 触屏（pointer: coarse）不退回筛选框：手机上给下拉框焦点会出现焦点框、甚至弹出选择器，
+ *   看起来像「点了境界筛选」。触屏用户本来也不靠键盘焦点导航。
+ */
+function restoreFocus(candidates: (HTMLElement | null | undefined)[]): void {
+  void nextTick(() => {
+    const target = candidates.find((element) => element && document.contains(element));
+    if (target) {
+      target.focus({ preventScroll: true });
+      return;
+    }
+    const coarse = typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches;
+    if (coarse) {
+      (document.activeElement as HTMLElement | null)?.blur();
+      return;
+    }
+    realmSelect.value?.focus({ preventScroll: true });
+  });
+}
+
 function setRowButton(discipleId: string, element: Element | null): void {
   if (element instanceof HTMLButtonElement) {
     rowButtons.value[discipleId] = element;
@@ -347,12 +392,8 @@ watch(
   () => props.detailId,
   (next, previous) => {
     if (previous === null || previous === undefined || next !== null) return;
-    void nextTick(() => {
-      const button = rowButtons.value[previous];
-      // 驱逐后该行已不存在；焦点退回始终存在的境界筛选框。
-      if (button && document.contains(button)) button.focus();
-      else realmSelect.value?.focus();
-    });
+    // 驱逐后该行已不存在：由 restoreFocus 兜底。
+    restoreFocus([rowButtons.value[previous]]);
   },
 );
 
@@ -360,12 +401,8 @@ watch(
   () => props.breakthroughConfirmId,
   (next, previous) => {
     if (previous === null || previous === undefined || next !== null) return;
-    void nextTick(() => {
-      const button = avatarButtons.value[previous];
-      // 修为/资格变化后头像可能不再是按钮（例如被派出去历练）；此时退回境界筛选框。
-      if (button && document.contains(button)) button.focus();
-      else realmSelect.value?.focus();
-    });
+    // 破境成功 / 被派出去历练后头像不再是按钮：退到同一行的「详情」按钮，而不是境界筛选框。
+    restoreFocus([avatarButtons.value[previous], rowButtons.value[previous]]);
   },
 );
 </script>
@@ -468,16 +505,28 @@ watch(
       <p class="disciple-count" role="status" aria-live="polite">
         匹配 <strong>{{ rows.length }}</strong> / 共 <strong>{{ disciples.length }}</strong> 位门人
       </p>
-      <button
-        v-if="disciples.length > 0"
-        class="quiet-button disciple-more disciple-select-toggle"
-        :class="{ 'is-active': selecting }"
-        type="button"
-        :aria-pressed="selecting"
-        @click="toggleSelecting"
-      >
-        {{ selecting ? '退出多选' : '多选' }}
-      </button>
+      <div v-if="disciples.length > 0" class="disciple-count-actions">
+        <!-- 有伤员才出现：点一下全宗伤员一起服回春丹，库存不够由服务端现炼。 -->
+        <button
+          v-if="healableIds.length > 0 && !selecting"
+          class="quiet-button disciple-more disciple-heal-all"
+          type="button"
+          :disabled="busy"
+          :aria-label="`一键疗伤：${healableIds.length} 名伤员服用回春丹，不够时自动炼制`"
+          @click="onHealAll"
+        >
+          一键疗伤 <span class="disciple-more-count">{{ healableIds.length }}</span>
+        </button>
+        <button
+          class="quiet-button disciple-more disciple-select-toggle"
+          :class="{ 'is-active': selecting }"
+          type="button"
+          :aria-pressed="selecting"
+          @click="toggleSelecting"
+        >
+          {{ selecting ? '退出多选' : '多选' }}
+        </button>
+      </div>
     </div>
 
     <ul v-if="rows.length > 0" class="disciple-list">

@@ -978,6 +978,58 @@ describe('丹药系统：批量疗伤', () => {
     expect(await injuredUntilOf(b)).not.toBeNull();
   });
 
+  it('一键疗伤 autoCraft：库存不够就现炼差额（扣资源、直接服下不进丹库）', async () => {
+    const sect = await makeSect();
+    await unlockAlchemy(sect.sectId);
+    await freezeSettlement(sect.sectId);
+    await setPillStock(sect.sectId, 'healingPill', 1);
+    await setBalance(sect.sectId, 'herb', 100_000);
+    await setBalance(sect.sectId, 'spiritStone', 100_000);
+    const [a, b, c] = sect.discipleIds as [string, string, string];
+    await injure(a);
+    await injure(b);
+    await injure(c);
+
+    const result = await sect.api.post('/api/v1/game/heal-batch', { discipleIds: [a, b, c], autoCraft: true });
+    expect(result.status).toBe(200);
+    const outcome = (dataOf(result) as Record<string, any>).outcome;
+    expect(outcome.pillsUsed).toBe(3);
+    expect(outcome.crafted).toBe(2);
+    expect(outcome.craftCost).toEqual({ herb: '20000', spiritStone: '30000' });
+    expect(await pillQuantity(sect.sectId, 'healingPill')).toBe(0);
+    expect(await dbBalance(sect.sectId, 'herb')).toBe(80_000);
+    expect(await dbBalance(sect.sectId, 'spiritStone')).toBe(70_000);
+    expect(await injuredUntilOf(a)).toBeNull();
+    expect(await injuredUntilOf(b)).toBeNull();
+    expect(await injuredUntilOf(c)).toBeNull();
+  });
+
+  it('一键疗伤 autoCraft：库存够时不炼；现炼资源不够时整批拒绝、什么都不动', async () => {
+    const sect = await makeSect();
+    await unlockAlchemy(sect.sectId);
+    await freezeSettlement(sect.sectId);
+    await setPillStock(sect.sectId, 'healingPill', 2);
+    const [a, b, c] = sect.discipleIds as [string, string, string];
+    await injure(a);
+
+    const enough = await sect.api.post('/api/v1/game/heal-batch', { discipleIds: [a], autoCraft: true });
+    expect(enough.status).toBe(200);
+    const outcome = (dataOf(enough) as Record<string, any>).outcome;
+    expect(outcome.crafted).toBe(0);
+    expect(outcome.craftCost).toEqual({});
+    expect(await pillQuantity(sect.sectId, 'healingPill')).toBe(1);
+
+    await injure(b);
+    await injure(c);
+    await setBalance(sect.sectId, 'herb', 5_000);
+    const short = await sect.api.post('/api/v1/game/heal-batch', { discipleIds: [b, c], autoCraft: true });
+    expect(errorOf(short).code).toBe('INSUFFICIENT_RESOURCE');
+    expect(errorOf(short).message).toContain('药材不足');
+    expect(await pillQuantity(sect.sectId, 'healingPill')).toBe(1);
+    expect(await dbBalance(sect.sectId, 'herb')).toBe(5_000);
+    expect(await injuredUntilOf(b)).not.toBeNull();
+  });
+
   it('所选弟子都无伤：INVALID_STATUS，不扣库存', async () => {
     const sect = await makeSect();
     await unlockAlchemy(sect.sectId);

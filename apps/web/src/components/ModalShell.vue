@@ -139,7 +139,7 @@ function restoreFocus(): void {
   if (!focusStillOurs) return;
   if (restoreTarget === null || !document.contains(restoreTarget)) return;
   if (card !== null && card.contains(restoreTarget)) return;
-  restoreTarget.focus();
+  restoreTarget.focus({ preventScroll: true });
 }
 </script>
 

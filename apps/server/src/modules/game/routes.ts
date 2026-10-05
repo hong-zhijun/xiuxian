@@ -322,11 +322,17 @@ export function createGameRoutes(): Hono<AppEnv> {
     return respondOk(c, { state: result.state, outcome: result.outcome });
   });
 
-  // 批量疗伤（结算 → 逐个校验，不符合条件的跳过 → 回春丹须够全部伤员 → 一次受保护 batch）。
+  // 批量疗伤（结算 → 逐个校验，不符合条件的跳过 → 回春丹须够全部伤员（autoCraft 时现炼差额）→ 一次受保护 batch）。
   routes.post('/game/heal-batch', async (c) => {
     const userId = requireUserId(c);
     const body = await parseStrictJson(healBatchRequestSchema, c);
-    const result = await healDisciplesBatch(getDb(c.env), userId, body.discipleIds, Date.now());
+    const result = await healDisciplesBatch(
+      getDb(c.env),
+      userId,
+      body.discipleIds,
+      Date.now(),
+      body.autoCraft === true,
+    );
     return respondOk(c, { state: result.state, outcome: result.outcome });
   });
 
