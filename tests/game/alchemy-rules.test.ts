@@ -20,10 +20,31 @@ import { describe, expect, it } from 'vitest';
  * 不依赖 workerd/D1，跑在根级 node 测试里（vitest.config.ts）。
  */
 describe('丹药配方定义', () => {
-  it('三种基础丹药 + 天赋重构的洗髓丹，id 与文档一致', () => {
-    expect(PILL_IDS).toEqual(['healingPill', 'cultivationPill', 'bodyTemperingPill', 'talentPill']);
-    expect(PILL_RECIPES).toHaveLength(4);
-    expect(findPillRecipe('talentPill')?.cost).toEqual({ herb: '300000', spiritStone: '300000', xuantie: '5000' });
+  it('七种丹药，id 与文档一致；神木只用在洗髓 / 悟道 / 培元，且用量很少', () => {
+    expect(PILL_IDS).toEqual([
+      'healingPill',
+      'cultivationPill',
+      'bodyTemperingPill',
+      'talentPill',
+      'greatCultivationPill',
+      'insightPill',
+      'aptitudePill',
+    ]);
+    expect(PILL_RECIPES).toHaveLength(7);
+    expect(findPillRecipe('talentPill')?.cost).toEqual({ herb: '300000', spiritStone: '300000', shenmu: '3000' });
+    expect(findPillRecipe('insightPill')?.cost).toEqual({ spiritStone: '250000', herb: '100000', shenmu: '1000' });
+    expect(findPillRecipe('aptitudePill')?.cost).toEqual({
+      herb: '200000',
+      spiritualEnergy: '150000',
+      spiritStone: '150000',
+      shenmu: '2000',
+    });
+    // 凝元丹 = 10 颗聚气丹：配方正好 10 倍、不要神木。
+    const small = findPillRecipe('cultivationPill')!.cost;
+    const great = findPillRecipe('greatCultivationPill')!.cost;
+    expect(Object.fromEntries(Object.entries(small).map(([id, amount]) => [id, String(Number(amount) * 10)]))).toEqual(great);
+    // 玄铁不再用于炼丹。
+    expect(PILL_RECIPES.some((recipe) => recipe.cost.xuantie !== undefined)).toBe(false);
   });
 
   it('配方成本与文档基线一致（最小单位字符串）', () => {

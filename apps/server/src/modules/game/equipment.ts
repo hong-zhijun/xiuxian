@@ -99,9 +99,10 @@ export const FORGE_WORKSHOP_ID = 'forgeWorkshop';
 /** 各品质单件炼造消耗（最小单位）与所需炼器坊等级。 */
 export const FORGE_RECIPES: readonly { quality: EquipmentQuality; workshopLevel: number; cost: Readonly<Record<string, string>> }[] = [
   { quality: 'common', workshopLevel: 1, cost: { spiritStone: '80000', ore: '150000' } },
-  { quality: 'spirit', workshopLevel: 2, cost: { spiritStone: '250000', ore: '400000', xuantie: '3000' } },
-  { quality: 'treasure', workshopLevel: 3, cost: { spiritStone: '600000', ore: '1000000', xuantie: '10000' } },
-  { quality: 'immortal', workshopLevel: 4, cost: { spiritStone: '1500000', ore: '2500000', xuantie: '30000' } },
+  // 玄铁下调约 4 成（原 3 / 10 / 30）：分解返还（1 / 3 / 8）仍低于炼造消耗，不能靠炼了再拆套利。
+  { quality: 'spirit', workshopLevel: 2, cost: { spiritStone: '250000', ore: '400000', xuantie: '2000' } },
+  { quality: 'treasure', workshopLevel: 3, cost: { spiritStone: '600000', ore: '1000000', xuantie: '6000' } },
+  { quality: 'immortal', workshopLevel: 4, cost: { spiritStone: '1500000', ore: '2500000', xuantie: '18000' } },
 ];
 
 /** 兼容一期：凡品的消耗。 */

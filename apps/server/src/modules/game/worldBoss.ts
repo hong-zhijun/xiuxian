@@ -571,7 +571,7 @@ export function worldBossMeritFor(input: {
   return input.repelled ? Math.max(1, Math.floor(base / 2)) : base;
 }
 
-export type BossMeritShopItemId = 'xuantie' | 'talentPill' | 'spirit' | 'treasure' | 'immortal';
+export type BossMeritShopItemId = 'xuantie' | 'shenmu' | 'talentPill' | 'spirit' | 'treasure' | 'immortal';
 
 /** 功勋兑换的分类（弹窗里一类一个标签页；以后开放新的兑换物，在这里加分类、在价目表里加条目即可）。 */
 export type MeritShopCategory = 'resource' | 'pill' | 'equipment';
@@ -592,16 +592,20 @@ export const WORLD_BOSS_MERIT_SHOP: readonly {
   cost: number;
   category: MeritShopCategory;
   quality: EquipmentQuality | null;
+  /** resource 类：兑换得到的资源 id；其它类为 null。 */
+  resourceId: string | null;
   /** pill 类：兑换得到的丹药 id；其它类为 null。 */
   pillId: string | null;
 }[] = [
-  { id: 'xuantie', name: '玄铁', cost: 4, category: 'resource', quality: null, pillId: null },
+  { id: 'xuantie', name: '玄铁', cost: 4, category: 'resource', quality: null, resourceId: 'xuantie', pillId: null },
+  // 神木：炼丹专用材料，目前只能在这里兑换；价格是玄铁的一半。
+  { id: 'shenmu', name: '神木', cost: 2, category: 'resource', quality: null, resourceId: 'shenmu', pillId: null },
   // 天赋重构：洗髓丹（也可炼制）；功勋多了一个去处。
-  { id: 'talentPill', name: '洗髓丹', cost: 60, category: 'pill', quality: null, pillId: 'talentPill' },
-  { id: 'spirit', name: '灵品装备', cost: 25, category: 'equipment', quality: 'spirit', pillId: null },
-  { id: 'treasure', name: '宝品装备', cost: 70, category: 'equipment', quality: 'treasure', pillId: null },
+  { id: 'talentPill', name: '洗髓丹', cost: 60, category: 'pill', quality: null, resourceId: null, pillId: 'talentPill' },
+  { id: 'spirit', name: '灵品装备', cost: 25, category: 'equipment', quality: 'spirit', resourceId: null, pillId: null },
+  { id: 'treasure', name: '宝品装备', cost: 70, category: 'equipment', quality: 'treasure', resourceId: null, pillId: null },
   // 原 200：满勤约两天一件，仙品太多；提到 400。
-  { id: 'immortal', name: '仙品装备', cost: 400, category: 'equipment', quality: 'immortal', pillId: null },
+  { id: 'immortal', name: '仙品装备', cost: 400, category: 'equipment', quality: 'immortal', resourceId: null, pillId: null },
 ];
 
 /** 一次最多兑换多少个（玄铁、丹药等按个数兑换的项共用）。 */

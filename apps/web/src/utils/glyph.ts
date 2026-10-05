@@ -8,6 +8,7 @@ const RESOURCE_GLYPHS: Record<string, string> = {
   herb: '药',
   ore: '矿',
   xuantie: '铁',
+  shenmu: '木',
   bossMerit: '勋',
 };
 

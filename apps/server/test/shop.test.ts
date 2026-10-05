@@ -436,9 +436,14 @@ describe('坊市面板：1 级宗门即可交易', () => {
     expect(shop.buyPrice).toBe(SHOP_BUY_PRICE);
     expect(shop.sellPrice).toBe(SHOP_SELL_PRICE);
 
-    // 售丹页的数据：可回收的三种丹方齐全（库存 0 也要下发展示；洗髓丹不回收），价格与库存都来自服务端。
+    // 售丹页的数据：可回收的丹方齐全（库存 0 也要下发展示；要神木的洗髓 / 悟道 / 培元不回收），价格与库存都来自服务端。
     const pills = shop.pills as Record<string, any>[];
-    expect(pills.map((pill) => pill.id)).toEqual(['healingPill', 'cultivationPill', 'bodyTemperingPill']);
+    expect(pills.map((pill) => pill.id)).toEqual([
+      'healingPill',
+      'cultivationPill',
+      'bodyTemperingPill',
+      'greatCultivationPill',
+    ]);
     for (const pill of pills) {
       expect(pill.name).toBe(findPillRecipe(pill.id)!.name);
       expect(pill.sellPrice).toBe(SHOP_PILL_PRICES[pill.id]);

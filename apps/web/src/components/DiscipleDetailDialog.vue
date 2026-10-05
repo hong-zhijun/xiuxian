@@ -619,7 +619,14 @@ const journal = computed<JournalEntry[]>(() =>
 
 const ATTRIBUTE_NAMES: Record<string, string> = { attack: '攻击', defense: '防御', speed: '身法' };
 // 洗髓丹不在这里：它走天赋旁的「更换」入口（确认 → 二选一）。
-const PILL_ORDER = ['healingPill', 'cultivationPill', 'bodyTemperingPill'] as const;
+const PILL_ORDER = [
+  'healingPill',
+  'cultivationPill',
+  'greatCultivationPill',
+  'bodyTemperingPill',
+  'aptitudePill',
+  'insightPill',
+] as const;
 const showPillPicker = ref(false);
 
 interface PillOption {
@@ -652,8 +659,6 @@ const pillOptions = computed<PillOption[]>(() => {
   );
   const locked = !props.state.alchemy.unlocked;
   const lockedReason = props.state.alchemy.blockedReason ?? '炼丹尚未开启';
-  // 单次增益由服务端按这名弟子的天赋（丹心）算好下发，前端不复制这个常量。
-  const gainPerPill = props.disciple.cultivationPillGain;
   const disciple = props.disciple;
   const options: PillOption[] = [];
 
@@ -672,7 +677,10 @@ const pillOptions = computed<PillOption[]>(() => {
       available = injured.value;
       preview = '清除伤势，立刻可再出战或突破';
       reason = '当前无恙，无需疗伤';
-    } else if (pillId === 'cultivationPill') {
+    } else if (pillId === 'cultivationPill' || pillId === 'greatCultivationPill') {
+      // 聚气丹与凝元丹同一套「服 1 颗 / 服到满」逻辑，只是每颗增益与所需颗数各取各的（服务端算好）。
+      const great = pillId === 'greatCultivationPill';
+      const gainPerPill = great ? disciple.greatCultivationPillGain : disciple.cultivationPillGain;
       const required = disciple.requiredCultivation;
       if (required === null) {
         reason = '已达当前版本上限，无法再靠丹药精进';
@@ -682,7 +690,7 @@ const pillOptions = computed<PillOption[]>(() => {
         reason = '修为已达门槛，无需进补';
 
         const remaining = required - disciple.cultivation;
-        fullNeeded = disciple.cultivationPillsToFull;
+        fullNeeded = great ? disciple.greatCultivationPillsToFull : disciple.cultivationPillsToFull;
         const count = Math.min(fullNeeded, recipe.owned);
         const total = Math.min(gainPerPill * count, remaining);
         fullPreview =
@@ -696,6 +704,25 @@ const pillOptions = computed<PillOption[]>(() => {
           fullNote = `最后一颗只生效 ${lastGain} 点`;
         }
       }
+    } else if (pillId === 'aptitudePill') {
+      // 培元丹：资质 +2/颗，次数与资质上限都由服务端算进 aptitudePillsToFull。
+      fullNeeded = disciple.aptitudePillsToFull;
+      available = fullNeeded > 0;
+      const gainNow = Math.min(2, 100 - disciple.aptitude);
+      preview = `资质 +${gainNow}（已服 ${disciple.aptitudePillUses} 次 · 剩余 ${disciple.aptitudePillRemaining} 次）`;
+      reason = disciple.aptitudePillRemaining <= 0 ? '培元次数已用尽' : '资质已达上限';
+      const count = Math.min(fullNeeded, recipe.owned);
+      fullPreview = `资质 +${Math.min(count * 2, 100 - disciple.aptitude)}`;
+      if (count < fullNeeded) fullNote = `库存只有 ${recipe.owned} 颗，服到满需要 ${fullNeeded} 颗`;
+    } else if (pillId === 'insightPill') {
+      // 悟道丹：悟道值 +1/颗，最多补到剩余额度（上限 − 已分配 − 未分配余额）。
+      fullNeeded = disciple.daoInsightRoom;
+      available = fullNeeded > 0;
+      preview = `悟道值 +1（当前可用 ${disciple.daoInsight} 点，还可再收 ${disciple.daoInsightRoom} 点）`;
+      reason = '悟道值已满（已分配 + 未分配达到上限）';
+      const count = Math.min(fullNeeded, recipe.owned);
+      fullPreview = `悟道值 +${count}`;
+      if (count < fullNeeded) fullNote = `库存只有 ${recipe.owned} 颗，补满需要 ${fullNeeded} 颗`;
     } else {
       const target = disciple.bodyTemperingTarget;
       available = target !== null;

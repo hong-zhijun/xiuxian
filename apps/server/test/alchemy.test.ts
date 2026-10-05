@@ -4,7 +4,6 @@ import { describe, expect, it } from 'vitest';
 import { createApp } from '../src/app';
 import { prepareStatements } from '../src/infra/db/repository';
 import { REQUIRED_TABLES } from '../src/infra/db/readiness';
-import { PILL_IDS } from '../src/modules/game/alchemy';
 import {
   BuildingRepository,
   DiscipleRepository,
@@ -333,18 +332,20 @@ describe('丹药系统：解锁与配方', () => {
     expect(errorOf(use).code).toBe('INVALID_STATUS');
   });
 
-  it('解锁后 sync 返回四种配方、库存 0、canCraft 按余额判定', async () => {
+  it('解锁后 sync 返回七种配方、库存 0、canCraft 按余额判定', async () => {
     const sect = await makeSect();
     await unlockAlchemy(sect.sectId);
 
     const state = await sect.state();
     expect(state.alchemy.unlocked).toBe(true);
     expect(state.alchemy.blockedReason).toBeNull();
-    expect(state.alchemy.recipes).toHaveLength(4);
-    // 洗髓丹要玄铁：新宗门没有玄铁，炼不了。
-    expect(recipeOf(state, 'talentPill').canCraft).toBe(false);
-    expect(recipeOf(state, 'talentPill').blockedReason).toContain('不足');
-    for (const pillId of PILL_IDS.filter((id) => id !== 'talentPill')) {
+    expect(state.alchemy.recipes).toHaveLength(7);
+    // 洗髓 / 悟道 / 培元要神木（新宗门没有）、凝元丹要的药材超过初始量：都炼不了。
+    for (const pillId of ['talentPill', 'insightPill', 'aptitudePill', 'greatCultivationPill']) {
+      expect(recipeOf(state, pillId).canCraft).toBe(false);
+      expect(recipeOf(state, pillId).blockedReason).toContain('不足');
+    }
+    for (const pillId of ['healingPill', 'cultivationPill', 'bodyTemperingPill']) {
       const recipe = recipeOf(state, pillId);
       expect(recipe.owned).toBe(0);
       // 初始资源足够每种丹药炼一颗
@@ -1082,5 +1083,140 @@ describe('丹药系统：批量疗伤', () => {
     expect(
       (await sect.api.post('/api/v1/game/heal-batch', { discipleIds: [id], pillId: 'cultivationPill' })).status,
     ).toBe(400);
+  });
+});
+
+/* ---------- 0035 神木与新丹药：悟道丹 / 培元丹 / 凝元丹，神木兑换，批量服药的守卫分片 ---------- */
+
+describe('神木与新丹药', () => {
+  async function discipleFields(discipleId: string) {
+    return env.DB.prepare(
+      'SELECT aptitude, aptitude_pill_count, dao_insight, dao_insight_used, cultivation FROM disciples WHERE id = ?',
+    )
+      .bind(discipleId)
+      .first<{
+        aptitude: number;
+        aptitude_pill_count: number;
+        dao_insight: number;
+        dao_insight_used: number;
+        cultivation: number;
+      }>();
+  }
+
+  it('悟道丹：只补到剩余额度（上限 − 已分配 − 未分配），满了就拒绝', async () => {
+    const sect = await makeSect();
+    await unlockAlchemy(sect.sectId);
+    await freezeSettlement(sect.sectId);
+    await setPillStock(sect.sectId, 'insightPill', 5);
+    const discipleId = sect.discipleIds[0] as string;
+    await env.DB.prepare('UPDATE disciples SET dao_insight = 0, dao_insight_used = 48 WHERE id = ?')
+      .bind(discipleId)
+      .run();
+
+    const used = await sect.api.post('/api/v1/game/use-pill', { pillId: 'insightPill', discipleId, count: 5 });
+    expect(used.status).toBe(200);
+    const outcome = (dataOf(used) as Record<string, any>).outcome;
+    expect(outcome.count).toBe(2);
+    expect(outcome.effect).toEqual({ kind: 'insight', gain: 2 });
+    expect(await discipleFields(discipleId)).toMatchObject({ dao_insight: 2, dao_insight_used: 48 });
+    expect(await pillQuantity(sect.sectId, 'insightPill')).toBe(3);
+
+    const full = await sect.api.post('/api/v1/game/use-pill', { pillId: 'insightPill', discipleId });
+    expect(errorOf(full).code).toBe('INVALID_STATUS');
+    expect(errorOf(full).message).toContain('悟道值已满');
+  });
+
+  it('培元丹：资质 +2/颗、封顶 100（最后一颗只加差额）；次数用满拒绝', async () => {
+    const sect = await makeSect();
+    await unlockAlchemy(sect.sectId);
+    await freezeSettlement(sect.sectId);
+    await setPillStock(sect.sectId, 'aptitudePill', 5);
+    const [a, b] = sect.discipleIds as [string, string];
+    await env.DB.prepare('UPDATE disciples SET aptitude = 97, aptitude_pill_count = 0 WHERE id = ?').bind(a).run();
+    await env.DB.prepare('UPDATE disciples SET aptitude = 50, aptitude_pill_count = 5 WHERE id = ?').bind(b).run();
+
+    const used = await sect.api.post('/api/v1/game/use-pill', { pillId: 'aptitudePill', discipleId: a, count: 5 });
+    expect(used.status).toBe(200);
+    const outcome = (dataOf(used) as Record<string, any>).outcome;
+    expect(outcome.count).toBe(2);
+    expect(outcome.effect).toEqual({ kind: 'aptitude', gain: 3 });
+    expect(await discipleFields(a)).toMatchObject({ aptitude: 100, aptitude_pill_count: 2 });
+
+    const capped = await sect.api.post('/api/v1/game/use-pill', { pillId: 'aptitudePill', discipleId: a });
+    expect(errorOf(capped).message).toContain('资质已达');
+    const exhausted = await sect.api.post('/api/v1/game/use-pill', { pillId: 'aptitudePill', discipleId: b });
+    expect(errorOf(exhausted).message).toContain('5 次');
+    expect(await pillQuantity(sect.sectId, 'aptitudePill')).toBe(3);
+  });
+
+  it('凝元丹：每颗 1200 修为，同样不越过突破门槛', async () => {
+    const sect = await makeSect();
+    await unlockAlchemy(sect.sectId);
+    await freezeSettlement(sect.sectId);
+    await setPillStock(sect.sectId, 'greatCultivationPill', 2);
+    const discipleId = sect.discipleIds[0] as string;
+    await env.DB.prepare(
+      "UPDATE disciples SET realm_id = 'foundationEstablishment', stage = 1, cultivation = 0, talent = 'combat' WHERE id = ?",
+    )
+      .bind(discipleId)
+      .run();
+
+    const used = await sect.api.post('/api/v1/game/use-pill', { pillId: 'greatCultivationPill', discipleId, count: 2 });
+    expect(used.status).toBe(200);
+    const outcome = (dataOf(used) as Record<string, any>).outcome;
+    // 筑基初期门槛 300：一颗就到门槛，只服 1 颗。
+    expect(outcome.count).toBe(1);
+    expect(outcome.effect).toEqual({ kind: 'cultivation', gain: 300 });
+    expect((await discipleFields(discipleId))?.cultivation).toBe(300);
+    expect(await pillQuantity(sect.sectId, 'greatCultivationPill')).toBe(1);
+  });
+
+  it('神木：功勋 2 个 / 个兑换，入账到神木余额', async () => {
+    const sect = await makeSect();
+    await freezeSettlement(sect.sectId);
+    await setBalance(sect.sectId, 'bossMerit', 100_000);
+    await setBalance(sect.sectId, 'shenmu', 0);
+    const result = await sect.api.post('/api/v1/game/world-boss/exchange', { itemId: 'shenmu', quantity: 10 });
+    expect(result.status).toBe(200);
+    expect((dataOf(result) as Record<string, any>).outcome.resource).toEqual({
+      resourceId: 'shenmu',
+      name: '神木',
+      amount: 10_000,
+    });
+    expect(await dbBalance(sect.sectId, 'shenmu')).toBe(10_000);
+    expect(await dbBalance(sect.sectId, 'bossMerit')).toBe(80_000);
+  });
+
+  it('一键疗伤 12 人：目标弟子按片守卫，不超过 D1 单条语句的参数上限', async () => {
+    const sect = await makeSect();
+    await unlockAlchemy(sect.sectId);
+    await freezeSettlement(sect.sectId);
+    await env.DB.prepare('UPDATE sects SET level = 5 WHERE id = ?').bind(sect.sectId).run();
+    const ids = [...sect.discipleIds];
+    for (let index = ids.length; index < 12; index += 1) {
+      const id = crypto.randomUUID();
+      await env.DB.prepare(
+        `INSERT INTO disciples
+           (id, sect_id, name, gender, aptitude, attack, defense, speed, talent,
+            realm_id, stage, cultivation, cultivation_remainder, assignment, injured_until,
+            body_tempering_count, note, created_at)
+         VALUES (?, ?, ?, 'male', 50, 50, 50, 50, 'combat', 'qiRefining', 1, 0, 0, 'idle', NULL, 0, '', ?)`,
+      )
+        .bind(id, sect.sectId, `伤员${String(index)}`, Date.now())
+        .run();
+      ids.push(id);
+    }
+    const until = Date.now() + 10 * 60 * 1000;
+    for (const id of ids) {
+      await env.DB.prepare('UPDATE disciples SET injured_until = ? WHERE id = ?').bind(until, id).run();
+    }
+    await setPillStock(sect.sectId, 'healingPill', 12);
+
+    const result = await sect.api.post('/api/v1/game/heal-batch', { discipleIds: ids, autoCraft: true });
+    expect(result.status).toBe(200);
+    expect((dataOf(result) as Record<string, any>).outcome.pillsUsed).toBe(12);
+    expect(await pillQuantity(sect.sectId, 'healingPill')).toBe(0);
+    const guards = await env.DB.prepare('SELECT COUNT(*) AS total FROM mutation_guards').first<{ total: number }>();
+    expect(Number(guards?.total ?? 0)).toBe(0);
   });
 });

@@ -730,6 +730,10 @@ function onUsePill(pillId: string, discipleId: string, count = 1): void {
         message = `${name} 伤势尽复，可以再度出战。`;
       } else if (effect?.kind === 'cultivation') {
         message = `${name} 修为 +${String(effect.gain ?? 0)}。`;
+      } else if (effect?.kind === 'insight') {
+        message = `${name} 悟道值 +${String(effect.gain ?? 0)}，可在弟子详情分配到属性。`;
+      } else if (effect?.kind === 'aptitude') {
+        message = `${name} 资质 +${String(effect.gain ?? 0)}。`;
       } else if (effect?.kind === 'talentReroll') {
         message = `${name} 洗出新天赋「${effect.candidate?.name ?? ''}」（${effect.candidate?.effect ?? ''}），请选择保留哪一个。`;
       } else if (effect?.kind === 'bodyTempering') {

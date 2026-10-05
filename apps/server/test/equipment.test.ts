@@ -1248,7 +1248,7 @@ describe('装备二期：炼器坊 · 玄铁', () => {
     random.mockRestore();
     expect(forged.outcome.result).toBe('success');
     expect(forged.outcome.quality).toBe('spirit');
-    expect(await balanceOf(fixture.sectId, 'xuantie')).toBe(32_000);
+    expect(await balanceOf(fixture.sectId, 'xuantie')).toBe(33_000);
     const panel = await getEquipment(env.DB, fixture.userId, now);
     expect(panel.equipment.workshopLevel).toBe(2);
     expect(panel.equipment.forgeOptions.map((option) => option.unlocked)).toEqual([true, true, false, false]);
@@ -1268,7 +1268,7 @@ describe('装备二期：炼器坊 · 玄铁', () => {
     expect(await bagCountOf(fixture.sectId)).toBe(0);
     expect(await balanceOf(fixture.sectId, 'spiritStone')).toBe(stoneBefore - 125_000);
     expect(await balanceOf(fixture.sectId, 'ore')).toBe(oreBefore - 200_000);
-    expect(await balanceOf(fixture.sectId, 'xuantie')).toBe(7_000);
+    expect(await balanceOf(fixture.sectId, 'xuantie')).toBe(8_000);
   });
 
   it('仙品保底：没出仙品叠一层、概率随之上调，出仙品清零', async () => {

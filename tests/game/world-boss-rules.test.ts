@@ -340,10 +340,11 @@ describe('世界 Boss 三期：功勋与功勋兑换（计划 2.3、2.4）', () 
     expect(worldBossMeritFor({ stage: 2, damageShare: 0, repelled: true })).toBe(0);
   });
 
-  it('功勋兑换价目表：五项 4 / 60 / 25 / 70 / 400，按个数兑换的单项上限 100', () => {
+  it('功勋兑换价目表：六项 4 / 2 / 60 / 25 / 70 / 400，按个数兑换的单项上限 100', () => {
     expect(BOSS_MERIT_RESOURCE_ID).toBe('bossMerit');
     expect(WORLD_BOSS_MERIT_SHOP.map((item) => item.id)).toEqual([
       'xuantie',
+      'shenmu',
       'talentPill',
       'spirit',
       'treasure',
@@ -351,13 +352,15 @@ describe('世界 Boss 三期：功勋与功勋兑换（计划 2.3、2.4）', () 
     ]);
     expect(WORLD_BOSS_MERIT_SHOP.map((item) => item.name)).toEqual([
       '玄铁',
+      '神木',
       '洗髓丹',
       '灵品装备',
       '宝品装备',
       '仙品装备',
     ]);
-    expect(WORLD_BOSS_MERIT_SHOP.map((item) => item.cost)).toEqual([4, 60, 25, 70, 400]);
+    expect(WORLD_BOSS_MERIT_SHOP.map((item) => item.cost)).toEqual([4, 2, 60, 25, 70, 400]);
     expect(WORLD_BOSS_MERIT_SHOP.map((item) => item.category)).toEqual([
+      'resource',
       'resource',
       'pill',
       'equipment',
@@ -367,11 +370,13 @@ describe('世界 Boss 三期：功勋与功勋兑换（计划 2.3、2.4）', () 
     expect(WORLD_BOSS_MERIT_SHOP.map((item) => item.quality)).toEqual([
       null,
       null,
+      null,
       'spirit',
       'treasure',
       'immortal',
     ]);
-    expect(findMeritShopItem('talentPill')).toMatchObject({ pillId: 'talentPill' });
+    expect(findMeritShopItem('talentPill')).toMatchObject({ pillId: 'talentPill', resourceId: null });
+    expect(findMeritShopItem('shenmu')).toMatchObject({ resourceId: 'shenmu', pillId: null, cost: 2 });
     expect(WORLD_BOSS_MERIT_XUANTIE_MAX).toBe(100);
     expect(findMeritShopItem('xuantie')).toMatchObject({ name: '玄铁', cost: 4, quality: null });
     expect(findMeritShopItem('xxx')).toBeUndefined();

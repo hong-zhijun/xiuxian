@@ -92,7 +92,7 @@ describe('坊市可交易材料白名单', () => {
 describe('坊市丹药回收价', () => {
   it('价格表的键 + 不回收的丹药与丹方完全一致（新增丹方必须二选一补上）', () => {
     expect([...Object.keys(SHOP_PILL_PRICES), ...SHOP_UNSELLABLE_PILL_IDS].sort()).toEqual([...PILL_IDS].sort());
-    expect(SHOP_UNSELLABLE_PILL_IDS).toEqual(['talentPill']);
+    expect(SHOP_UNSELLABLE_PILL_IDS).toEqual(['talentPill', 'insightPill', 'aptitudePill']);
   });
 
   it('回收价 = 炼制总成本（材料按卖出价折算、灵气按 0）× 70% 向下取整', () => {

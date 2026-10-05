@@ -57,13 +57,15 @@ export const SHOP_PILL_PRICES: Record<string, number> = {
   healingPill: 14_000,
   cultivationPill: 15_750,
   bodyTemperingPill: 42_000,
+  // 凝元丹 = 10 倍聚气丹配方：药材 250000 × 0.5 + 灵石 100000 = 225000 → × 70% = 157500。
+  greatCultivationPill: 157_500,
 };
 
 /**
- * 坊市不回收的丹药（天赋重构）：洗髓丹 —— 它能用功勋兑换，回收的话功勋就能变相换成灵石；
- * 配方里的玄铁也不可交易，没有折算口径。价格表里没有它，service 按未知丹药拒绝。
+ * 坊市不回收的丹药：洗髓丹 / 悟道丹 / 培元丹 —— 配方都要神木（只能功勋兑换、不可交易，
+ * 没有折算口径），回收的话功勋就能变相换成灵石。价格表里没有它们，service 按未知丹药拒绝。
  */
-export const SHOP_UNSELLABLE_PILL_IDS: readonly string[] = ['talentPill'];
+export const SHOP_UNSELLABLE_PILL_IDS: readonly string[] = ['talentPill', 'insightPill', 'aptitudePill'];
 
 /** 单次买卖的材料数量上限（展示单位整数）：与 schema 同口径。 */
 export const SHOP_MAX_TRADE_AMOUNT = 10_000;

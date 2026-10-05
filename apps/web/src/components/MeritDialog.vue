@@ -42,12 +42,12 @@ function balanceOf(resourceId: string): number {
 }
 
 /** 按个数兑换的条目的「现有」：丹药看丹库库存（颗），资源看余额（展示单位）。 */
-function ownedText(item: { id: string; pillId: string | null }): string {
+function ownedText(item: { id: string; resourceId: string | null; pillId: string | null }): string {
   if (item.pillId !== null) {
     const owned = props.state.alchemy.recipes.find((recipe) => recipe.id === item.pillId)?.owned ?? 0;
     return `${String(owned)} 颗`;
   }
-  return formatAmount(balanceOf(item.id));
+  return formatAmount(balanceOf(item.resourceId ?? item.id));
 }
 
 /** 功勋余额（展示单位）；价目也是展示单位，直接比。 */
@@ -163,8 +163,11 @@ async function submit(input: Parameters<typeof exchangeBossMerit>[0]): Promise<v
     emit('state-update', data.state);
     const equipment = data.outcome.equipment;
     const pill = data.outcome.pill;
+    const resource = data.outcome.resource;
     if (pill !== null) {
       emit('notify', 'success', '兑换成功', `${pill.name} +${String(pill.quantity)}，已收入丹库。`);
+    } else if (resource !== null) {
+      emit('notify', 'success', '兑换成功', `${resource.name} +${formatAmount(resource.amount)}`);
     } else if (equipment === null) {
       emit('notify', 'success', '兑换成功', `玄铁 +${formatAmount(data.outcome.xuantie)}`);
     } else {

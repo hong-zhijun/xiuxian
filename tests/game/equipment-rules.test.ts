@@ -315,7 +315,9 @@ describe('装备二期：玄铁 · 炼器坊', () => {
     expect(forgeWorkshopUpgradeFrom(1)).toMatchObject({ level: 2, sectLevel: 3, cost: { xuantie: '15000' } });
     expect(forgeWorkshopUpgradeFrom(3)).toMatchObject({ level: 4, sectLevel: 7, cost: { xuantie: '100000' } });
     expect(forgeWorkshopUpgradeFrom(4)).toBeNull();
-    expect(forgeRecipeOf('immortal')).toMatchObject({ workshopLevel: 4, cost: { xuantie: '30000' } });
+    expect(forgeRecipeOf('spirit')).toMatchObject({ workshopLevel: 2, cost: { xuantie: '2000' } });
+    expect(forgeRecipeOf('treasure')).toMatchObject({ workshopLevel: 3, cost: { xuantie: '6000' } });
+    expect(forgeRecipeOf('immortal')).toMatchObject({ workshopLevel: 4, cost: { xuantie: '18000' } });
     expect(salvageXuantieUnits('common')).toBe(0);
     expect(salvageXuantieUnits('immortal')).toBe(8000);
   });

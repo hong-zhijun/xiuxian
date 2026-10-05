@@ -80,6 +80,15 @@ export interface DiscipleView {
   combatBlockedReason: string | null;
   /** 天赋重构 · 丹心：这名弟子每颗聚气丹的修为。 */
   cultivationPillGain: number;
+  /** 凝元丹：这名弟子每颗的修为与「服到满」需要几颗（0 = 不可服用）。 */
+  greatCultivationPillGain: number;
+  greatCultivationPillsToFull: number;
+  /** 培元丹：已服 / 剩余次数与「服到满」能服几颗（0 = 不可服用）。 */
+  aptitudePillUses: number;
+  aptitudePillRemaining: number;
+  aptitudePillsToFull: number;
+  /** 悟道丹：还能再收多少悟道值（上限 − 已分配 − 未分配余额）。 */
+  daoInsightRoom: number;
   /** 天赋重构 · 铁骨：讨伐受伤 / 重伤概率减免（基点）。 */
   bossInjuryReductionBp: number;
   /** 当前战力（服务端按 realms.ts 公式算好）。 */
@@ -344,7 +353,7 @@ export interface CraftPillOutcome {
 
 /** 服用效果（与后端 service.ts 的 UsePillOutcome['effect'] 一一对应）。 */
 export interface PillUseEffect {
-  kind: 'heal' | 'cultivation' | 'bodyTempering' | 'talentReroll';
+  kind: 'heal' | 'cultivation' | 'bodyTempering' | 'talentReroll' | 'insight' | 'aptitude';
   /** 洗髓丹洗出的候选天赋（待二选一）。 */
   candidate?: { id: string; name: string; effect: string };
   /** 总提升量。 */
@@ -1877,6 +1886,8 @@ export interface MeritShopView {
     category: string;
     /** 装备类的品质与品质色；资源类为 null。 */
     quality: string | null;
+    /** 资源类（玄铁 / 神木）兑换得到的资源 id；其它类为 null。 */
+    resourceId: string | null;
     /** 丹药类（洗髓丹）兑换得到的丹药 id；其它类为 null。 */
     pillId: string | null;
     color: string | null;
@@ -1909,6 +1920,8 @@ export interface BossMeritExchangeOutcome {
   cost: number;
   /** 兑换到的玄铁（最小单位）；兑换装备时为 0。 */
   xuantie: number;
+  /** 兑换到的资源（玄铁 / 神木，amount 为最小单位）；不是资源时为 null。 */
+  resource: { resourceId: string; name: string; amount: number } | null;
   /** 兑换到的丹药；不是丹药时为 null。 */
   pill: { pillId: string; name: string; quantity: number } | null;
   /** 兑换到的装备；兑换玄铁时为 null。 */

@@ -20,14 +20,14 @@ import type { GameConfigContent } from '@xiuxian/game-core';
  */
 
 /** 版本号：内容变化时必须同步更新版本与 payloadHash（见 03 第 12 节）。 */
-export const GAME_CONFIG_VERSION = 'v8.0.0';
+export const GAME_CONFIG_VERSION = 'v9.0.0';
 
 /**
  * 内容哈希（sha256:，覆盖规范化后的 JSON）。
  * 修改 content 后必须重新计算，否则 Worker 启动与 config:hash 校验都会失败。
  */
 export const GAME_CONFIG_PAYLOAD_HASH =
-  'sha256:7c795b90d69375f5f49b6f3d70133e1ef0cc6fd5ac811d30bb0a9cee0fccce64';
+  'sha256:51a2521a4154132bd73a7402958e4e17622147a6bedb603673117dbe4cffbbbd';
 
 export const GAME_CONFIG_CONTENT: GameConfigContent = {
   server: {
@@ -85,6 +85,16 @@ export const GAME_CONFIG_CONTENT: GameConfigContent = {
       name: '功勋',
       startAmount: '0',
       capacity: '9999000',
+      baseRatePerHour: '0',
+      visibility: 'public',
+    },
+    {
+      // 神木：炼丹专用的稀有材料（洗髓丹 / 悟道丹 / 培元丹），目前只能用功勋兑换。
+      // 没有产速；不可在坊市买卖、不可下注（坊市与赌坊都有资源白名单）。
+      id: 'shenmu',
+      name: '神木',
+      startAmount: '0',
+      capacity: '999000',
       baseRatePerHour: '0',
       visibility: 'public',
     },

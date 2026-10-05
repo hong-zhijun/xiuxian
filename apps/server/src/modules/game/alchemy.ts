@@ -24,8 +24,23 @@ export const MAX_CRAFT_QUANTITY = 99;
 export const MAX_PILL_USE_COUNT = 1000;
 /** 聚气丹每颗增加的当前阶段修为。 */
 export const CULTIVATION_PILL_GAIN = 120;
+/** 凝元丹（大聚气丹）每颗增加的修为 = 10 颗聚气丹；配方也正好是聚气丹的 10 倍。 */
+export const GREAT_CULTIVATION_PILL_GAIN = 1200;
+/** 悟道丹每颗增加的悟道值（未分配余额，受 DAO_INSIGHT_CAP 的剩余额度限制）。 */
+export const INSIGHT_PILL_GAIN = 1;
+/** 培元丹每颗增加的资质（封顶 ATTRIBUTE_MAX）。 */
+export const APTITUDE_PILL_GAIN = 2;
+/** 每名弟子最多服用培元丹次数。 */
+export const APTITUDE_PILL_MAX_USES = 5;
 
-export type PillId = 'healingPill' | 'cultivationPill' | 'bodyTemperingPill' | 'talentPill';
+export type PillId =
+  | 'healingPill'
+  | 'cultivationPill'
+  | 'bodyTemperingPill'
+  | 'talentPill'
+  | 'greatCultivationPill'
+  | 'insightPill'
+  | 'aptitudePill';
 
 export type PillAttribute = 'attack' | 'defense' | 'speed';
 
@@ -43,6 +58,12 @@ export interface PillRecipe {
  * - 聚气丹：增加 120 点当前阶段修为（不越过突破门槛）；
  * - 淬体丹：自动补最明显的战斗属性短板（每名弟子最多 10 次）。
  * - 洗髓丹（天赋重构）：洗出一个新天赋，玩家二选一（每名弟子最多 5 次，见 talents.ts）。
+ * - 凝元丹：1200 修为（= 10 颗聚气丹，配方也是 10 倍），后期免得一颗颗吃。
+ * - 悟道丹：悟道值 +1。定价参照赌坊：论道 ×1 押 100 灵石、五五开，期望约 100 灵石换 1 点悟道值
+ *   （对手弱时约 54），且每天限次；系统对悟道值的折价是 180 灵石（溢出折算）。悟道丹不限次、
+ *   必定到手，所以定在约 300 灵石当量 + 1 神木，约为赌坊期望的 3 倍。
+ * - 培元丹：资质 +2，每名弟子最多 5 次（资质封顶 100）。
+ * 神木（炼丹专用，只能功勋兑换）只用在洗髓丹 / 悟道丹 / 培元丹，数量刻意压得很少。
  */
 export const PILL_RECIPES: readonly PillRecipe[] = [
   {
@@ -67,7 +88,25 @@ export const PILL_RECIPES: readonly PillRecipe[] = [
     id: 'talentPill',
     name: '洗髓丹',
     description: '洗出一个新天赋（不会与当前相同），可选择保留原天赋或换成新天赋；每名弟子最多服用 5 次。',
-    cost: { herb: '300000', spiritStone: '300000', xuantie: '5000' },
+    cost: { herb: '300000', spiritStone: '300000', shenmu: '3000' },
+  },
+  {
+    id: 'greatCultivationPill',
+    name: '凝元丹',
+    description: '为一名弟子增加 1200 点当前阶段修为（相当于 10 颗聚气丹），不越过突破门槛。',
+    cost: { herb: '250000', spiritualEnergy: '150000', spiritStone: '100000' },
+  },
+  {
+    id: 'insightPill',
+    name: '悟道丹',
+    description: '为一名弟子增加 1 点悟道值（受悟道值累计上限限制），可在弟子详情分配到属性。',
+    cost: { spiritStone: '250000', herb: '100000', shenmu: '1000' },
+  },
+  {
+    id: 'aptitudePill',
+    name: '培元丹',
+    description: '为一名弟子增加 2 点资质（最高 100），每名弟子最多服用 5 次。',
+    cost: { herb: '200000', spiritualEnergy: '150000', spiritStone: '150000', shenmu: '2000' },
   },
 ];
 
@@ -181,12 +220,33 @@ export function bodyTemperingTarget(
 }
 
 /**
- * 天赋重构 · 丹心：这名弟子每颗聚气丹的修为 = floor(120 × (1 + 丹心加成))，加成随境界提高；
- * 没有丹心天赋时就是 CULTIVATION_PILL_GAIN。
+ * 天赋重构 · 丹心：这名弟子每颗聚气丹的修为 = floor(基础 × (1 + 丹心加成))，加成随境界提高；
+ * 没有丹心天赋时就是基础值。base 缺省为聚气丹（120），凝元丹传 GREAT_CULTIVATION_PILL_GAIN。
  */
-export function cultivationPillGainOf(talent: string, realmId: string): number {
+export function cultivationPillGainOf(
+  talent: string,
+  realmId: string,
+  base: number = CULTIVATION_PILL_GAIN,
+): number {
   const bp = talentBonusBp(talent, realmId, 'pillAffinity');
-  return Math.floor((CULTIVATION_PILL_GAIN * (10_000 + bp)) / 10_000);
+  return Math.floor((base * (10_000 + bp)) / 10_000);
+}
+
+/** 修为类丹药（聚气丹 / 凝元丹）的基础每颗修为；不是修为类返回 null。 */
+export function cultivationPillBaseGain(pillId: string): number | null {
+  if (pillId === 'cultivationPill') return CULTIVATION_PILL_GAIN;
+  if (pillId === 'greatCultivationPill') return GREAT_CULTIVATION_PILL_GAIN;
+  return null;
+}
+
+/**
+ * 培元丹「服到满」能服几颗：受剩余次数与资质上限限制（最后一颗可能只加 1 点）。
+ * 已满次数或资质已到上限返回 0。
+ */
+export function aptitudePillsToFull(aptitude: number, uses: number, aptitudeMax: number): number {
+  const byUses = Math.max(0, APTITUDE_PILL_MAX_USES - uses);
+  const byCap = Math.max(0, Math.ceil((aptitudeMax - aptitude) / APTITUDE_PILL_GAIN));
+  return Math.min(byUses, byCap);
 }
 
 /**

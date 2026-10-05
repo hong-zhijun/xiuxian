@@ -1044,11 +1044,12 @@ function openEquipment(): void {
 }
 
 /**
- * 资源栏：四种常规资源走通用卡片；玄铁（装备二期，无产速）单独一个窄格；
+ * 资源栏：四种常规资源走通用卡片；玄铁（炼器）与神木（炼丹）都没有产速，合用一个窄格、上下两层；
  * 功勋（三期）只在首页「功勋」弹窗里看，不上资源栏、也不占窄格。
  */
+const NARROW_RESOURCE_IDS = ['xuantie', 'shenmu', 'bossMerit'];
 const mainResources = computed(() =>
-  props.state.resources.filter((resource) => resource.id !== 'xuantie' && resource.id !== 'bossMerit'),
+  props.state.resources.filter((resource) => !NARROW_RESOURCE_IDS.includes(resource.id)),
 );
 
 /** 打开背包（资源栏最右侧的「背包」格）。 */
@@ -1695,11 +1696,21 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
               <span :style="{ width: `${resourcePercent(resource.id, resource.capacity)}%` }" />
             </div>
           </li>
-          <li class="resource-card narrow-card">
-            <div class="resource-glyph" aria-hidden="true">铁</div>
-            <div class="resource-main">
-              <span class="resource-name">玄铁</span>
-              <strong>{{ formatAmount(liveResources.xuantie ?? 0) }}</strong>
+          <!-- 玄铁（炼器）与神木（炼丹）合用一个窄格：上下两层，各占一行。 -->
+          <li class="resource-card narrow-card material-card">
+            <div class="material-row">
+              <div class="resource-glyph" aria-hidden="true">{{ resourceGlyph('xuantie') }}</div>
+              <div class="resource-main">
+                <span class="resource-name">玄铁</span>
+                <strong>{{ formatAmount(liveResources.xuantie ?? 0) }}</strong>
+              </div>
+            </div>
+            <div class="material-row">
+              <div class="resource-glyph" aria-hidden="true">{{ resourceGlyph('shenmu') }}</div>
+              <div class="resource-main">
+                <span class="resource-name">神木</span>
+                <strong>{{ formatAmount(liveResources.shenmu ?? 0) }}</strong>
+              </div>
             </div>
           </li>
           <li class="resource-card bag-card">

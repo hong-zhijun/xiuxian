@@ -1415,7 +1415,7 @@ ul {
 
 .resource-grid {
   display: grid;
-  /* 四种资源 + 较窄的「玄铁」「背包」两格 */
+  /* 四种资源 + 较窄的「玄铁 / 神木」「背包」两格 */
   grid-template-columns: repeat(4, minmax(0, 1fr)) minmax(88px, 0.5fr) minmax(96px, 0.6fr);
   border-top: 1px solid var(--line);
   border-bottom: 1px solid var(--line);
@@ -1424,6 +1424,41 @@ ul {
 /* 窄格（玄铁）：只有图标 + 名称数量，没有产速列 */
 .resource-card.narrow-card {
   grid-template-columns: 32px minmax(0, 1fr);
+}
+
+/* 材料格：玄铁（上）与神木（下）上下两层，每层「小图标 + 名称 … 数量」一行，整格高度与其它资源格一致。 */
+.resource-card.material-card {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 5px;
+  padding: 7px 10px;
+}
+
+.material-row {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+}
+
+.material-row .resource-glyph {
+  width: 22px;
+  height: 22px;
+  font-size: 12px;
+}
+
+.material-row .resource-main {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.material-row .resource-main > strong {
+  margin: 0;
+  font-size: 15px;
 }
 
 /* 背包格：外层 li 不再用资源格的三列网格，否则按钮会被挤进 32px 的图标列 */

@@ -97,6 +97,8 @@ export interface DiscipleRow {
   talent_candidate: string | null;
   /** 0034 天赋重构：卸任执事后的交接期结束时间（UTC 毫秒）；期间不能出战；null = 无。 */
   steward_handover_until: number | null;
+  /** 0035 已服用培元丹次数（上限 APTITUDE_PILL_MAX_USES，见 alchemy.ts）。 */
+  aptitude_pill_count: number;
 }
 
 /** 0034 执事堂：每宗门每个职位一行；disciple_id 为 null = 空缺（行保留，用来记当天是否已任命）。 */
@@ -266,7 +268,7 @@ export class DiscipleRepository extends ParamRepository {
                    gear_attack, gear_defense, gear_speed, gear_luck, gear_physique, gear_power_bp,
                    realm_id, stage, cultivation, cultivation_remainder,
                    assignment, injured_until, severe_injured_until, body_tempering_count, note, avatar_frame_id, dao_insight, dao_insight_used,
-                   talent_reroll_count, talent_candidate, steward_handover_until, created_at
+                   talent_reroll_count, talent_candidate, steward_handover_until, aptitude_pill_count, created_at
             FROM disciples WHERE sect_id = ? ORDER BY created_at ASC, id ASC`,
       params: [sectId],
     });
@@ -278,7 +280,7 @@ export class DiscipleRepository extends ParamRepository {
                    gear_attack, gear_defense, gear_speed, gear_luck, gear_physique, gear_power_bp,
                    realm_id, stage, cultivation, cultivation_remainder,
                    assignment, injured_until, severe_injured_until, body_tempering_count, note, avatar_frame_id, dao_insight, dao_insight_used,
-                   talent_reroll_count, talent_candidate, steward_handover_until, created_at
+                   talent_reroll_count, talent_candidate, steward_handover_until, aptitude_pill_count, created_at
             FROM disciples WHERE id = ?`,
       params: [discipleId],
     });
@@ -383,6 +385,18 @@ export function updateDiscipleTalentRerollStatement(
   return {
     sql: 'UPDATE disciples SET talent_reroll_count = ?, talent_candidate = ? WHERE id = ?',
     params: [count, candidate, discipleId],
+  };
+}
+
+/** 0035 培元丹：写回资质与服用次数。 */
+export function updateDiscipleAptitudePillStatement(
+  discipleId: string,
+  aptitude: number,
+  count: number,
+): ParameterizedQuery {
+  return {
+    sql: 'UPDATE disciples SET aptitude = ?, aptitude_pill_count = ? WHERE id = ?',
+    params: [aptitude, count, discipleId],
   };
 }
 
@@ -1313,6 +1327,40 @@ export function alchemySnapshotGuardStatement(
     );
   }
 
+  return {
+    sql: `INSERT INTO mutation_guards (command_id, valid)
+          SELECT ?, CASE WHEN ${checks.join(' AND ')} THEN 1 ELSE 0 END`,
+    params,
+  };
+}
+
+/** 炼丹守卫里每条「目标弟子」守卫最多带几人：每人 12 个参数，8 人 = 96 + 1（守卫 id）。 */
+export const ALCHEMY_DISCIPLES_PER_GUARD = 8;
+
+/**
+ * 服药目标的分片守卫（批量疗伤 / 一键疗伤可能有很多人）：与 alchemySnapshotGuardStatement 的
+ * 弟子部分同一口径，只是单独成行 —— 宗门快照那一条已经带了全部资源余额与建筑，
+ * 再塞多名弟子就会超过 D1 单条语句 100 个绑定参数的上限。
+ */
+export function alchemyDisciplesGuardStatement(
+  guardId: string,
+  sectId: string,
+  disciples: readonly DiscipleRow[],
+): ParameterizedQuery {
+  const checks: string[] = [];
+  const params: (string | number | null)[] = [guardId];
+  for (const disciple of disciples) {
+    checks.push(`EXISTS (SELECT 1 FROM disciples WHERE id = ? AND sect_id = ?
+      AND realm_id = ? AND stage = ? AND cultivation = ? AND cultivation_remainder = ?
+      AND attack = ? AND defense = ? AND speed = ? AND body_tempering_count = ?
+      AND injured_until IS ? AND assignment = ?)`);
+    params.push(
+      disciple.id, sectId, disciple.realm_id, disciple.stage,
+      disciple.cultivation, disciple.cultivation_remainder,
+      disciple.attack, disciple.defense, disciple.speed, disciple.body_tempering_count,
+      disciple.injured_until, disciple.assignment,
+    );
+  }
   return {
     sql: `INSERT INTO mutation_guards (command_id, valid)
           SELECT ?, CASE WHEN ${checks.join(' AND ')} THEN 1 ELSE 0 END`,

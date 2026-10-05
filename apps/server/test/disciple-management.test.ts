@@ -1086,6 +1086,8 @@ describe('0018 迁移：disciples 重建后结构与约束完好', () => {
       'talent_reroll_count',
       'talent_candidate',
       'steward_handover_until',
+      // 0035 培元丹次数。
+      'aptitude_pill_count',
     ]);
   });
 
@@ -1147,6 +1149,8 @@ describe('0018 迁移：disciples 重建后结构与约束完好', () => {
       'talent_reroll_count|INTEGER|1|0',
       'talent_candidate|TEXT|0|',
       'steward_handover_until|INTEGER|0|',
+      // 0035 培元丹次数 NOT NULL DEFAULT 0。
+      'aptitude_pill_count|INTEGER|1|0',
     ]);
   });
 

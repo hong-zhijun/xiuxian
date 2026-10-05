@@ -4,8 +4,11 @@ import {
   alchemyUnlockBlockedReason,
   bodyTemperingPlan,
   bodyTemperingTarget,
+  aptitudePillsToFull,
   cultivationPillGainOf,
   cultivationPillsToFull,
+  APTITUDE_PILL_MAX_USES,
+  GREAT_CULTIVATION_PILL_GAIN,
   discountedPillCost,
   firstInsufficientResource,
   type BodyTemperingStep,
@@ -24,6 +27,7 @@ import {
 import {
   DAO_INSIGHT_CAP,
   DEBATE_DAILY_LIMIT,
+  daoInsightRoom,
   WHEEL_RESET_COST,
   WHEEL_TIERS,
   gamblingUnlockBlockedReason,
@@ -59,6 +63,7 @@ import {
   SECT_NAME_MAX_CHARS,
   SECT_NAME_MIN_CHARS,
   SECT_RENAME_COST,
+  ATTRIBUTE_MAX,
   attributeScore,
 } from './names';
 import {
@@ -185,6 +190,15 @@ export interface DiscipleView {
   combatBlockedReason: string | null;
   /** 天赋重构 · 丹心：这名弟子每颗聚气丹的修为（无丹心 = 基础 120）。 */
   cultivationPillGain: number;
+  /** 0035 凝元丹：这名弟子每颗的修为（无丹心 = 1200）与「服到满」需要几颗（0 = 不可服用）。 */
+  greatCultivationPillGain: number;
+  greatCultivationPillsToFull: number;
+  /** 0035 培元丹：已服 / 剩余次数与「服到满」能服几颗（受次数与资质上限限制；0 = 不可服用）。 */
+  aptitudePillUses: number;
+  aptitudePillRemaining: number;
+  aptitudePillsToFull: number;
+  /** 0035 悟道丹：还能再收多少悟道值（上限 − 已分配 − 未分配余额）。 */
+  daoInsightRoom: number;
   /** 天赋重构 · 铁骨：讨伐受伤 / 重伤概率减免（基点）；前端算冒进风险用。 */
   bossInjuryReductionBp: number;
   /**
@@ -464,6 +478,8 @@ export interface MeritShopView {
     category: string;
     /** 装备类的品质与品质色；资源类为 null。 */
     quality: string | null;
+    /** 资源类（玄铁 / 神木）兑换得到的资源 id；其它类为 null。 */
+    resourceId: string | null;
     /** 丹药类（天赋重构：洗髓丹）兑换得到的丹药 id；其它类为 null。 */
     pillId: string | null;
     color: string | null;
@@ -1777,6 +1793,7 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
       combatBlockedReason = '执事交接中';
     }
     const pillGain = cultivationPillGainOf(disciple.talent, disciple.realm_id);
+    const greatPillGain = cultivationPillGainOf(disciple.talent, disciple.realm_id, GREAT_CULTIVATION_PILL_GAIN);
 
     // 0028 装备：战斗属性 = 基础属性 + 装备加成（加成后可以超过 100；基础属性本身仍最高 100）。
     const gear = gearBonusOfDisciple(disciple);
@@ -1819,6 +1836,20 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
         handoverUntil !== null && handoverUntil > now ? new Date(handoverUntil).toISOString() : null,
       combatBlockedReason,
       cultivationPillGain: pillGain,
+      greatCultivationPillGain: greatPillGain,
+      greatCultivationPillsToFull: cultivationPillsToFull(
+        Number(disciple.cultivation),
+        stage.requiredCultivation,
+        greatPillGain,
+      ),
+      aptitudePillUses: Number(disciple.aptitude_pill_count) || 0,
+      aptitudePillRemaining: Math.max(0, APTITUDE_PILL_MAX_USES - (Number(disciple.aptitude_pill_count) || 0)),
+      aptitudePillsToFull: aptitudePillsToFull(
+        Number(disciple.aptitude),
+        Number(disciple.aptitude_pill_count) || 0,
+        ATTRIBUTE_MAX,
+      ),
+      daoInsightRoom: daoInsightRoom(Number(disciple.dao_insight) || 0, Number(disciple.dao_insight_used) || 0),
       bossInjuryReductionBp: talentBonusBp(disciple.talent, disciple.realm_id, 'ironBody'),
       combatPower: discipleCombatPower(
         disciple.realm_id,

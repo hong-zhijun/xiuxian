@@ -19,6 +19,11 @@ import {
   findPillRecipe,
   BODY_TEMPERING_MAX_USES,
   cultivationPillGainOf,
+  cultivationPillBaseGain,
+  aptitudePillsToFull,
+  APTITUDE_PILL_GAIN,
+  APTITUDE_PILL_MAX_USES,
+  INSIGHT_PILL_GAIN,
   type PillAttribute,
   type PillId,
   type PillRecipe,
@@ -199,6 +204,8 @@ import {
   SectRepository,
   SparringRepository,
   alchemySnapshotGuardStatement,
+  alchemyDisciplesGuardStatement,
+  ALCHEMY_DISCIPLES_PER_GUARD,
   challengeSnapshotGuardStatement,
   deleteAlchemySnapshotGuardStatement,
   deleteChallengeSnapshotGuardStatement,
@@ -265,6 +272,7 @@ import {
 import type { DiscipleJourneyRow, RealmExplorationRow } from './repository';
 import {
   StewardRepository,
+  updateDiscipleAptitudePillStatement,
   updateDiscipleHandoverStatement,
   updateDiscipleTalentRerollStatement,
   updateDiscipleTalentStatement,
@@ -1141,19 +1149,34 @@ class SectDraft {
       const row = this.base.disciples.find((item) => item.id === id);
       return row === undefined ? [] : [row];
     });
+    // 宗门快照（资源余额 + 建筑 + 丹药库存）一条，目标弟子另按片成行：
+    // 全塞进一条会超过 D1 单条语句 100 个绑定参数（批量疗伤 / 一键疗伤可能有很多人）。
     const guard = alchemySnapshotGuardStatement(commandId, {
       sect: this.base.sect,
       balances: this.base.balances,
       buildings: this.base.buildings,
       pillId,
       pillQuantity: this.base.pillInventories.find((row) => row.pill_id === pillId)?.quantity ?? 0,
-      disciples,
     });
+    const guardIds = [commandId];
+    const discipleGuards: ParameterizedQuery[] = [];
+    for (let start = 0; start < disciples.length; start += ALCHEMY_DISCIPLES_PER_GUARD) {
+      const guardId = `${commandId}:disciples:${String(start)}`;
+      guardIds.push(guardId);
+      discipleGuards.push(
+        alchemyDisciplesGuardStatement(
+          guardId,
+          this.base.sect.id,
+          disciples.slice(start, start + ALCHEMY_DISCIPLES_PER_GUARD),
+        ),
+      );
+    }
     try {
       await this.db.batch(prepareStatements(this.db, [
         guard,
+        ...discipleGuards,
         ...this.statements,
-        deleteAlchemySnapshotGuardStatement(commandId),
+        ...guardIds.map((id) => deleteAlchemySnapshotGuardStatement(id)),
       ]));
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -1191,12 +1214,17 @@ class SectDraft {
     const commandId = crypto.randomUUID();
     const rejectAwayMembers = options?.allowActiveJourney !== true;
     const rejectSevereMembers = options?.allowSevereInjury !== true;
-    // D1 单条语句最多 100 个绑定参数：首条守卫只带前 MEMBERS_PER_GUARD 名成员，其余按片另起守卫行。
+    // D1 单条语句最多 100 个绑定参数。首条守卫还带宗门（4）、每种资源余额（4）与阵容（2），
+    // 能放几名成员按剩余额度算（每人最多 7 个参数）—— 资源种类一多（如新增神木），
+    // 写死的 10 人就会超限。其余成员按每片 MEMBERS_PER_GUARD 人另起守卫行（每片 1 + 7 × 10 = 71）。
     const MEMBERS_PER_GUARD = 10;
+    const PARAMS_PER_MEMBER = 7;
+    const firstGuardBudget = 100 - 4 - 4 * this.base.balances.length - 2;
+    const firstSlice = Math.max(0, Math.min(MEMBERS_PER_GUARD, Math.floor(firstGuardBudget / PARAMS_PER_MEMBER)));
     const guard = discipleSnapshotGuardStatement(commandId, {
       sect: this.base.sect,
       balances: this.base.balances,
-      members: members.slice(0, MEMBERS_PER_GUARD),
+      members: members.slice(0, firstSlice),
       now: this.now,
       rejectAwayMembers,
       rejectSevereMembers,
@@ -1204,7 +1232,7 @@ class SectDraft {
     });
     const guardIds = [commandId];
     const memberGuards: ParameterizedQuery[] = [];
-    for (let start = MEMBERS_PER_GUARD; start < members.length; start += MEMBERS_PER_GUARD) {
+    for (let start = firstSlice; start < members.length; start += MEMBERS_PER_GUARD) {
       const guardId = `${commandId}:members:${String(start)}`;
       guardIds.push(guardId);
       memberGuards.push(discipleMembersGuardStatement(
@@ -1795,6 +1823,7 @@ export async function createSect(
       talent_reroll_count: 0,
       talent_candidate: null,
       steward_handover_until: null,
+      aptitude_pill_count: 0,
       created_at: now,
     };
     statements.push(
@@ -2143,6 +2172,7 @@ export async function recruitDisciple(
     talent_reroll_count: 0,
     talent_candidate: null,
     steward_handover_until: null,
+    aptitude_pill_count: 0,
     created_at: now,
   };
   draft.addDisciple(disciple);
@@ -4550,8 +4580,8 @@ export interface UsePillOutcome {
   /** 实际服用颗数（请求颗数按「服到满所需」与库存截断后的结果）。 */
   count: number;
   effect: {
-    kind: 'heal' | 'cultivation' | 'bodyTempering' | 'talentReroll';
-    /** cultivation / bodyTempering 的总提升量。 */
+    kind: 'heal' | 'cultivation' | 'bodyTempering' | 'talentReroll' | 'insight' | 'aptitude';
+    /** cultivation / bodyTempering / insight（悟道值）/ aptitude（资质）的总提升量。 */
     gain?: number;
     /** talentReroll（洗髓丹）：洗出的候选天赋与它在当前境界的效果；原天赋待玩家二选一。 */
     candidate?: { id: string; name: string; effect: string };
@@ -4678,17 +4708,19 @@ export async function usePill(
     };
   }
 
-  if (recipe.id === 'cultivationPill') {
+  // 修为类：聚气丹（120）与凝元丹（1200）同一条路径，只差每颗的基础增益。
+  const cultivationBase = cultivationPillBaseGain(recipe.id);
+  if (cultivationBase !== null) {
     const stage = findStage(disciple.realm_id, Number(disciple.stage));
     if (stage.requiredCultivation === null) {
-      throw new AppError('INVALID_STATUS', `${disciple.name}已达本版本最高阶段，无法再服用聚气丹`);
+      throw new AppError('INVALID_STATUS', `${disciple.name}已达本版本最高阶段，无法再服用${recipe.name}`);
     }
     if (Number(disciple.cultivation) >= stage.requiredCultivation) {
-      throw new AppError('INVALID_STATUS', `${disciple.name}修为已达突破门槛，请先突破再服用聚气丹`);
+      throw new AppError('INVALID_STATUS', `${disciple.name}修为已达突破门槛，请先突破再服用${recipe.name}`);
     }
     const remaining = stage.requiredCultivation - Number(disciple.cultivation);
     // 天赋重构 · 丹心：每颗增益按这名弟子的天赋与境界算。
-    const gainPerPill = cultivationPillGainOf(disciple.talent, disciple.realm_id);
+    const gainPerPill = cultivationPillGainOf(disciple.talent, disciple.realm_id, cultivationBase);
     const used = Math.min(
       count,
       cultivationPillsToFull(Number(disciple.cultivation), stage.requiredCultivation, gainPerPill),
@@ -4713,6 +4745,78 @@ export async function usePill(
         discipleName: disciple.name,
         count: used,
         effect: { kind: 'cultivation', gain },
+      },
+    };
+  }
+
+  // 悟道丹：悟道值 +1/颗，受剩余额度（上限 − 已分配 − 未分配余额）限制，不溢出折灵石。
+  if (recipe.id === 'insightPill') {
+    const balance = Number(disciple.dao_insight) || 0;
+    const allocated = Number(disciple.dao_insight_used) || 0;
+    const room = daoInsightRoom(balance, allocated);
+    if (room < INSIGHT_PILL_GAIN) {
+      throw new AppError(
+        'INVALID_STATUS',
+        `${disciple.name}的悟道值已满（已分配 ${String(allocated)} + 未分配 ${String(balance)}，上限 ${String(DAO_INSIGHT_CAP)}）`,
+      );
+    }
+    const used = Math.min(
+      count,
+      Math.floor(room / INSIGHT_PILL_GAIN),
+      Math.max(1, draft.pillQuantity(recipe.id)),
+    );
+    const gain = used * INSIGHT_PILL_GAIN;
+    draft.removePill(recipe.id, used);
+    draft.addStatement(updateDiscipleDaoInsightStatement(disciple.id, balance + gain, allocated));
+    disciple.dao_insight = balance + gain;
+    await draft.commitAlchemy(recipe.id, [disciple.id]);
+    return {
+      state: draft.view(),
+      outcome: {
+        pillId: recipe.id,
+        pillName: recipe.name,
+        discipleId: disciple.id,
+        discipleName: disciple.name,
+        count: used,
+        effect: { kind: 'insight', gain },
+      },
+    };
+  }
+
+  // 培元丹：资质 +2/颗，每名弟子最多 APTITUDE_PILL_MAX_USES 次，资质封顶 ATTRIBUTE_MAX。
+  if (recipe.id === 'aptitudePill') {
+    const aptitude = Number(disciple.aptitude);
+    const uses = Number(disciple.aptitude_pill_count) || 0;
+    if (uses >= APTITUDE_PILL_MAX_USES) {
+      throw new AppError(
+        'INVALID_STATUS',
+        `${disciple.name}已服用${recipe.name} ${String(APTITUDE_PILL_MAX_USES)} 次，药力已满`,
+      );
+    }
+    if (aptitude >= ATTRIBUTE_MAX) {
+      throw new AppError('INVALID_STATUS', `${disciple.name}的资质已达 ${String(ATTRIBUTE_MAX)}，无需再服`);
+    }
+    const used = Math.min(
+      count,
+      aptitudePillsToFull(aptitude, uses, ATTRIBUTE_MAX),
+      Math.max(1, draft.pillQuantity(recipe.id)),
+    );
+    // 最后一颗可能只加 1 点：总增益封顶到上限。
+    const gain = Math.min(APTITUDE_PILL_GAIN * used, ATTRIBUTE_MAX - aptitude);
+    draft.removePill(recipe.id, used);
+    draft.addStatement(updateDiscipleAptitudePillStatement(disciple.id, aptitude + gain, uses + used));
+    disciple.aptitude = aptitude + gain;
+    disciple.aptitude_pill_count = uses + used;
+    await draft.commitAlchemy(recipe.id, [disciple.id]);
+    return {
+      state: draft.view(),
+      outcome: {
+        pillId: recipe.id,
+        pillName: recipe.name,
+        discipleId: disciple.id,
+        discipleName: disciple.name,
+        count: used,
+        effect: { kind: 'aptitude', gain },
       },
     };
   }
@@ -8963,6 +9067,7 @@ export function getMeritShop(): MeritShopView {
       cost: item.cost,
       category: item.category,
       quality: item.quality,
+      resourceId: item.resourceId,
       pillId: item.pillId,
       color: item.quality === null ? null : qualityColorOf(item.quality),
     })),
@@ -8976,8 +9081,10 @@ export interface BossMeritExchangeOutcome {
   itemId: string;
   /** 花掉的功勋（最小单位）。 */
   cost: number;
-  /** 兑换到的玄铁（最小单位）；兑换装备时为 0。 */
+  /** 兑换到的玄铁（最小单位）；不是玄铁时为 0。 */
   xuantie: number;
+  /** 兑换到的资源（玄铁 / 神木）；不是资源时为 null。amount 为最小单位。 */
+  resource: { resourceId: string; name: string; amount: number } | null;
   /** 兑换到的丹药；不是丹药时为 null。 */
   pill: { pillId: string; name: string; quantity: number } | null;
   /** 兑换到的装备；兑换玄铁时为 null。 */
@@ -9030,19 +9137,24 @@ export async function exchangeBossMerit(
           itemId: item.id,
           cost: costMinUnits * quantity,
           xuantie: 0,
+          resource: null,
           pill: { pillId: item.pillId, name: item.name, quantity },
           equipment: null,
         },
       };
     }
-    draft.addResource(XUANTIE_RESOURCE_ID, quantity * 1000);
+    // 资源类（玄铁 / 神木）：数量 × 1000 入账。
+    const resourceId = item.resourceId ?? XUANTIE_RESOURCE_ID;
+    const amount = quantity * 1000;
+    draft.addResource(resourceId, amount);
     await draft.commit();
     return {
       state: draft.view(),
       outcome: {
         itemId: item.id,
         cost: costMinUnits * quantity,
-        xuantie: quantity * 1000,
+        xuantie: resourceId === XUANTIE_RESOURCE_ID ? amount : 0,
+        resource: { resourceId, name: item.name, amount },
         pill: null,
         equipment: null,
       },
@@ -9091,6 +9203,7 @@ export async function exchangeBossMerit(
       itemId: item.id,
       cost: costMinUnits,
       xuantie: 0,
+      resource: null,
       pill: null,
       equipment: {
         id: equipmentId,
