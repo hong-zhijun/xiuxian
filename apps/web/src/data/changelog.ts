@@ -19,6 +19,12 @@ export const MAX_ENTRIES = 5;
 
 export const CHANGELOG: readonly ChangelogEntry[] = [
   {
+    id: '2026-10-07-gift-talent-pill',
+    time: '2026-10-07 12:00',
+    title: '福利：洗髓丹 ×20',
+    items: ['所有宗门的丹库已发放洗髓丹 20 颗，可在弟子详情天赋旁点「更换」使用。'],
+  },
+  {
     id: '2026-10-06-reroll-10',
     time: '2026-10-06 21:00',
     title: '洗髓次数上调',
