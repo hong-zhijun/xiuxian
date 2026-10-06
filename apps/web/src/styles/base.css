@@ -2709,31 +2709,18 @@ ul {
   flex-direction: column;
 }
 
+/* 服丹弹窗的一行：名称 · 作用 · 库存 → 本次效果 → （服到满说明）→ 两个按钮，由上到下。 */
 .disciple-pill {
   display: flex;
   min-width: 0;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
+  flex-direction: column;
+  gap: 4px;
   padding: 10px 0;
   border-bottom: 1px solid var(--line);
 }
 
 .disciple-pill:last-child {
   border-bottom: 0;
-}
-
-.disciple-pill.is-blocked .disciple-pill-desc {
-  color: #566b61;
-}
-
-.disciple-pill-copy {
-  display: flex;
-  min-width: 0;
-  flex: 1 1 0;
-  flex-direction: column;
-  gap: 2px;
 }
 
 .disciple-pill-title {
@@ -2751,8 +2738,19 @@ ul {
   letter-spacing: 0.06em;
 }
 
-.disciple-pill-desc {
-  color: #657970;
+/* 一句话作用：与炼丹面板的效果标签同一视觉。 */
+.disciple-pill-summary {
+  padding: 1px 7px;
+  border-radius: 2px;
+  color: var(--gold-bright);
+  background: rgba(202, 169, 106, 0.12);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.disciple-pill-full {
+  color: var(--muted);
   font-size: 12px;
   line-height: 1.45;
 }
@@ -2765,9 +2763,9 @@ ul {
 
 .disciple-pill-actions {
   display: flex;
-  flex: 0 0 auto;
-  flex-direction: column;
-  gap: 6px;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
 }
 
 /* 「服到满」确认：在该丹药条目下方展开，占满整行。 */
@@ -2811,12 +2809,7 @@ ul {
   font-size: 12px;
 }
 
-.disciple-pill-button.is-disabled {
-  border-color: rgba(167, 184, 173, 0.11);
-  color: #63756c;
-  background: rgba(255, 255, 255, 0.016);
-  cursor: help;
-}
+
 
 .disciple-danger {
   border-top: 1px dashed rgba(184, 81, 66, 0.35);

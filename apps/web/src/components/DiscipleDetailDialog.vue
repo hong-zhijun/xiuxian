@@ -637,6 +637,8 @@ const showPillPicker = ref(false);
 interface PillOption {
   pillId: string;
   name: string;
+  /** 一句话作用（服务端配方下发，如「修为 +1200」）。 */
+  summary: string;
   description: string;
   owned: number;
   /** 规则上可以服用（库存与最终裁决仍在服务端）。 */
@@ -760,6 +762,7 @@ const pillOptions = computed<PillOption[]>(() => {
     options.push({
       pillId,
       name: recipe.name,
+      summary: recipe.summary,
       description: recipe.description,
       owned: recipe.owned,
       available,
@@ -794,19 +797,14 @@ function usePill(option: PillOption): void {
   emit('usePill', option.pillId, props.disciple.id, 1);
 }
 
-/** 「服到满」先在列表里展开确认（写明颗数、效果与浪费/库存提示），确认后才提交。 */
-const confirmingFullPillId = ref<string | null>(null);
+/**
+ * 弹窗里只列「此刻能服、且有库存」的丹药（不能服的不列，免得一堆灰掉的条目）；
+ * 列表为空时弹窗给一句说明。
+ */
+const usablePills = computed(() => pillOptions.value.filter((option) => option.available && option.owned >= 1));
 
-watch(showPillPicker, (open) => {
-  if (!open) confirmingFullPillId.value = null;
-});
-
-function askUsePillToFull(option: PillOption): void {
-  if (props.busy || option.fullCount < 2) return;
-  confirmingFullPillId.value = option.pillId;
-}
-
-function confirmUsePillToFull(option: PillOption): void {
+/** 「服用到满」：直接按服务端算好的颗数服用（颗数、效果与提醒都显示在按钮上方）。 */
+function usePillToFull(option: PillOption): void {
   if (props.busy) return;
   // 重伤卧床期间服务端会拒绝服药（回春丹也无效），这里同步挡住。
   if (severeInjured.value) {
@@ -1810,73 +1808,44 @@ function unequipGear(item: EquipmentItemView | null): void {
         <header class="section-heading panel-heading compact-heading">
           <div>
             <p class="eyebrow">丹库</p>
-            <h2 id="disciple-pill-picker-title">选择要服用的丹药</h2>
+            <h2 id="disciple-pill-picker-title">服用丹药</h2>
           </div>
         </header>
-        <ul class="disciple-pill-list">
-          <li
-            v-for="option in pillOptions"
-            :key="option.pillId"
-            class="disciple-pill"
-            :class="{ 'is-blocked': !option.available || option.owned < 1 }"
-          >
-            <div class="disciple-pill-copy">
-              <div class="disciple-pill-title">
-                <strong>{{ option.name }}</strong>
-                <span class="alchemy-owned">库存 {{ option.owned }}</span>
-              </div>
-              <p class="disciple-pill-desc">{{ option.description }}</p>
-              <p v-if="option.available && option.preview !== ''" class="disciple-pill-effect">
-                本次效果：{{ option.preview }}
-              </p>
-              <p v-if="!option.available || option.owned < 1" class="blocked-hint">
-                {{ option.owned < 1 ? '丹药库存不足，请先炼制' : option.disabledReason }}
-              </p>
+
+        <!-- 只列此刻能服、且有库存的丹药：名称 · 作用 · 库存，下面两个按钮。 -->
+        <ul v-if="usablePills.length > 0" class="disciple-pill-list">
+          <li v-for="option in usablePills" :key="option.pillId" class="disciple-pill">
+            <div class="disciple-pill-title">
+              <strong>{{ option.name }}</strong>
+              <span class="disciple-pill-summary">{{ option.summary }}</span>
+              <span class="alchemy-owned">库存 {{ option.owned }}</span>
             </div>
+            <p class="disciple-pill-effect">{{ option.preview }}</p>
+            <p v-if="option.fullCount >= 2" class="disciple-pill-full">
+              服用到满：{{ option.fullCount }} 颗 · {{ option.fullPreview }}
+              <template v-if="option.fullNote !== ''">（{{ option.fullNote }}）</template>
+            </p>
             <div class="disciple-pill-actions">
-              <button
-                class="upgrade-button disciple-pill-button"
-                type="button"
-                :disabled="busy || !option.available || option.owned < 1"
-                @click="usePill(option)"
-              >
-                <span>{{ option.fullCount >= 2 ? '服 1 颗' : '服用' }}</span>
+              <button class="upgrade-button disciple-pill-button" type="button" :disabled="busy" @click="usePill(option)">
+                服用一颗
               </button>
               <button
-                v-if="option.fullCount >= 2"
-                class="upgrade-button disciple-pill-button"
+                class="action-button primary-action disciple-pill-button"
                 type="button"
-                :disabled="busy"
-                :aria-expanded="confirmingFullPillId === option.pillId"
-                @click="askUsePillToFull(option)"
+                :disabled="busy || option.fullCount < 2"
+                :title="option.fullCount < 2 ? '一颗就够了' : undefined"
+                @click="usePillToFull(option)"
               >
-                <span>服到满 · 需 {{ option.fullNeeded }} 颗</span>
+                服用到满
               </button>
-            </div>
-            <div
-              v-if="confirmingFullPillId === option.pillId"
-              class="disciple-pill-confirm"
-              role="group"
-              :aria-label="`确认服到满 · ${option.name}`"
-            >
-              <p>
-                将服用 <strong>{{ option.fullCount }}</strong> 颗{{ option.name }}：{{ option.fullPreview }}
-              </p>
-              <p v-if="option.fullNote !== ''" class="disciple-pill-confirm-note">{{ option.fullNote }}</p>
-              <div class="disciple-pill-confirm-actions">
-                <button class="upgrade-button" type="button" @click="confirmingFullPillId = null">取消</button>
-                <button
-                  class="action-button primary-action"
-                  type="button"
-                  :disabled="busy"
-                  @click="confirmUsePillToFull(option)"
-                >
-                  确认服用
-                </button>
-              </div>
             </div>
           </li>
         </ul>
+        <div v-else class="empty-state compact-empty">
+          <span aria-hidden="true">丹</span>
+          <strong>暂无可服用的丹药</strong>
+          <p>丹库里没有这名弟子此刻用得上的丹药，可到「炼丹」炼制，或在「功勋」兑换。</p>
+        </div>
       </section>
     </ModalShell>
 
