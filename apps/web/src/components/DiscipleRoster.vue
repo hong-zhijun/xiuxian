@@ -608,7 +608,7 @@ watch(
           </p>
         </div>
 
-        <!-- 境界单独一行：左边境界阶段，右边天赋名。 -->
+        <!-- 境界单独一行：境界阶段与天赋两个标签居中并排。 -->
         <p class="disciple-row-realm">
           <span class="realm-tag">{{ row.disciple.stageName }}</span>
           <span class="disciple-row-talent" :title="row.disciple.talentEffect || undefined">{{ row.disciple.talentName }}</span>
