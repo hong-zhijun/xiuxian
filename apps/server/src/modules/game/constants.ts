@@ -70,10 +70,63 @@ export const REALMS: readonly RealmDef[] = [
     stages: [
       { stage: 1, name: '化神初期', requiredCultivation: 32400 },
       { stage: 2, name: '化神中期', requiredCultivation: 64800 },
-      { stage: 3, name: '化神后期', requiredCultivation: null },
+      // 境界扩充：化神后期不再封顶，补上通往炼虚的门槛（沿用 ×1.5 的节奏）。
+      { stage: 3, name: '化神后期', requiredCultivation: 97200 },
+    ],
+  },
+  // 境界扩充（docs/境界与宗门等级扩充开发计划.md）：门槛 ÷ 修炼倍率 ≈ 等效挂机时长，
+  // 从化神后期起每层只涨约 10%（修炼倍率见 REALM_CULTIVATION_MULTIPLIER）。
+  {
+    id: 'voidRefinement',
+    name: '炼虚',
+    stages: [
+      { stage: 1, name: '炼虚初期', requiredCultivation: 210000 },
+      { stage: 2, name: '炼虚中期', requiredCultivation: 230000 },
+      { stage: 3, name: '炼虚后期', requiredCultivation: 250000 },
+    ],
+  },
+  {
+    id: 'bodyIntegration',
+    name: '合体',
+    stages: [
+      { stage: 1, name: '合体初期', requiredCultivation: 420000 },
+      { stage: 2, name: '合体中期', requiredCultivation: 465000 },
+      { stage: 3, name: '合体后期', requiredCultivation: 510000 },
+    ],
+  },
+  {
+    id: 'mahayana',
+    name: '大乘',
+    stages: [
+      { stage: 1, name: '大乘初期', requiredCultivation: 740000 },
+      { stage: 2, name: '大乘中期', requiredCultivation: 820000 },
+      { stage: 3, name: '大乘后期', requiredCultivation: 900000 },
+    ],
+  },
+  {
+    id: 'tribulation',
+    name: '渡劫',
+    stages: [
+      { stage: 1, name: '渡劫初期', requiredCultivation: 1250000 },
+      { stage: 2, name: '渡劫中期', requiredCultivation: 1375000 },
+      { stage: 3, name: '渡劫后期', requiredCultivation: null },
     ],
   },
 ];
+
+/**
+ * 修炼倍率（按 REALMS 下标）：挂机修炼速度、历练修为、聚气丹 / 凝元丹每颗修为都乘它。
+ * 前五个境界 ×1（与扩充前完全一致），炼虚起 ×2 / ×3 / ×4 / ×5。
+ */
+export const REALM_CULTIVATION_MULTIPLIER: readonly number[] = [1, 1, 1, 1, 1, 2, 3, 4, 5];
+
+/** 境界的修炼倍率；未知境界按 1。 */
+export function realmCultivationMultiplier(realmId: string): number {
+  return REALM_CULTIVATION_MULTIPLIER[realmIndex(realmId)] ?? 1;
+}
+
+/** 破境灵气倍率（按 REALMS 下标）：前五个境界 ×1（与扩充前一致），炼虚起 ×3 / ×6 / ×10 / ×15。 */
+export const BREAKTHROUGH_REALM_COST_MULTIPLIER: readonly number[] = [1, 1, 1, 1, 1, 3, 6, 10, 15];
 
 /** 突破消耗的灵气（最小单位）：每点阶段 20000（= 展示值 20），本次新增的调参值。 */
 export const BREAKTHROUGH_ENERGY_COST_PER_STAGE = 20_000;
@@ -113,9 +166,10 @@ export function nextStageOf(realmId: string, stage: number): { realmId: string; 
   return nextRealm === undefined ? null : { realmId: nextRealm.id, stage: 1 };
 }
 
-/** 突破消耗：阶段越高越贵。 */
-export function breakthroughEnergyCost(stage: number): number {
-  return BREAKTHROUGH_ENERGY_COST_PER_STAGE * Math.max(1, stage);
+/** 突破消耗：阶段越高越贵；境界扩充后再乘破境灵气倍率（前五个境界 ×1）。 */
+export function breakthroughEnergyCost(realmId: string, stage: number): number {
+  const multiplier = BREAKTHROUGH_REALM_COST_MULTIPLIER[realmIndex(realmId)] ?? 1;
+  return BREAKTHROUGH_ENERGY_COST_PER_STAGE * Math.max(1, stage) * multiplier;
 }
 
 /**
@@ -278,6 +332,99 @@ export const SECT_LEVELS: readonly SectLevelDef[] = [
     },
     buildingRequirements: [],
     discipleRequirements: [{ minRealmId: 'spiritTransformation', count: 3 }],
+    unlockBuildings: [],
+  },
+  // 宗门等级扩充（docs/境界与宗门等级扩充开发计划.md）：消耗每级约 ×1.5，11 级起加玄铁、13 级起加神木；
+  // 弟子条件与新境界一一对应。建筑上限保持 8（现有建筑只有 6 种）。
+  {
+    level: 11,
+    name: '洞天福地',
+    discipleCapacity: 38,
+    buildingCapacity: 8,
+    capacityMultiplier: 25,
+    upgradeCost: {
+      spiritStone: '8000000',
+      ore: '3000000',
+      herb: '2000000',
+      spiritualEnergy: '4000000',
+      xuantie: '200000',
+    },
+    buildingRequirements: [],
+    discipleRequirements: [{ minRealmId: 'voidRefinement', count: 1 }],
+    unlockBuildings: [],
+  },
+  {
+    level: 12,
+    name: '上古仙门',
+    discipleCapacity: 41,
+    buildingCapacity: 8,
+    capacityMultiplier: 32,
+    upgradeCost: {
+      spiritStone: '12000000',
+      ore: '4500000',
+      herb: '3000000',
+      spiritualEnergy: '6000000',
+      xuantie: '400000',
+    },
+    buildingRequirements: [],
+    discipleRequirements: [{ minRealmId: 'voidRefinement', count: 3 }],
+    unlockBuildings: [],
+  },
+  {
+    level: 13,
+    name: '万法仙庭',
+    discipleCapacity: 44,
+    buildingCapacity: 8,
+    capacityMultiplier: 40,
+    upgradeCost: {
+      spiritStone: '18000000',
+      ore: '6500000',
+      herb: '4500000',
+      spiritualEnergy: '9000000',
+      xuantie: '700000',
+      shenmu: '100000',
+    },
+    buildingRequirements: [],
+    discipleRequirements: [{ minRealmId: 'bodyIntegration', count: 1 }],
+    unlockBuildings: [],
+  },
+  {
+    level: 14,
+    name: '太虚圣宗',
+    discipleCapacity: 47,
+    buildingCapacity: 8,
+    capacityMultiplier: 50,
+    upgradeCost: {
+      spiritStone: '26000000',
+      ore: '9000000',
+      herb: '6500000',
+      spiritualEnergy: '13000000',
+      xuantie: '1000000',
+      shenmu: '200000',
+    },
+    buildingRequirements: [],
+    discipleRequirements: [
+      { minRealmId: 'bodyIntegration', count: 2 },
+      { minRealmId: 'mahayana', count: 1 },
+    ],
+    unlockBuildings: [],
+  },
+  {
+    level: 15,
+    name: '道祖仙庭',
+    discipleCapacity: 50,
+    buildingCapacity: 8,
+    capacityMultiplier: 64,
+    upgradeCost: {
+      spiritStone: '38000000',
+      ore: '13000000',
+      herb: '9000000',
+      spiritualEnergy: '19000000',
+      xuantie: '1500000',
+      shenmu: '300000',
+    },
+    buildingRequirements: [],
+    discipleRequirements: [{ minRealmId: 'tribulation', count: 1 }],
     unlockBuildings: [],
   },
 ];

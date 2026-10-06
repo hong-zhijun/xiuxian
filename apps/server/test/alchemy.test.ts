@@ -599,7 +599,7 @@ describe('丹药系统：服用', () => {
     // 最高阶段弟子（requiredCultivation = null）：拒绝
     const topId = sect.discipleIds[1] as string;
     await env.DB.prepare(
-      "UPDATE disciples SET realm_id = 'spiritTransformation', stage = 3, cultivation = 0 WHERE id = ?",
+      "UPDATE disciples SET realm_id = 'tribulation', stage = 3, cultivation = 0 WHERE id = ?",
     )
       .bind(topId)
       .run();

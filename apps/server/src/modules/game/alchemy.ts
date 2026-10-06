@@ -8,6 +8,7 @@
  * 解锁判断、短板选择等服务端规则都集中在这里，复用于 sync 视图与 craft/use 写路径。
  */
 
+import { realmCultivationMultiplier } from './constants';
 import { talentBonusBp } from './talents';
 
 /** 炼丹解锁：宗门等级下限。 */
@@ -267,7 +268,8 @@ export function cultivationPillGainOf(
   base: number = CULTIVATION_PILL_GAIN,
 ): number {
   const bp = talentBonusBp(talent, realmId, 'pillAffinity');
-  return Math.floor((base * (10_000 + bp)) / 10_000);
+  // 境界扩充：每颗修为再乘修炼倍率（前五个境界 ×1），否则后期修为丹形同作废。
+  return Math.floor((base * (10_000 + bp)) / 10_000) * realmCultivationMultiplier(realmId);
 }
 
 /** 修为类丹药（聚气丹 / 凝元丹）的基础每颗修为；不是修为类返回 null。 */

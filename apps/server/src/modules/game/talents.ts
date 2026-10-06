@@ -149,8 +149,13 @@ export function talentNameOf(talentId: string | null | undefined): string {
   return talentId === null || talentId === undefined ? '无' : (findTalent(talentId)?.name ?? '无');
 }
 
-/** 境界系数（基点）：炼气 ×1、筑基 ×1.25、金丹 ×1.5、元婴 ×2、化神 ×2.5（下标对齐 REALMS）。 */
-export const TALENT_REALM_MULTIPLIER_BP: readonly number[] = [10_000, 12_500, 15_000, 20_000, 25_000];
+/**
+ * 境界系数（基点，下标对齐 REALMS）：炼气 ×1、筑基 ×1.25、金丹 ×1.5、元婴 ×2、化神 ×2.5；
+ * 境界扩充后炼虚 ×2.75、合体 ×3、大乘 ×3.25、渡劫 ×3.5（化神之后每境界只 +0.25，防后期天赋失控）。
+ */
+export const TALENT_REALM_MULTIPLIER_BP: readonly number[] = [
+  10_000, 12_500, 15_000, 20_000, 25_000, 27_500, 30_000, 32_500, 35_000,
+];
 
 /** 某境界下标的系数；越界夹到表的两端（以后开放新境界前先按最高档算）。 */
 function realmMultiplierBp(index: number): number {

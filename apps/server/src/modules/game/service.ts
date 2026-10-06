@@ -273,6 +273,8 @@ import type { DiscipleJourneyRow, RealmExplorationRow } from './repository';
 import {
   StewardRepository,
   updateDiscipleAptitudePillStatement,
+  raiseDiscipleAttributeStatement,
+  grantDaoInsightStatement,
   updateDiscipleHandoverStatement,
   updateDiscipleTalentRerollStatement,
   updateDiscipleTalentStatement,
@@ -403,6 +405,13 @@ import {
   previewJourneyCultivation,
   rollJourneyOutcome,
   type JourneyBlock,
+  rollJourneyBonus,
+  journeyBonusChances,
+  journeyCultivationWithFortune,
+  serializeJourneyBonus,
+  parseJourneyBonus,
+  JOURNEY_BONUS_ATTRIBUTE_NAMES,
+  type JourneyBonus,
 } from './journey';
 import {
   breakthroughChanceBp,
@@ -1502,6 +1511,7 @@ class SectDraft {
         extraHarvest: Number(row.extra_harvest) === 1,
         injured: Number(row.injured) === 1,
         injuryChanceBp: Number(row.injury_chance_bp),
+        bonusDetail: row.bonus_detail,
         now: this.now,
       }),
     );
@@ -2528,7 +2538,7 @@ export async function breakthrough(
   const blocker = breakthroughBlocker(draft, disciple);
   if (blocker !== null) throw blocker.error;
 
-  draft.requireResource('spiritualEnergy', breakthroughEnergyCost(disciple.stage));
+  draft.requireResource('spiritualEnergy', breakthroughEnergyCost(disciple.realm_id, disciple.stage));
   const outcome = resolveBreakthrough(draft, disciple, breakthroughChanceOf(draft));
 
   // 同批核对弟子仍属本宗，避免驱逐先提交后白扣灵气、破境写入影响 0 行。
@@ -2578,7 +2588,7 @@ export async function breakthroughBatch(
   }
 
   const energyCost = eligible.reduce(
-    (sum, disciple) => sum + breakthroughEnergyCost(disciple.stage),
+    (sum, disciple) => sum + breakthroughEnergyCost(disciple.realm_id, disciple.stage),
     0,
   );
   const energyBalance = draft.balanceOf('spiritualEnergy');
@@ -5884,6 +5894,12 @@ export async function previewJourney(
           // 实际概率由服务端按出发时的幸运 / 体魄算好，前端不复制公式、也不写死 15%。
           extraChanceBp: reward.extraChanceBp,
           injuryChanceBp: reward.injuryChanceBp,
+          // 0036 额外奖励的三项概率（按方向 × 时长固定，见 journey.ts 的 JOURNEY_PLANS）。
+          ...(journeyBonusChances(definition.id, durationSeconds) ?? {
+            fortuneChanceBp: 0,
+            insightChanceBp: 0,
+            attributeChanceBp: 0,
+          }),
           endsAt: new Date(journeyEndsAt(now, durationSeconds)).toISOString(),
         };
       },
@@ -5978,7 +5994,24 @@ export async function startJourney(
     extraChanceBp: base.extraChanceBp,
     injuryChanceBp: base.injuryChanceBp,
   });
-  const reward = journeyFinalReward(base, roll.extraHarvest);
+  // 历练奖励丰富化：机遇 / 悟道 / 淬炼在「额外收获 / 受伤」之后掷，同样随记录落库、到期前不公开。
+  const bonus = rollJourneyBonus(journeyBonusChances(direction, durationSeconds) ?? {
+    fortuneChanceBp: 0,
+    insightChanceBp: 0,
+    attributeChanceBp: 0,
+  }, {
+    attack: Number(disciple.attack),
+    defense: Number(disciple.defense),
+    speed: Number(disciple.speed),
+    luck: Number(disciple.luck),
+    physique: Number(disciple.physique),
+  });
+  const finalReward = journeyFinalReward(base, roll.extraHarvest);
+  // 机遇：保底修为再 +100%，直接并入计划修为（返程时照常按门槛截断）。
+  const reward = {
+    ...finalReward,
+    cultivation: journeyCultivationWithFortune(finalReward.cultivation, base.cultivation, bonus.fortune),
+  };
   const endsAt = journeyEndsAt(now, durationSeconds);
   const resources: Record<string, number> = {};
   for (const [resourceId, amount] of Object.entries(reward.resources)) {
@@ -6005,10 +6038,49 @@ export async function startJourney(
     injury_chance_bp: base.injuryChanceBp,
     cultivation_awarded: null,
     created_at: now,
+    bonus_detail: serializeJourneyBonus(bonus),
   });
 
   await draft.commitJourneyStart(disciple.id, activeCount, atHomeCount);
   return draft.view();
+}
+
+/**
+ * 0036 历练额外奖励在领取时入账，返回给玩家看的文案：
+ * - 机遇：修为已在出发时并入计划修为，这里只出文案；
+ * - 淬炼：该属性 +1（相对更新、封顶 100；已满则不加，文案照实说明）；
+ * - 悟道：悟道值 +1（带上限条件的相对更新；已满则不得，文案照实说明）。
+ * 内存里的弟子行同步更新，让随领取返回的 state 立刻是新值。
+ */
+function applyJourneyBonusOnClaim(draft: SectDraft, discipleId: string, bonus: JourneyBonus): string[] {
+  const texts: string[] = [];
+  if (bonus.fortune) texts.push('偶得机遇，修为加倍');
+  const disciple = draft.disciples.find((row) => row.id === discipleId);
+  if (disciple === undefined) return texts;
+  if (bonus.attribute !== null) {
+    const name = JOURNEY_BONUS_ATTRIBUTE_NAMES[bonus.attribute];
+    const current = Number(disciple[bonus.attribute]);
+    const statement = raiseDiscipleAttributeStatement(disciple.id, bonus.attribute, ATTRIBUTE_MAX);
+    if (statement !== null && current < ATTRIBUTE_MAX) {
+      draft.addStatement(statement);
+      disciple[bonus.attribute] = current + 1;
+      texts.push(`淬炼有成，${name} +1`);
+    } else {
+      texts.push(`淬炼有成，但${name}已满`);
+    }
+  }
+  if (bonus.insight) {
+    const balance = Number(disciple.dao_insight) || 0;
+    const used = Number(disciple.dao_insight_used) || 0;
+    if (daoInsightRoom(balance, used) > 0) {
+      draft.addStatement(grantDaoInsightStatement(disciple.id, DAO_INSIGHT_CAP));
+      disciple.dao_insight = balance + 1;
+      texts.push('悟道有得，悟道值 +1');
+    } else {
+      texts.push('悟道有得，但悟道值已满');
+    }
+  }
+  return texts;
 }
 
 /** 领取回执文案（服务端拼好；前端不复制规则）。 */
@@ -6018,6 +6090,8 @@ function journeyClaimMessage(input: {
   cultivationAwarded: number;
   extraHarvest: boolean;
   injured: boolean;
+  /** 0036 额外奖励的文案（机遇 / 淬炼 / 悟道），已按领取时的实际结果拼好。 */
+  bonusTexts: readonly string[];
 }): string {
   const parts = [`${input.discipleName}${input.directionName}归来`];
   parts.push(
@@ -6026,6 +6100,7 @@ function journeyClaimMessage(input: {
   if (input.extraHarvest) {
     parts.push('另有额外收获');
   }
+  parts.push(...input.bonusTexts);
   parts.push(input.injured ? '途中受伤' : '平安无事');
   return parts.join('，');
 }
@@ -6079,6 +6154,9 @@ export async function claimJourney(
       draft.grantResource(resourceId, parsed);
     }
   }
+  // 0036 历练额外奖励：淬炼 / 悟道在领取时入账（相对更新，封顶 / 满额由 SQL 条件兜底）。
+  const bonus = parseJourneyBonus(journey.bonus_detail);
+  const bonusTexts = applyJourneyBonusOnClaim(draft, journey.disciple_id, bonus);
   draft.markJourneyClaimed(journey);
 
   await draft.commitJourneyClaim(
@@ -6107,12 +6185,14 @@ export async function claimJourney(
         ? new Date(journeyInjuryUntil(Number(journey.ends_at))).toISOString()
         : null,
       endsAt: new Date(Number(journey.ends_at)).toISOString(),
+      bonusTexts,
       message: journeyClaimMessage({
         discipleName: journey.disciple_name,
         directionName,
         cultivationAwarded,
         extraHarvest,
         injured,
+        bonusTexts,
       }),
     },
   };

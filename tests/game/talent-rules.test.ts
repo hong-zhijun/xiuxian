@@ -75,14 +75,18 @@ describe('天赋表（计划 1.2）', () => {
     expect(talentEffectText('none', 'goldenCore')).toBe('');
   });
 
-  it('天赋总表：11 行 × 5 个境界，数值服务端算好', () => {
+  it('天赋总表：11 行 × 9 个境界，数值服务端算好', () => {
     const catalog = talentCatalog();
     expect(catalog).toHaveLength(11);
     const combat = catalog.find((entry) => entry.id === 'combat')!;
     expect(combat.categoryName).toBe('战斗');
     expect(combat.effect).toBe('战力');
-    expect(combat.values.map((value) => value.text)).toEqual(['+10%', '+12.5%', '+15%', '+20%', '+25%']);
-    expect(combat.values.map((value) => value.realmName)).toEqual(['炼气', '筑基', '金丹', '元婴', '化神']);
+    expect(combat.values.map((value) => value.text)).toEqual([
+      '+10%', '+12.5%', '+15%', '+20%', '+25%', '+27.5%', '+30%', '+32.5%', '+35%',
+    ]);
+    expect(combat.values.map((value) => value.realmName)).toEqual([
+      '炼气', '筑基', '金丹', '元婴', '化神', '炼虚', '合体', '大乘', '渡劫',
+    ]);
   });
 
   it('新弟子天赋等概率覆盖 11 个；洗髓候选不会与当前相同', () => {

@@ -37,9 +37,9 @@ const realmColumns = computed(() => props.talents[0]?.values ?? []);
         洗髓丹可以洗出新天赋，再二选一。
       </p>
 
-      <p class="talent-catalog-swipe disciple-detail-hint">表格可左右滑动，查看各境界的数值。</p>
+      <p class="talent-catalog-swipe disciple-detail-hint">表格可左右滑动，查看九个境界的数值。</p>
       <div class="talent-catalog-scroll">
-        <table class="talent-catalog-table">
+        <table class="talent-catalog-table talent-values-table">
           <thead>
             <tr>
               <th scope="col">天赋</th>

@@ -2299,13 +2299,13 @@ ul {
   transform: translateY(1px);
 }
 
-/* 竖版弟子卡：头像 → 姓名/境界 → 状态 → 战力评分 → 备注 → 详情，六行由上到下。 */
+/* 竖版弟子卡：头像 → 姓名 → 境界 / 天赋 → 状态 → 战力评分 → 详情，六行由上到下。 */
 .disciple-row {
   position: relative;
   display: grid;
   min-height: 0;
   grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: auto auto auto auto 14px 28px;
+  grid-template-rows: auto auto auto auto auto 28px;
   align-items: center;
   gap: 3px;
   padding: 7px 8px 6px;
@@ -2387,7 +2387,7 @@ ul {
   overflow: visible;
 }
 
-/* 第 2 行：姓名 + 境界阶段同一行；窄到放不下时才折行，姓名先让位省略。 */
+/* 第 2 行：姓名（境界移到第 3 行）。 */
 .disciple-row-head {
   display: flex;
   min-width: 0;
@@ -2404,9 +2404,30 @@ ul {
   font-size: 16px;
 }
 
-/* 第 3 行：当前状态独占一行；下限取状态标本身的高度，让所有卡片这一行等高。 */
-.disciple-card-status {
+/* 第 3 行：左边境界阶段、右边天赋名；窄卡片里天赋名先省略。 */
+.disciple-row-realm {
   grid-row: 3;
+  grid-column: 1;
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  margin: 0;
+}
+
+.disciple-row-talent {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--gold);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 第 4 行：当前状态独占一行；下限取状态标本身的高度，让所有卡片这一行等高。 */
+.disciple-card-status {
+  grid-row: 4;
   grid-column: 1;
   display: flex;
   min-width: 0;
@@ -2416,9 +2437,9 @@ ul {
   overflow: hidden;
 }
 
-/* 第 4 行：战力与综合评分。 */
+/* 第 5 行：战力与综合评分。 */
 .disciple-card-meta {
-  grid-row: 4;
+  grid-row: 5;
   grid-column: 1;
   display: flex;
   min-width: 0;
@@ -2427,28 +2448,6 @@ ul {
   justify-content: center;
   gap: 3px 7px;
   overflow: visible;
-}
-
-.disciple-row-note {
-  grid-row: 5;
-  grid-column: 1;
-  display: block;
-  height: 14px;
-  flex: 0 0 14px;
-  width: 100%;
-  margin: 0;
-  overflow: hidden;
-  color: #7f948a;
-  font-size: 11px;
-  line-height: 14px;
-  text-align: center;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* 备注为空：只把占位符压淡，14px 行高照占，卡片总高不随备注有无变化。 */
-.disciple-row-note.is-empty {
-  opacity: 0.45;
 }
 
 .disciple-detail-button {
@@ -7374,7 +7373,6 @@ p.steward-bonus-note {
 }
 
 .talent-catalog-swipe {
-  display: none;
   margin: 0;
 }
 
@@ -7545,12 +7543,6 @@ p.steward-bonus-note {
   width: 100%;
 }
 
-@media (max-width: 620px) {
-  .talent-catalog-swipe {
-    display: block;
-  }
-}
-
 @media (max-width: 420px) {
   .talent-reroll-options {
     grid-template-columns: minmax(0, 1fr);
@@ -7560,4 +7552,20 @@ p.steward-bonus-note {
   .steward-actions .upgrade-button {
     flex: 1 1 auto;
   }
+}
+
+/* 首页宗门品阶旁的「?」：与等级名之间留一点距离，垂直居中。 */
+.sect-level-help {
+  margin-left: 6px;
+  vertical-align: middle;
+}
+
+/* 宗门等级一览：升级消耗与条件两列文字较多，表格最小宽度放宽一些。 */
+.talent-catalog-table.sect-level-catalog-table {
+  min-width: 640px;
+}
+
+/* 天赋一览：境界扩到九个后共 13 列，最小宽度放宽，桌面端也横向滚动查看。 */
+.talent-catalog-table.talent-values-table {
+  min-width: 820px;
 }

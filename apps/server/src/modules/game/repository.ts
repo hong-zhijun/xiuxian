@@ -1560,13 +1560,15 @@ export interface DiscipleJourneyRow {
   /** 返程实际入账修为；未处理返程为 NULL。 */
   cultivation_awarded: number | null;
   created_at: number;
+  /** 0036 历练额外奖励（受控 JSON：机遇 / 悟道 / 淬炼，见 journey.ts 的 JourneyBonus）；旧记录为 '{}'。 */
+  bonus_detail: string;
 }
 
 /** 历练表的完整列清单（避免 SELECT * 与将来加列时的静默漂移）。 */
 const JOURNEY_COLUMNS = `id, sect_id, disciple_id, disciple_name, direction, duration_seconds,
        original_assignment, started_at, ends_at, completed_at, claimed_at,
        reward_cultivation, reward_resources, extra_harvest, injured, injury_chance_bp,
-       cultivation_awarded, created_at`;
+       cultivation_awarded, created_at, bonus_detail`;
 
 export class DiscipleJourneyRepository extends ParamRepository {
   /**
@@ -1630,6 +1632,8 @@ export function insertDiscipleJourneyStatement(row: {
   extraHarvest: boolean;
   injured: boolean;
   injuryChanceBp: number;
+  /** 0036 额外奖励 JSON（见 journey.ts 的 serializeJourneyBonus）。 */
+  bonusDetail: string;
   now: number;
 }): ParameterizedQuery {
   return {
@@ -1637,8 +1641,8 @@ export function insertDiscipleJourneyStatement(row: {
             (id, sect_id, disciple_id, disciple_name, direction, duration_seconds,
              original_assignment, started_at, ends_at, completed_at, claimed_at,
              reward_cultivation, reward_resources, extra_harvest, injured, injury_chance_bp,
-             cultivation_awarded, created_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, NULL, ?)`,
+             cultivation_awarded, created_at, bonus_detail)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, NULL, ?, ?)`,
     params: [
       row.id,
       row.sectId,
@@ -1655,7 +1659,45 @@ export function insertDiscipleJourneyStatement(row: {
       row.injured ? 1 : 0,
       row.injuryChanceBp,
       row.now,
+      row.bonusDetail,
     ],
+  };
+}
+
+/** 历练淬炼可写的属性列（白名单，拼进 SQL 的列名只能来自这里）。 */
+const JOURNEY_ATTRIBUTE_COLUMNS: Readonly<Record<string, string>> = {
+  attack: 'attack',
+  defense: 'defense',
+  speed: 'speed',
+  luck: 'luck',
+  physique: 'physique',
+};
+
+/**
+ * 0036 历练淬炼：领取时某项属性 +1，封顶 100。相对更新（不依赖读到的旧值），
+ * 与其它改属性的命令并发也不会互相覆盖。未知属性返回 null（调用方跳过）。
+ */
+export function raiseDiscipleAttributeStatement(
+  discipleId: string,
+  attribute: string,
+  max: number,
+): ParameterizedQuery | null {
+  const column = JOURNEY_ATTRIBUTE_COLUMNS[attribute];
+  if (column === undefined) return null;
+  return {
+    sql: `UPDATE disciples SET ${column} = MIN(?, ${column} + 1) WHERE id = ?`,
+    params: [max, discipleId],
+  };
+}
+
+/**
+ * 0036 历练悟道：领取时悟道值 +1，带「已分配 + 未分配 < 上限」条件 —— 满了这句就是 no-op。
+ * 相对更新，不会覆盖并发的论道发奖 / 分配悟道值。
+ */
+export function grantDaoInsightStatement(discipleId: string, cap: number): ParameterizedQuery {
+  return {
+    sql: 'UPDATE disciples SET dao_insight = dao_insight + 1 WHERE id = ? AND dao_insight + dao_insight_used < ?',
+    params: [discipleId, cap],
   };
 }
 

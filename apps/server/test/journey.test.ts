@@ -687,8 +687,8 @@ describe('预览：只读、数值与截断', () => {
 
     // 最高阶段：访道不可用，采集仍可用且修为为 0。
     const top = await seedDisciple(fixture.sectId, {
-      name: '化神客',
-      realmId: 'spiritTransformation',
+      name: '渡劫客',
+      realmId: 'tribulation',
       stage: 3,
     });
     preview = (dataOf(await fixture.preview(top)) as Record<string, any>) as typeof preview;
@@ -1435,5 +1435,64 @@ describe('异常与并发交错：不留悬空记录、不产生免费奖励', (
       ]),
     );
     expect(await mutationGuardCount()).toBe(0);
+  });
+});
+
+/* ---------- 0036 历练额外奖励：淬炼 / 悟道在领取时入账 ---------- */
+
+describe('0036 历练额外奖励', () => {
+  async function bonusFields(discipleId: string) {
+    return env.DB.prepare('SELECT luck, dao_insight, dao_insight_used FROM disciples WHERE id = ?')
+      .bind(discipleId)
+      .first<{ luck: number; dao_insight: number; dao_insight_used: number }>();
+  }
+
+  async function readyJourneyWithBonus(prefix: string, bonus: Record<string, unknown>) {
+    const fixture = await makeSect(prefix);
+    const discipleId = fixture.discipleIds[0]!;
+    const journeyId = await startOk(fixture, discipleId, 'daoSeeking', 7_200);
+    await env.DB.prepare('UPDATE disciple_journeys SET bonus_detail = ? WHERE id = ?')
+      .bind(JSON.stringify(bonus), journeyId)
+      .run();
+    const now = Date.now();
+    await transportJourney(journeyId, now - 3 * HOUR, now - HOUR);
+    return { fixture, discipleId, journeyId };
+  }
+
+  it('淬炼：该属性 +1；悟道：悟道值 +1；回执写明', async () => {
+    const { fixture, discipleId, journeyId } = await readyJourneyWithBonus('bonus-ok', {
+      fortune: false,
+      insight: true,
+      attribute: 'luck',
+    });
+    const claimed = await fixture.claim(journeyId);
+    expect(claimed.status).toBe(200);
+    const outcome = (dataOf(claimed) as Record<string, any>).outcome;
+    expect(outcome.bonusTexts).toEqual(['淬炼有成，幸运 +1', '悟道有得，悟道值 +1']);
+    expect(await bonusFields(discipleId)).toMatchObject({ luck: 51, dao_insight: 1 });
+    // 历练记录里也能看到抽中了什么。
+    const record = (dataOf(claimed) as Record<string, any>).state.journey.recent.find(
+      (item: { id: string }) => item.id === journeyId,
+    );
+    expect(record.outcome).toMatchObject({ insight: true, attributeName: '幸运', fortune: false });
+  });
+
+  it('属性已满 / 悟道值已满：照实说明，不写库', async () => {
+    const { fixture, discipleId, journeyId } = await readyJourneyWithBonus('bonus-full', {
+      fortune: true,
+      insight: true,
+      attribute: 'luck',
+    });
+    await env.DB.prepare('UPDATE disciples SET luck = 100, dao_insight = 0, dao_insight_used = 50 WHERE id = ?')
+      .bind(discipleId)
+      .run();
+    const claimed = await fixture.claim(journeyId);
+    expect(claimed.status).toBe(200);
+    expect((dataOf(claimed) as Record<string, any>).outcome.bonusTexts).toEqual([
+      '偶得机遇，修为加倍',
+      '淬炼有成，但幸运已满',
+      '悟道有得，但悟道值已满',
+    ]);
+    expect(await bonusFields(discipleId)).toMatchObject({ luck: 100, dao_insight: 0, dao_insight_used: 50 });
   });
 });

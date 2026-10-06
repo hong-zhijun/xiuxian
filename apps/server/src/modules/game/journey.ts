@@ -1,4 +1,4 @@
-import { findStage, realmIndex } from './constants';
+import { findStage, realmCultivationMultiplier, realmIndex } from './constants';
 import { ATTRIBUTE_MAX, ATTRIBUTE_MIN, ATTRIBUTE_NEUTRAL } from './names';
 import { discipleCombatPower } from './realms';
 import { talentBonusBp } from './talents';
@@ -58,6 +58,10 @@ export interface JourneyPlanDef {
   resources: Record<string, number>;
   /** 基础受伤概率（基点，未按战力下调）。 */
   injuryChanceBp: number;
+  /** 历练奖励丰富化：机遇（保底修为再 +100%）/ 悟道（悟道值 +1）/ 淬炼（随机属性 +1）的概率（基点）。 */
+  fortuneChanceBp: number;
+  insightChanceBp: number;
+  attributeChanceBp: number;
 }
 
 /**
@@ -70,6 +74,9 @@ export const JOURNEY_PLANS: readonly JourneyPlanDef[] = [
     cultivation: 180,
     resources: { spiritStone: 15_000 },
     injuryChanceBp: 500,
+    fortuneChanceBp: 600,
+    insightChanceBp: 800,
+    attributeChanceBp: 400,
   },
   {
     direction: 'daoSeeking',
@@ -77,6 +84,9 @@ export const JOURNEY_PLANS: readonly JourneyPlanDef[] = [
     cultivation: 540,
     resources: { spiritStone: 45_000 },
     injuryChanceBp: 800,
+    fortuneChanceBp: 1_200,
+    insightChanceBp: 1_500,
+    attributeChanceBp: 800,
   },
   {
     direction: 'gathering',
@@ -84,6 +94,9 @@ export const JOURNEY_PLANS: readonly JourneyPlanDef[] = [
     cultivation: 40,
     resources: { herb: 25_000, ore: 20_000 },
     injuryChanceBp: 1_200,
+    fortuneChanceBp: 300,
+    insightChanceBp: 300,
+    attributeChanceBp: 800,
   },
   {
     direction: 'gathering',
@@ -91,6 +104,9 @@ export const JOURNEY_PLANS: readonly JourneyPlanDef[] = [
     cultivation: 120,
     resources: { herb: 75_000, ore: 60_000 },
     injuryChanceBp: 1_500,
+    fortuneChanceBp: 600,
+    insightChanceBp: 600,
+    attributeChanceBp: 1_500,
   },
 ];
 
@@ -334,6 +350,8 @@ export function journeyBaseReward(input: JourneyRewardInput): JourneyBaseReward 
   if (cultivationBp > 0) {
     cultivation = Math.floor((cultivation * (BP + cultivationBp)) / BP);
   }
+  // 境界扩充：历练修为同样乘修炼倍率（前五个境界 ×1）。
+  cultivation *= realmCultivationMultiplier(input.realmId);
 
   const talentResource = JOURNEY_GATHERING_TALENT_RESOURCES[input.talent];
   const gatheringBp = talentResource === undefined ? 0 : talentBonusBp(input.talent, input.realmId);
@@ -395,6 +413,90 @@ export function rollJourneyOutcome(
   const extraHarvest = Math.floor(random() * BP) < chances.extraChanceBp;
   const injured = Math.floor(random() * BP) < chances.injuryChanceBp;
   return { extraHarvest, injured };
+}
+
+/* ---------- 历练奖励丰富化：机遇 / 悟道 / 淬炼（出发时与额外收获、受伤一起掷） ---------- */
+
+/** 淬炼可能提升的属性（资质不在内：资质另有培元丹与悟道值）。 */
+export const JOURNEY_BONUS_ATTRIBUTES = ['attack', 'defense', 'speed', 'luck', 'physique'] as const;
+export type JourneyBonusAttribute = (typeof JOURNEY_BONUS_ATTRIBUTES)[number];
+
+export const JOURNEY_BONUS_ATTRIBUTE_NAMES: Readonly<Record<JourneyBonusAttribute, string>> = {
+  attack: '攻击',
+  defense: '防御',
+  speed: '身法',
+  luck: '幸运',
+  physique: '体魄',
+};
+
+/** 一次历练抽到的额外奖励（随记录落库为 bonus_detail JSON）。 */
+export interface JourneyBonus {
+  /** 机遇：保底修为再 +100%（出发时就并入计划修为）。 */
+  fortune: boolean;
+  /** 悟道：领取时悟道值 +1（悟道值已满则不得）。 */
+  insight: boolean;
+  /** 淬炼：领取时这项属性 +1（封顶 100）；没抽中为 null。 */
+  attribute: JourneyBonusAttribute | null;
+}
+
+export const EMPTY_JOURNEY_BONUS: JourneyBonus = { fortune: false, insight: false, attribute: null };
+
+/** 方向 + 时长对应的三项概率（基点）；非法组合返回 null。 */
+export function journeyBonusChances(
+  direction: JourneyDirection,
+  durationSeconds: number,
+): { fortuneChanceBp: number; insightChanceBp: number; attributeChanceBp: number } | null {
+  const plan = findJourneyPlan(direction, durationSeconds);
+  if (plan === undefined) return null;
+  return {
+    fortuneChanceBp: plan.fortuneChanceBp,
+    insightChanceBp: plan.insightChanceBp,
+    attributeChanceBp: plan.attributeChanceBp,
+  };
+}
+
+/**
+ * 出发时掷三项额外奖励（各自独立）。随机数取用顺序固定：机遇 → 悟道 → 淬炼 → （淬炼中了才取）挑哪项属性；
+ * 调用方在「额外收获 / 受伤」两次之后再调用，既有的随机序列不受影响。
+ * 淬炼只在还没满 100 的属性里挑；全满则视为没抽中。
+ */
+export function rollJourneyBonus(
+  chances: { fortuneChanceBp: number; insightChanceBp: number; attributeChanceBp: number },
+  attributes: Readonly<Record<JourneyBonusAttribute, number>>,
+  random: () => number = Math.random,
+): JourneyBonus {
+  const fortune = Math.floor(random() * BP) < chances.fortuneChanceBp;
+  const insight = Math.floor(random() * BP) < chances.insightChanceBp;
+  let attribute: JourneyBonusAttribute | null = null;
+  if (Math.floor(random() * BP) < chances.attributeChanceBp) {
+    const open = JOURNEY_BONUS_ATTRIBUTES.filter((id) => attributes[id] < ATTRIBUTE_MAX);
+    if (open.length > 0) {
+      attribute = open[Math.min(open.length - 1, Math.floor(random() * open.length))] ?? null;
+    }
+  }
+  return { fortune, insight, attribute };
+}
+
+/** 机遇：最终计划修为 = 原计划 + 保底修为（即保底部分翻倍）。 */
+export function journeyCultivationWithFortune(planned: number, baseCultivation: number, fortune: boolean): number {
+  return fortune ? planned + baseCultivation : planned;
+}
+
+/** 落库的 bonus_detail（受控 JSON）。 */
+export function serializeJourneyBonus(bonus: JourneyBonus): string {
+  return JSON.stringify(bonus);
+}
+
+/** 读库：脏数据 / 旧记录（'{}'）一律按「没有额外奖励」处理，不抛错。 */
+export function parseJourneyBonus(text: string | null | undefined): JourneyBonus {
+  if (typeof text !== 'string' || text === '') return EMPTY_JOURNEY_BONUS;
+  try {
+    const raw = JSON.parse(text) as Record<string, unknown>;
+    const attribute = JOURNEY_BONUS_ATTRIBUTES.find((id) => id === raw.attribute) ?? null;
+    return { fortune: raw.fortune === true, insight: raw.insight === true, attribute };
+  } catch {
+    return EMPTY_JOURNEY_BONUS;
+  }
 }
 
 /* ---------- 修为封顶与预览 ---------- */

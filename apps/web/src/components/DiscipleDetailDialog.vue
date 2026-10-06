@@ -42,6 +42,7 @@ import HelpTip from './HelpTip.vue';
 import LoadingState from './LoadingState.vue';
 import TalentCatalogDialog from './TalentCatalogDialog.vue';
 import TalentRerollDialog from './TalentRerollDialog.vue';
+import RealmCatalogDialog from './RealmCatalogDialog.vue';
 /**
  * 弟子详情（弹窗内容）：固定紧凑头部 + 五个 Tab（概览 / 修行 / 装备 / 历练 / 档案）。
  *
@@ -593,6 +594,10 @@ function recordResultLines(record: JourneyRecordView): string[] {
     lines.push(`${entry.name} +${entry.amount}`);
   }
   if (recordOutcome.extraHarvest) lines.push('额外收获');
+  // 额外奖励：机遇已体现在修为里；淬炼 / 悟道在领取时入账（已满则不得，见领取回执）。
+  if (recordOutcome.fortune) lines.push('偶得机遇');
+  if (recordOutcome.attributeName !== null) lines.push(`淬炼 · ${recordOutcome.attributeName} +1`);
+  if (recordOutcome.insight) lines.push('悟道 · 悟道值 +1');
   if (recordOutcome.injured) lines.push('途中受伤');
   return lines;
 }
@@ -935,6 +940,8 @@ const POWER_HELP = [
 const TALENT_PILL_ID = 'talentPill';
 const showTalentCatalog = ref(false);
 const showTalentReroll = ref(false);
+/** 头部境界旁的「?」：境界一览。 */
+const showRealmCatalog = ref(false);
 /** 执事 / 交接期的状态标（不能出战的原因，服务端算好）。 */
 const stewardTag = computed(() => props.disciple.combatBlockedReason);
 const talentPillRecipe = computed(() =>
@@ -1026,7 +1033,13 @@ function unequipGear(item: EquipmentItemView | null): void {
         <h2 class="disciple-detail-name" :title="disciple.name">{{ disciple.name }}</h2>
         <p class="disciple-detail-headline-meta">
           <span class="realm-tag">{{ disciple.stageName }}</span>
-          <span class="disciple-detail-headline-realm">{{ disciple.realmName }}</span>
+          <!-- 境界旁的「?」：与页面其它问号同一样式，点开境界一览（门槛 / 修炼倍率 / 天赋系数）。 -->
+          <button
+            class="help-tip-button"
+            type="button"
+            aria-label="查看所有境界"
+            @click="showRealmCatalog = true"
+          >?</button>
           <span class="disciple-status" :class="{ 'is-severeInjured': severeInjured }">{{ headerStatusLabel }}</span>
         </p>
       </div>
@@ -1125,6 +1138,14 @@ function unequipGear(item: EquipmentItemView | null): void {
             @use="useTalentPill"
             @choose="chooseTalent"
             @close="showTalentReroll = false"
+          />
+
+          <RealmCatalogDialog
+            v-if="showRealmCatalog"
+            :realms="state.realmCatalog"
+            :current-realm-id="disciple.realmId"
+            :current-stage="disciple.stage"
+            @close="showRealmCatalog = false"
           />
 
           <TalentCatalogDialog
@@ -1503,6 +1524,9 @@ function unequipGear(item: EquipmentItemView | null): void {
                         {{ line.name }} +{{ line.amount }}
                       </span>
                       <span class="journey-tag is-extra">额外收获 {{ formatBp(option.extraChanceBp) }}</span>
+                      <span class="journey-tag is-extra" title="保底修为再加一份">机遇 {{ formatBp(option.fortuneChanceBp) }}</span>
+                      <span class="journey-tag is-extra" title="悟道值 +1">悟道 {{ formatBp(option.insightChanceBp) }}</span>
+                      <span class="journey-tag is-extra" title="随机一项属性 +1">淬炼 {{ formatBp(option.attributeChanceBp) }}</span>
                       <span class="journey-tag is-risk">实际受伤 {{ formatBp(option.injuryChanceBp) }}</span>
                     </span>
                     <span class="journey-return">预计 {{ formatTime(option.endsAt) }} 归队</span>

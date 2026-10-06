@@ -66,6 +66,7 @@ import LeaderboardPanel from './LeaderboardPanel.vue';
 import RecruitDialog from './RecruitDialog.vue';
 import ShopDialog from './ShopDialog.vue';
 import StewardDialog from './StewardDialog.vue';
+import SectLevelCatalogDialog from './SectLevelCatalogDialog.vue';
 import WorldBossDialog from './WorldBossDialog.vue';
 import MeritDialog from './MeritDialog.vue';
 import ModalShell from './ModalShell.vue';
@@ -589,7 +590,10 @@ function buildingGlyph(defId: string): string {
 }
 
 /** 宗门等级上限（与后端 SECT_LEVELS 一致）。 */
-const MAX_SECT_LEVEL = 10;
+/** 宗门等级上限：取服务端下发的等级表长度（扩充等级后不用改前端）。 */
+const MAX_SECT_LEVEL = computed(() => props.state.sectLevelCatalog.length);
+/** 首页宗门品阶旁的「?」：宗门等级一览。 */
+const showSectLevelCatalog = ref(false);
 
 /** 建筑等级用菱形字标显示（与后端建筑上限 5 级一致）。 */
 const LEVEL_GLYPHS = ['壹', '贰', '叁', '肆', '伍'] as const;
@@ -1612,7 +1616,15 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
       <dl class="sect-metrics" aria-label="宗门概况">
         <div>
           <dt>宗门品阶</dt>
-          <dd><b>LV.</b>{{ state.sect.level }}<span class="sect-metric-title">{{ state.sect.levelName }}</span></dd>
+          <dd>
+            <b>LV.</b>{{ state.sect.level }}<span class="sect-metric-title">{{ state.sect.levelName }}</span>
+            <button
+              class="help-tip-button sect-level-help"
+              type="button"
+              aria-label="查看所有宗门等级"
+              @click="showSectLevelCatalog = true"
+            >?</button>
+          </dd>
         </div>
         <div><dt>声望</dt><dd>{{ state.sect.reputation }}</dd></div>
         <div><dt>门下弟子</dt><dd>{{ state.recruit.discipleCount }}<b>/{{ state.sect.discipleCapacity }}</b></dd></div>
@@ -2116,6 +2128,8 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
       />
     </ModalShell>
   <!-- 功勋兑换：价目打开时拉一次；兑换回执里的 state 交给 App，兑到装备顺手刷新背包件数。 -->
+  <SectLevelCatalogDialog v-if="showSectLevelCatalog" :state="state" @close="showSectLevelCatalog = false" />
+
   <!-- 天赋重构 · 执事堂：任命 / 卸任都走上层 runAction，返回的 state 一到职位视图即更新。 -->
   <ModalShell v-if="openPanel === 'steward'" :loading="busy" label="执事堂" @close="openPanel = null">
     <StewardDialog

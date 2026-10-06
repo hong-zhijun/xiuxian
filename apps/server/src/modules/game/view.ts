@@ -48,6 +48,9 @@ import {
   assignmentLimitOf,
   breakthroughEnergyCost,
   dateKeyUtc8,
+  REALMS,
+  REALM_CULTIVATION_MULTIPLIER,
+  SECT_LEVELS,
   effectiveCapacity,
   findRealm,
   findSectLevel,
@@ -113,6 +116,7 @@ import {
   STEWARD_HANDOVER_MS,
   STEWARD_OFFICES,
   TALENT_REROLL_MAX_USES,
+  TALENT_REALM_MULTIPLIER_BP,
   type TalentCatalogEntry,
 } from './talents';
 import {
@@ -127,7 +131,9 @@ import {
   type JourneyDirection,
   type JourneyStatus,
   asJourneyDirection,
+  parseJourneyBonus,
   parseJourneyRewardResources,
+  JOURNEY_BONUS_ATTRIBUTE_NAMES,
 } from './journey';
 import { cultivationRatePerHour, resourceRates, type DiscipleState, type SettleResult } from './settle';
 import type { WorldBossPhase } from './worldBoss';
@@ -375,6 +381,36 @@ export interface StewardOfficeView {
   paused: boolean;
   /** 今天还能不能任命（每职位每天一次）。 */
   canAppointToday: boolean;
+}
+
+/** 境界一览的一行（全部服务端算好）。 */
+export interface RealmCatalogEntry {
+  id: string;
+  name: string;
+  /** 修炼倍率（挂机修炼 / 历练修为 / 修为丹都乘它）。 */
+  cultivationMultiplier: number;
+  /** 天赋系数文案，如「×2.75」。 */
+  talentMultiplierText: string;
+  stages: {
+    stage: number;
+    name: string;
+    /** 突破门槛；null = 当前版本最高阶段。 */
+    requiredCultivation: number | null;
+    /** 破境灵气（最小单位）；最高阶段为 null。 */
+    breakthroughCost: string | null;
+  }[];
+}
+
+/** 宗门等级一览的一行。 */
+export interface SectLevelCatalogEntry {
+  level: number;
+  name: string;
+  discipleCapacity: number;
+  capacityMultiplier: number;
+  /** 升到本级的消耗（最小单位）；1 级为空对象。 */
+  upgradeCost: Record<string, string>;
+  /** 升到本级的条件文案（建筑等级 / 弟子境界）。 */
+  requirements: string[];
 }
 
 export interface StewardsView {
@@ -877,6 +913,10 @@ export interface JourneyOutcomeView {
   injuredUntil: string | null;
   completedAt: string | null;
   claimedAt: string | null;
+  /** 0036 额外奖励：机遇（修为已加倍并入计划修为）/ 悟道（领取时悟道值 +1）/ 淬炼的属性名（领取时 +1）。 */
+  fortune: boolean;
+  insight: boolean;
+  attributeName: string | null;
 }
 
 /** 单个弟子的历练状态（DiscipleView.journey）。 */
@@ -939,6 +979,10 @@ export interface JourneyDurationPreviewView {
   extraChanceBp: number;
   /** 实际受伤概率（基点，已按出发时战力与体魄调整并 clamp 到方向下限）。 */
   injuryChanceBp: number;
+  /** 0036 机遇（保底修为再 +100%）/ 悟道（悟道值 +1）/ 淬炼（随机属性 +1）的概率（基点）。 */
+  fortuneChanceBp: number;
+  insightChanceBp: number;
+  attributeChanceBp: number;
   /** 预计返程时间（服务器时间基准）。 */
   endsAt: string;
 }
@@ -983,6 +1027,8 @@ export interface JourneyClaimOutcomeView {
   /** 伤势复原时间（从到期时间起算 30 分钟）；未受伤为 null。 */
   injuredUntil: string | null;
   endsAt: string;
+  /** 0036 额外奖励的实际结果文案（如「淬炼有成，幸运 +1」）；没有为空数组。 */
+  bonusTexts: string[];
   message: string;
 }
 
@@ -1256,6 +1302,10 @@ export interface SectStateView {
   talents: TalentCatalogEntry[];
   /** 天赋重构：执事堂。 */
   stewards: StewardsView;
+  /** 境界扩充：境界一览（弟子详情境界旁的「?」）。 */
+  realmCatalog: RealmCatalogEntry[];
+  /** 境界扩充：宗门等级一览（首页宗门品阶旁的「?」）。 */
+  sectLevelCatalog: SectLevelCatalogEntry[];
   /** 主动挑战的当日次数（0012：每日 3 次；失败/零奖励同样消耗）。 */
   challenge: {
     dailyLimit: number;
@@ -1744,7 +1794,7 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
   const discipleViews: DiscipleView[] = disciples.map((disciple) => {
     const realm = findRealm(disciple.realm_id);
     const stage = findStage(disciple.realm_id, disciple.stage);
-    const cost = breakthroughEnergyCost(disciple.stage);
+    const cost = breakthroughEnergyCost(disciple.realm_id, disciple.stage);
     const chanceBp = breakthroughChanceBp(config, arrayLevel);
     const injured = disciple.injured_until !== null && disciple.injured_until > now;
     // 0014：历练状态（在外 / 待领取 / 名额与资格原因）全部在服务端算好，前端不复制公式。
@@ -2149,6 +2199,35 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
     sectUpgrade,
     alchemy: alchemyView,
     talents: talentCatalog(),
+    realmCatalog: REALMS.map((realm, index) => ({
+      id: realm.id,
+      name: realm.name,
+      cultivationMultiplier: REALM_CULTIVATION_MULTIPLIER[index] ?? 1,
+      talentMultiplierText: `×${String((TALENT_REALM_MULTIPLIER_BP[index] ?? 10_000) / 10_000)}`,
+      stages: realm.stages.map((stage) => ({
+        stage: stage.stage,
+        name: stage.name,
+        requiredCultivation: stage.requiredCultivation,
+        breakthroughCost:
+          stage.requiredCultivation === null ? null : String(breakthroughEnergyCost(realm.id, stage.stage)),
+      })),
+    })),
+    sectLevelCatalog: SECT_LEVELS.map((def) => ({
+      level: def.level,
+      name: def.name,
+      discipleCapacity: def.discipleCapacity,
+      capacityMultiplier: def.capacityMultiplier,
+      upgradeCost: { ...def.upgradeCost },
+      requirements: [
+        ...def.buildingRequirements.map(
+          (req) =>
+            `${config.buildings.find((building) => building.id === req.defId)?.name ?? req.defId} ${String(req.minLevel)} 级`,
+        ),
+        ...def.discipleRequirements.map(
+          (req) => `${String(req.count)} 名${findRealm(req.minRealmId).name}及以上弟子`,
+        ),
+      ],
+    })),
     stewards: {
       offices: STEWARD_OFFICES.map((office) => {
         const row = stewards.find((item) => item.office === office.id);
@@ -2419,6 +2498,7 @@ function journeyOutcomeView(row: DiscipleJourneyRow, now: number): JourneyOutcom
     return null;
   }
   const injured = Number(row.injured) === 1;
+  const bonus = parseJourneyBonus(row.bonus_detail);
   return {
     cultivationAwarded: Number(row.cultivation_awarded ?? 0),
     cultivationPlanned: Number(row.reward_cultivation),
@@ -2430,6 +2510,9 @@ function journeyOutcomeView(row: DiscipleJourneyRow, now: number): JourneyOutcom
     injuredUntil: injured ? new Date(journeyInjuryUntil(Number(row.ends_at))).toISOString() : null,
     completedAt: row.completed_at === null ? null : new Date(Number(row.completed_at)).toISOString(),
     claimedAt: row.claimed_at === null ? null : new Date(Number(row.claimed_at)).toISOString(),
+    fortune: bonus.fortune,
+    insight: bonus.insight,
+    attributeName: bonus.attribute === null ? null : JOURNEY_BONUS_ATTRIBUTE_NAMES[bonus.attribute],
   };
 }
 

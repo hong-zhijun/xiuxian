@@ -603,12 +603,16 @@ watch(
         </div>
 
         <div class="disciple-row-info">
-          <!-- 姓名与境界阶段合并到同一行；修为数字不再常显，进度只看环长。 -->
           <p class="disciple-row-head">
             <strong class="disciple-row-name" :title="row.disciple.name">{{ row.disciple.name }}</strong>
-            <span class="realm-tag">{{ row.disciple.stageName }}</span>
           </p>
         </div>
+
+        <!-- 境界单独一行：左边境界阶段，右边天赋名。 -->
+        <p class="disciple-row-realm">
+          <span class="realm-tag">{{ row.disciple.stageName }}</span>
+          <span class="disciple-row-talent" :title="row.disciple.talentEffect || undefined">{{ row.disciple.talentName }}</span>
+        </p>
 
         <!-- 状态单独占一行：不再和境界标签挤在同一行里抢宽度。
              历练标记（在外 / 待领取）也在这里，玩家一眼能看出这名弟子不在宗门正常当值。 -->
@@ -634,16 +638,6 @@ watch(
           <span class="disciple-row-power">战力 {{ row.disciple.combatPower }}</span>
           <span class="disciple-row-score">综合评分 {{ row.disciple.attributeScore.toFixed(1) }}</span>
         </div>
-
-        <!-- 备注为空也保留这一行：占位符顶住行高，卡片总高不随备注有无变化。 -->
-        <p
-          class="disciple-row-note"
-          :class="{ 'is-empty': row.disciple.note === '' }"
-          :title="row.disciple.note || undefined"
-          :aria-hidden="row.disciple.note === ''"
-        >
-          {{ row.disciple.note || '—' }}
-        </p>
 
         <!-- 待领取时按钮上再挂一个「待领取」标记：玩家知道点这里去领历练收获。 -->
         <button

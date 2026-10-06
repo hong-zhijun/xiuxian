@@ -229,6 +229,10 @@ export interface SectStateView {
   talents: TalentCatalogEntry[];
   /** 天赋重构：执事堂。 */
   stewards: StewardsView;
+  /** 境界一览（弟子详情境界旁的「?」）。 */
+  realmCatalog: RealmCatalogEntry[];
+  /** 宗门等级一览（首页宗门品阶旁的「?」）。 */
+  sectLevelCatalog: SectLevelCatalogEntry[];
   /** 主动挑战的当日次数（每日 3 次；失败/零奖励同样消耗）。 */
   challenge: {
     dailyLimit: number;
@@ -315,6 +319,36 @@ export interface TalentCatalogEntry {
   condition: string;
   effect: string;
   values: { realmId: string; realmName: string; text: string }[];
+}
+
+/** 境界一览的一行（服务端 view.ts 的 RealmCatalogEntry）。 */
+export interface RealmCatalogEntry {
+  id: string;
+  name: string;
+  /** 修炼倍率（挂机修炼 / 历练修为 / 修为丹都乘它）。 */
+  cultivationMultiplier: number;
+  /** 天赋系数文案，如「×2.75」。 */
+  talentMultiplierText: string;
+  stages: {
+    stage: number;
+    name: string;
+    /** 突破门槛；null = 当前版本最高阶段。 */
+    requiredCultivation: number | null;
+    /** 破境灵气（最小单位）；最高阶段为 null。 */
+    breakthroughCost: string | null;
+  }[];
+}
+
+/** 宗门等级一览的一行。 */
+export interface SectLevelCatalogEntry {
+  level: number;
+  name: string;
+  discipleCapacity: number;
+  capacityMultiplier: number;
+  /** 升到本级的消耗（最小单位）；1 级为空对象。 */
+  upgradeCost: Record<string, string>;
+  /** 升到本级的条件文案。 */
+  requirements: string[];
 }
 
 /** 执事堂的一个职位（全部服务端算好）。 */
@@ -1150,6 +1184,10 @@ export interface JourneyOutcomeView {
   injuredUntil: string | null;
   completedAt: string | null;
   claimedAt: string | null;
+  /** 额外奖励：机遇（修为加倍）/ 悟道（领取时悟道值 +1）/ 淬炼的属性名（领取时 +1）。 */
+  fortune: boolean;
+  insight: boolean;
+  attributeName: string | null;
 }
 
 /** 单个弟子的历练状态（DiscipleView.journey）。 */
@@ -1208,6 +1246,10 @@ export interface JourneyDurationPreviewView {
   extraChanceBp: number;
   /** 实际受伤概率（基点，已按出发时战力与体魄调整并 clamp 到方向下限）。 */
   injuryChanceBp: number;
+  /** 机遇（保底修为再 +100%）/ 悟道（悟道值 +1）/ 淬炼（随机属性 +1）的概率（基点）。 */
+  fortuneChanceBp: number;
+  insightChanceBp: number;
+  attributeChanceBp: number;
   /** 预计返程时间（服务器时间基准）。 */
   endsAt: string;
 }
@@ -1249,6 +1291,8 @@ export interface JourneyClaimOutcomeView {
   injured: boolean;
   injuredUntil: string | null;
   endsAt: string;
+  /** 额外奖励的实际结果文案（如「淬炼有成，幸运 +1」）。 */
+  bonusTexts: string[];
   message: string;
 }
 

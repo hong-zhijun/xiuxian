@@ -9,6 +9,7 @@ import {
   SPIRITUAL_ARRAY_ENERGY_BONUS_BP_PER_LEVEL,
   effectiveCapacity,
   findStage,
+  realmCultivationMultiplier,
 } from './constants';
 import { triggerEvents, type TriggeredEvent } from './events';
 import { talentBonusBp } from './talents';
@@ -339,7 +340,9 @@ export function cultivationRatePerHour(
   const result = Math.floor((baseRate * (10_000 + libraryBonusBp)) / 10_000);
   // 天赋重构：悟道在藏经阁加成之后再 ×(1 + 加成)，加成随境界提高。
   const talentBp = talentBonusBp(disciple.talent, disciple.realmId, 'cultivation');
-  return talentBp > 0 ? Math.floor((result * (10_000 + talentBp)) / 10_000) : result;
+  const withTalent = talentBp > 0 ? Math.floor((result * (10_000 + talentBp)) / 10_000) : result;
+  // 境界扩充：最后乘修炼倍率（炼虚起 ×2～×5；前五个境界 ×1，结果与扩充前一致）。
+  return withTalent * realmCultivationMultiplier(disciple.realmId);
 }
 
 /**
