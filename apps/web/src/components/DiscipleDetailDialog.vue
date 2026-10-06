@@ -1188,14 +1188,6 @@ function unequipGear(item: EquipmentItemView | null): void {
             @close="showTalentReroll = false"
           />
 
-          <AvatarCropDialog
-            v-if="avatarCropFile !== null"
-            :file="avatarCropFile"
-            :busy="busy"
-            @confirm="confirmAvatarImage"
-            @close="avatarCropFile = null"
-          />
-
           <RealmCatalogDialog
             v-if="showRealmCatalog"
             :realms="state.realmCatalog"
@@ -1747,6 +1739,14 @@ function unequipGear(item: EquipmentItemView | null): void {
               @change="onAvatarFileChange"
             />
           </div>
+          <!-- 裁剪弹窗必须放在「档案」面板里：别的面板此时是 v-show 隐藏的，放进去弹窗会打开但看不见。 -->
+          <AvatarCropDialog
+            v-if="avatarCropFile !== null"
+            :file="avatarCropFile"
+            :busy="busy"
+            @confirm="confirmAvatarImage"
+            @close="avatarCropFile = null"
+          />
           <p class="disciple-note-meta">
             图片铺满整个圆形头像，所有玩家可见；上传前自动裁剪压缩成小图。{{
               disciple.avatarHash !== null ? '移除后恢复下面选的头像框。' : ''

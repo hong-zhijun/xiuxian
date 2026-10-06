@@ -144,26 +144,32 @@ function restoreFocus(): void {
 </script>
 
 <template>
-  <div class="modal-backdrop" @click.self="requestClose">
-    <div
-      ref="dialog"
-      class="modal-card game-panel"
-      :class="{ 'is-narrow': narrow, 'is-fixed-height': fixedHeight, 'is-loading': loading }"
-      role="dialog"
-      aria-modal="true"
-      :aria-label="label"
-      :aria-busy="loading"
-      tabindex="-1"
-    >
-      <button class="modal-close" type="button" aria-label="关闭" :disabled="loading" @click="requestClose">
-        <svg viewBox="0 0 20 20" aria-hidden="true">
-          <path d="m5 5 10 10M15 5 5 15" />
-        </svg>
-      </button>
-      <slot />
-      <div v-if="loading" class="modal-loading-layer">
-        <LoadingState :label="loadingText ?? '正在处理请求'" />
+  <!--
+    渲染到 body 下：二级弹窗（服用丹药、裁剪头像、境界一览……）写在详情弹窗内部时，
+    不会被外层弹窗的滚动区 / 隐藏的 Tab 面板困住，始终铺满整个视口、叠在最上层。
+  -->
+  <Teleport to="body">
+    <div class="modal-backdrop" @click.self="requestClose">
+      <div
+        ref="dialog"
+        class="modal-card game-panel"
+        :class="{ 'is-narrow': narrow, 'is-fixed-height': fixedHeight, 'is-loading': loading }"
+        role="dialog"
+        aria-modal="true"
+        :aria-label="label"
+        :aria-busy="loading"
+        tabindex="-1"
+      >
+        <button class="modal-close" type="button" aria-label="关闭" :disabled="loading" @click="requestClose">
+          <svg viewBox="0 0 20 20" aria-hidden="true">
+            <path d="m5 5 10 10M15 5 5 15" />
+          </svg>
+        </button>
+        <slot />
+        <div v-if="loading" class="modal-loading-layer">
+          <LoadingState :label="loadingText ?? '正在处理请求'" />
+        </div>
       </div>
     </div>
-  </div>
+  </Teleport>
 </template>
