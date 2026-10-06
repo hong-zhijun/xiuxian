@@ -7603,3 +7603,45 @@ p.steward-bonus-note {
 .talent-catalog-table.talent-values-table {
   min-width: 820px;
 }
+
+/* ---------- 门人调度入口（弟子修行标题旁） ---------- */
+.dispatch-launch {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  padding: 4px 11px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  color: var(--jade-bright);
+  background: transparent;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.dispatch-launch.has-suggestions {
+  border-color: rgba(234, 209, 154, 0.6);
+  color: var(--gold-bright);
+  background: rgba(202, 169, 106, 0.1);
+}
+
+.dispatch-launch-count {
+  display: inline-flex;
+  min-width: 18px;
+  height: 18px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 5px;
+  border-radius: 999px;
+  color: #0b1713;
+  background: var(--gold);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+/* 名册：天赋没在对口岗位上时，天赋标签描成虚线金边提醒。 */
+.disciple-row-talent.is-misplaced {
+  border-style: dashed;
+  border-color: rgba(234, 209, 154, 0.75);
+  color: var(--gold-bright);
+}

@@ -655,6 +655,60 @@ function onBatchAssign(discipleIds: string[], assignment: string): void {
   );
 }
 
+/**
+ * 门人调度：按顺序执行批量换岗（先不限人数的岗位、再采灵 / 吐纳），最后任命执事。
+ * 每一步都以服务端返回为准；某一步被拒（如整批都不符合条件、今日已任命）不影响后面的步骤，
+ * 原因汇总进最后的提示。
+ */
+function onApplyDispatch(
+  batches: { assignment: string; discipleIds: string[] }[],
+  appointments: { office: string; discipleId: string }[],
+): void {
+  let moved = 0;
+  let appointed = 0;
+  const skipped: AssignBatchOutcome['skipped'] = [];
+  const failures: string[] = [];
+  const reasonOf = (caught: unknown): string => (caught instanceof Error ? caught.message : '请求失败');
+  void runAction(
+    async () => {
+      let latest: SectStateView | null = null;
+      for (const batch of batches) {
+        try {
+          const result = await assignBatch(batch.discipleIds, batch.assignment);
+          latest = result.state;
+          moved += result.outcome.assigned.length;
+          skipped.push(...result.outcome.skipped);
+        } catch (caught) {
+          failures.push(reasonOf(caught));
+        }
+      }
+      for (const item of appointments) {
+        try {
+          latest = (await appointSteward(item.office, item.discipleId)).state;
+          appointed += 1;
+        } catch (caught) {
+          failures.push(reasonOf(caught));
+        }
+      }
+      if (latest !== null) return latest;
+      const synced = await syncSect();
+      if (synced === null) throw new Error(failures[0] ?? '门人调度失败');
+      return synced;
+    },
+    () => {
+      const parts: string[] = [];
+      if (moved > 0) parts.push(`换岗 ${String(moved)} 人`);
+      if (appointed > 0) parts.push(`任命执事 ${String(appointed)} 位`);
+      const failed = failures.length > 0 ? `；未完成：${failures.slice(0, 2).join('；')}` : '';
+      return {
+        tone: skipped.length > 0 || failures.length > 0 ? 'info' : 'success',
+        title: '门人调度完成',
+        message: `${parts.join('，') || '没有变动'}${skippedSummary(skipped)}${failed}。`,
+      };
+    },
+  );
+}
+
 /** 名册多选：批量破境（确认弹窗里已核对人数与灵气；逐人结果由服务端抽随机）。 */
 function onBatchBreakthrough(discipleIds: string[]): void {
   void runAction(
@@ -1065,6 +1119,7 @@ onUnmounted(() => {
       @allocate-dao-insight="onAllocateDaoInsight"
       @breakthrough="onBreakthrough"
       @batch-assign="onBatchAssign"
+      @apply-dispatch="onApplyDispatch"
       @batch-breakthrough="onBatchBreakthrough"
       @batch-heal="onBatchHeal"
       @craft-pill="onCraftPill"

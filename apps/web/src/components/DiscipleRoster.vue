@@ -27,6 +27,7 @@ import {
   stageOptions,
 } from '../utils/discipleFilter';
 import DiscipleAvatar from './DiscipleAvatar.vue';
+import { isTalentMisplaced, misplacedHint } from '../utils/discipleDispatch';
 
 /**
  * 门人名册：境界 / 阶段 / 岗位 / 状态 / 修为进度筛选 + 排序 + 精简列表行 +
@@ -613,7 +614,15 @@ watch(
         <!-- 境界单独一行：境界阶段与天赋两个标签居中并排。 -->
         <p class="disciple-row-realm">
           <span class="realm-tag">{{ row.disciple.stageName }}</span>
-          <span class="disciple-row-talent" :title="row.disciple.talentEffect || undefined">{{ row.disciple.talentName }}</span>
+          <span
+            class="disciple-row-talent"
+            :class="{ 'is-misplaced': isTalentMisplaced(row.disciple) }"
+            :title="
+              isTalentMisplaced(row.disciple)
+                ? misplacedHint(row.disciple, assignments)
+                : row.disciple.talentEffect || undefined
+            "
+          >{{ row.disciple.talentName }}</span>
         </p>
 
         <!-- 状态单独占一行：不再和境界标签挤在同一行里抢宽度。

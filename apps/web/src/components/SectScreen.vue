@@ -67,6 +67,8 @@ import LeaderboardPanel from './LeaderboardPanel.vue';
 import RecruitDialog from './RecruitDialog.vue';
 import ShopDialog from './ShopDialog.vue';
 import StewardDialog from './StewardDialog.vue';
+import DispatchDialog from './DispatchDialog.vue';
+import { moveBatches, planDispatch, type DispatchPlan } from '../utils/discipleDispatch';
 import SectLevelCatalogDialog from './SectLevelCatalogDialog.vue';
 import WorldBossDialog from './WorldBossDialog.vue';
 import MeritDialog from './MeritDialog.vue';
@@ -98,6 +100,11 @@ const emit = defineEmits<{
   recruited: [state: SectStateView];
   'recruit-refreshed': [state: SectStateView];
   assign: [discipleId: string, assignment: string];
+  /** 门人调度：按顺序执行的批量换岗 + 执事任命（推荐由 planDispatch 算好，玩家勾选后提交）。 */
+  applyDispatch: [
+    batches: { assignment: string; discipleIds: string[] }[],
+    appointments: { office: string; discipleId: string }[],
+  ];
   upgrade: [defId: string];
   'upgrade-sect': [];
   explore: [realmId: string, discipleIds: string[]];
@@ -1232,6 +1239,38 @@ watch(detailDisciple, (disciple) => {
   if (detailId.value !== null && disciple === null) detailId.value = null;
 });
 
+/* ---------- 门人调度：问题提示 + 一键调度（规则见 utils/discipleDispatch.ts） ---------- */
+
+const showDispatch = ref(false);
+
+const dispatchPlan = computed<DispatchPlan>(() =>
+  planDispatch({
+    disciples: props.state.disciples,
+    assignments: props.state.assignments,
+    offices: props.state.stewards.offices,
+    defenseLineup: props.state.sect.defenseLineup,
+    serverNowMs: serverNowMs.value,
+  }),
+);
+
+/** 按钮角标：一键调度能解决的问题数（推荐调整条数）。 */
+const dispatchCount = computed(() => dispatchPlan.value.moves.length + dispatchPlan.value.appointments.length);
+
+function onApplyDispatch(moveKeys: string[], appointmentKeys: string[]): void {
+  if (props.busy) return;
+  const plan = dispatchPlan.value;
+  const moves = plan.moves.filter((item) => moveKeys.includes(item.key));
+  const appointments = plan.appointments
+    .filter((item) => appointmentKeys.includes(item.key))
+    .map((item) => ({ office: item.office, discipleId: item.discipleId }));
+  emit('applyDispatch', moveBatches(moves, props.state.assignments), appointments);
+}
+
+function onDispatchOpenDetail(discipleId: string): void {
+  showDispatch.value = false;
+  openDetail(discipleId);
+}
+
 /** 打开详情时顺带拉一份最新的装备视图（「装备」Tab 与穿戴入口都读它；失败不影响其他 Tab）。 */
 function openDetail(discipleId: string): void {
   detailId.value = discipleId;
@@ -1872,6 +1911,15 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
       <section class="game-panel disciple-panel" aria-labelledby="disciple-title">
         <header class="section-heading panel-heading">
           <h2 id="disciple-title" class="home-section-title">弟子修行</h2>
+          <button
+            class="dispatch-launch"
+            :class="{ 'has-suggestions': dispatchCount > 0 }"
+            type="button"
+            :title="dispatchCount > 0 ? `有 ${dispatchCount} 项可调整` : '门人安排妥当'"
+            @click="showDispatch = true"
+          >
+            门人调度<span v-if="dispatchCount > 0" class="dispatch-launch-count">{{ dispatchCount }}</span>
+          </button>
           <span class="count-badge">{{ state.disciples.length }} 位门人</span>
         </header>
 
@@ -2144,6 +2192,15 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
     </ModalShell>
   <!-- 功勋兑换：价目打开时拉一次；兑换回执里的 state 交给 App，兑到装备顺手刷新背包件数。 -->
   <SectLevelCatalogDialog v-if="showSectLevelCatalog" :state="state" @close="showSectLevelCatalog = false" />
+
+  <DispatchDialog
+    v-if="showDispatch"
+    :plan="dispatchPlan"
+    :busy="busy"
+    @apply="onApplyDispatch"
+    @open-detail="onDispatchOpenDetail"
+    @close="showDispatch = false"
+  />
 
   <!-- 天赋重构 · 执事堂：任命 / 卸任都走上层 runAction，返回的 state 一到职位视图即更新。 -->
   <ModalShell v-if="openPanel === 'steward'" :loading="busy" label="执事堂" @close="openPanel = null">
