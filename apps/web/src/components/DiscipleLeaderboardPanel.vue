@@ -195,6 +195,11 @@ function valueLabel(entry: DiscipleLeaderboardEntryView): string {
   flex-shrink: 0;
 }
 
+/* 榜单头像只有 32px，乾 / 坤角标挤在角上看不清，去掉。 */
+.dlb-avatar :deep(i) {
+  display: none;
+}
+
 .dlb-value {
   color: var(--gold);
   font-weight: 600;
