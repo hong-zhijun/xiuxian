@@ -1334,8 +1334,12 @@ export function alchemySnapshotGuardStatement(
   };
 }
 
-/** 炼丹守卫里每条「目标弟子」守卫最多带几人：每人 12 个参数，8 人 = 96 + 1（守卫 id）。 */
-export const ALCHEMY_DISCIPLES_PER_GUARD = 8;
+/**
+ * 炼丹守卫里每条「目标弟子」守卫最多带几人：每人 15 个参数，6 人 = 90 + 1（守卫 id）。
+ * 资质 / 悟道值也在守卫里：培元丹、悟道丹按快照写绝对值，与论道（押属性 / 发悟道值）、
+ * 分配悟道值并发时，晚提交的一方必须整批回滚，否则会覆盖对方刚写的值。
+ */
+export const ALCHEMY_DISCIPLES_PER_GUARD = 6;
 
 /**
  * 服药目标的分片守卫（批量疗伤 / 一键疗伤可能有很多人）：与 alchemySnapshotGuardStatement 的
@@ -1353,12 +1357,14 @@ export function alchemyDisciplesGuardStatement(
     checks.push(`EXISTS (SELECT 1 FROM disciples WHERE id = ? AND sect_id = ?
       AND realm_id = ? AND stage = ? AND cultivation = ? AND cultivation_remainder = ?
       AND attack = ? AND defense = ? AND speed = ? AND body_tempering_count = ?
-      AND injured_until IS ? AND assignment = ?)`);
+      AND injured_until IS ? AND assignment = ?
+      AND aptitude = ? AND dao_insight = ? AND dao_insight_used = ?)`);
     params.push(
       disciple.id, sectId, disciple.realm_id, disciple.stage,
       disciple.cultivation, disciple.cultivation_remainder,
       disciple.attack, disciple.defense, disciple.speed, disciple.body_tempering_count,
       disciple.injured_until, disciple.assignment,
+      disciple.aptitude, disciple.dao_insight, disciple.dao_insight_used,
     );
   }
   return {

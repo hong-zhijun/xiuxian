@@ -6548,8 +6548,61 @@ h2.public-sect-name {
 
 .alchemy-recipe-title {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: 4px 8px;
+}
+
+/* 炼丹面板按用途分组：小标题 + 该组配方；图标与效果标签按组着色，一眼分清丹药种类。 */
+.alchemy-group + .alchemy-group {
+  margin-top: 6px;
+}
+
+.alchemy-group-title {
+  margin: 8px 0 0;
+  padding-left: 8px;
+  border-left: 2px solid var(--pill-color, var(--gold));
+  color: var(--pill-color, var(--gold));
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+}
+
+.alchemy-group.is-heal,
+.alchemy-recipe.is-heal {
+  --pill-color: #e48a78;
+}
+
+.alchemy-group.is-cultivation,
+.alchemy-recipe.is-cultivation {
+  --pill-color: #7fc9a3;
+}
+
+.alchemy-group.is-attribute,
+.alchemy-recipe.is-attribute {
+  --pill-color: #e2c27e;
+}
+
+.alchemy-group.is-talent,
+.alchemy-recipe.is-talent {
+  --pill-color: #b8a2e3;
+}
+
+.alchemy-recipe .alchemy-pill-glyph {
+  border-color: color-mix(in srgb, var(--pill-color, var(--gold-bright)) 45%, transparent);
+  color: var(--pill-color, var(--gold-bright));
+  background: color-mix(in srgb, var(--pill-color, var(--gold-bright)) 10%, transparent);
+  font-size: 17px;
+}
+
+.alchemy-summary {
+  padding: 1px 7px;
+  border-radius: 2px;
+  color: var(--pill-color, var(--gold-bright));
+  background: color-mix(in srgb, var(--pill-color, var(--gold-bright)) 14%, transparent);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
 }
 
 .alchemy-recipe-title strong {

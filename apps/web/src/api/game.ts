@@ -277,6 +277,10 @@ export interface SectStateView {
 export interface AlchemyRecipeView {
   id: string;
   name: string;
+  /** 分组（heal / cultivation / attribute / talent）、单字图标与一句话效果（服务端下发）。 */
+  category: string;
+  glyph: string;
+  summary: string;
   description: string;
   /** 单颗炼制成本（最小单位）。 */
   cost: Record<string, string>;
@@ -298,6 +302,8 @@ export interface AlchemyView {
   maxCraftQuantity: number;
   /** 天赋重构：丹房执事的折扣文案；配方 cost 已是折后价。没有为 null。 */
   costDiscountText: string | null;
+  /** 分组的展示顺序与名称。 */
+  categories: { id: string; name: string }[];
 }
 
 /** 天赋总表的一行（服务端 talents.ts 的 talentCatalog）。 */

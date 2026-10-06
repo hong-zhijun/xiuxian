@@ -13,6 +13,7 @@ import {
   firstInsufficientResource,
   type BodyTemperingStep,
   BODY_TEMPERING_MAX_USES,
+  PILL_CATEGORIES,
   PILL_RECIPES,
   CULTIVATION_PILL_GAIN,
   MAX_CRAFT_QUANTITY,
@@ -325,6 +326,10 @@ export interface SectUpgradeView {
 export interface AlchemyRecipeView {
   id: string;
   name: string;
+  /** 所属分组（heal / cultivation / attribute / talent）、单字图标与一句话效果（都来自 alchemy.ts）。 */
+  category: string;
+  glyph: string;
+  summary: string;
   description: string;
   /** 单颗炼制成本（最小单位）。 */
   cost: Record<string, string>;
@@ -349,6 +354,8 @@ export interface AlchemyView {
   maxCraftQuantity: number;
   /** 天赋重构：丹房执事的折扣文案（如「丹房执事：消耗 −15%」）；配方 cost 已是折后价。没有为 null。 */
   costDiscountText: string | null;
+  /** 分组的展示顺序与名称（炼丹面板按组列出配方）。 */
+  categories: { id: string; name: string }[];
 }
 
 /** 天赋重构 · 执事堂：一个职位的视图（全部服务端算好）。 */
@@ -2004,6 +2011,7 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
     unlocked: alchemyLockedReason === null,
     cultivationPillGain: CULTIVATION_PILL_GAIN,
     maxCraftQuantity: MAX_CRAFT_QUANTITY,
+    categories: PILL_CATEGORIES.map((category) => ({ id: category.id, name: category.name })),
     costDiscountText:
       alchemyDiscountBp > 0
         ? `丹房执事：消耗 −${String(Number((alchemyDiscountBp / 100).toFixed(1)))}%`
@@ -2022,6 +2030,9 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
       return {
         id: recipe.id,
         name: recipe.name,
+        category: recipe.category,
+        glyph: recipe.glyph,
+        summary: recipe.summary,
         description: recipe.description,
         cost,
         owned: ownedRow === undefined ? 0 : Number(ownedRow.quantity),

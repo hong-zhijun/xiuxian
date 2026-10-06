@@ -44,9 +44,26 @@ export type PillId =
 
 export type PillAttribute = 'attack' | 'defense' | 'speed';
 
+/** 丹药分组（炼丹面板按组展示）：疗伤 / 修为 / 属性 / 天赋。 */
+export type PillCategory = 'heal' | 'cultivation' | 'attribute' | 'talent';
+
+/** 分组的展示顺序与名称（炼丹面板的小标题）。 */
+export const PILL_CATEGORIES: readonly { id: PillCategory; name: string }[] = [
+  { id: 'heal', name: '疗伤' },
+  { id: 'cultivation', name: '修为' },
+  { id: 'attribute', name: '属性' },
+  { id: 'talent', name: '天赋' },
+];
+
 export interface PillRecipe {
   id: PillId;
   name: string;
+  /** 所属分组。 */
+  category: PillCategory;
+  /** 卡片上的单字图标（每种丹药不同，一眼区分）。 */
+  glyph: string;
+  /** 一句话效果（卡片标题旁的标签），如「修为 +1200」。 */
+  summary: string;
   description: string;
   /** 单颗炼制成本：resourceId -> 最小单位十进制字符串（与配置资源同口径）。 */
   cost: Record<string, string>;
@@ -69,42 +86,63 @@ export const PILL_RECIPES: readonly PillRecipe[] = [
   {
     id: 'healingPill',
     name: '回春丹',
+    category: 'heal',
+    glyph: '春',
+    summary: '清除伤势',
     description: '清除一名弟子的疗伤状态，立刻可以再度出战或突破。',
     cost: { herb: '10000', spiritStone: '15000' },
   },
   {
     id: 'cultivationPill',
     name: '聚气丹',
+    category: 'cultivation',
+    glyph: '气',
+    summary: '修为 +120',
     description: '为一名弟子增加 120 点当前阶段修为，不越过突破门槛。',
     cost: { herb: '25000', spiritualEnergy: '15000', spiritStone: '10000' },
   },
   {
     id: 'bodyTemperingPill',
     name: '淬体丹',
+    category: 'attribute',
+    glyph: '体',
+    summary: '补攻防身短板',
     description: '自动补齐一名弟子最明显的战斗属性短板，每名弟子最多服用 10 次。',
     cost: { herb: '40000', ore: '20000', spiritStone: '30000' },
   },
   {
     id: 'talentPill',
     name: '洗髓丹',
+    category: 'talent',
+    glyph: '髓',
+    summary: '洗出新天赋',
     description: '洗出一个新天赋（不会与当前相同），可选择保留原天赋或换成新天赋；每名弟子最多服用 5 次。',
     cost: { herb: '300000', spiritStone: '300000', shenmu: '3000' },
   },
   {
     id: 'greatCultivationPill',
     name: '凝元丹',
+    category: 'cultivation',
+    glyph: '元',
+    summary: '修为 +1200',
     description: '为一名弟子增加 1200 点当前阶段修为（相当于 10 颗聚气丹），不越过突破门槛。',
     cost: { herb: '250000', spiritualEnergy: '150000', spiritStone: '100000' },
   },
   {
     id: 'insightPill',
     name: '悟道丹',
+    category: 'attribute',
+    glyph: '悟',
+    summary: '悟道值 +1',
     description: '为一名弟子增加 1 点悟道值（受悟道值累计上限限制），可在弟子详情分配到属性。',
     cost: { spiritStone: '250000', herb: '100000', shenmu: '1000' },
   },
   {
     id: 'aptitudePill',
     name: '培元丹',
+    category: 'attribute',
+    glyph: '培',
+    summary: '资质 +2',
     description: '为一名弟子增加 2 点资质（最高 100），每名弟子最多服用 5 次。',
     cost: { herb: '200000', spiritualEnergy: '150000', spiritStone: '150000', shenmu: '2000' },
   },

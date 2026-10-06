@@ -771,9 +771,9 @@ describe('丹药系统：服到满（count）', () => {
     await setPillStock(sect.sectId, 'cultivationPill', 10);
 
     const discipleId = sect.discipleIds[0] as string;
-    // 筑基初期门槛 300，修为 50：还差 250 → 需 3 颗（120 + 120 + 10）。
+    // 筑基初期门槛 300，修为 50：还差 250 → 需 3 颗（120 + 120 + 10）。天赋固定为战意（丹心会改变每颗修为）。
     await env.DB.prepare(
-      "UPDATE disciples SET realm_id = 'foundationEstablishment', stage = 1, cultivation = 50 WHERE id = ?",
+      "UPDATE disciples SET realm_id = 'foundationEstablishment', stage = 1, cultivation = 50, talent = 'combat' WHERE id = ?",
     )
       .bind(discipleId)
       .run();

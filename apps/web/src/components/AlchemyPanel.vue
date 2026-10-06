@@ -91,6 +91,22 @@ function canCraftSelected(recipe: AlchemyRecipeView): boolean {
   );
 }
 
+/**
+ * 按服务端给的分组顺序（疗伤 / 修为 / 属性 / 天赋）把配方分组；没有配方的组不显示，
+ * 不认识的分组（服务端以后新增）归到最后一组「其它」，不会把配方弄丢。
+ */
+const recipeGroups = computed(() => {
+  const groups = props.state.alchemy.categories.map((category) => ({
+    id: category.id,
+    name: category.name,
+    recipes: props.state.alchemy.recipes.filter((recipe) => recipe.category === category.id),
+  }));
+  const known = new Set(groups.map((group) => group.id));
+  const others = props.state.alchemy.recipes.filter((recipe) => !known.has(recipe.category));
+  if (others.length > 0) groups.push({ id: 'other', name: '其它', recipes: others });
+  return groups.filter((group) => group.recipes.length > 0);
+});
+
 /** 丹库总量（角标用）；原来的「N 条用药建议」随全局用药区块一起移除。 */
 const totalOwned = computed(() =>
   props.state.alchemy.recipes.reduce((sum, recipe) => sum + recipe.owned, 0),
@@ -122,13 +138,28 @@ function onCraft(recipe: AlchemyRecipeView): void {
     <template v-else>
       <!-- 天赋重构 · 丹房执事：下面的配方价已是折后价（服务端算好）。 -->
       <p v-if="state.alchemy.costDiscountText" class="steward-bonus-note">{{ state.alchemy.costDiscountText }}</p>
+      <section
+        v-for="group in recipeGroups"
+        :key="group.id"
+        class="alchemy-group"
+        :class="`is-${group.id}`"
+        :aria-label="`${group.name}类丹药`"
+      >
+        <h3 class="alchemy-group-title">{{ group.name }}</h3>
       <ul class="alchemy-recipe-list">
-        <li v-for="recipe in state.alchemy.recipes" :key="recipe.id" class="alchemy-recipe">
-          <div class="alchemy-pill-glyph" aria-hidden="true">丹</div>
+        <li
+          v-for="recipe in group.recipes"
+          :key="recipe.id"
+          class="alchemy-recipe"
+          :class="`is-${recipe.category}`"
+        >
+          <!-- 每种丹药一个单字图标，颜色按分组区分（服务端下发的 glyph）。 -->
+          <div class="alchemy-pill-glyph" aria-hidden="true">{{ recipe.glyph }}</div>
 
           <div class="alchemy-recipe-copy">
             <div class="alchemy-recipe-title">
               <strong>{{ recipe.name }}</strong>
+              <span class="alchemy-summary">{{ recipe.summary }}</span>
               <span class="alchemy-owned">库存 {{ recipe.owned }}</span>
             </div>
             <p class="alchemy-recipe-desc">{{ recipe.description }}</p>
@@ -187,6 +218,7 @@ function onCraft(recipe: AlchemyRecipeView): void {
           </div>
         </li>
       </ul>
+      </section>
 
       <p class="alchemy-note">
         弟子服药已移至「弟子详情」：在门人名册里点某位弟子的「详情」，即可按他的伤势、修为与属性短板服用丹药。
