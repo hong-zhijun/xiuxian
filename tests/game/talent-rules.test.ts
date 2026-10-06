@@ -180,6 +180,13 @@ describe('各系统接入', () => {
       spiritStone: '13800',
     });
     expect(discountedPillCost({ herb: '10000' }, 0)).toEqual({ herb: '10000' });
+    // 神木 / 玄铁不打折：始终是整数个。
+    expect(discountedPillCost({ herb: '300000', spiritStone: '300000', shenmu: '3000' }, 800)).toEqual({
+      herb: '276000',
+      spiritStone: '276000',
+      shenmu: '3000',
+    });
+    expect(discountedPillCost({ xuantie: '5000' }, 2000)).toEqual({ xuantie: '5000' });
   });
 
   it('寻宝执事：玄铁掉落概率同比例提高', () => {

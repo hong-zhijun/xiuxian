@@ -152,8 +152,15 @@ export const PILL_RECIPES: readonly PillRecipe[] = [
 export const PILL_IDS: readonly PillId[] = PILL_RECIPES.map((recipe) => recipe.id);
 
 /**
+ * 丹道折扣只作用于这四种常规资源；神木 / 玄铁这类稀缺材料不打折，始终是整数个
+ * （否则会出现「神木 0.92」这种零头，稀缺材料的门槛也会被折扣稀释）。
+ */
+export const ALCHEMY_DISCOUNTABLE_RESOURCES: readonly string[] = ['herb', 'spiritStone', 'spiritualEnergy', 'ore'];
+
+/**
  * 天赋重构 · 丹道：丹房执事让全宗炼丹消耗按比例降低（discountBp 基点）。
- * 每项资源各自向下取整；discountBp ≤ 0 时原样返回。
+ * 只折 ALCHEMY_DISCOUNTABLE_RESOURCES 里的资源，各自向下取整；其余资源原价。
+ * discountBp ≤ 0 时原样返回。
  */
 export function discountedPillCost(
   cost: Readonly<Record<string, string>>,
@@ -162,7 +169,9 @@ export function discountedPillCost(
   const keep = 10_000 - Math.min(10_000, Math.max(0, discountBp));
   const out: Record<string, string> = {};
   for (const [resourceId, amount] of Object.entries(cost)) {
-    out[resourceId] = String(Math.floor((Number(amount) * keep) / 10_000));
+    out[resourceId] = ALCHEMY_DISCOUNTABLE_RESOURCES.includes(resourceId)
+      ? String(Math.floor((Number(amount) * keep) / 10_000))
+      : amount;
   }
   return out;
 }
