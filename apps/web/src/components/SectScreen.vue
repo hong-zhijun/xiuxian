@@ -69,6 +69,8 @@ import ShopDialog from './ShopDialog.vue';
 import StewardDialog from './StewardDialog.vue';
 import DispatchDialog from './DispatchDialog.vue';
 import { moveBatches, planDispatch, type DispatchPlan } from '../utils/discipleDispatch';
+import { postInsights } from '../utils/postInsights';
+import { talentNeeds } from '../utils/talentNeeds';
 import SectLevelCatalogDialog from './SectLevelCatalogDialog.vue';
 import WorldBossDialog from './WorldBossDialog.vue';
 import MeritDialog from './MeritDialog.vue';
@@ -1253,6 +1255,25 @@ const dispatchPlan = computed<DispatchPlan>(() =>
   }),
 );
 
+/** 「岗位」页：每个岗位 / 执事的在岗最高、备选与提示。 */
+const postCards = computed(() =>
+  postInsights({
+    disciples: props.state.disciples,
+    assignments: props.state.assignments,
+    offices: props.state.stewards.offices,
+    talents: props.state.talents,
+  }),
+);
+
+/** 「人才」页：每种天赋有几人、还缺几人。 */
+const talentRows = computed(() =>
+  talentNeeds({
+    disciples: props.state.disciples,
+    talents: props.state.talents,
+    assignments: props.state.assignments,
+  }),
+);
+
 /** 按钮角标：一键调度能解决的问题数（推荐调整条数）。 */
 const dispatchCount = computed(() => dispatchPlan.value.moves.length + dispatchPlan.value.appointments.length);
 
@@ -2196,6 +2217,8 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
   <DispatchDialog
     v-if="showDispatch"
     :plan="dispatchPlan"
+    :post-cards="postCards"
+    :talent-rows="talentRows"
     :busy="busy"
     @apply="onApplyDispatch"
     @open-detail="onDispatchOpenDetail"

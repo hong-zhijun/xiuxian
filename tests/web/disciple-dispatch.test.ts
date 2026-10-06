@@ -8,6 +8,8 @@ import {
   type DispatchInput,
   type DispatchOffice,
 } from '../../apps/web/src/utils/discipleDispatch';
+import { postInsights, type PostInsightDisciple } from '../../apps/web/src/utils/postInsights';
+import { talentNeeds, topTalentNeeds, type TalentNeedDisciple } from '../../apps/web/src/utils/talentNeeds';
 
 /**
  * 门人调度（apps/web/src/utils/discipleDispatch.ts）：天赋对口岗位、闲置派修炼、采灵 / 吐纳名额、
@@ -145,5 +147,109 @@ describe('执事推荐', () => {
     const plan = planDispatch(input([candidate], { offices: [office({ canAppointToday: false })] }));
     expect(plan.appointments).toEqual([]);
     expect(plan.issues.find((item) => item.key === 'steward-tomorrow:alchemy')?.detail).toContain('明日');
+  });
+});
+
+describe('人才缺口', () => {
+  const TALENTS = [
+    { id: 'herbGathering', name: '灵植', category: 'production', categoryName: '产出', condition: '在药园岗位时', effect: '药材产出 +20%' },
+    { id: 'spiritGathering', name: '聚灵', category: 'production', categoryName: '产出', condition: '在采灵 / 吐纳岗位时', effect: '灵石 / 灵气产出 +20%' },
+    { id: 'combat', name: '战意', category: 'combat', categoryName: '战斗', condition: '讨伐', effect: '战力 +10%' },
+    { id: 'critical', name: '会心', category: 'combat', categoryName: '战斗', condition: '讨伐暴击时', effect: '伤害 +60%' },
+    { id: 'alchemy', name: '丹道', category: 'steward', categoryName: '宗门', condition: '任丹房执事时', effect: '炼丹消耗 −8%' },
+    { id: 'pillAffinity', name: '丹心', category: 'cultivation', categoryName: '修行', condition: '服用聚气丹时', effect: '修为 +20%' },
+  ];
+  const row = (overrides: Partial<TalentNeedDisciple>): TalentNeedDisciple => ({
+    id: `n${(seq += 1)}`,
+    name: `门人${seq}`,
+    talent: 'none',
+    assignment: 'cultivating',
+    realmOrder: 0,
+    realmName: '炼气',
+    ...overrides,
+  });
+
+  it('执事天赋 0 人急缺；聚灵按采灵 + 吐纳名额算缺口；药园缺口扣掉可调来的灵植', () => {
+    const rows = talentNeeds({
+      talents: TALENTS,
+      assignments: ASSIGNMENTS,
+      disciples: [
+        row({ assignment: 'herbGathering' }),
+        row({ assignment: 'herbGathering' }),
+        row({ talent: 'herbGathering', assignment: 'oreGathering' }),
+        row({ talent: 'spiritGathering', assignment: 'stoneMining' }),
+        row({ talent: 'combat' }),
+      ],
+    });
+    const byId = Object.fromEntries(rows.map((item) => [item.talentId, item]));
+    expect(byId.alchemy).toMatchObject({ level: 'urgent', gap: 1 });
+    expect(byId.spiritGathering).toMatchObject({ level: 'short', gap: 2 });
+    expect(byId.herbGathering).toMatchObject({ level: 'short', gap: 1 });
+    expect(byId.combat).toMatchObject({ level: 'short', gap: 2 });
+    expect(byId.pillAffinity).toMatchObject({ level: 'info', gap: null });
+    expect(rows[0]!.talentId).toBe('alchemy');
+
+    const top = topTalentNeeds(rows, 10);
+    expect(top.filter((item) => item.key === 'combat')).toHaveLength(1);
+    expect(top.some((item) => item.key === 'critical')).toBe(false);
+  });
+});
+
+describe('岗位概览', () => {
+  const TALENT_NAMES = [
+    { id: 'herbGathering', name: '灵植' },
+    { id: 'cultivation', name: '悟道' },
+    { id: 'alchemy', name: '丹道' },
+  ];
+  const person = (overrides: Partial<PostInsightDisciple>): PostInsightDisciple => ({
+    id: `p${(seq += 1)}`,
+    name: `门人${seq}`,
+    talent: 'none',
+    talentName: '无',
+    talentEffect: '',
+    assignment: 'cultivating',
+    realmOrder: 2,
+    realmName: '金丹',
+    stage: 1,
+    aptitude: 60,
+    ...overrides,
+  });
+
+  it('药园：在岗最高取对口天赋、列出不在岗的备选、境界偏低的提示补境界', () => {
+    const top = person({ talent: 'herbGathering', talentName: '灵植', talentEffect: '药材产出 +30%', assignment: 'herbGathering', realmOrder: 2 });
+    const low = person({ talent: 'herbGathering', talentName: '灵植', assignment: 'herbGathering', realmOrder: 0, realmName: '炼气' });
+    const backup = person({ talent: 'herbGathering', talentName: '灵植', assignment: 'oreGathering' });
+    const others = [1, 2].map(() => person({ realmOrder: 3 }));
+    const cards = postInsights({ disciples: [top, low, backup, ...others], assignments: ASSIGNMENTS, offices: [], talents: TALENT_NAMES });
+    const herb = cards.find((card) => card.key === 'post:herbGathering')!;
+    expect(herb.summary).toBe('在岗 2 人，其中灵植 2 人');
+    expect(herb.lines[0]!.people[0]).toMatchObject({ id: top.id, note: '金丹·药材产出 +30%' });
+    expect(herb.lines[1]!.people.map((item) => item.id)).toEqual([backup.id]);
+    expect(herb.tips[0]!.people.map((item) => item.id)).toEqual([low.id]);
+  });
+
+  it('修炼：资质高却在产出岗位的建议去修炼，资质低在修炼的建议去产出；有岗位天赋的不参与', () => {
+    const fast = person({ aptitude: 95, assignment: 'oreGathering' });
+    const slow = person({ aptitude: 20 });
+    const herbTalent = person({ talent: 'herbGathering', talentName: '灵植', aptitude: 99, assignment: 'oreGathering' });
+    const mids = [50, 55, 60, 65].map((aptitude) => person({ aptitude }));
+    const cards = postInsights({ disciples: [fast, slow, herbTalent, ...mids], assignments: ASSIGNMENTS, offices: [], talents: TALENT_NAMES });
+    const tips = cards.find((card) => card.key === 'post:cultivating')!.tips;
+    expect(tips.map((tip) => tip.people.map((item) => item.id))).toEqual([[fast.id], [slow.id]]);
+  });
+
+  it('执事：现任不在修炼时提示改去修炼，备选里有更高境界时提示可换', () => {
+    const current = person({ talent: 'alchemy', talentName: '丹道', assignment: 'oreGathering', realmOrder: 1 });
+    const better = person({ talent: 'alchemy', talentName: '丹道', realmOrder: 3 });
+    const cards = postInsights({
+      disciples: [current, better],
+      assignments: ASSIGNMENTS,
+      offices: [{ ...office({ discipleId: current.id }), effect: '全宗炼丹消耗 −10%' }],
+      talents: TALENT_NAMES,
+    });
+    const card = cards.find((item) => item.key === 'office:alchemy')!;
+    expect(card.summary).toBe(`现任 ${current.name}`);
+    expect(card.lines[1]!.people.map((item) => item.id)).toEqual([better.id]);
+    expect(card.tips).toHaveLength(2);
   });
 });
