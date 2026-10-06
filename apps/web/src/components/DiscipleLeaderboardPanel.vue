@@ -109,6 +109,7 @@ function valueLabel(entry: DiscipleLeaderboardEntryView): string {
             :gender="entry.gender"
             :realm-id="entry.realmId"
             :frame-id="entry.frameId"
+            :image-hash="entry.avatarHash"
             variant="roster"
           />
           <span class="rank-copy">

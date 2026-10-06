@@ -4,6 +4,7 @@ import { AppError, authOf, type AppContext, type AppEnv } from '../../http/appEr
 import { respondOk } from '../../http/envelope';
 import { parseStrictJson } from '../../http/validation';
 import { getDb } from '../../infra/db/client';
+import { AVATAR_HASH_PATTERN } from './avatarImage';
 import {
   abandonExplorationSchema,
   allocateDaoInsightRequestSchema,
@@ -30,6 +31,8 @@ import {
   salvageEquipmentRequestSchema,
   setDefenseLineupSchema,
   setDiscipleAvatarFrameRequestSchema,
+  setDiscipleAvatarImageRequestSchema,
+  clearDiscipleAvatarImageRequestSchema,
   setDiscipleNoteRequestSchema,
   shopBuyRequestSchema,
   sendChatMessageRequestSchema,
@@ -71,6 +74,9 @@ import {
   getPublicSect,
   getEquipment,
   getSectState,
+  getAvatarImage,
+  setDiscipleAvatarImage,
+  clearDiscipleAvatarImage,
   healDisciplesBatch,
   appointSteward,
   chooseTalent,
@@ -401,6 +407,44 @@ export function createGameRoutes(): Hono<AppEnv> {
       Date.now(),
     );
     return respondOk(c, { state });
+  });
+
+  // 0038：上传弟子自定义头像（浏览器压缩好的成品；服务端按文件头再校验，按内容哈希入库）。
+  routes.post('/game/set-disciple-avatar-image', async (c) => {
+    const userId = requireUserId(c);
+    const body = await parseStrictJson(setDiscipleAvatarImageRequestSchema, c);
+    const state = await setDiscipleAvatarImage(
+      getDb(c.env),
+      userId,
+      body.discipleId,
+      body.mime,
+      body.data,
+      Date.now(),
+    );
+    return respondOk(c, { state });
+  });
+
+  // 0038：移除弟子自定义头像（回到头像框 / 旧式）。
+  routes.post('/game/clear-disciple-avatar-image', async (c) => {
+    const userId = requireUserId(c);
+    const body = await parseStrictJson(clearDiscipleAvatarImageRequestSchema, c);
+    const state = await clearDiscipleAvatarImage(getDb(c.env), userId, body.discipleId, Date.now());
+    return respondOk(c, { state });
+  });
+
+  // 0038：头像图片本体。地址按内容哈希寻址、内容永不变，所以给 immutable 长缓存（覆盖全局 no-store）；
+  // 只对登录玩家开放（<img> 同源请求会带上会话 Cookie）。
+  routes.get('/game/avatars/:hash', async (c) => {
+    requireUserId(c);
+    const hash = c.req.param('hash');
+    if (!AVATAR_HASH_PATTERN.test(hash)) {
+      throw new AppError('NOT_FOUND', '头像不存在');
+    }
+    const image = await getAvatarImage(getDb(c.env), hash);
+    c.header('Cache-Control', 'private, max-age=31536000, immutable');
+    c.header('X-Content-Type-Options', 'nosniff');
+    c.header('Content-Type', image.mime);
+    return c.body(image.bytes.buffer);
   });
 
   // 0021：宗门改名（结算 → 名称归一化 → 扣 500 灵石 → 单列写回，一次受保护 batch；同名早退不扣费）。

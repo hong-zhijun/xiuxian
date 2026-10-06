@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { MAX_CRAFT_QUANTITY, MAX_PILL_USE_COUNT } from './alchemy';
+import { AVATAR_IMAGE_MAX_BASE64_CHARS, AVATAR_IMAGE_MIMES } from './avatarImage';
 import { BETTABLE_ATTRIBUTES, RACE_BEAST_COUNT, RACE_BET_MAX, RACE_BET_MIN } from './gambling';
 import { BAG_CAPACITY } from './equipment';
 import { SHOP_MAX_PILL_QUANTITY, SHOP_MAX_TRADE_AMOUNT, SHOP_TRADABLE_RESOURCES } from './shop';
@@ -269,6 +270,21 @@ export const AVATAR_FRAME_IDS = [
 export const setDiscipleAvatarFrameRequestSchema = z.strictObject({
   discipleId: z.string().min(1).max(64),
   frameId: z.enum(AVATAR_FRAME_IDS),
+});
+
+/**
+ * 0038 上传弟子自定义头像：浏览器压缩好的成品（base64）。
+ * 这里只挡类型与长度，格式 / 尺寸 / 大小由 avatarImage.ts 按文件头再校验一次。
+ */
+export const setDiscipleAvatarImageRequestSchema = z.strictObject({
+  discipleId: z.string().min(1).max(64),
+  mime: z.enum(AVATAR_IMAGE_MIMES),
+  data: z.string().min(1).max(AVATAR_IMAGE_MAX_BASE64_CHARS),
+});
+
+/** 0038 移除弟子自定义头像（回到头像框 / 旧式）。 */
+export const clearDiscipleAvatarImageRequestSchema = z.strictObject({
+  discipleId: z.string().min(1).max(64),
 });
 
 /**

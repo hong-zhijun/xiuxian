@@ -2,9 +2,10 @@
 import { computed, ref, watch } from 'vue';
 
 import { avatarFrameOption, resolveAvatarFrameId } from '../utils/avatarFrames';
+import { avatarImageUrl } from '../utils/avatarImage';
 
 /**
- * 弟子头像：框图 + 中央姓名首字。
+ * 弟子头像：框图 + 中央姓名首字；有自定义头像（0038）时图片铺满整个圆形，框图与首字都不画。
  *
  * 层级固定为「最外修为环 → 框图 → 中央姓名首字」：修为环由调用方包在外层
  * （名册是 `.disciple-ring`，详情头部是 `.disciple-detail-portrait`），
@@ -20,11 +21,20 @@ const props = defineProps<{
   realmId: string;
   /** 服务端样式 id（未知值按 classic 处理）。 */
   frameId: string;
+  /** 0038 自定义头像的内容哈希；null / 不传 = 没有。图片加载失败时回退框图。 */
+  imageHash?: string | null;
   /** detail = 详情头部与预览用的大尺寸。 */
   variant?: 'roster' | 'detail';
 }>();
 
 const imageFailed = ref(false);
+const photoFailed = ref(false);
+
+const photoSrc = computed(() =>
+  props.imageHash !== undefined && props.imageHash !== null && !photoFailed.value
+    ? avatarImageUrl(props.imageHash)
+    : null,
+);
 
 const option = computed(() => avatarFrameOption(props.frameId));
 /** 实际渲染用的样式 id：图片失败时回退 classic（只影响图片，不显示破图）。 */
@@ -38,24 +48,39 @@ watch(
     imageFailed.value = false;
   },
 );
+watch(
+  () => props.imageHash,
+  () => {
+    photoFailed.value = false;
+  },
+);
 </script>
 
 <template>
   <div
     class="disciple-avatar"
-    :class="[`realm-${realmId}`, variant === 'detail' ? 'is-large' : '']"
+    :class="[`realm-${realmId}`, variant === 'detail' ? 'is-large' : '', photoSrc !== null ? 'has-photo' : '']"
     :data-frame="frameId"
     aria-hidden="true"
   >
     <img
-      v-if="showImage"
+      v-if="photoSrc !== null"
+      class="disciple-photo"
+      :src="photoSrc"
+      alt=""
+      decoding="async"
+      loading="lazy"
+      @error="photoFailed = true"
+    />
+    <img
+      v-else-if="showImage"
       class="disciple-frame"
       :src="option.src ?? ''"
       alt=""
       decoding="async"
       @error="imageFailed = true"
     />
-    <span class="disciple-avatar-char">{{ name.slice(0, 1) }}</span>
+    <span v-if="photoSrc === null" class="disciple-avatar-char">{{ name.slice(0, 1) }}</span>
     <i>{{ gender === 'female' ? '坤' : '乾' }}</i>
   </div>
 </template>

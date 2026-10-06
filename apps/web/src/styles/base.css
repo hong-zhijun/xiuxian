@@ -6845,6 +6845,25 @@ h2.public-sect-name {
   z-index: 1;
 }
 
+/* 0038 自定义头像：铺满整个圆形（盖住内圈虚线与底色），乾 / 坤角标仍浮在上面。 */
+.disciple-avatar .disciple-photo {
+  position: absolute;
+  z-index: 1;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  object-fit: cover;
+  pointer-events: none;
+}
+
+.disciple-avatar.has-photo i {
+  z-index: 2;
+}
+
 /* 详情头部与头像框预览用的大头像；名册里仍是 48px 的小头像。 */
 .disciple-avatar.is-large {
   width: 64px;
@@ -7024,6 +7043,23 @@ h2.public-sect-name {
 
 .disciple-frame-option:focus-within {
   box-shadow: 0 0 0 2px rgba(202, 169, 106, 0.3);
+}
+
+/* 0038 自定义头像：预览 + 上传 / 移除按钮一行。 */
+.disciple-photo-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.disciple-photo-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.disciple-photo-input {
+  display: none;
 }
 
 .disciple-frame-preview {

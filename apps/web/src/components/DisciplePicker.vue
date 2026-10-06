@@ -567,6 +567,7 @@ onUnmounted(() => {
               :gender="disciple.gender"
               :realm-id="disciple.realmId"
               :frame-id="disciple.avatarFrameId"
+              :image-hash="disciple.avatarHash"
             />
           </span>
           <span class="dp-name">{{ disciple.name }}</span>

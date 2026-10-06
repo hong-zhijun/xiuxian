@@ -575,6 +575,7 @@ watch(
               :gender="row.disciple.gender"
               :realm-id="row.disciple.realmId"
               :frame-id="row.disciple.avatarFrameId"
+              :image-hash="row.disciple.avatarHash"
             />
           </button>
 
@@ -598,6 +599,7 @@ watch(
               :gender="row.disciple.gender"
               :realm-id="row.disciple.realmId"
               :frame-id="row.disciple.avatarFrameId"
+              :image-hash="row.disciple.avatarHash"
             />
           </div>
         </div>

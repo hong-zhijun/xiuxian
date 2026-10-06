@@ -71,6 +71,7 @@ const injuryText = computed(() => {
           :gender="profile.gender"
           :realm-id="profile.realmId"
           :frame-id="profile.frameId"
+          :image-hash="profile.avatarHash"
           variant="roster"
         />
         <div class="dpf-head-copy">

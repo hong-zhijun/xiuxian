@@ -25,6 +25,8 @@ import {
   renameSect,
   setDiscipleNote,
   setDiscipleAvatarFrame,
+  setDiscipleAvatarImage,
+  clearDiscipleAvatarImage,
   setDefenseLineup,
   startJourney,
   startRealmExplore,
@@ -69,6 +71,7 @@ import ToastStack from './components/ToastStack.vue';
 import type { ToastItem, ToastTone } from './types/ui';
 import type { AvatarFrameId } from './utils/avatarFrames';
 import { avatarFrameOption } from './utils/avatarFrames';
+import type { CompressedAvatar } from './utils/avatarImage';
 import { formatAmount, formatBp, formatTime } from './utils/format';
 
 /**
@@ -827,6 +830,28 @@ function onSetAvatarFrame(discipleId: string, frameId: AvatarFrameId): void {
   );
 }
 
+/** 0038 上传自定义头像：image 已在浏览器里裁剪压缩好，服务端再校验格式 / 尺寸 / 大小。 */
+function onSetAvatarImage(discipleId: string, image: CompressedAvatar): void {
+  void runAction(
+    () => setDiscipleAvatarImage(discipleId, image.mime, image.data),
+    (data) => {
+      const name = data.state.disciples.find((item) => item.id === discipleId)?.name;
+      return {
+        title: '头像已换',
+        message: `${name === undefined ? '' : `「${name}」的`}新头像已保存（压缩后 ${Math.max(1, Math.round(image.bytes / 1024))}KB）。`,
+      };
+    },
+  );
+}
+
+/** 0038 移除自定义头像：回到头像框 / 旧式。 */
+function onClearAvatarImage(discipleId: string): void {
+  void runAction(
+    () => clearDiscipleAvatarImage(discipleId),
+    () => ({ title: '头像已移除', message: '已恢复为头像框样式。' }),
+  );
+}
+
 /** 0021 宗门改名（一次 500 灵石）：名称规则与扣费都在服务端，这里只按回执提示。 */
 function onRenameSect(name: string): void {
   void runAction(
@@ -1049,6 +1074,8 @@ onUnmounted(() => {
       @dismiss-steward="onDismissSteward"
       @save-note="onSaveNote"
       @set-avatar-frame="onSetAvatarFrame"
+      @set-avatar-image="onSetAvatarImage"
+      @clear-avatar-image="onClearAvatarImage"
       @rename-sect="onRenameSect"
       @rename-disciple="onRenameDisciple"
       @expel="onExpelDisciple"

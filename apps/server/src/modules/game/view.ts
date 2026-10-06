@@ -278,6 +278,11 @@ export interface DiscipleView {
    */
   avatarFrameId: string;
   /**
+   * 0038 自定义头像的内容哈希（null = 没有，显示头像框 / 旧式）。
+   * 与头像框不同，这是公开外观：天骄榜、弟子公开档案、宗门公开档案也会带上。
+   */
+  avatarHash: string | null;
+  /**
    * 0014 历练状态：none / active / ready + 名额与不可出发原因（全部服务端算好）。
    */
   journey: DiscipleJourneyView;
@@ -1405,6 +1410,8 @@ export interface DiscipleLeaderboardEntryView {
   gender: string;
   realmId: string;
   frameId: string;
+  /** 0038 自定义头像哈希（null = 没有）；图片走 GET /game/avatars/:hash。 */
+  avatarHash: string | null;
   sectId: string;
   sectName: string;
   realmName: string;
@@ -1451,6 +1458,8 @@ export interface DiscipleProfileView {
   gender: string;
   realmId: string;
   frameId: string;
+  /** 0038 自定义头像哈希（null = 没有）。 */
+  avatarHash: string | null;
   sectId: string;
   sectName: string;
   /** 是不是观看者自己宗门的弟子。 */
@@ -1564,6 +1573,8 @@ export interface PublicDiscipleView {
   stage: number;
   /** 境界 id：公开档案的头像与名册用同一套配色。 */
   realmId: string;
+  /** 0038 自定义头像哈希（null = 没有；公开外观）。 */
+  avatarHash: string | null;
   /** 当前战力（服务端现算；只由已公开的字段算出，不泄漏私有属性）。 */
   combatPower: number;
 }
@@ -1971,6 +1982,7 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
       note: disciple.note,
       /** 0017 头像框 id（'classic' 或 'frame01'…'frame20'）：掌门私有的固定外观选择。 */
       avatarFrameId: disciple.avatar_frame_id,
+      avatarHash: disciple.avatar_hash ?? null,
       journey: journeyView,
     };
   });

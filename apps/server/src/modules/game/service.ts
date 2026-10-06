@@ -28,6 +28,7 @@ import {
   type PillId,
   type PillRecipe,
 } from './alchemy';
+import { base64ToBytes, validateAvatarImage } from './avatarImage';
 import {
   ATTRIBUTE_INSIGHT_REWARDS,
   ATTRIBUTE_LABELS,
@@ -193,6 +194,7 @@ import {
   type EquipmentSlot,
 } from './equipment';
 import {
+  AvatarImageRepository,
   BuildingRepository,
   ChallengeRepository,
   DiscipleRepository,
@@ -213,9 +215,11 @@ import {
   deleteDiscipleSnapshotGuardStatement,
   deleteDiscipleStatement,
   deleteEquipmentStatement,
+  deleteOrphanAvatarImageStatement,
   discipleMembersGuardStatement,
   discipleSnapshotGuardStatement,
   equipmentGuardStatements,
+  insertAvatarImageStatement,
   insertBuildingStatement,
   insertChallengeLogStatement,
   insertDiscipleStatement,
@@ -230,6 +234,7 @@ import {
   updateBuildingLevelStatement,
   updateDiscipleAssignmentStatement,
   updateDiscipleAvatarFrameStatement,
+  updateDiscipleAvatarHashStatement,
   updateDiscipleBodyTemperingStatement,
   updateDiscipleCultivationStatement,
   updateDiscipleInjuryStatement,
@@ -1829,6 +1834,7 @@ export async function createSect(
       dao_insight: 0,
       dao_insight_used: 0,
       avatar_frame_id: 'classic',
+      avatar_hash: null,
       // 0034 天赋重构：洗髓次数 / 候选 / 交接期都从空开始（列默认值也是这样）。
       talent_reroll_count: 0,
       talent_candidate: null,
@@ -2175,6 +2181,7 @@ export async function recruitDisciple(
     body_tempering_count: 0,
     note: '',
     avatar_frame_id: 'classic',
+    avatar_hash: null,
     // 0019：新招募的弟子悟道值为 0（只能通过赌坊获得；列默认值也是 0，这里显式写出）。
     dao_insight: 0,
     dao_insight_used: 0,
@@ -2771,6 +2778,79 @@ export async function setDiscipleAvatarFrame(
   return draft.view();
 }
 
+/**
+ * 上传弟子自定义头像（0038：公开外观，铺满整个圆形头像）。
+ *
+ * - 图片在浏览器里压缩好（160×160 WebP / JPEG），这里由 validateAvatarImage 按文件头再校验格式 / 尺寸 / 大小；
+ * - 图片按内容哈希入库（INSERT OR IGNORE），同一张图只存一份；
+ * - 换图时旧图若已没人引用，同批删掉（放在 UPDATE 之后，NOT EXISTS 才看得到新值）；
+ * - 幂等：与当前哈希相同时显式早退，不写库；
+ * - 与头像框一样是纯外观，在外历练 / 重伤期间也能换。
+ */
+export async function setDiscipleAvatarImage(
+  db: D1Database,
+  userId: string,
+  discipleId: string,
+  mime: string,
+  base64: string,
+  now: number,
+): Promise<SectStateView> {
+  const image = await validateAvatarImage(mime, base64);
+  const draft = await draftFor(db, userId, now);
+  const disciple = draft.discipleById(discipleId);
+  if (disciple.avatar_hash === image.hash) {
+    return draft.view();
+  }
+  draft.addStatement(insertAvatarImageStatement(image.hash, image.mime, image.base64, now));
+  return commitAvatarHash(draft, disciple, image.hash);
+}
+
+/** 移除弟子自定义头像（0038）：回到头像框 / 旧式；本来就没有时显式早退。 */
+export async function clearDiscipleAvatarImage(
+  db: D1Database,
+  userId: string,
+  discipleId: string,
+  now: number,
+): Promise<SectStateView> {
+  const draft = await draftFor(db, userId, now);
+  const disciple = draft.discipleById(discipleId);
+  if (disciple.avatar_hash === null) {
+    return draft.view();
+  }
+  return commitAvatarHash(draft, disciple, null);
+}
+
+/** 写回 avatar_hash，并在同批最后清理旧图（别的弟子还在用同一张图时 NOT EXISTS 会保留它）。 */
+async function commitAvatarHash(
+  draft: SectDraft,
+  disciple: DiscipleRow,
+  hash: string | null,
+): Promise<SectStateView> {
+  const previous = disciple.avatar_hash;
+  draft.addStatement(updateDiscipleAvatarHashStatement(disciple.id, draft.sect.id, hash));
+  if (previous !== null) {
+    draft.addStatement(deleteOrphanAvatarImageStatement(previous));
+  }
+  disciple.avatar_hash = hash;
+  await draft.commitDisciple([{ id: disciple.id }], undefined, {
+    allowActiveJourney: true,
+    allowSevereInjury: true,
+  });
+  return draft.view();
+}
+
+/** 读取头像图片（0038）：按内容哈希取，不存在 404。 */
+export async function getAvatarImage(
+  db: D1Database,
+  hash: string,
+): Promise<{ mime: string; bytes: Uint8Array<ArrayBuffer> }> {
+  const row = await new AvatarImageRepository(db).findByHash(hash);
+  if (row === null) {
+    throw new AppError('NOT_FOUND', '头像不存在');
+  }
+  return { mime: row.mime, bytes: base64ToBytes(row.data) };
+}
+
 /* ---------- 改名（宗门 / 弟子）：扣灵石的名称写回 ---------- */
 
 /**
@@ -2994,6 +3074,10 @@ export async function expelDisciple(
 
   draft.disciples = draft.disciples.filter((row) => row.id !== disciple.id);
   draft.addStatement(deleteDiscipleStatement(disciple.id, draft.sect.id));
+  // 0038：弟子走了，没人再用的自定义头像图片同批删掉（删行之后执行，NOT EXISTS 才看得到）。
+  if (disciple.avatar_hash !== null) {
+    draft.addStatement(deleteOrphanAvatarImageStatement(disciple.avatar_hash));
+  }
   // 0034 执事堂：驱逐执事时同批把职位置空（人走了，不需要交接期）。
   if (stewardRowOf(draft, disciple.id) !== undefined) {
     draft.addStatement(vacateStewardByDiscipleStatement(draft.sect.id, disciple.id, draft.now));
@@ -3583,6 +3667,7 @@ export async function listDiscipleLeaderboard(
       gender: item.row.gender,
       realmId: item.row.realm_id,
       frameId: item.row.avatar_frame_id,
+      avatarHash: item.row.avatar_hash ?? null,
       sectId: item.sectId,
       sectName: sectNames.get(item.sectId) ?? '',
       realmName: realm.name,
@@ -3665,6 +3750,7 @@ export async function getDiscipleProfile(
     gender: disciple.gender,
     realmId: disciple.realm_id,
     frameId: disciple.avatar_frame_id,
+    avatarHash: disciple.avatar_hash ?? null,
     sectId: disciple.sect_id,
     sectName: sect?.name ?? '',
     isMe: mySect?.id === disciple.sect_id,
@@ -3815,6 +3901,7 @@ export async function getPublicSect(
       realmName: findRealm(disciple.realm_id).name,
       // 境界高低用服务端 REALMS 下标（前端排序只认它，不按境界名字符串比较）。
       realmOrder: realmIndex(disciple.realm_id),
+      avatarHash: disciple.avatar_hash ?? null,
       stage: Number(disciple.stage),
       stageName: findStage(disciple.realm_id, Number(disciple.stage)).name,
       // 0028 装备：公开档案的「战力」计入装备（这里展示的攻/防/身法仍是基础属性）。

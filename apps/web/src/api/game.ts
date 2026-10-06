@@ -125,6 +125,8 @@ export interface DiscipleView {
   note: string;
   /** 0017 头像框样式 id（白名单，见 utils/avatarFrames.ts）：旧、新弟子默认 `classic`。 */
   avatarFrameId: string;
+  /** 0038 自定义头像的内容哈希（null = 没有，显示头像框 / 旧式）；公开外观。 */
+  avatarHash: string | null;
   /** 0014 历练状态：none / active / ready + 名额与不可出发原因（全部服务端算好，前端只渲染）。 */
   journey: DiscipleJourneyView;
 
@@ -688,6 +690,8 @@ export interface PublicDiscipleView {
   realmOrder: number;
   stage: number;
   realmId: string;
+  /** 0038 自定义头像哈希（null = 没有）。 */
+  avatarHash: string | null;
   /** 当前战力（服务端现算；只由已公开的字段算出，不泄漏私有属性）。 */
   combatPower: number;
 }
@@ -820,6 +824,8 @@ export interface DiscipleLeaderboardEntryView {
   gender: string;
   realmId: string;
   frameId: string;
+  /** 0038 自定义头像哈希（null = 没有）。 */
+  avatarHash: string | null;
   sectId: string;
   sectName: string;
   realmName: string;
@@ -863,6 +869,8 @@ export interface DiscipleProfileView {
   gender: string;
   realmId: string;
   frameId: string;
+  /** 0038 自定义头像哈希（null = 没有）。 */
+  avatarHash: string | null;
   sectId: string;
   sectName: string;
   /** 是不是观看者自己宗门的弟子。 */
@@ -1094,6 +1102,31 @@ export async function setDiscipleNote(discipleId: string, note: string): Promise
     body: { discipleId, note },
   });
   return data.state;
+}
+
+/**
+ * 0038 上传弟子自定义头像（POST /game/set-disciple-avatar-image）：
+ * data 是浏览器压缩好的成品（utils/avatarImage.ts 的 compressAvatar），服务端按文件头再校验。
+ */
+export async function setDiscipleAvatarImage(
+  discipleId: string,
+  mime: string,
+  data: string,
+): Promise<SectStateView> {
+  const result = await apiRequest<{ state: SectStateView }>(
+    '/api/v1/game/set-disciple-avatar-image',
+    { method: 'POST', body: { discipleId, mime, data } },
+  );
+  return result.state;
+}
+
+/** 0038 移除弟子自定义头像（POST /game/clear-disciple-avatar-image），回到头像框 / 旧式。 */
+export async function clearDiscipleAvatarImage(discipleId: string): Promise<SectStateView> {
+  const result = await apiRequest<{ state: SectStateView }>(
+    '/api/v1/game/clear-disciple-avatar-image',
+    { method: 'POST', body: { discipleId } },
+  );
+  return result.state;
 }
 
 /**

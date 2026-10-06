@@ -35,7 +35,9 @@ import {
   resolveAvatarFrameId,
   type AvatarFrameId,
 } from '../utils/avatarFrames';
+import type { CompressedAvatar } from '../utils/avatarImage';
 import AssignmentSelect from './AssignmentSelect.vue';
+import AvatarCropDialog from './AvatarCropDialog.vue';
 import DiscipleAvatar from './DiscipleAvatar.vue';
 import DiscipleRadarChart from './DiscipleRadarChart.vue';
 import HelpTip from './HelpTip.vue';
@@ -93,6 +95,10 @@ const emit = defineEmits<{
   saveNote: [discipleId: string, note: string];
   /** 0017 保存头像框样式（frameId 只可能是白名单里的固定 id）。 */
   setAvatarFrame: [discipleId: string, frameId: AvatarFrameId];
+  /** 0038 上传自定义头像（image 已在浏览器里裁剪压缩好）。 */
+  setAvatarImage: [discipleId: string, image: CompressedAvatar];
+  /** 0038 移除自定义头像。 */
+  clearAvatarImage: [discipleId: string];
   /** 0019 分配悟道值（属性六选一 + 点数）：归属、余额与上限由服务端裁决，这里只 emit。 */
   allocateDaoInsight: [discipleId: string, attribute: DaoAttribute, points: number];
   /** 0021 弟子改名（2-6 个码点、一次 50 灵石）：规则与价格都由服务端裁决，这里只 emit。 */
@@ -286,6 +292,49 @@ function saveAvatarFrame(): void {
 }
 
 const frameCurrentLabel = computed(() => avatarFrameOption(frameDraft.value).label);
+
+/* ---------- 0038 自定义头像：选图 → 裁剪弹窗里压缩 → 上传；服务端回填新哈希后关弹窗 ---------- */
+
+const avatarFileInput = ref<HTMLInputElement | null>(null);
+/** 正在裁剪的图片；null = 裁剪弹窗没开。 */
+const avatarCropFile = ref<File | null>(null);
+
+function pickAvatarFile(): void {
+  if (props.busy) return;
+  avatarFileInput.value?.click();
+}
+
+function onAvatarFileChange(event: Event): void {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0] ?? null;
+  // 清空选择，同一张图再选一次也能触发 change。
+  input.value = '';
+  if (file !== null) avatarCropFile.value = file;
+}
+
+function confirmAvatarImage(image: CompressedAvatar): void {
+  emit('setAvatarImage', props.disciple.id, image);
+}
+
+function clearAvatarImage(): void {
+  if (props.busy || props.disciple.avatarHash === null) return;
+  emit('clearAvatarImage', props.disciple.id);
+}
+
+// 上传成功（服务端回填了新哈希）就关掉裁剪弹窗；失败时弹窗留着，可以直接换个位置再试。
+watch(
+  () => props.disciple.avatarHash,
+  () => {
+    avatarCropFile.value = null;
+  },
+);
+// 切到别的弟子时不把上一位的裁剪弹窗带过去。
+watch(
+  () => props.disciple.id,
+  () => {
+    avatarCropFile.value = null;
+  },
+);
 
 /* ---------- 0019 悟道值加点：目标属性六选一 + 点数 ---------- */
 
@@ -1023,6 +1072,7 @@ function unequipGear(item: EquipmentItemView | null): void {
           :gender="disciple.gender"
           :realm-id="disciple.realmId"
           :frame-id="disciple.avatarFrameId"
+          :image-hash="disciple.avatarHash"
           variant="detail"
         />
       </div>
@@ -1136,6 +1186,14 @@ function unequipGear(item: EquipmentItemView | null): void {
             @use="useTalentPill"
             @choose="chooseTalent"
             @close="showTalentReroll = false"
+          />
+
+          <AvatarCropDialog
+            v-if="avatarCropFile !== null"
+            :file="avatarCropFile"
+            :busy="busy"
+            @confirm="confirmAvatarImage"
+            @close="avatarCropFile = null"
           />
 
           <RealmCatalogDialog
@@ -1648,8 +1706,59 @@ function unequipGear(item: EquipmentItemView | null): void {
         :aria-labelledby="tabButtonId('archive')"
         tabindex="0"
       >
+        <section class="disciple-detail-section" aria-labelledby="disciple-photo-title">
+          <h3 id="disciple-photo-title" class="disciple-detail-title">自定义头像</h3>
+          <div class="disciple-photo-row">
+            <span class="disciple-frame-preview disciple-ring">
+              <DiscipleAvatar
+                :name="disciple.name"
+                :gender="disciple.gender"
+                :realm-id="disciple.realmId"
+                :frame-id="disciple.avatarFrameId"
+                :image-hash="disciple.avatarHash"
+              />
+            </span>
+            <div class="disciple-photo-actions">
+              <button
+                class="action-button disciple-note-save"
+                type="button"
+                :disabled="busy"
+                @click="pickAvatarFile"
+              >
+                {{ disciple.avatarHash === null ? '上传图片' : '换一张' }}
+              </button>
+              <button
+                v-if="disciple.avatarHash !== null"
+                class="action-button disciple-note-save"
+                type="button"
+                :disabled="busy"
+                @click="clearAvatarImage"
+              >
+                移除
+              </button>
+            </div>
+            <input
+              ref="avatarFileInput"
+              class="disciple-photo-input"
+              type="file"
+              accept="image/*"
+              tabindex="-1"
+              aria-hidden="true"
+              @change="onAvatarFileChange"
+            />
+          </div>
+          <p class="disciple-note-meta">
+            图片铺满整个圆形头像，所有玩家可见；上传前自动裁剪压缩成小图。{{
+              disciple.avatarHash !== null ? '移除后恢复下面选的头像框。' : ''
+            }}
+          </p>
+        </section>
+
         <section class="disciple-detail-section" aria-labelledby="disciple-frame-title">
           <h3 id="disciple-frame-title" class="disciple-detail-title">头像框</h3>
+          <p v-if="disciple.avatarHash !== null" class="disciple-note-meta">
+            已使用自定义头像，头像框暂不显示。
+          </p>
           <!-- 图像单选控件：固定二十种样式 + 旧式，不接受任意上传或 URL。 -->
           <div class="disciple-frame-grid" role="radiogroup" aria-label="头像框样式">
             <label

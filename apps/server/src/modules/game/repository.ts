@@ -86,6 +86,8 @@ export interface DiscipleRow {
   note: string;
   /** 0017 头像框 id（'classic' 或 'frame01'…'frame20'；掌门私有外观，只进自己的视图）。 */
   avatar_frame_id: string;
+  /** 0038 自定义头像的内容哈希（avatar_images.hash）；null = 没有，沿用头像框 / 旧式。公开外观。 */
+  avatar_hash: string | null;
   created_at: number;
   /** 0019 赌坊：当前可用悟道值余额（非负整数；本版本只能通过论道赌局获得）。 */
   dao_insight: number;
@@ -267,7 +269,7 @@ export class DiscipleRepository extends ParamRepository {
       sql: `SELECT id, sect_id, name, gender, aptitude, attack, defense, speed, luck, physique, talent,
                    gear_attack, gear_defense, gear_speed, gear_luck, gear_physique, gear_power_bp,
                    realm_id, stage, cultivation, cultivation_remainder,
-                   assignment, injured_until, severe_injured_until, body_tempering_count, note, avatar_frame_id, dao_insight, dao_insight_used,
+                   assignment, injured_until, severe_injured_until, body_tempering_count, note, avatar_frame_id, avatar_hash, dao_insight, dao_insight_used,
                    talent_reroll_count, talent_candidate, steward_handover_until, aptitude_pill_count, created_at
             FROM disciples WHERE sect_id = ? ORDER BY created_at ASC, id ASC`,
       params: [sectId],
@@ -279,7 +281,7 @@ export class DiscipleRepository extends ParamRepository {
       sql: `SELECT id, sect_id, name, gender, aptitude, attack, defense, speed, luck, physique, talent,
                    gear_attack, gear_defense, gear_speed, gear_luck, gear_physique, gear_power_bp,
                    realm_id, stage, cultivation, cultivation_remainder,
-                   assignment, injured_until, severe_injured_until, body_tempering_count, note, avatar_frame_id, dao_insight, dao_insight_used,
+                   assignment, injured_until, severe_injured_until, body_tempering_count, note, avatar_frame_id, avatar_hash, dao_insight, dao_insight_used,
                    talent_reroll_count, talent_candidate, steward_handover_until, aptitude_pill_count, created_at
             FROM disciples WHERE id = ?`,
       params: [discipleId],
@@ -1061,6 +1063,53 @@ export function updateDiscipleAvatarFrameStatement(
     sql: 'UPDATE disciples SET avatar_frame_id = ? WHERE id = ? AND sect_id = ?',
     params: [frameId, discipleId, sectId],
   };
+}
+
+/**
+ * 0038 自定义头像：图片按内容哈希入库（同一张图只存一份；已存在就什么也不做）。
+ */
+export function insertAvatarImageStatement(
+  hash: string,
+  mime: string,
+  base64: string,
+  now: number,
+): ParameterizedQuery {
+  return {
+    sql: 'INSERT OR IGNORE INTO avatar_images (hash, mime, data, created_at) VALUES (?, ?, ?, ?)',
+    params: [hash, mime, base64, now],
+  };
+}
+
+/** 0038 自定义头像写回：只更新 avatar_hash 一列（null = 移除自定义头像）。 */
+export function updateDiscipleAvatarHashStatement(
+  discipleId: string,
+  sectId: string,
+  hash: string | null,
+): ParameterizedQuery {
+  return {
+    sql: 'UPDATE disciples SET avatar_hash = ? WHERE id = ? AND sect_id = ?',
+    params: [hash, discipleId, sectId],
+  };
+}
+
+/**
+ * 0038 清理孤儿图片：换头像 / 移除头像 / 驱逐弟子时，放在同一个 batch 的**最后**，
+ * 删掉不再被任何弟子引用的那张旧图（别的弟子用着同一张图时保留）。
+ */
+export function deleteOrphanAvatarImageStatement(hash: string): ParameterizedQuery {
+  return {
+    sql: 'DELETE FROM avatar_images WHERE hash = ? AND NOT EXISTS (SELECT 1 FROM disciples WHERE avatar_hash = ?)',
+    params: [hash, hash],
+  };
+}
+
+export class AvatarImageRepository extends ParamRepository {
+  async findByHash(hash: string): Promise<{ mime: string; data: string } | null> {
+    return this.one<{ mime: string; data: string }>({
+      sql: 'SELECT mime, data FROM avatar_images WHERE hash = ?',
+      params: [hash],
+    });
+  }
 }
 
 /**

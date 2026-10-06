@@ -1088,6 +1088,8 @@ describe('0018 迁移：disciples 重建后结构与约束完好', () => {
       'steward_handover_until',
       // 0035 培元丹次数。
       'aptitude_pill_count',
+      // 0038 自定义头像哈希。
+      'avatar_hash',
     ]);
   });
 
@@ -1151,6 +1153,8 @@ describe('0018 迁移：disciples 重建后结构与约束完好', () => {
       'steward_handover_until|INTEGER|0|',
       // 0035 培元丹次数 NOT NULL DEFAULT 0。
       'aptitude_pill_count|INTEGER|1|0',
+      // 0038 自定义头像哈希：可空（NULL = 没有）、无 DEFAULT。
+      'avatar_hash|TEXT|0|',
     ]);
   });
 

@@ -26,6 +26,7 @@ import type {
 } from '../api/game';
 import type { ToastTone } from '../types/ui';
 import type { AvatarFrameId } from '../utils/avatarFrames';
+import type { CompressedAvatar } from '../utils/avatarImage';
 import { ApiError } from '../api/client';
 import { formatAmount, formatBp, formatRate, formatTime } from '../utils/format';
 import {
@@ -141,6 +142,9 @@ const emit = defineEmits<{
   claimJourney: [journeyId: string];
   /** 0017 保存头像框样式（白名单 id，见 utils/avatarFrames.ts）。 */
   setAvatarFrame: [discipleId: string, frameId: AvatarFrameId];
+  /** 0038 自定义头像：上传（浏览器里已压缩好）/ 移除。 */
+  setAvatarImage: [discipleId: string, image: CompressedAvatar];
+  clearAvatarImage: [discipleId: string];
   /** 0019 赌坊：论道请求与悟道值加点都由 App.vue 绑定并调接口，这里只派发与展示。 */
   daoDebate: [input: DaoDebateInput];
   allocateDaoInsight: [discipleId: string, attribute: DaoAttribute, points: number];
@@ -1574,6 +1578,17 @@ function onDetailSetAvatarFrame(discipleId: string, frameId: AvatarFrameId): voi
   emit('setAvatarFrame', discipleId, frameId);
 }
 
+/** 0038 自定义头像：只转发，请求与提示都在 App.vue。 */
+function onDetailSetAvatarImage(discipleId: string, image: CompressedAvatar): void {
+  if (props.busy) return;
+  emit('setAvatarImage', discipleId, image);
+}
+
+function onDetailClearAvatarImage(discipleId: string): void {
+  if (props.busy) return;
+  emit('clearAvatarImage', discipleId);
+}
+
 /** 0021 宗门改名：只把新名字交给 App.vue，请求与提示都在上层。 */
 function submitRenameSect(): void {
   if (props.busy || !renameDirty.value || renameInvalid.value || !renameAffordable.value) return;
@@ -2263,6 +2278,8 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
         @claim-journey="onDetailClaimJourney"
         @notify="onDetailNotify"
         @set-avatar-frame="onDetailSetAvatarFrame"
+        @set-avatar-image="onDetailSetAvatarImage"
+        @clear-avatar-image="onDetailClearAvatarImage"
         @allocate-dao-insight="onDetailAllocateDaoInsight"
         @rename-disciple="onDetailRenameDisciple"
         @equip="onDetailEquip"

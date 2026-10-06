@@ -121,6 +121,7 @@ function requestChallenge(): void {
                 :gender="disciple.gender"
                 :realm-id="disciple.realmId"
                 frame-id="classic"
+                :image-hash="disciple.avatarHash"
               />
             </span>
             <span class="public-name">{{ disciple.name }}</span>
