@@ -54,6 +54,8 @@ import {
   auctionListRequestSchema,
   auctionBidRequestSchema,
   auctionLotRequestSchema,
+  veinPartyRequestSchema,
+  veinWithdrawRequestSchema,
 } from './schema';
 import {
   abandonRealmExplore,
@@ -97,6 +99,11 @@ import {
   buyoutAuction,
   cancelAuction,
   claimAuction,
+  getVeins,
+  occupyVein,
+  attackVein,
+  setVeinGarrison,
+  withdrawVein,
   getMeritShop,
   getRaceHistory,
   getRaceState,
@@ -725,6 +732,42 @@ export function createGameRoutes(): Hono<AppEnv> {
     const userId = requireUserId(c);
     const result = await sweepTower(getDb(c.env), userId, Date.now());
     return respondOk(c, { state: result.state, tower: result.tower, result: result.result });
+  });
+
+  // 0042 灵脉争夺：面板（先顺手结算产出 / 枯竭）。
+  routes.get('/game/veins', async (c) => {
+    const userId = requireUserId(c);
+    const result = await getVeins(getDb(c.env), userId, Date.now());
+    return respondOk(c, { state: result.state, veins: result.veins });
+  });
+
+  // 0042 灵脉争夺：进驻 / 抢夺 / 换守军 / 撤离（各自一次受保护 batch，带灵脉 version 守卫）。
+  routes.post('/game/veins/occupy', async (c) => {
+    const userId = requireUserId(c);
+    const body = await parseStrictJson(veinPartyRequestSchema, c);
+    const result = await occupyVein(getDb(c.env), userId, body, Date.now());
+    return respondOk(c, { state: result.state, veins: result.veins, result: result.result });
+  });
+
+  routes.post('/game/veins/attack', async (c) => {
+    const userId = requireUserId(c);
+    const body = await parseStrictJson(veinPartyRequestSchema, c);
+    const result = await attackVein(getDb(c.env), userId, body, Date.now());
+    return respondOk(c, { state: result.state, veins: result.veins, result: result.result });
+  });
+
+  routes.post('/game/veins/garrison', async (c) => {
+    const userId = requireUserId(c);
+    const body = await parseStrictJson(veinPartyRequestSchema, c);
+    const result = await setVeinGarrison(getDb(c.env), userId, body, Date.now());
+    return respondOk(c, { state: result.state, veins: result.veins, result: result.result });
+  });
+
+  routes.post('/game/veins/withdraw', async (c) => {
+    const userId = requireUserId(c);
+    const body = await parseStrictJson(veinWithdrawRequestSchema, c);
+    const result = await withdrawVein(getDb(c.env), userId, body, Date.now());
+    return respondOk(c, { state: result.state, veins: result.veins, result: result.result });
   });
 
   // 0040 拍卖行：面板（先顺手结算到期的单）。

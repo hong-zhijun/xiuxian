@@ -2438,3 +2438,100 @@ export async function cancelAuction(lotId: string): Promise<AuctionActionRespons
 export async function claimAuction(lotId: string): Promise<AuctionActionResponse> {
   return apiRequest<AuctionActionResponse>('/api/v1/game/auction/claim', { method: 'POST', body: { lotId } });
 }
+
+/* ---------- 0042 灵脉争夺 ---------- */
+
+export interface VeinRoundView {
+  round: number;
+  attackerName: string;
+  attackerPower: number;
+  defenderName: string | null;
+  defenderPower: number | null;
+  winner: 'attacker' | 'defender';
+}
+
+/** 一条灵脉。产出是最小单位 / 小时；时间是毫秒时间戳。 */
+export interface VeinView {
+  id: string;
+  name: string;
+  tier: 'small' | 'large' | 'eye';
+  tierName: string;
+  ratePerHour: number;
+  minSectLevel: number;
+  holdLimitHours: number | null;
+  holder: { sectId: string; name: string; level: number; isMe: boolean } | null;
+  garrison: { discipleId: string; name: string; realmName: string; power: number; absent: boolean }[];
+  garrisonPower: number;
+  heldSince: number | null;
+  protectedUntil: number | null;
+  exhaustsAt: number | null;
+  cooldownUntil: number | null;
+  action: 'occupy' | 'attack' | 'mine' | null;
+  blockedReason: string | null;
+}
+
+export interface VeinBattleView {
+  id: string;
+  veinId: string;
+  veinName: string;
+  attackerName: string;
+  defenderName: string;
+  won: boolean;
+  rounds: VeinRoundView[];
+  createdAt: number;
+  iAttacked: boolean;
+  iDefended: boolean;
+  canRetake: boolean;
+}
+
+export interface VeinPanelView {
+  unlocked: boolean;
+  unlockSectLevel: number;
+  partySize: number;
+  dailyAttacks: number;
+  attacksUsed: number;
+  attacksLeft: number;
+  levelGap: number;
+  protectMinutes: number;
+  exhaustCooldownHours: number;
+  defenderBonusPercent: number;
+  myVeinId: string | null;
+  harvested: number;
+  veins: VeinView[];
+  battles: VeinBattleView[];
+}
+
+export interface VeinBattleResultView {
+  veinId: string;
+  veinName: string;
+  defenderName: string;
+  won: boolean;
+  rounds: VeinRoundView[];
+  injured: string[];
+}
+
+export interface VeinActionResponse {
+  state: SectStateView;
+  veins: VeinPanelView;
+  result: { message: string; battle: VeinBattleResultView | null };
+}
+
+export async function fetchVeins(): Promise<{ state: SectStateView; veins: VeinPanelView }> {
+  return apiRequest<{ state: SectStateView; veins: VeinPanelView }>('/api/v1/game/veins');
+}
+
+export async function occupyVein(veinId: string, discipleIds: string[]): Promise<VeinActionResponse> {
+  return apiRequest<VeinActionResponse>('/api/v1/game/veins/occupy', { method: 'POST', body: { veinId, discipleIds } });
+}
+
+export async function attackVein(veinId: string, discipleIds: string[]): Promise<VeinActionResponse> {
+  return apiRequest<VeinActionResponse>('/api/v1/game/veins/attack', { method: 'POST', body: { veinId, discipleIds } });
+}
+
+export async function setVeinGarrison(veinId: string, discipleIds: string[]): Promise<VeinActionResponse> {
+  return apiRequest<VeinActionResponse>('/api/v1/game/veins/garrison', { method: 'POST', body: { veinId, discipleIds } });
+}
+
+export async function withdrawVein(veinId: string): Promise<VeinActionResponse> {
+  return apiRequest<VeinActionResponse>('/api/v1/game/veins/withdraw', { method: 'POST', body: { veinId } });
+}

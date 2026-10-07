@@ -406,3 +406,14 @@ export const auctionBidRequestSchema = z.strictObject({
 export const auctionLotRequestSchema = z.strictObject({
   lotId: z.string().min(1).max(64),
 });
+
+/** 0042 灵脉争夺：进驻 / 抢夺 / 换守军（固定 3 人；是否能出战由 service 校验）。 */
+export const veinPartyRequestSchema = z.strictObject({
+  veinId: z.string().min(1).max(32),
+  discipleIds: z.array(z.string().min(1).max(64)).length(3),
+});
+
+/** 0042 灵脉争夺：撤离。 */
+export const veinWithdrawRequestSchema = z.strictObject({
+  veinId: z.string().min(1).max(32),
+});

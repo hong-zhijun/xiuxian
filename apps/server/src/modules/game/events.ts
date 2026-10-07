@@ -136,9 +136,16 @@ export function eventDefinition(eventId: string): EventDef | undefined {
   return EVENT_POOL.find((event) => event.id === eventId);
 }
 
-/** 事件的展示名；定义里查不到时用 event_id 兜底（event_log 没有 name 列）。 */
+/** 不在随机事件池里、由玩法直接写进 event_log 的系统事件（0042 灵脉争夺）。 */
+const SYSTEM_EVENT_NAMES: Readonly<Record<string, string>> = {
+  veinLost: '灵脉失守',
+  veinHeld: '灵脉守住',
+  veinExhausted: '灵脉枯竭',
+};
+
+/** 事件的展示名；定义里查不到时先查系统事件，再用 event_id 兜底（event_log 没有 name 列）。 */
 export function eventNameOf(eventId: string): string {
-  return eventDefinition(eventId)?.name ?? eventId;
+  return eventDefinition(eventId)?.name ?? SYSTEM_EVENT_NAMES[eventId] ?? eventId;
 }
 
 /** 按权重随机选一个事件；随机源可注入，便于测试。 */

@@ -3624,3 +3624,150 @@ export function auctionLotGuardStatement(guardId: string, lotId: string, version
     params: [guardId, lotId, version],
   };
 }
+
+/* ---------- 0042 灵脉争夺 ---------- */
+
+export interface SpiritVeinRow {
+  id: string;
+  holder_sect_id: string | null;
+  holder_name: string | null;
+  /** 守军弟子 id 的 JSON 数组。 */
+  garrison: string | null;
+  held_since: number | null;
+  protected_until: number | null;
+  settled_at: number | null;
+  exhausted_sect_id: string | null;
+  exhausted_until: number | null;
+  version: number;
+  updated_at: number;
+}
+
+export interface VeinBattleRow {
+  id: string;
+  vein_id: string;
+  attacker_sect_id: string;
+  attacker_name: string;
+  defender_sect_id: string;
+  defender_name: string;
+  won: number;
+  /** 回合 JSON（veins.ts 的 VeinRound[]）。 */
+  rounds: string;
+  created_at: number;
+}
+
+export class VeinRepository extends ParamRepository {
+  async listAll(): Promise<SpiritVeinRow[]> {
+    return this.all<SpiritVeinRow>({ sql: 'SELECT * FROM spirit_veins', params: [] });
+  }
+
+  async findById(veinId: string): Promise<SpiritVeinRow | null> {
+    return this.one<SpiritVeinRow>({ sql: 'SELECT * FROM spirit_veins WHERE id = ?', params: [veinId] });
+  }
+
+  /** 今日（since 起）本宗发起的抢夺次数。 */
+  async countAttacksSince(sectId: string, since: number): Promise<number> {
+    const row = await this.one<{ cnt: number }>({
+      sql: 'SELECT COUNT(*) AS cnt FROM vein_battles WHERE attacker_sect_id = ? AND created_at >= ?',
+      params: [sectId, since],
+    });
+    return Number(row?.cnt ?? 0);
+  }
+
+  async recentBattles(limit: number): Promise<VeinBattleRow[]> {
+    return this.all<VeinBattleRow>({
+      sql: 'SELECT * FROM vein_battles ORDER BY created_at DESC LIMIT ?',
+      params: [limit],
+    });
+  }
+
+  async harvestedOf(sectId: string): Promise<number> {
+    const row = await this.one<{ harvested: number }>({
+      sql: 'SELECT harvested FROM sect_vein_stats WHERE sect_id = ?',
+      params: [sectId],
+    });
+    return Number(row?.harvested ?? 0);
+  }
+}
+
+/**
+ * 灵脉整行写回（占领者 / 守军 / 计时字段一起写；version +1）。
+ * 进驻、易主、换守军、撤离、枯竭、结算都走它，字段语义见 0042 迁移。
+ */
+export function updateSpiritVeinStatement(input: {
+  veinId: string;
+  holderSectId: string | null;
+  holderName: string | null;
+  garrison: string | null;
+  heldSince: number | null;
+  protectedUntil: number | null;
+  settledAt: number | null;
+  exhaustedSectId: string | null;
+  exhaustedUntil: number | null;
+  now: number;
+}): ParameterizedQuery {
+  return {
+    sql: `UPDATE spirit_veins SET holder_sect_id = ?, holder_name = ?, garrison = ?, held_since = ?,
+            protected_until = ?, settled_at = ?, exhausted_sect_id = ?, exhausted_until = ?,
+            version = version + 1, updated_at = ?
+          WHERE id = ?`,
+    params: [
+      input.holderSectId,
+      input.holderName,
+      input.garrison,
+      input.heldSince,
+      input.protectedUntil,
+      input.settledAt,
+      input.exhaustedSectId,
+      input.exhaustedUntil,
+      input.now,
+      input.veinId,
+    ],
+  };
+}
+
+export function insertVeinBattleStatement(input: {
+  id: string;
+  veinId: string;
+  attackerSectId: string;
+  attackerName: string;
+  defenderSectId: string;
+  defenderName: string;
+  won: boolean;
+  rounds: string;
+  now: number;
+}): ParameterizedQuery {
+  return {
+    sql: `INSERT INTO vein_battles
+            (id, vein_id, attacker_sect_id, attacker_name, defender_sect_id, defender_name, won, rounds, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    params: [
+      input.id,
+      input.veinId,
+      input.attackerSectId,
+      input.attackerName,
+      input.defenderSectId,
+      input.defenderName,
+      input.won ? 1 : 0,
+      input.rounds,
+      input.now,
+    ],
+  };
+}
+
+/** 累计采集（相对加法；没有行就建一行）。 */
+export function addVeinHarvestStatement(sectId: string, amount: number, now: number): ParameterizedQuery {
+  return {
+    sql: `INSERT INTO sect_vein_stats (sect_id, harvested, updated_at) VALUES (?, ?, ?)
+          ON CONFLICT (sect_id) DO UPDATE SET harvested = harvested + excluded.harvested, updated_at = excluded.updated_at`,
+    params: [sectId, amount, now],
+  };
+}
+
+/** 并发守卫：这条灵脉的 version 必须仍是读到的值，否则整批回滚。 */
+export function spiritVeinGuardStatement(guardId: string, veinId: string, version: number): ParameterizedQuery {
+  return {
+    sql: `INSERT INTO mutation_guards (command_id, valid)
+          SELECT ?, CASE WHEN EXISTS (SELECT 1 FROM spirit_veins WHERE id = ? AND version = ?) THEN 1 ELSE 0 END`,
+    params: [guardId, veinId, version],
+  };
+}

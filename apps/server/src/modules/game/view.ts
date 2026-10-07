@@ -2862,3 +2862,88 @@ export interface AuctionView {
 export interface AuctionActionResultView {
   message: string;
 }
+
+/* ---------- 0042 灵脉争夺 ---------- */
+
+/** 一回合（与 veins.ts 的 VeinRound 同形）。 */
+export interface VeinRoundView {
+  round: number;
+  attackerName: string;
+  attackerPower: number;
+  defenderName: string | null;
+  defenderPower: number | null;
+  winner: 'attacker' | 'defender';
+}
+
+/** 一条灵脉。产出是最小单位 / 小时；时间是毫秒时间戳。 */
+export interface VeinView {
+  id: string;
+  name: string;
+  tier: 'small' | 'large' | 'eye';
+  tierName: string;
+  ratePerHour: number;
+  minSectLevel: number;
+  /** 连续占领上限（小时）；null = 不限。 */
+  holdLimitHours: number | null;
+  holder: { sectId: string; name: string; level: number; isMe: boolean } | null;
+  /** 守军（按回合顺序）；absent = 已离宗 / 重伤卧床，这一回合缺席。 */
+  garrison: { discipleId: string; name: string; realmName: string; power: number; absent: boolean }[];
+  /** 在场守军战力之和（未计守方 +10%）。 */
+  garrisonPower: number;
+  heldSince: number | null;
+  /** 保护期截止（还在保护期内才有值）。 */
+  protectedUntil: number | null;
+  /** 枯竭时刻（不限时的档位为 null）。 */
+  exhaustsAt: number | null;
+  /** 我对这条的枯竭冷却截止（没有为 null）。 */
+  cooldownUntil: number | null;
+  /** 我能做什么：occupy 进驻 / attack 抢夺 / mine 我占着（换守军、撤离）/ null 不能动。 */
+  action: 'occupy' | 'attack' | 'mine' | null;
+  blockedReason: string | null;
+}
+
+export interface VeinBattleView {
+  id: string;
+  veinId: string;
+  veinName: string;
+  attackerName: string;
+  defenderName: string;
+  /** 进攻方是否获胜。 */
+  won: boolean;
+  rounds: VeinRoundView[];
+  createdAt: number;
+  iAttacked: boolean;
+  iDefended: boolean;
+  /** 我失守的、且灵脉仍在对方手里（显示「去夺回」）。 */
+  canRetake: boolean;
+}
+
+/** 灵脉面板（GET /game/veins 与各命令回执里的 veins）。 */
+export interface VeinPanelView {
+  unlocked: boolean;
+  unlockSectLevel: number;
+  partySize: number;
+  dailyAttacks: number;
+  attacksUsed: number;
+  attacksLeft: number;
+  levelGap: number;
+  protectMinutes: number;
+  exhaustCooldownHours: number;
+  defenderBonusPercent: number;
+  myVeinId: string | null;
+  /** 累计从灵脉获得的灵气（最小单位）。 */
+  harvested: number;
+  veins: VeinView[];
+  battles: VeinBattleView[];
+}
+
+/** 抢夺回执里的这一战。 */
+export interface VeinBattleResultView {
+  veinId: string;
+  veinName: string;
+  defenderName: string;
+  won: boolean;
+  rounds: VeinRoundView[];
+  /** 进攻失败时受伤的弟子名。 */
+  injured: string[];
+}

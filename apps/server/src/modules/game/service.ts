@@ -378,6 +378,36 @@ import {
   type AuctionEquipmentSnapshot,
   type AuctionKind,
 } from './auction';
+import {
+  addVeinHarvestStatement,
+  insertVeinBattleStatement,
+  spiritVeinGuardStatement,
+  updateSpiritVeinStatement,
+  VeinRepository,
+  type SpiritVeinRow,
+} from './repository';
+import {
+  findVein,
+  isVeinLevelGapBlocked,
+  parseGarrison,
+  resolveVeinBattle,
+  veinExhaustAt,
+  veinProduction,
+  veinTierOf,
+  VEINS,
+  VEIN_ATTACK_INJURY_CHANCE,
+  VEIN_ATTACK_INJURY_MS,
+  VEIN_DAILY_ATTACKS,
+  VEIN_DEFENDER_BONUS_BP,
+  VEIN_EXHAUST_COOLDOWN_MS,
+  VEIN_LEVEL_GAP,
+  VEIN_PARTY_SIZE,
+  VEIN_PROTECT_MS,
+  VEIN_RECENT_BATTLES,
+  VEIN_UNLOCK_SECT_LEVEL,
+  type VeinDef,
+  type VeinRound,
+} from './veins';
 import { settleEconomy, resourceRates, type SettleResult } from './settle';
 import {
   simulateTowerBattle,
@@ -550,6 +580,9 @@ import {
   type AuctionEquipmentView,
   type AuctionLotView,
   type AuctionView,
+  type VeinBattleResultView,
+  type VeinPanelView,
+  type VeinView,
 } from './view';
 /**
  * 游戏服务（一次性可玩版本）。
@@ -10692,4 +10725,603 @@ export async function claimAuction(
     now,
     side === 'buyer' ? `已领取拍得的 ${auctionItemLabel(lot)}` : `已领回流拍的 ${auctionItemLabel(lot)}`,
   );
+}
+
+/* ------------------------------------------------------------------ *
+ * 0042 灵脉争夺（docs/灵脉争夺开发计划.md）
+ *
+ * 规则在 veins.ts（纯函数）。这里负责：
+ * - 产出结算：按 settled_at → 结算时刻折算，用「不超过容量的相对加法」记给占领者（与讨伐发奖同一语句），
+ *   占领者变动时当场结算；定时任务每 10 分钟、面板与命令开头也先跑一遍（processVeins）。
+ * - 枯竭：大灵脉 / 灵眼连续占满上限 → 结算到枯竭时刻、守军撤回、原占领者 24 小时内不能再占这一条。
+ * - 每次改动灵脉都带该行 version 守卫：并发进驻 / 抢夺 / 结算只会成功一个。
+ * ------------------------------------------------------------------ */
+
+/** 面板 / 命令顺手结算时，距上次结算不足这么久就不写库（定时任务照常结算）。 */
+const VEIN_LAZY_SETTLE_MS = 60_000;
+/** 事件日志的系统事件 id（名字见 events.ts 的 SYSTEM_EVENT_NAMES）。 */
+const VEIN_EVENT_LOST = 'veinLost';
+const VEIN_EVENT_HELD = 'veinHeld';
+const VEIN_EVENT_EXHAUSTED = 'veinExhausted';
+
+function veinGuard(vein: SpiritVeinRow): { id: string; statement: ParameterizedQuery } {
+  const id = `${crypto.randomUUID()}:vein`;
+  return { id, statement: spiritVeinGuardStatement(id, vein.id, Number(vein.version)) };
+}
+
+function requireVeinUnlocked(draft: SectDraft): void {
+  if (Number(draft.sect.level) < VEIN_UNLOCK_SECT_LEVEL) {
+    throw new AppError('INVALID_STATUS', `宗门 ${String(VEIN_UNLOCK_SECT_LEVEL)} 级开放灵脉争夺`);
+  }
+}
+
+/** 某宗门的灵气容量（最小单位）：配置容量 × 宗门等级倍率。 */
+function energyCapacityOf(sectLevel: number): number {
+  const definition = gameConfig().resources.find((item) => item.id === 'spiritualEnergy');
+  return definition === undefined ? 0 : effectiveCapacity(definition.capacity, findSectLevel(sectLevel).capacityMultiplier);
+}
+
+/** 把这条灵脉 settled_at → until 的产出记给占领者（不超过容量）+ 累计采集；没有产出返回空。 */
+function veinCreditStatements(vein: SpiritVeinRow, until: number, holderLevel: number, now: number): ParameterizedQuery[] {
+  const def = findVein(vein.id);
+  if (def === undefined || vein.holder_sect_id === null || vein.settled_at === null) return [];
+  const amount = veinProduction(veinTierOf(def.tier).ratePerHour, Number(vein.settled_at), until);
+  if (amount <= 0) return [];
+  return [
+    resourceCreditCappedStatement(vein.holder_sect_id, 'spiritualEnergy', amount, energyCapacityOf(holderLevel), now),
+    addVeinHarvestStatement(vein.holder_sect_id, amount, now),
+  ];
+}
+
+/** 让出（撤离 / 被抢前 / 枯竭）：占领相关字段清空；枯竭冷却由调用方决定是否写入。 */
+function releasedVeinStatement(
+  vein: SpiritVeinRow,
+  now: number,
+  exhausted: { sectId: string; until: number } | null,
+): ParameterizedQuery {
+  return updateSpiritVeinStatement({
+    veinId: vein.id,
+    holderSectId: null,
+    holderName: null,
+    garrison: null,
+    heldSince: null,
+    protectedUntil: null,
+    settledAt: null,
+    exhaustedSectId: exhausted === null ? vein.exhausted_sect_id : exhausted.sectId,
+    exhaustedUntil: exhausted === null ? vein.exhausted_until : exhausted.until,
+    now,
+  });
+}
+
+/** 新占领者入驻（进驻 / 抢下）：连续占领从现在算，保护期 1 小时，结算从现在起。 */
+function occupiedVeinStatement(
+  vein: SpiritVeinRow,
+  sect: { id: string; name: string },
+  garrison: readonly string[],
+  now: number,
+): ParameterizedQuery {
+  return updateSpiritVeinStatement({
+    veinId: vein.id,
+    holderSectId: sect.id,
+    holderName: sect.name,
+    garrison: JSON.stringify(garrison),
+    heldSince: now,
+    protectedUntil: now + VEIN_PROTECT_MS,
+    settledAt: now,
+    exhaustedSectId: vein.exhausted_sect_id,
+    exhaustedUntil: vein.exhausted_until,
+    now,
+  });
+}
+
+async function runGuardedBatch(db: D1Database, statements: ParameterizedQuery[]): Promise<boolean> {
+  try {
+    await db.batch(prepareStatements(db, statements));
+    return true;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (/CHECK constraint failed: (?:valid = 1|mutation_guards)/i.test(message)) return false;
+    throw error;
+  }
+}
+
+/**
+ * 结算所有灵脉（定时任务；面板与命令开头也跑一遍）：到了枯竭时刻的先枯竭，其余把产出结算到现在。
+ * lazy = true 时，距上次结算不足 1 分钟的灵脉跳过（省写库）。每条各自一个受守卫的 batch，失败只跳过那一条。
+ */
+export async function processVeins(db: D1Database, now: number, lazy = false): Promise<void> {
+  const rows = await new VeinRepository(db).listAll();
+  const sectRepo = new SectRepository(db);
+  for (const vein of rows) {
+    if (vein.holder_sect_id === null) continue;
+    const def = findVein(vein.id);
+    if (def === undefined) continue;
+    try {
+      const holder = await sectRepo.findById(vein.holder_sect_id);
+      const guard = veinGuard(vein);
+      const exhaustAt = vein.held_since === null ? null : veinExhaustAt(def.tier, Number(vein.held_since));
+      if (holder === null) {
+        await runGuardedBatch(db, [guard.statement, releasedVeinStatement(vein, now, null), deleteDiscipleSnapshotGuardStatement(guard.id)]);
+        continue;
+      }
+      if (exhaustAt !== null && now >= exhaustAt) {
+        const hours = (veinTierOf(def.tier).holdLimitMs ?? 0) / 3_600_000;
+        const done = await runGuardedBatch(db, [
+          guard.statement,
+          ...veinCreditStatements(vein, exhaustAt, Number(holder.level), now),
+          releasedVeinStatement(vein, now, { sectId: holder.id, until: exhaustAt + VEIN_EXHAUST_COOLDOWN_MS }),
+          insertEventLogStatement({
+            id: crypto.randomUUID(),
+            sectId: holder.id,
+            eventId: VEIN_EVENT_EXHAUSTED,
+            description: `「${def.name}」连续占领满 ${String(hours)} 小时，灵气被抽干，守军已撤回；24 小时内不能再占这一条。`,
+            effects: '{}',
+            now,
+          }),
+          deleteDiscipleSnapshotGuardStatement(guard.id),
+        ]);
+        if (done && def.tier === 'eye') {
+          await broadcastWorldBoss(db, `【灵脉】${holder.name}占据的${def.name}灵气枯竭，灵眼重归无主！`, now);
+        }
+        continue;
+      }
+      if (vein.settled_at === null || (lazy && now - Number(vein.settled_at) < VEIN_LAZY_SETTLE_MS)) continue;
+      const credits = veinCreditStatements(vein, now, Number(holder.level), now);
+      if (credits.length === 0) continue;
+      await runGuardedBatch(db, [
+        guard.statement,
+        ...credits,
+        updateSpiritVeinStatement({
+          veinId: vein.id,
+          holderSectId: vein.holder_sect_id,
+          holderName: vein.holder_name,
+          garrison: vein.garrison,
+          heldSince: vein.held_since,
+          protectedUntil: vein.protected_until,
+          settledAt: now,
+          exhaustedSectId: vein.exhausted_sect_id,
+          exhaustedUntil: vein.exhausted_until,
+          now,
+        }),
+        deleteDiscipleSnapshotGuardStatement(guard.id),
+      ]);
+    } catch (error) {
+      console.warn(`vein_settle_failed vein=${vein.id} error=${String(error)}`);
+    }
+  }
+}
+
+/** 出战校验（进驻 / 抢夺 / 换守军共用）：3 名不重复、属于本宗、能出战且不在疗伤。 */
+function requireVeinParty(draft: SectDraft, discipleIds: readonly string[], action: string): DiscipleRow[] {
+  const ids = [...new Set(discipleIds)];
+  if (ids.length !== VEIN_PARTY_SIZE) {
+    throw new AppError('VALIDATION_ERROR', `需要 ${String(VEIN_PARTY_SIZE)} 名不同的弟子`);
+  }
+  const members = ids.map((id) => draft.discipleById(id));
+  for (const member of members) {
+    requireCanFight(draft, member, action);
+    if (member.injured_until !== null && Number(member.injured_until) > draft.now) {
+      throw new AppError('INVALID_STATUS', `${member.name}正在疗伤，无法${action}`);
+    }
+  }
+  return members;
+}
+
+/** 进驻 / 抢夺的共同前置：档位门槛、枯竭冷却。 */
+function requireVeinEnterable(draft: SectDraft, vein: SpiritVeinRow, def: VeinDef): void {
+  const tier = veinTierOf(def.tier);
+  if (Number(draft.sect.level) < tier.minSectLevel) {
+    throw new AppError('INVALID_STATUS', `${tier.name}需要宗门 ${String(tier.minSectLevel)} 级`);
+  }
+  if (vein.exhausted_sect_id === draft.sect.id && vein.exhausted_until !== null && Number(vein.exhausted_until) > draft.now) {
+    throw new AppError('INVALID_STATUS', `「${def.name}」刚被你抽干，${severeInjuryLeftText(Number(vein.exhausted_until), draft.now)}后才能再占`);
+  }
+}
+
+/** 本宗正占着的另一条灵脉：进驻 / 抢下新的一条时先结算并让出（不触发枯竭冷却）。 */
+function releaseOtherVeinStatements(
+  draft: SectDraft,
+  rows: readonly SpiritVeinRow[],
+  targetId: string,
+  now: number,
+): { statements: ParameterizedQuery[]; guards: { id: string; statement: ParameterizedQuery }[] } {
+  const other = rows.find((row) => row.holder_sect_id === draft.sect.id && row.id !== targetId);
+  if (other === undefined) return { statements: [], guards: [] };
+  return {
+    statements: [...veinCreditStatements(other, now, Number(draft.sect.level), now), releasedVeinStatement(other, now, null)],
+    guards: [veinGuard(other)],
+  };
+}
+
+async function requireVeinRow(db: D1Database, veinId: string): Promise<{ vein: SpiritVeinRow; def: VeinDef }> {
+  const def = findVein(veinId);
+  const vein = def === undefined ? null : await new VeinRepository(db).findById(veinId);
+  if (def === undefined || vein === null) throw new AppError('NOT_FOUND', '灵脉不存在');
+  return { vein, def };
+}
+
+function veinCommitError(error: unknown): never {
+  if (error instanceof AppError && error.code === 'INVALID_STATUS') {
+    throw new AppError('INVALID_STATUS', '灵脉刚有变动，请刷新后再试');
+  }
+  throw error;
+}
+
+/* ---------- 面板 ---------- */
+
+async function buildVeinPanel(db: D1Database, draft: SectDraft, now: number): Promise<VeinPanelView> {
+  const repo = new VeinRepository(db);
+  const [rows, attacksUsed, harvested, battles] = await Promise.all([
+    repo.listAll(),
+    repo.countAttacksSince(draft.sect.id, dayStartMs(now)),
+    repo.harvestedOf(draft.sect.id),
+    repo.recentBattles(VEIN_RECENT_BATTLES),
+  ]);
+  const byId = new Map(rows.map((row) => [row.id, row]));
+  const holderIds = [...new Set(rows.map((row) => row.holder_sect_id).filter((id): id is string => id !== null))];
+  const sectRepo = new SectRepository(db);
+  const discipleRepo = new DiscipleRepository(db);
+  const holders = new Map<string, { level: number; disciples: Map<string, DiscipleRow> }>();
+  for (const sectId of holderIds) {
+    const [sect, disciples] =
+      sectId === draft.sect.id
+        ? [draft.sect, draft.disciples]
+        : await Promise.all([sectRepo.findById(sectId), discipleRepo.findBySectId(sectId)]);
+    holders.set(sectId, {
+      level: Number(sect?.level ?? 0),
+      disciples: new Map(disciples.map((row) => [row.id, row])),
+    });
+  }
+  const myLevel = Number(draft.sect.level);
+  const unlocked = myLevel >= VEIN_UNLOCK_SECT_LEVEL;
+  const attacksLeft = Math.max(0, VEIN_DAILY_ATTACKS - attacksUsed);
+  const myVein = rows.find((row) => row.holder_sect_id === draft.sect.id);
+
+  const veins: VeinView[] = VEINS.map((def) => {
+    const row = byId.get(def.id);
+    const tier = veinTierOf(def.tier);
+    const holderInfo = row?.holder_sect_id === null || row === undefined ? undefined : holders.get(row.holder_sect_id ?? '');
+    const garrison =
+      row === undefined || holderInfo === undefined
+        ? []
+        : parseGarrison(row.garrison).map((id) => {
+            const disciple = holderInfo.disciples.get(id);
+            const absent = disciple === undefined || isSeverelyInjured(disciple.severe_injured_until, now);
+            return {
+              discipleId: id,
+              name: disciple?.name ?? '（已离宗）',
+              realmName: disciple === undefined ? '' : findStage(disciple.realm_id, Number(disciple.stage)).name,
+              power: disciple === undefined ? 0 : gearedCombatPower(disciple),
+              absent,
+            };
+          });
+    const isMine = row?.holder_sect_id === draft.sect.id;
+    const heldSince = row?.held_since === null || row === undefined ? null : Number(row.held_since);
+    const protectedUntil =
+      row?.protected_until !== null && row !== undefined && Number(row.protected_until) > now ? Number(row.protected_until) : null;
+    const cooldownUntil =
+      row !== undefined && row.exhausted_sect_id === draft.sect.id && row.exhausted_until !== null && Number(row.exhausted_until) > now
+        ? Number(row.exhausted_until)
+        : null;
+
+    let action: VeinView['action'] = null;
+    let blockedReason: string | null = null;
+    if (!unlocked) {
+      blockedReason = `宗门 ${String(VEIN_UNLOCK_SECT_LEVEL)} 级开放`;
+    } else if (isMine) {
+      action = 'mine';
+    } else if (myLevel < tier.minSectLevel) {
+      blockedReason = `需要宗门 ${String(tier.minSectLevel)} 级`;
+    } else if (cooldownUntil !== null) {
+      blockedReason = '刚被你抽干，冷却中';
+    } else if (row?.holder_sect_id === null || row === undefined) {
+      action = 'occupy';
+    } else if (protectedUntil !== null) {
+      blockedReason = '保护期中';
+    } else if (holderInfo !== undefined && isVeinLevelGapBlocked(myLevel, holderInfo.level)) {
+      blockedReason = `对方宗门比你低 ${String(VEIN_LEVEL_GAP)} 级以上`;
+    } else if (attacksLeft <= 0) {
+      blockedReason = '今日抢夺次数已用完';
+    } else {
+      action = 'attack';
+    }
+
+    return {
+      id: def.id,
+      name: def.name,
+      tier: def.tier,
+      tierName: tier.name,
+      ratePerHour: tier.ratePerHour,
+      minSectLevel: tier.minSectLevel,
+      holdLimitHours: tier.holdLimitMs === null ? null : tier.holdLimitMs / 3_600_000,
+      holder:
+        row === undefined || row.holder_sect_id === null
+          ? null
+          : {
+              sectId: row.holder_sect_id,
+              name: row.holder_name ?? '',
+              level: holderInfo?.level ?? 0,
+              isMe: isMine,
+            },
+      garrison,
+      garrisonPower: garrison.filter((member) => !member.absent).reduce((sum, member) => sum + member.power, 0),
+      heldSince,
+      protectedUntil,
+      exhaustsAt: heldSince === null ? null : veinExhaustAt(def.tier, heldSince),
+      cooldownUntil,
+      action,
+      blockedReason,
+    };
+  });
+
+  return {
+    unlocked,
+    unlockSectLevel: VEIN_UNLOCK_SECT_LEVEL,
+    partySize: VEIN_PARTY_SIZE,
+    dailyAttacks: VEIN_DAILY_ATTACKS,
+    attacksUsed,
+    attacksLeft,
+    levelGap: VEIN_LEVEL_GAP,
+    protectMinutes: VEIN_PROTECT_MS / 60_000,
+    exhaustCooldownHours: VEIN_EXHAUST_COOLDOWN_MS / 3_600_000,
+    defenderBonusPercent: VEIN_DEFENDER_BONUS_BP / 100,
+    myVeinId: myVein?.id ?? null,
+    harvested,
+    veins,
+    battles: battles.map((row) => {
+      const def = findVein(row.vein_id);
+      const iDefended = row.defender_sect_id === draft.sect.id;
+      return {
+        id: row.id,
+        veinId: row.vein_id,
+        veinName: def?.name ?? row.vein_id,
+        attackerName: row.attacker_name,
+        defenderName: row.defender_name,
+        won: Number(row.won) === 1,
+        rounds: parseVeinRounds(row.rounds),
+        createdAt: Number(row.created_at),
+        iAttacked: row.attacker_sect_id === draft.sect.id,
+        iDefended,
+        canRetake:
+          iDefended && Number(row.won) === 1 && byId.get(row.vein_id)?.holder_sect_id === row.attacker_sect_id,
+      };
+    }),
+  };
+}
+
+function parseVeinRounds(raw: string): VeinRound[] {
+  try {
+    const value: unknown = JSON.parse(raw);
+    return Array.isArray(value) ? (value as VeinRound[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+async function veinResponse(
+  db: D1Database,
+  userId: string,
+  now: number,
+  message: string,
+  battle: VeinBattleResultView | null = null,
+): Promise<{ state: SectStateView; veins: VeinPanelView; result: { message: string; battle: VeinBattleResultView | null } }> {
+  const draft = await draftFor(db, userId, now);
+  return { state: draft.view(), veins: await buildVeinPanel(db, draft, now), result: { message, battle } };
+}
+
+/** GET /game/veins：面板（先顺手结算 / 枯竭；不写本宗数据）。 */
+export async function getVeins(
+  db: D1Database,
+  userId: string,
+  now: number,
+): Promise<{ state: SectStateView; veins: VeinPanelView }> {
+  await processVeins(db, now, true);
+  const draft = await draftFor(db, userId, now);
+  return { state: draft.view(), veins: await buildVeinPanel(db, draft, now) };
+}
+
+/** POST /game/veins/occupy：进驻无主灵脉（不算抢夺次数）；本宗原来那条自动让出。 */
+export async function occupyVein(
+  db: D1Database,
+  userId: string,
+  input: { veinId: string; discipleIds: readonly string[] },
+  now: number,
+): Promise<{ state: SectStateView; veins: VeinPanelView; result: { message: string; battle: VeinBattleResultView | null } }> {
+  await processVeins(db, now, true);
+  const draft = await draftFor(db, userId, now);
+  requireVeinUnlocked(draft);
+  const { vein, def } = await requireVeinRow(db, input.veinId);
+  if (vein.holder_sect_id === draft.sect.id) throw new AppError('INVALID_STATUS', '这条灵脉已经是你的了');
+  if (vein.holder_sect_id !== null) throw new AppError('INVALID_STATUS', '这条灵脉已有人占领，只能抢夺');
+  requireVeinEnterable(draft, vein, def);
+  const members = requireVeinParty(draft, input.discipleIds, '驻守灵脉');
+
+  const rows = await new VeinRepository(db).listAll();
+  const other = releaseOtherVeinStatements(draft, rows, vein.id, now);
+  for (const statement of other.statements) draft.addStatement(statement);
+  draft.addStatement(occupiedVeinStatement(vein, draft.sect, members.map((member) => member.id), now));
+  try {
+    await draft.commit({ extraGuards: [veinGuard(vein), ...other.guards] });
+  } catch (error) {
+    veinCommitError(error);
+  }
+  if (def.tier === 'eye') {
+    await broadcastWorldBoss(db, `【灵脉】${draft.sect.name}进驻了${def.name}！`, now);
+  }
+  return veinResponse(db, userId, now, `已进驻「${def.name}」，每小时 +${displayAmount(veinTierOf(def.tier).ratePerHour)} 灵气`);
+}
+
+/** POST /game/veins/attack：抢夺别人占着的灵脉（3 对 3，守方 +10%）。 */
+export async function attackVein(
+  db: D1Database,
+  userId: string,
+  input: { veinId: string; discipleIds: readonly string[] },
+  now: number,
+): Promise<{ state: SectStateView; veins: VeinPanelView; result: { message: string; battle: VeinBattleResultView | null } }> {
+  await processVeins(db, now, true);
+  const draft = await draftFor(db, userId, now);
+  requireVeinUnlocked(draft);
+  const { vein, def } = await requireVeinRow(db, input.veinId);
+  if (vein.holder_sect_id === null) throw new AppError('INVALID_STATUS', '这条灵脉无人占领，直接进驻即可');
+  if (vein.holder_sect_id === draft.sect.id) throw new AppError('INVALID_STATUS', '这条灵脉已经是你的了');
+  requireVeinEnterable(draft, vein, def);
+  if (vein.protected_until !== null && Number(vein.protected_until) > now) {
+    throw new AppError('INVALID_STATUS', `「${def.name}」刚易主，保护期还剩 ${severeInjuryLeftText(Number(vein.protected_until), now)}`);
+  }
+  const defenderSect = await new SectRepository(db).findById(vein.holder_sect_id);
+  if (defenderSect === null) throw new AppError('INVALID_STATUS', '灵脉刚有变动，请刷新后再试');
+  if (isVeinLevelGapBlocked(Number(draft.sect.level), Number(defenderSect.level))) {
+    throw new AppError('INVALID_STATUS', `不能抢比你低 ${String(VEIN_LEVEL_GAP)} 级以上的宗门`);
+  }
+  const repo = new VeinRepository(db);
+  const attacksUsed = await repo.countAttacksSince(draft.sect.id, dayStartMs(now));
+  if (attacksUsed >= VEIN_DAILY_ATTACKS) {
+    throw new AppError('DAILY_LIMIT', `今日抢夺次数已用完（${String(VEIN_DAILY_ATTACKS)} 次）`);
+  }
+  const members = requireVeinParty(draft, input.discipleIds, '抢夺灵脉');
+
+  // 守军：按守军顺序取对方弟子，已离宗 / 重伤卧床的那一回合缺席。
+  const defenderRows = new Map(
+    (await new DiscipleRepository(db).findBySectId(defenderSect.id)).map((row) => [row.id, row]),
+  );
+  const defenders = parseGarrison(vein.garrison).map((id) => {
+    const row = defenderRows.get(id);
+    return row === undefined || isSeverelyInjured(row.severe_injured_until, now)
+      ? null
+      : { name: row.name, power: gearedCombatPower(row) };
+  });
+  while (defenders.length < VEIN_PARTY_SIZE) defenders.push(null);
+  const battle = resolveVeinBattle({
+    attackers: members.map((member) => ({ name: member.name, power: gearedCombatPower(member) })),
+    defenders,
+    random: Math.random,
+  });
+
+  const guards = [veinGuard(vein)];
+  draft.addStatement(
+    insertVeinBattleStatement({
+      id: crypto.randomUUID(),
+      veinId: vein.id,
+      attackerSectId: draft.sect.id,
+      attackerName: draft.sect.name,
+      defenderSectId: defenderSect.id,
+      defenderName: defenderSect.name,
+      won: battle.won,
+      rounds: JSON.stringify(battle.rounds),
+      now,
+    }),
+  );
+  const injured: string[] = [];
+  if (battle.won) {
+    const rows = await repo.listAll();
+    const other = releaseOtherVeinStatements(draft, rows, vein.id, now);
+    guards.push(...other.guards);
+    for (const statement of veinCreditStatements(vein, now, Number(defenderSect.level), now)) draft.addStatement(statement);
+    for (const statement of other.statements) draft.addStatement(statement);
+    draft.addStatement(occupiedVeinStatement(vein, draft.sect, members.map((member) => member.id), now));
+    draft.addStatement(
+      insertEventLogStatement({
+        id: crypto.randomUUID(),
+        sectId: defenderSect.id,
+        eventId: VEIN_EVENT_LOST,
+        description: `${draft.sect.name}攻占了你的「${def.name}」，守军已撤回。可在灵脉面板「去夺回」。`,
+        effects: '{}',
+        now,
+      }),
+    );
+  } else {
+    for (const member of members) {
+      if (Math.random() < VEIN_ATTACK_INJURY_CHANCE) {
+        const until = now + VEIN_ATTACK_INJURY_MS;
+        draft.addStatement(updateDiscipleInjuryStatement(member.id, until));
+        const row = draft.disciples.find((item) => item.id === member.id);
+        if (row !== undefined) row.injured_until = until;
+        injured.push(member.name);
+      }
+    }
+    draft.addStatement(
+      insertEventLogStatement({
+        id: crypto.randomUUID(),
+        sectId: defenderSect.id,
+        eventId: VEIN_EVENT_HELD,
+        description: `${draft.sect.name}来犯「${def.name}」，被你的守军击退。`,
+        effects: '{}',
+        now,
+      }),
+    );
+  }
+  try {
+    await draft.commit({ extraGuards: guards });
+  } catch (error) {
+    veinCommitError(error);
+  }
+  if (battle.won && def.tier === 'eye') {
+    await broadcastWorldBoss(db, `【灵脉】${draft.sect.name}从${defenderSect.name}手中夺下${def.name}！`, now);
+  }
+  const message = battle.won
+    ? `抢下「${def.name}」！每小时 +${displayAmount(veinTierOf(def.tier).ratePerHour)} 灵气`
+    : `抢夺「${def.name}」失败${injured.length > 0 ? `，${injured.join('、')}受伤（疗伤 30 分钟）` : ''}`;
+  return veinResponse(db, userId, now, message, {
+    veinId: vein.id,
+    veinName: def.name,
+    defenderName: defenderSect.name,
+    won: battle.won,
+    rounds: battle.rounds,
+    injured,
+  });
+}
+
+/** POST /game/veins/garrison：换守军（只换人，不影响连续占领时长与保护期）。 */
+export async function setVeinGarrison(
+  db: D1Database,
+  userId: string,
+  input: { veinId: string; discipleIds: readonly string[] },
+  now: number,
+): Promise<{ state: SectStateView; veins: VeinPanelView; result: { message: string; battle: VeinBattleResultView | null } }> {
+  await processVeins(db, now, true);
+  const draft = await draftFor(db, userId, now);
+  const { vein, def } = await requireVeinRow(db, input.veinId);
+  if (vein.holder_sect_id !== draft.sect.id) throw new AppError('INVALID_STATUS', '你没有占领这条灵脉');
+  const members = requireVeinParty(draft, input.discipleIds, '驻守灵脉');
+  draft.addStatement(
+    updateSpiritVeinStatement({
+      veinId: vein.id,
+      holderSectId: vein.holder_sect_id,
+      holderName: draft.sect.name,
+      garrison: JSON.stringify(members.map((member) => member.id)),
+      heldSince: vein.held_since,
+      protectedUntil: vein.protected_until,
+      settledAt: vein.settled_at,
+      exhaustedSectId: vein.exhausted_sect_id,
+      exhaustedUntil: vein.exhausted_until,
+      now,
+    }),
+  );
+  try {
+    await draft.commit({ extraGuards: [veinGuard(vein)] });
+  } catch (error) {
+    veinCommitError(error);
+  }
+  return veinResponse(db, userId, now, `「${def.name}」守军已换为：${members.map((member) => member.name).join('、')}`);
+}
+
+/** POST /game/veins/withdraw：主动撤离（先结算产出；不触发枯竭冷却）。 */
+export async function withdrawVein(
+  db: D1Database,
+  userId: string,
+  input: { veinId: string },
+  now: number,
+): Promise<{ state: SectStateView; veins: VeinPanelView; result: { message: string; battle: VeinBattleResultView | null } }> {
+  await processVeins(db, now, true);
+  const draft = await draftFor(db, userId, now);
+  const { vein, def } = await requireVeinRow(db, input.veinId);
+  if (vein.holder_sect_id !== draft.sect.id) throw new AppError('INVALID_STATUS', '你没有占领这条灵脉');
+  for (const statement of veinCreditStatements(vein, now, Number(draft.sect.level), now)) draft.addStatement(statement);
+  draft.addStatement(releasedVeinStatement(vein, now, null));
+  try {
+    await draft.commit({ extraGuards: [veinGuard(vein)] });
+  } catch (error) {
+    veinCommitError(error);
+  }
+  return veinResponse(db, userId, now, `已撤离「${def.name}」`);
 }

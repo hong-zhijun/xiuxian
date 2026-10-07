@@ -76,6 +76,7 @@ import WorldBossDialog from './WorldBossDialog.vue';
 import MeritDialog from './MeritDialog.vue';
 import TowerDialog from './TowerDialog.vue';
 import AuctionDialog from './AuctionDialog.vue';
+import VeinDialog from './VeinDialog.vue';
 import ModalShell from './ModalShell.vue';
 
 /**
@@ -184,6 +185,7 @@ const openPanel = ref<
   | 'merit'
   | 'tower'
   | 'auction'
+  | 'veins'
   | 'steward'
   | null
 >(null);
@@ -1929,7 +1931,7 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
           <span>炼器</span>
         </button>
       </div>
-      <div class="action-group" role="group" aria-label="出战" :style="{ '--chips': 3 }">
+      <div class="action-group" role="group" aria-label="出战" :style="{ '--chips': 4 }">
         <span class="action-group-label" aria-hidden="true">出战</span>
         <button class="action-chip" type="button" @click="openPanel = 'explore'">
           <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -1962,6 +1964,18 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
           </svg>
           <span>镇妖塔</span>
           <span v-if="state.tower?.sweepable" class="chip-badge">!</span>
+        </button>
+        <button
+          class="action-chip"
+          type="button"
+          aria-label="灵脉争夺：占领灵脉产出灵气"
+          title="全服 10 条灵脉，派弟子占领、互相抢夺"
+          @click="openPanel = 'veins'"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 3c-3 4-6 6.5-6 10a6 6 0 0 0 12 0c0-3.5-3-6-6-10Zm0 7c-1.2 1.6-2.4 2.6-2.4 4a2.4 2.4 0 0 0 4.8 0c0-1.4-1.2-2.4-2.4-4Z" />
+          </svg>
+          <span>灵脉</span>
         </button>
       </div>
       <div class="action-group" role="group" aria-label="市集" :style="{ '--chips': 4 }">
@@ -2367,6 +2381,16 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
       @state-update="(s: SectStateView) => emit('recruited', s)"
       @notify="onWorldBossNotify"
       @equipment-changed="loadEquipment"
+    />
+  </ModalShell>
+
+  <!-- 0042 灵脉争夺：只在打开时 / 操作后 / 点刷新时请求，不做定时轮询。 -->
+  <ModalShell v-if="openPanel === 'veins'" :loading="busy" label="灵脉争夺" @close="openPanel = null">
+    <VeinDialog
+      :state="state"
+      :busy="busy"
+      @state-update="(s: SectStateView) => emit('recruited', s)"
+      @notify="onWorldBossNotify"
     />
   </ModalShell>
 
