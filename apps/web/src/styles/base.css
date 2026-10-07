@@ -4792,6 +4792,17 @@ ul {
   color: var(--red-bright);
 }
 
+/* ---------- PC 待办（TodoFloat）：宽屏停靠时首页内容右移让位 ---------- */
+:root {
+  --todo-width: 248px;
+  --todo-gap: 14px;
+}
+
+.game-shell.has-todo {
+  max-width: calc(1540px + var(--todo-width) + var(--todo-gap));
+  padding-left: calc(30px + var(--todo-width) + var(--todo-gap));
+}
+
 /* ---------- 首页功能区：分组的状态卡片 ---------- */
 .hub-cards {
   display: flex;

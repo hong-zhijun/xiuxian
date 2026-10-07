@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from 'vue';
+import { onMounted, onUnmounted, ref, watchEffect } from 'vue';
 
 /**
- * PC 端待办浮窗：固定在屏幕左上角，不随页面滚动；手机端不显示（见样式里的断点）。
+ * PC 端待办：不随页面滚动；手机端不显示（见样式里的断点）。
  *
- * - 左侧留白够宽（≥ 1900px）时默认展开成一列，停在首页内容左边，不挡内容；
- * - 不够宽时默认收成左侧边缘的一个竖条「待办 N」，点开后浮在内容上方，点外面收起；
+ * - 宽屏（≥ 1600px）默认展开并停靠在首页内容左侧、与宗门名同高：首页内容整体右移给它让位
+ *   （通过 docked 事件让 SectScreen 给 .game-shell 加 has-todo），不挡内容；
+ * - 窄屏默认收成左侧边缘的一个竖条「待办 N」，点开后浮在内容上方，点外面收起；
  * - 展开 / 收起记在本机（宽屏下手动收起后保持收起）。
  * 条目由 SectScreen 算好传进来，点一条 emit select，由 SectScreen 打开对应功能。
  */
@@ -19,10 +20,10 @@ export interface TodoItem {
 
 defineProps<{ items: readonly TodoItem[] }>();
 
-const emit = defineEmits<{ select: [id: string] }>();
+const emit = defineEmits<{ select: [id: string]; docked: [docked: boolean] }>();
 
 const OPEN_KEY = 'todo-float-open';
-const WIDE_QUERY = '(min-width: 1900px)';
+const WIDE_QUERY = '(min-width: 1600px)';
 
 const TONE_LABELS: Record<TodoItem['tone'], string> = { claim: '可领取', warn: '提醒', act: '可操作' };
 
@@ -38,6 +39,11 @@ function readPreference(): boolean | null {
 const wide = ref(false);
 const open = ref(false);
 let media: MediaQueryList | null = null;
+
+/** 宽屏展开 = 停靠（占布局）；告诉 SectScreen 给首页内容让位。 */
+watchEffect(() => {
+  emit('docked', wide.value && open.value);
+});
 
 function onMediaChange(): void {
   wide.value = media?.matches ?? false;
@@ -119,6 +125,14 @@ onUnmounted(() => {
   left: 0;
 }
 
+/*
+ * 宽屏停靠：贴在首页内容左边。首页 .game-shell.has-todo 的最大宽度 = 1540 + 待办宽 + 间距、左内边距 30 + 待办宽 + 间距，
+ * 居中后它的左边缘 = max(0, (100vw − 最大宽度) / 2)，待办放在左边缘 + 30 处，正好在宗门名左侧。
+ */
+.todo-float.is-wide.is-open {
+  left: calc(max(0px, (100vw - 1540px - var(--todo-width) - var(--todo-gap)) / 2) + 30px);
+}
+
 /* 收起：贴在左侧边缘的竖条（落在首页左右留白里）。 */
 .todo-tab {
   display: flex;
@@ -151,11 +165,10 @@ onUnmounted(() => {
 
 .todo-panel {
   display: flex;
-  width: 188px;
+  width: var(--todo-width);
   max-height: calc(100vh - 36px);
   flex-direction: column;
   gap: 8px;
-  margin-left: 12px;
   padding: 10px;
   overflow-y: auto;
   border: 1px solid rgba(202, 169, 106, 0.38);
@@ -165,9 +178,9 @@ onUnmounted(() => {
   scrollbar-width: none;
 }
 
-/* 窄屏展开时浮在内容上方，宽一点好读。 */
+/* 窄屏展开时浮在内容上方，离屏幕边缘留一点。 */
 .todo-float:not(.is-wide) .todo-panel {
-  width: 240px;
+  margin-left: 12px;
 }
 
 .todo-head {
@@ -208,7 +221,7 @@ onUnmounted(() => {
 .todo-item {
   display: grid;
   width: 100%;
-  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-columns: auto minmax(0, 1fr) auto;
   gap: 3px 6px;
   padding: 6px 7px;
   border: 1px solid rgba(202, 169, 106, 0.2);
@@ -254,9 +267,10 @@ onUnmounted(() => {
 }
 
 .todo-action {
-  grid-column: 2;
+  align-self: start;
   color: var(--gold, #caa96a);
   font-size: 11px;
+  white-space: nowrap;
 }
 
 /* 手机端不显示待办。 */

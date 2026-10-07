@@ -40,7 +40,11 @@ describe('首页功能区状态', () => {
     expect(lowHub.market.unlocked).toBe(false);
 
     const mid = await makeSect(3);
-    expect((await getHub(env.DB, mid.userId, NOW)).veins.freeCount).toBe(6);
+    const midHub = await getHub(env.DB, mid.userId, NOW);
+    expect(midHub.veins.freeCount).toBe(6);
+    // 没有演武场：只有两个不需要演武场的低阶秘境开放，各 3 次
+    expect(midHub.explore).toEqual({ remaining: 6, total: 6 });
+    expect(midHub.tower.failsLeft).toBe(5);
     const top = await makeSect(9);
     expect((await getHub(env.DB, top.userId, NOW)).veins.freeCount).toBe(10);
   });

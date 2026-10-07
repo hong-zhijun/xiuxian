@@ -2668,7 +2668,9 @@ export interface HubView {
     hpPercent: number | null;
     attackable: boolean;
   };
-  tower: { unlocked: boolean; maxFloor: number; sweepable: boolean };
+  tower: { unlocked: boolean; maxFloor: number; sweepable: boolean; failsLeft: number };
+  /** 秘境：今天在已开放的秘境里还能探几次（各秘境每日次数相加）。 */
+  explore: { remaining: number; total: number };
   veins: { unlocked: boolean; holding: { name: string; ratePerHour: number } | null; freeCount: number };
   auction: { unlocked: boolean; claimable: number; myActive: number };
   market: { unlocked: boolean; holdings: number; profit: number; profitPct: number };

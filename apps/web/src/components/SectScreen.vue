@@ -1640,6 +1640,9 @@ onUnmounted(() => {
   if (hubTimer !== undefined) window.clearInterval(hubTimer);
 });
 
+/** 待办在宽屏展开停靠：首页内容右移给它让位（.game-shell.has-todo）。 */
+const todoDocked = ref(false);
+
 /** 受伤（不含重伤）可疗伤的弟子。 */
 const healableIds = computed(() =>
   props.state.disciples
@@ -1714,7 +1717,20 @@ const hubGroups = computed<{ label: string; cards: HubCard[] }[]>(() => {
                   ? `第 ${String(tower.maxFloor)} 层 · 可扫荡`
                   : `最高第 ${String(tower.maxFloor)} 层`,
         },
-        { id: 'explore', name: '秘境探索', glyph: '秘', status: props.state.activeExploration ? '探索进行中' : '派弟子探秘境' },
+        {
+          id: 'explore',
+          name: '秘境探索',
+          glyph: '秘',
+          status: props.state.activeExploration
+            ? '探索进行中'
+            : h === null
+              ? '派弟子探秘境'
+              : h.explore.total === 0
+                ? '暂无可去的秘境'
+                : h.explore.remaining > 0
+                  ? `今日还可探 ${String(h.explore.remaining)} 次`
+                  : '今日次数已用完',
+        },
         {
           id: 'veins',
           name: '灵脉',
@@ -1824,6 +1840,20 @@ const todoItems = computed<TodoItem[]>(() => {
   if (h?.worldBoss.attackable) {
     items.push({ id: 'boss', tone: 'act', text: `讨伐开放中 · 第 ${String(h.worldBoss.stage ?? 1)} 关`, action: '去讨伐' });
   }
+  if (props.state.activeExploration) {
+    items.push({ id: 'explore', tone: 'act', text: '秘境探索进行中', action: '去继续' });
+  } else if ((h?.explore.remaining ?? 0) > 0) {
+    items.push({ id: 'explore', tone: 'act', text: `秘境今日还可探 ${String(h?.explore.remaining)} 次`, action: '去探索' });
+  }
+  if (h?.tower.unlocked && h.tower.failsLeft > 0) {
+    items.push({ id: 'tower-climb', tone: 'act', text: `镇妖塔可挑战第 ${String(h.tower.maxFloor + 1)} 层`, action: '去闯塔' });
+  }
+  if (props.state.challenge.remaining > 0) {
+    items.push({ id: 'challenge', tone: 'act', text: `今日挑战还剩 ${String(props.state.challenge.remaining)} 次`, action: '去挑战' });
+  }
+  if (props.state.gambling.unlocked && props.state.gambling.remaining > 0) {
+    items.push({ id: 'gambling', tone: 'act', text: `赌坊今日还剩 ${String(props.state.gambling.remaining)} 次`, action: '去赌坊' });
+  }
   if (h?.veins.unlocked && h.veins.holding === null && h.veins.freeCount > 0) {
     items.push({ id: 'veins', tone: 'act', text: `${String(h.veins.freeCount)} 条灵脉无主`, action: '去进驻' });
   }
@@ -1851,6 +1881,12 @@ function onTodo(id: string): void {
     openPanel.value = id;
   } else if (id === 'boss') {
     openPanel.value = 'world-boss';
+  } else if (id === 'explore' || id === 'gambling') {
+    openPanel.value = id;
+  } else if (id === 'tower-climb') {
+    openPanel.value = 'tower';
+  } else if (id === 'challenge') {
+    openPanel.value = 'leaderboard';
   } else if (id === 'resources') {
     scrollToSection('resource-title');
   } else if (id === 'heal') {
@@ -1964,8 +2000,8 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
 </script>
 
 <template>
-  <main class="game-shell" :aria-busy="busy">
-    <TodoFloat :items="todoItems" @select="onTodo" />
+  <main class="game-shell" :class="{ 'has-todo': todoDocked }" :aria-busy="busy">
+    <TodoFloat :items="todoItems" @select="onTodo" @docked="(docked: boolean) => (todoDocked = docked)" />
     <header class="game-topbar">
       <div class="sect-identity">
         <img class="sect-logo" src="/brand-logo.png" alt="" aria-hidden="true" />

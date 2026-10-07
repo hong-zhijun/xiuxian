@@ -3068,7 +3068,15 @@ export interface HubView {
     hpPercent: number | null;
     attackable: boolean;
   };
-  tower: { unlocked: boolean; maxFloor: number; sweepable: boolean };
+  tower: {
+    unlocked: boolean;
+    maxFloor: number;
+    sweepable: boolean;
+    /** 今天还能失败几次（打赢不扣）。 */
+    failsLeft: number;
+  };
+  /** 秘境：今天在已开放的秘境里还能探几次（各秘境每日次数相加）。 */
+  explore: { remaining: number; total: number };
   veins: {
     unlocked: boolean;
     /** 本宗正占着的灵脉；没有为 null。 */

@@ -11706,14 +11706,28 @@ export async function getHub(db: D1Database, userId: string, now: number): Promi
   const level = Number(sect.level);
   const todayKey = dateKeyUtc8(now);
 
-  const [boss, towerRow, veinRows, claimable, myActive, holdings] = await Promise.all([
+  const [boss, towerRow, veinRows, claimable, myActive, holdings, buildings] = await Promise.all([
     new WorldBossRepository(db).findLatestByDayKey(todayKey),
     new TowerRepository(db).findBySectId(sect.id),
     new VeinRepository(db).listAll(),
     level >= AUCTION_UNLOCK_SECT_LEVEL ? new AuctionRepository(db).countClaimable(sect.id) : Promise.resolve(0),
     level >= AUCTION_UNLOCK_SECT_LEVEL ? new AuctionRepository(db).countActiveBySeller(sect.id) : Promise.resolve(0),
     level >= MARKET_UNLOCK_SECT_LEVEL ? new MarketRepository(db).holdingsOf(sect.id) : Promise.resolve([]),
+    new BuildingRepository(db).findBySectId(sect.id),
   ]);
+
+  // 秘境：已开放（宗门等级够、需要演武场的有演武场）的秘境，今日剩余次数相加（与秘境列表同一口径）。
+  const hasArena = buildings.some((building) => building.def_id === ARENA_BUILDING_ID);
+  const exploreRepo = new ExplorationRepository(db);
+  const dayStart = dayStartMs(now);
+  let exploreRemaining = 0;
+  let exploreTotal = 0;
+  for (const realm of SECRET_REALMS) {
+    if (realm.dailyLimit === null || level < realm.requiredSectLevel || (realm.requiresArena && !hasArena)) continue;
+    const used = await exploreRepo.countTodayBySectAndRealm(sect.id, realm.id, dayStart);
+    exploreTotal += realm.dailyLimit;
+    exploreRemaining += Math.max(0, realm.dailyLimit - used);
+  }
 
   // 讨伐
   const phase = worldBossPhaseOf(now);
@@ -11761,7 +11775,9 @@ export async function getHub(db: D1Database, userId: string, now: number): Promi
       unlocked: towerUnlocked,
       maxFloor,
       sweepable: towerUnlocked && maxFloor > 0 && towerRow?.sweep_date_key !== todayKey,
+      failsLeft: Math.max(0, TOWER_DAILY_FAILS - towerFailsToday(towerRow, todayKey)),
     },
+    explore: { remaining: exploreRemaining, total: exploreTotal },
     veins: {
       unlocked: level >= VEIN_UNLOCK_SECT_LEVEL,
       holding: mineDef === undefined ? null : { name: mineDef.name, ratePerHour: veinTierOf(mineDef.tier).ratePerHour },
