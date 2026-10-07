@@ -117,7 +117,8 @@ export function postInsights(input: {
   for (const post of assignments) {
     if (post.id === IDLE) continue;
     const inPost = disciples.filter((item) => item.assignment === post.id).sort(byRealm);
-    const talentId = talentOfPost(post.id);
+    // 修炼不看悟道：人人都该修炼，不列「其中悟道几人 / 悟道备选」。
+    const talentId = post.id === CULTIVATING ? undefined : talentOfPost(post.id);
     const talented = talentId === undefined ? [] : disciples.filter((item) => item.talent === talentId).sort(byRealm);
     const talentedIn = talented.filter((item) => item.assignment === post.id);
     const backups = talented.filter((item) => item.assignment !== post.id);

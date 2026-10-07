@@ -27,7 +27,7 @@ import {
   stageOptions,
 } from '../utils/discipleFilter';
 import DiscipleAvatar from './DiscipleAvatar.vue';
-import { isTalentMisplaced, misplacedHint } from '../utils/discipleDispatch';
+import { misplacedHint } from '../utils/discipleDispatch';
 
 /**
  * 门人名册：境界 / 阶段 / 岗位 / 状态 / 修为进度筛选 + 排序 + 精简列表行 +
@@ -57,7 +57,11 @@ const props = defineProps<{
   detailId: string | null;
   /** 破境确认弹窗对应的弟子 id（null = 未打开）：关闭后把焦点还回头像按钮。 */
   breakthroughConfirmId: string | null;
+  /** 天赋没发挥的弟子 id（门人调度算好；在修炼里待命的轮换备选不在其中）。 */
+  misplacedIds: string[];
 }>();
+
+const misplacedSet = computed(() => new Set(props.misplacedIds));
 
 const emit = defineEmits<{
   openDetail: [discipleId: string];
@@ -616,9 +620,9 @@ watch(
           <span class="realm-tag">{{ row.disciple.stageName }}</span>
           <span
             class="disciple-row-talent"
-            :class="{ 'is-misplaced': isTalentMisplaced(row.disciple) }"
+            :class="{ 'is-misplaced': misplacedSet.has(row.disciple.id) }"
             :title="
-              isTalentMisplaced(row.disciple)
+              misplacedSet.has(row.disciple.id)
                 ? misplacedHint(row.disciple, assignments)
                 : row.disciple.talentEffect || undefined
             "

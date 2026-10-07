@@ -7,6 +7,8 @@
  *   - 执事加成按任职者境界放大，所以每个职位推荐该天赋里境界最高、不在外、不在守擂阵容里的弟子；
  *     现任已是同境界就不换（换人会让原执事进 12 小时交接期）；每职位每天只能任命一次；
  *   - 没有岗位加成的弟子（战意 / 会心 / 铁骨 / 丹心 / 执事天赋 / 无天赋）保持原岗位，只把闲置的派去修炼；
+ *   - 有上限的岗位（采灵 / 吐纳）坐满时轮换：没有对口天赋的占位者、或境界更低的同天赋弟子回去修炼，
+ *     让境界更高的同天赋弟子上岗（天赋加成随境界提高）；同天赋、境界不低于他的人坐着时，他就在修炼里待命，不算问题；
  *   - 在外历练、重伤卧床的弟子不能转岗，不进推荐。
  */
 
@@ -97,6 +99,8 @@ export interface DispatchPlan {
   moves: DispatchMove[];
   appointments: DispatchAppointment[];
   issues: DispatchIssue[];
+  /** 天赋真正没发挥的弟子（名册天赋标签描虚线用）；在修炼里待命的轮换备选不算。 */
+  misplacedIds: string[];
 }
 
 /** 在外历练、尚未归队（不能转岗，也不能就任执事）。 */
@@ -200,6 +204,40 @@ export function planDispatch(input: DispatchInput): DispatchPlan {
     }
     move(disciple, target, talentReason(disciple));
   }
+  // 2b) 名额坐满时轮换：先换下没有对口天赋的占位者，再换下境界更低的同天赋弟子（都回去修炼）。
+  const reserves = new Set<string>();
+  const stuck: DispatchDisciple[] = [];
+  for (const disciple of crowded) {
+    const posts = (talentPostsOf(disciple.talent) ?? []).filter(validPost);
+    const occupants = available.filter((item) => posts.includes(item.assignment) && !moved.has(item.id));
+    const outsider = occupants.find((item) => item.talent !== disciple.talent);
+    const weaker = occupants
+      .filter((item) => item.talent === disciple.talent && item.realmOrder < disciple.realmOrder)
+      .sort((a, b) => a.realmOrder - b.realmOrder || a.stage - b.stage)[0];
+    const seat = outsider ?? weaker;
+    if (seat !== undefined && validPost(CULTIVATING)) {
+      const post = seat.assignment;
+      move(
+        seat,
+        CULTIVATING,
+        seat === outsider
+          ? `把${nameOf(post)}名额让给${disciple.talentName}弟子${disciple.name}`
+          : `轮换：${disciple.name}境界更高，加成更大；${seat.name}回去修炼长境界`,
+      );
+      move(disciple, post, `轮换上岗：${talentReason(disciple)}`);
+      continue;
+    }
+    // 能换的位子被在外 / 重伤的人占着：等他们回来再调。
+    const blocked = disciples.some(
+      (item) =>
+        posts.includes(item.assignment) &&
+        isUnavailable(item, serverNowMs) &&
+        (item.talent !== disciple.talent || item.realmOrder < disciple.realmOrder),
+    );
+    // 否则名额都被同天赋、境界不低于他的人占着：在修炼里待命就是对的（闲置的第 3 步会派去修炼）。
+    if (blocked) stuck.push(disciple);
+    else reserves.add(disciple.id);
+  }
   // 3) 其余闲置的派去修炼。
   const idle = available.filter((disciple) => disciple.assignment === IDLE && !moved.has(disciple.id));
   if (validPost(CULTIVATING)) {
@@ -268,11 +306,12 @@ export function planDispatch(input: DispatchInput): DispatchPlan {
   }
 
   const issues: DispatchIssue[] = [];
-  if (misplaced.length > 0) {
+  const unfulfilled = misplaced.filter((item) => !reserves.has(item.id));
+  if (unfulfilled.length > 0) {
     issues.push({
       key: 'misplaced',
-      title: `${misplaced.length} 人天赋未发挥`,
-      disciples: misplaced.map((item) => ({
+      title: `${unfulfilled.length} 人天赋未发挥`,
+      disciples: unfulfilled.map((item) => ({
         id: item.id,
         name: item.name,
         note: `${item.talentName}·在${nameOf(item.assignment)}`,
@@ -280,12 +319,12 @@ export function planDispatch(input: DispatchInput): DispatchPlan {
       fixable: true,
     });
   }
-  if (crowded.length > 0) {
+  if (stuck.length > 0) {
     issues.push({
       key: 'crowded',
-      title: `${crowded.length} 名聚灵弟子没有位置`,
-      disciples: crowded.map((item) => ({ id: item.id, name: item.name })),
-      detail: '采灵 / 吐纳岗位已满，可手动把占位的其他弟子换走',
+      title: `${stuck.length} 名聚灵弟子暂时没有位置`,
+      disciples: stuck.map((item) => ({ id: item.id, name: item.name })),
+      detail: '采灵 / 吐纳的占位者正在外历练或重伤，归来后再调',
       fixable: false,
     });
   }
@@ -317,7 +356,7 @@ export function planDispatch(input: DispatchInput): DispatchPlan {
     });
   }
 
-  return { moves, appointments, issues };
+  return { moves, appointments, issues, misplacedIds: unfulfilled.map((item) => item.id) };
 }
 
 /**

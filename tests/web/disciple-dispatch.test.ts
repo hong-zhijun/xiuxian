@@ -96,7 +96,7 @@ describe('岗位推荐', () => {
     expect(plan.moves.map((item) => item.discipleId)).toEqual([back.id]);
   });
 
-  it('聚灵按境界高低占采灵 / 吐纳名额；被错位弟子占着的名额先腾出来', () => {
+  it('聚灵按境界高低占采灵 / 吐纳名额；被错位弟子占着的名额先腾出来，没天赋的占位者让位回去修炼', () => {
     const squatter = disciple({ talent: 'cultivation', assignment: 'stoneMining' });
     const low = disciple({ talent: 'spiritGathering', assignment: 'idle', realmOrder: 0 });
     const high = disciple({ talent: 'spiritGathering', assignment: 'cultivating', realmOrder: 3 });
@@ -105,10 +105,40 @@ describe('岗位推荐', () => {
     expect(plan.moves.map((item) => [item.discipleId, item.to])).toEqual([
       [squatter.id, 'cultivating'],
       [high.id, 'stoneMining'],
-      // 没抢到名额、原本闲置的聚灵弟子：先去修炼，总比闲着强（仍提示没有位置）。
-      [low.id, 'cultivating'],
+      [filler[0]!.id, 'cultivating'],
+      [low.id, 'energyGathering'],
     ]);
-    expect(plan.issues.find((item) => item.key === 'crowded')?.disciples.map((item) => item.id)).toEqual([low.id]);
+    expect(plan.issues.some((item) => item.key === 'crowded')).toBe(false);
+  });
+
+  it('4 个聚灵抢 2 个名额（采灵 1 + 吐纳 2 中已坐 3 人）：境界高的轮换上岗，低的回去修炼；同境界不换、待命不算问题', () => {
+    const seatedLow = disciple({ talent: 'spiritGathering', assignment: 'stoneMining', realmOrder: 1 });
+    const seatedMid = disciple({ talent: 'spiritGathering', assignment: 'energyGathering', realmOrder: 2 });
+    const seatedTop = disciple({ talent: 'spiritGathering', assignment: 'energyGathering', realmOrder: 4 });
+    const reserveHigh = disciple({ talent: 'spiritGathering', realmOrder: 3 });
+    const reserveSame = disciple({ talent: 'spiritGathering', realmOrder: 2 });
+    const plan = planDispatch(input([seatedLow, seatedMid, seatedTop, reserveHigh, reserveSame]));
+    expect(plan.moves.map((item) => [item.discipleId, item.to])).toEqual([
+      [seatedLow.id, 'cultivating'],
+      [reserveHigh.id, 'stoneMining'],
+    ]);
+    // reserveSame 与在岗最低的同境界：留在修炼待命，不提示「天赋未发挥」，名册也不描虚线。
+    expect(plan.misplacedIds).not.toContain(reserveSame.id);
+    expect(plan.issues.find((item) => item.key === 'misplaced')?.disciples.map((item) => item.id)).toEqual([
+      reserveHigh.id,
+    ]);
+  });
+
+  it('能换的位子被在外历练的人占着：提示暂时没有位置', () => {
+    const awaySeat = disciple({
+      assignment: 'stoneMining',
+      journey: { status: 'active', endsAt: '2026-10-06T20:00:00Z' },
+    });
+    const seated = [1, 2].map(() => disciple({ talent: 'spiritGathering', assignment: 'energyGathering', realmOrder: 5 }));
+    const waiting = disciple({ talent: 'spiritGathering', realmOrder: 1 });
+    const plan = planDispatch(input([awaySeat, ...seated, waiting]));
+    expect(plan.moves).toEqual([]);
+    expect(plan.issues.find((item) => item.key === 'crowded')?.disciples.map((item) => item.id)).toEqual([waiting.id]);
   });
 
   it('执行顺序：不限人数的岗位在前，采灵 / 吐纳在后，同岗位合并', () => {
@@ -158,6 +188,7 @@ describe('人才缺口', () => {
     { id: 'critical', name: '会心', category: 'combat', categoryName: '战斗', condition: '讨伐暴击时', effect: '伤害 +60%' },
     { id: 'alchemy', name: '丹道', category: 'steward', categoryName: '宗门', condition: '任丹房执事时', effect: '炼丹消耗 −8%' },
     { id: 'pillAffinity', name: '丹心', category: 'cultivation', categoryName: '修行', condition: '服用聚气丹时', effect: '修为 +20%' },
+    { id: 'cultivation', name: '悟道', category: 'cultivation', categoryName: '修行', condition: '在修炼岗位时', effect: '修炼速度 +16%' },
   ];
   const row = (overrides: Partial<TalentNeedDisciple>): TalentNeedDisciple => ({
     id: `n${(seq += 1)}`,
@@ -187,6 +218,7 @@ describe('人才缺口', () => {
     expect(byId.herbGathering).toMatchObject({ level: 'short', gap: 1 });
     expect(byId.combat).toMatchObject({ level: 'short', gap: 2 });
     expect(byId.pillAffinity).toMatchObject({ level: 'info', gap: null });
+    expect(byId.cultivation).toMatchObject({ level: 'info', gap: null });
     expect(rows[0]!.talentId).toBe('alchemy');
 
     const top = topTalentNeeds(rows, 10);

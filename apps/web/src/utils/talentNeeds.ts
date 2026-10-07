@@ -4,9 +4,10 @@
  * 口径（天赋效果见 apps/server/src/modules/game/talents.ts）：
  *   - 执事天赋（炼器 / 丹道 / 寻宝）：每种有 1 人就能任执事，0 人 = 急缺；
  *   - 聚灵：采灵 + 吐纳的名额都该由聚灵弟子占，缺口 = 名额 − 聚灵人数；
- *   - 灵植 / 矿脉 / 悟道：缺口 = 药园 / 采矿 / 修炼岗位上「不是该天赋」的人数（换成对口天赋就有加成）；
+ *   - 灵植 / 矿脉：缺口 = 药园 / 采矿岗位上「不是该天赋」的人数（换成对口天赋就有加成）；
+ *   - 悟道不算缺口：修炼人人都去，有悟道只是修得更快；
  *   - 战斗天赋（战意 / 会心 / 铁骨）合起来看：守擂与讨伐一队 3 人，少于 3 人算缺；
- *   - 丹心只在服聚气丹时生效，不算缺口，只做说明。
+ *   - 丹心只在服聚气丹时生效，同样不算缺口，只做说明。
  * 补人的途径：招贤台留意对应天赋的候选人，或给现有弟子服洗髓丹重洗天赋。
  */
 
@@ -104,7 +105,12 @@ export function talentNeeds(input: {
         : { ...base, gap: 0, level: 'ok', advice: `${nameOf('stoneMining')} / ${nameOf('energyGathering')}名额都能由聚灵弟子占满` };
     }
 
-    const post = { herbGathering: 'herbGathering', mining: 'oreGathering', cultivation: 'cultivating' }[talent.id];
+    // 悟道不算缺口：修炼人人都去，有没有悟道都该修炼。
+    if (talent.id === 'cultivation') {
+      return { ...base, gap: null, level: 'info', advice: '在修炼岗位上修炼更快，有就是锦上添花，不算缺口' };
+    }
+
+    const post = { herbGathering: 'herbGathering', mining: 'oreGathering' }[talent.id];
     if (post !== undefined) {
       // 已有但不在对口岗位上的同天赋弟子先抵掉缺口：调过去就能补上（门人调度会推荐）。
       const misplaced = disciples.filter((item) => item.talent === talent.id && item.assignment !== post).length;
