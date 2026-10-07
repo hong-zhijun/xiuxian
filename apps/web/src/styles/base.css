@@ -3802,6 +3802,13 @@ ul {
   color: #48584f;
 }
 
+/* 第 6～10 级（聚灵阵）：同一个菱形点亮第二层，玉色高亮。 */
+.building-copy > div > span.high {
+  border-color: rgba(119, 184, 154, 0.7);
+  color: var(--jade-bright);
+  background: rgba(119, 184, 154, 0.12);
+}
+
 .building-copy p {
   overflow: hidden;
   margin: 3px 0 1px;

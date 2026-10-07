@@ -612,16 +612,26 @@ const MAX_SECT_LEVEL = computed(() => props.state.sectLevelCatalog.length);
 /** 首页宗门品阶旁的「?」：宗门等级一览。 */
 const showSectLevelCatalog = ref(false);
 
-/** 建筑等级用菱形字标显示（与后端建筑上限 5 级一致）。 */
-const LEVEL_GLYPHS = ['壹', '贰', '叁', '肆', '伍'] as const;
+/** 建筑等级用菱形字标显示；一排最多 5 个菱形。 */
+const LEVEL_GLYPHS = ['壹', '贰', '叁', '肆', '伍', '陆', '柒', '捌', '玖', '拾'] as const;
+const LEVEL_MARK_SLOTS = 5;
 
-/** 该建筑最大等级决定显示几个菱形。 */
-function levelGlyphsFor(building: BuildingView): readonly string[] {
-  return LEVEL_GLYPHS.slice(0, Math.min(building.maxLevel, LEVEL_GLYPHS.length));
+/**
+ * 该建筑的等级菱形：最大等级决定显示几个（最多 5 个）。
+ * 超过 5 级的建筑（聚灵阵上限 10）第 6～10 级在同一排菱形上「点亮第二层」：换成陆～拾、换高亮色。
+ */
+function levelMarksFor(building: BuildingView): { glyph: string; state: 'dim' | 'on' | 'high' }[] {
+  const slots = Math.min(building.maxLevel, LEVEL_MARK_SLOTS);
+  return Array.from({ length: slots }, (_, index) => {
+    if (building.level >= index + 1 + LEVEL_MARK_SLOTS) {
+      return { glyph: LEVEL_GLYPHS[index + LEVEL_MARK_SLOTS] ?? '', state: 'high' as const };
+    }
+    return { glyph: LEVEL_GLYPHS[index] ?? '', state: building.level >= index + 1 ? ('on' as const) : ('dim' as const) };
+  });
 }
 
 function buildingDescription(defId: string): string {
-  if (defId === 'spiritualArray') return '汇聚天地灵气，每级提升灵气产出';
+  if (defId === 'spiritualArray') return '汇聚灵气，每级灵气产出 +40%（含吐纳）';
   if (defId === 'herbGarden') return '培育灵植，为宗门积蓄药材';
   if (defId === 'missionHall') return '开采地脉灵矿，提升灵石产出';
   if (defId === 'scriptureLibrary') return '典藏万卷，加速弟子修炼';
@@ -2122,13 +2132,13 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
             <li v-for="building in state.buildings" :key="building.defId" class="building-card">
               <div class="building-glyph" aria-hidden="true">{{ buildingGlyph(building.defId) }}</div>
               <div class="building-copy">
-                <div>
+                <div :title="`${building.level} / ${building.maxLevel} 级`">
                   <strong>{{ building.name }}</strong>
                   <span
-                    v-for="(glyph, index) in levelGlyphsFor(building)"
+                    v-for="(mark, index) in levelMarksFor(building)"
                     :key="index"
-                    :class="{ dim: building.level < index + 1 }"
-                  >{{ glyph }}</span>
+                    :class="{ dim: mark.state === 'dim', high: mark.state === 'high' }"
+                  >{{ mark.glyph }}</span>
                 </div>
                 <p>{{ buildingDescription(building.defId) }}</p>
                 <small>{{ costText(building.upgradeCost) }}</small>

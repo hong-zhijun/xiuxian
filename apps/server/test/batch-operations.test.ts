@@ -170,7 +170,7 @@ describe('批量转岗', () => {
     expect(await guardRowCount()).toBe(0);
   });
 
-  it('吐纳岗位：每人每小时 10 灵气，上限 2 人；聚灵阵每级 +40% 灵气基础产出', async () => {
+  it('吐纳岗位：每人每小时 10 灵气，上限 2 人；聚灵阵每级 +40% 全宗灵气产出（含吐纳）', async () => {
     const fixture = await makeSect('assign-energy');
     const a = await seedDisciple(fixture.sectId);
     const b = await seedDisciple(fixture.sectId);
@@ -193,11 +193,11 @@ describe('批量转岗', () => {
     const post = (state.assignments as { id: string; currentCount: number | null; maxCount: number | null }[])
       .find((item) => item.id === 'energyGathering');
     expect(post).toMatchObject({ currentCount: 2, maxCount: 2 });
-    // 灵气产速 = 基础 20 × (1 + 聚灵阵 1 级 40%) + 吐纳 2 人 × 10 = 48（最小单位 48000）
+    // 灵气产速 = 基础 20 × (1 + 聚灵阵 1 级 40%) + 吐纳 2 人 × 10 × (1 + 40%) = 28 + 28 = 56（最小单位 56000）
     const energy = (state.resources as { id: string; ratePerHour: string }[]).find(
       (item) => item.id === 'spiritualEnergy',
     );
-    expect(energy?.ratePerHour).toBe('48000');
+    expect(energy?.ratePerHour).toBe('56000');
   });
 
   it('一个都转不了时整批报错、不写库', async () => {

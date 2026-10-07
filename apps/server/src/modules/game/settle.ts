@@ -133,7 +133,7 @@ export function settleEconomy(input: SettleInput, random: () => number = Math.ra
   const outputs = disciples.map((disciple) => ({
     id: disciple.id,
     activeMs: Math.max(0, durationMs - (absentMsByDisciple.get(disciple.id) ?? 0)),
-    output: positionOutputPerHour(config, disciple),
+    output: positionOutputPerHour(config, disciple, input.buildingLevels),
   }));
   const baseRates = resourceBaseRates(config, input.buildingLevels);
   const rateByResource = resourceRates(config, disciples, input.buildingLevels);
@@ -239,7 +239,7 @@ export function resourceRates(
 ): Map<string, number> {
   const rates = resourceBaseRates(config, buildingLevels);
   for (const disciple of disciples) {
-    for (const [resourceId, amount] of positionOutputPerHour(config, disciple)) {
+    for (const [resourceId, amount] of positionOutputPerHour(config, disciple, buildingLevels)) {
       rates.set(resourceId, (rates.get(resourceId) ?? 0) + amount);
     }
   }
@@ -248,7 +248,7 @@ export function resourceRates(
 
 /**
  * 不含弟子的基础产量（最小单位/小时）：资源基础产出 + 灵矿对灵石的加成 + 聚灵阵对灵气的加成。
- * 这两项加成只抬高基础值，与弟子岗位产出是相加关系（V5.1）。
+ * 这两项加成抬高基础值，与弟子岗位产出是相加关系（V5.1）；聚灵阵对吐纳的加成见 positionOutputPerHour。
  */
 export function resourceBaseRates(
   config: GameConfigContent,
@@ -279,10 +279,12 @@ export function resourceBaseRates(
 /**
  * 单名弟子在当前岗位上的产出（最小单位/小时）；岗位不在配置里（例如闲置）返回空表。
  * 天赋重构：天赋匹配当前岗位（POSITION_TALENTS）时产出 ×(1 + 天赋加成)，加成随境界提高。
+ * 灵气短缺调整：岗位产出的灵气（吐纳）再按聚灵阵等级 ×(1 + 40%/级)，与基础产出同一加成。
  */
 export function positionOutputPerHour(
   config: GameConfigContent,
   disciple: DiscipleState,
+  buildingLevels?: Record<string, number>,
 ): Map<string, number> {
   const output = new Map<string, number>();
   const position = config.positions.find((item) => String(item.id) === disciple.assignment);
@@ -294,8 +296,13 @@ export function positionOutputPerHour(
   const bonusMultiplier =
     BP + (positionTalent === undefined ? 0 : talentBonusBp(disciple.talent, disciple.realmId, positionTalent));
 
+  const arrayLevel = buildingLevels?.[SPIRITUAL_ARRAY_BUILDING_ID] ?? 0;
   for (const [resourceId, amountText] of Object.entries(position.outputPerHourPerDisciple)) {
-    output.set(resourceId, Math.floor((Number(amountText) * bonusMultiplier) / BP));
+    let amount = Math.floor((Number(amountText) * bonusMultiplier) / BP);
+    if (resourceId === 'spiritualEnergy' && arrayLevel > 0) {
+      amount = Math.floor((amount * (BP + arrayLevel * SPIRITUAL_ARRAY_ENERGY_BONUS_BP_PER_LEVEL)) / BP);
+    }
+    output.set(resourceId, amount);
   }
   return output;
 }

@@ -133,12 +133,38 @@ export const BREAKTHROUGH_ENERGY_COST_PER_STAGE = 20_000;
 
 /** 聚灵阵每高一级的突破成功率加成（基点）。 */
 export const BREAKTHROUGH_ARRAY_BONUS_BP_PER_LEVEL = 500;
+/** 聚灵阵的突破加成只算到这一级：6～10 级只加灵气，不再抬高突破成功率。 */
+export const BREAKTHROUGH_ARRAY_BONUS_MAX_LEVEL = 5;
 
 /** 聚灵阵的建筑定义 id（加成来源）。 */
 export const SPIRITUAL_ARRAY_BUILDING_ID = 'spiritualArray';
 
-/** 聚灵阵每级给灵气基础产出的加成（基点，4000 = +40%；v8 由 +20% 提高）。 */
+/**
+ * 聚灵阵每级给灵气产出的加成（基点，4000 = +40%；v8 由 +20% 提高）。
+ * 灵气短缺调整：同时作用于基础产出与吐纳岗位（全宗灵气产出 +40%/级）。
+ */
 export const SPIRITUAL_ARRAY_ENERGY_BONUS_BP_PER_LEVEL = 4000;
+
+/**
+ * 聚灵阵 6～10 级（灵气短缺调整，上限由 5 提到 10）：分档表 —— 宗门等级门槛 + 消耗（最小单位），
+ * 与炼器坊同一做法；1～5 级仍按配置的线性升级消耗。
+ */
+export const SPIRITUAL_ARRAY_HIGH_UPGRADES: readonly {
+  level: number;
+  sectLevel: number;
+  cost: Readonly<Record<string, string>>;
+}[] = [
+  { level: 6, sectLevel: 6, cost: { spiritStone: '1500000', ore: '800000' } },
+  { level: 7, sectLevel: 7, cost: { spiritStone: '2500000', ore: '1300000' } },
+  { level: 8, sectLevel: 8, cost: { spiritStone: '4000000', ore: '2000000' } },
+  { level: 9, sectLevel: 9, cost: { spiritStone: '6000000', ore: '3000000', xuantie: '10000' } },
+  { level: 10, sectLevel: 10, cost: { spiritStone: '9000000', ore: '4500000', xuantie: '20000' } },
+];
+
+/** 聚灵阵从 currentLevel 升一级的分档条件；1～5 级（走线性消耗）或已满级返回 null。 */
+export function spiritualArrayUpgradeFrom(currentLevel: number) {
+  return SPIRITUAL_ARRAY_HIGH_UPGRADES.find((item) => item.level === currentLevel + 1) ?? null;
+}
 
 /** 空闲岗位 id（不在配置里，属于弟子状态的枚举值）。 */
 export const IDLE_ASSIGNMENT = 'idle';

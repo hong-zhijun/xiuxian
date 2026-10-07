@@ -75,7 +75,7 @@ describe('game-core 配置语义校验', () => {
     expect(semanticCodes(capacityTooSmall)).toContain('invalid_range');
 
     const levelTooHigh = cloneConfig();
-    levelTooHigh.sect.initialBuildings = [{ defId: 'spiritualArray', level: 9 }];
+    levelTooHigh.sect.initialBuildings = [{ defId: 'spiritualArray', level: 11 }];
     expect(semanticCodes(levelTooHigh)).toContain('invalid_range');
   });
 

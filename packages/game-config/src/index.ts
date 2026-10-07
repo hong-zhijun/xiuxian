@@ -20,14 +20,14 @@ import type { GameConfigContent } from '@xiuxian/game-core';
  */
 
 /** 版本号：内容变化时必须同步更新版本与 payloadHash（见 03 第 12 节）。 */
-export const GAME_CONFIG_VERSION = 'v9.0.0';
+export const GAME_CONFIG_VERSION = 'v10.0.0';
 
 /**
  * 内容哈希（sha256:，覆盖规范化后的 JSON）。
  * 修改 content 后必须重新计算，否则 Worker 启动与 config:hash 校验都会失败。
  */
 export const GAME_CONFIG_PAYLOAD_HASH =
-  'sha256:51a2521a4154132bd73a7402958e4e17622147a6bedb603673117dbe4cffbbbd';
+  'sha256:2870499196cdb4fd789ec6df18ba1453f66361bf12dbb5e52c3bcabde7d6f86b';
 
 export const GAME_CONFIG_CONTENT: GameConfigContent = {
   server: {
@@ -101,9 +101,11 @@ export const GAME_CONFIG_CONTENT: GameConfigContent = {
   ],
   buildings: [
     {
+      // 灵气短缺调整：上限 5 → 10；6～10 级走服务端分档表（宗门等级门槛 + 消耗），
+      // 这里的 upgradeCostPerLevel 只用于 1～5 级。
       id: 'spiritualArray',
       name: '聚灵阵',
-      maxLevel: 5,
+      maxLevel: 10,
       upgradeCostPerLevel: { spiritStone: '50000', ore: '10000' },
       visibility: 'public',
     },

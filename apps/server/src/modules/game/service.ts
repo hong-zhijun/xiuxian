@@ -113,6 +113,7 @@ import {
   RECRUIT_PAID_REFRESH_COST,
   RECRUIT_REFRESH_PER_LEVEL,
   SPIRITUAL_ARRAY_BUILDING_ID,
+  spiritualArrayUpgradeFrom,
   assignmentLimitOf,
   breakthroughEnergyCost,
   dateKeyUtc8,
@@ -2564,8 +2565,13 @@ export async function upgradeBuilding(
     });
   }
 
-  // 装备二期：炼器坊走分档表（宗门等级门槛 + 玄铁），其余建筑沿用线性升级消耗。
-  const workshopStep = defId === FORGE_WORKSHOP_ID ? forgeWorkshopUpgradeFrom(building.level) : null;
+  // 装备二期：炼器坊走分档表（宗门等级门槛 + 玄铁）；聚灵阵 6～10 级同理；其余建筑沿用线性升级消耗。
+  const workshopStep =
+    defId === FORGE_WORKSHOP_ID
+      ? forgeWorkshopUpgradeFrom(building.level)
+      : defId === SPIRITUAL_ARRAY_BUILDING_ID
+        ? spiritualArrayUpgradeFrom(building.level)
+        : null;
   if (workshopStep !== null && Number(draft.sect.level) < workshopStep.sectLevel) {
     throw new AppError(
       'INVALID_STATUS',
