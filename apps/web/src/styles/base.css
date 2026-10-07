@@ -4783,12 +4783,62 @@ ul {
   color: var(--red-bright);
 }
 
-/* ---------- Action bar (single row) ---------- */
+/* ---------- Action bar：分组 + 「更多」折叠 ---------- */
 .action-bar {
-  display: grid;
-  grid-template-columns: repeat(10, minmax(0, 1fr));
-  gap: 7px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  gap: 8px;
   margin-top: 14px;
+}
+
+/*
+ * 一组：左边竖排的组名 + 等宽的按钮（按钮数由 --chips 给出）。
+ * 按按钮数分配宽度、每个按钮最宽约 124px：宽屏不会拉得过长，中等宽度一起收窄，「更多」不会被挤到下一行。
+ */
+.action-group {
+  display: grid;
+  flex: var(--chips, 3) 1 0;
+  max-width: calc(var(--chips, 3) * 131px + 24px);
+  grid-template-columns: auto repeat(var(--chips, 3), minmax(0, 1fr));
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  padding: 4px 4px 4px 6px;
+  border: 1px solid rgba(202, 169, 106, 0.1);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.012);
+}
+
+.action-group-label {
+  color: #7d9186;
+  font-size: 11px;
+  letter-spacing: 0.2em;
+  writing-mode: vertical-rl;
+  user-select: none;
+}
+
+/* 「更多 / 收起」：靠右；展开的那一排独占一行。 */
+.action-more {
+  flex: 0 0 auto;
+  align-self: center;
+  margin-left: auto;
+  min-width: 96px;
+}
+
+.action-more-caret {
+  transition: transform 150ms ease;
+}
+
+.action-more-caret.is-open {
+  transform: rotate(180deg);
+}
+
+.action-bar-more {
+  display: flex;
+  flex: 1 1 100%;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .action-chip {
@@ -5823,9 +5873,10 @@ h2.public-sect-name {
 
 
 /* ---------- Toasts ---------- */
+/* 最上层：高于弹窗遮罩（900）、帮助气泡（950）、选人浮层（1000）；组件挂在 body 上，见 ToastStack.vue。 */
 .toast-viewport {
   position: fixed;
-  z-index: 1000;
+  z-index: 2000;
   top: 18px;
   right: 18px;
   width: 360px;
@@ -6016,10 +6067,6 @@ h2.public-sect-name {
 
   .resource-card:nth-child(n + 3) {
     border-top: 1px solid var(--line);
-  }
-
-  .action-bar {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .management-grid {
@@ -6333,8 +6380,19 @@ h2.public-sect-name {
     text-align: left;
   }
 
-  .action-bar {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+  /* 窄屏：每组占一整行、固定 3 列（2 个按钮的组也同宽）；「更多」铺满一行。 */
+  .action-group,
+  .action-more {
+    flex: 1 1 100%;
+  }
+
+  .action-group {
+    max-width: none;
+    grid-template-columns: auto repeat(3, minmax(0, 1fr));
+  }
+
+  .action-more {
+    margin-left: 0;
   }
 
   .action-bar .action-chip {

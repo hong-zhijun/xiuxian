@@ -18,6 +18,11 @@ function toneLabel(toast: ToastItem): string {
 </script>
 
 <template>
+  <!--
+    挂到 body 上：.app-root 是独立层叠上下文（isolation: isolate），留在里面的话 z-index 再高
+    也压不过同样挂在 body 上的弹窗遮罩（ModalShell），提示会被盖住。
+  -->
+  <Teleport to="body">
   <div class="toast-viewport" role="region" aria-label="消息通知">
     <TransitionGroup name="toast-list" tag="div" class="toast-stack">
       <article
@@ -62,4 +67,5 @@ function toneLabel(toast: ToastItem): string {
       </article>
     </TransitionGroup>
   </div>
+  </Teleport>
 </template>

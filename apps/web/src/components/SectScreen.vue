@@ -1589,6 +1589,29 @@ watch(
 
 const showAccountDialog = ref(false);
 
+/* ---------- 操作条「更多」：不常用的入口折叠起来，展开与否记在本机 ---------- */
+
+const MORE_ACTIONS_KEY = 'action-bar-more-open';
+
+function readMoreActionsOpen(): boolean {
+  try {
+    return localStorage.getItem(MORE_ACTIONS_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+const moreActionsOpen = ref(readMoreActionsOpen());
+
+function toggleMoreActions(): void {
+  moreActionsOpen.value = !moreActionsOpen.value;
+  try {
+    localStorage.setItem(MORE_ACTIONS_KEY, moreActionsOpen.value ? '1' : '0');
+  } catch {
+    /* 存不下只是下次打开页面又是收起的 */
+  }
+}
+
 /* ---------- 更新说明：有没看过的新条目时「更新」按钮亮红点，打开即记为已读 ---------- */
 
 const CHANGELOG_SEEN_KEY = 'changelog-seen';
@@ -1874,95 +1897,128 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
       </section>
     </div>
 
+    <!--
+      操作条：常用的「宗门 / 出战」两组常驻；不常用的「市集 / 事务」收进「更多」，
+      展开与否记在本机（moreActionsOpen），有角标的入口都放在常驻组里，折叠后不会漏看。
+    -->
     <nav class="action-bar" aria-label="宗门操作" role="toolbar">
+      <div class="action-group" role="group" aria-label="宗门" :style="{ '--chips': 3 }">
+        <span class="action-group-label" aria-hidden="true">宗门</span>
+        <button
+          class="action-chip"
+          type="button"
+          :disabled="busy || recruitLoading"
+          :aria-label="recruitBadge > 0 ? `招贤台（还可招募 ${recruitBadge} 人）` : '招贤台'"
+          :title="recruitBadge > 0 ? `还可招募 ${recruitBadge} 人（弟子上限 − 现有门人）` : '张榜招贤'"
+          @click="requestRecruit"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm-6.5 9.5a6.5 6.5 0 0 1 13 0M18 14.5v6m3-3h-6" />
+          </svg>
+          <span>招贤台</span>
+          <span v-if="recruitBadge > 0" class="chip-badge">{{ recruitBadge }}</span>
+        </button>
+        <button class="action-chip" type="button" @click="openPanel = 'alchemy'">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M9 3h6M10 3v4.2a6.5 6.5 0 1 0 4 0V3m-4.8 11h9.6" />
+          </svg>
+          <span>炼丹</span>
+        </button>
+        <button class="action-chip" type="button" @click="openEquipment">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M4 4h9l7 7-6 6-7-7V4Zm3 3h.01M15 18l2.5 2.5M18 15l2.5 2.5" />
+          </svg>
+          <span>炼器</span>
+        </button>
+      </div>
+      <div class="action-group" role="group" aria-label="出战" :style="{ '--chips': 3 }">
+        <span class="action-group-label" aria-hidden="true">出战</span>
+        <button class="action-chip" type="button" @click="openPanel = 'explore'">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Zm3.4 5.6-2.1 5-5 2.1 2.1-5 5-2.1Z" />
+          </svg>
+          <span>秘境探索</span>
+        </button>
+        <button
+          class="action-chip"
+          type="button"
+          aria-label="讨伐：全服共讨妖王"
+          title="每日 08:00 妖王降临，全服共讨"
+          @click="openPanel = 'world-boss'"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M14.5 3.2 20.8 9.5 9.6 20.7 3.3 21l.3-6.3L14.5 3.2Zm-8.6 12.5 3.4 3.4M16.2 6.9l1 1" />
+          </svg>
+          <span>讨伐</span>
+          <span v-if="state.worldBoss?.attackable" class="chip-badge">!</span>
+        </button>
+        <button
+          class="action-chip"
+          type="button"
+          aria-label="镇妖塔：单人爬塔"
+          title="派 5 名弟子逐层闯塔，每天可扫荡一次"
+          @click="openPanel = 'tower'"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 2.8 8 6.2h8L12 2.8ZM9 6.2v3.6h6V6.2M7.5 9.8h9l-.8 4.4H8.3l-.8-4.4Zm.8 4.4h7.4l.8 6.6H7.5l.8-6.6ZM10.6 20.8v-3.2h2.8v3.2" />
+          </svg>
+          <span>镇妖塔</span>
+          <span v-if="state.tower?.sweepable" class="chip-badge">!</span>
+        </button>
+      </div>
       <button
-        class="action-chip"
+        class="action-chip action-more"
         type="button"
-        :disabled="busy || recruitLoading"
-        :aria-label="recruitBadge > 0 ? `招贤台（还可招募 ${recruitBadge} 人）` : '招贤台'"
-        :title="recruitBadge > 0 ? `还可招募 ${recruitBadge} 人（弟子上限 − 现有门人）` : '张榜招贤'"
-        @click="requestRecruit"
+        :aria-expanded="moreActionsOpen"
+        aria-controls="action-bar-more"
+        @click="toggleMoreActions"
       >
         <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm-6.5 9.5a6.5 6.5 0 0 1 13 0M18 14.5v6m3-3h-6" />
+          <path d="M5 12h.01M12 12h.01M19 12h.01" />
         </svg>
-        <span>招贤台</span>
-        <span v-if="recruitBadge > 0" class="chip-badge">{{ recruitBadge }}</span>
-      </button>
-      <button class="action-chip" type="button" @click="openPanel = 'alchemy'">
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M9 3h6M10 3v4.2a6.5 6.5 0 1 0 4 0V3m-4.8 11h9.6" />
+        <span>{{ moreActionsOpen ? '收起' : '更多' }}</span>
+        <svg class="action-more-caret" :class="{ 'is-open': moreActionsOpen }" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="m7 10 5 5 5-5" />
         </svg>
-        <span>炼丹</span>
       </button>
-      <button class="action-chip" type="button" @click="openEquipment">
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M4 4h9l7 7-6 6-7-7V4Zm3 3h.01M15 18l2.5 2.5M18 15l2.5 2.5" />
-        </svg>
-        <span>炼器</span>
-      </button>
-      <button class="action-chip" type="button" @click="openPanel = 'defense-lineup'">
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M12 3.2 5 6.3v5.2c0 4.1 2.9 7.8 7 9.3 4.1-1.5 7-5.2 7-9.3V6.3L12 3.2Zm-3 8.6h6" />
-        </svg>
-        <span>守擂阵容</span>
-      </button>
-      <button class="action-chip" type="button" @click="openPanel = 'explore'">
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Zm3.4 5.6-2.1 5-5 2.1 2.1-5 5-2.1Z" />
-        </svg>
-        <span>秘境探索</span>
-      </button>
-      <button
-        class="action-chip"
-        type="button"
-        aria-label="讨伐：全服共讨妖王"
-        title="每日 08:00 妖王降临，全服共讨"
-        @click="openPanel = 'world-boss'"
-      >
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M14.5 3.2 20.8 9.5 9.6 20.7 3.3 21l.3-6.3L14.5 3.2Zm-8.6 12.5 3.4 3.4M16.2 6.9l1 1" />
-        </svg>
-        <span>讨伐</span>
-        <span v-if="state.worldBoss?.attackable" class="chip-badge">!</span>
-      </button>
-      <button
-        class="action-chip"
-        type="button"
-        aria-label="镇妖塔：单人爬塔"
-        title="派 5 名弟子逐层闯塔，每天可扫荡一次"
-        @click="openPanel = 'tower'"
-      >
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M12 2.8 8 6.2h8L12 2.8ZM9 6.2v3.6h6V6.2M7.5 9.8h9l-.8 4.4H8.3l-.8-4.4Zm.8 4.4h7.4l.8 6.6H7.5l.8-6.6ZM10.6 20.8v-3.2h2.8v3.2" />
-        </svg>
-        <span>镇妖塔</span>
-        <span v-if="state.tower?.sweepable" class="chip-badge">!</span>
-      </button>
-      <button class="action-chip" type="button" aria-label="功勋兑换" @click="openPanel = 'merit'">
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M8 3h8l-1.5 5h-5L8 3Zm4 5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13Zm0 3.2 1.1 2.2 2.4.35-1.75 1.7.4 2.4L12 16.7l-2.15 1.15.4-2.4-1.75-1.7 2.4-.35L12 11.2Z" />
-        </svg>
-        <span>功勋</span>
-      </button>
-      <button class="action-chip" type="button" aria-label="执事堂：任命宗门执事" @click="openPanel = 'steward'">
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M4 20h16M6 20V10m12 10V10M3 10l9-6 9 6M10 20v-5h4v5" />
-        </svg>
-        <span>执事堂</span>
-      </button>
-      <button class="action-chip" type="button" @click="openPanel = 'gambling'">
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M5 5h14v14H5zM8.5 9h.01M12 12h.01M15.5 15h.01" />
-        </svg>
-        <span>赌坊</span>
-      </button>
-      <button class="action-chip" type="button" @click="openPanel = 'shop'">
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M12 4.2v14.6M4.4 7.6h15.2M8.4 18.8h7.2M4.4 7.6 2.4 12.4h4L4.4 7.6Zm15.2 0-2 4.8h4l-2-4.8Z" />
-        </svg>
-        <span>坊市</span>
-      </button>
+      <div v-if="moreActionsOpen" id="action-bar-more" class="action-bar-more">
+        <div class="action-group" role="group" aria-label="市集" :style="{ '--chips': 3 }">
+          <span class="action-group-label" aria-hidden="true">市集</span>
+          <button class="action-chip" type="button" @click="openPanel = 'shop'">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 4.2v14.6M4.4 7.6h15.2M8.4 18.8h7.2M4.4 7.6 2.4 12.4h4L4.4 7.6Zm15.2 0-2 4.8h4l-2-4.8Z" />
+            </svg>
+            <span>坊市</span>
+          </button>
+          <button class="action-chip" type="button" @click="openPanel = 'gambling'">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M5 5h14v14H5zM8.5 9h.01M12 12h.01M15.5 15h.01" />
+            </svg>
+            <span>赌坊</span>
+          </button>
+          <button class="action-chip" type="button" aria-label="功勋兑换" @click="openPanel = 'merit'">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M8 3h8l-1.5 5h-5L8 3Zm4 5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13Zm0 3.2 1.1 2.2 2.4.35-1.75 1.7.4 2.4L12 16.7l-2.15 1.15.4-2.4-1.75-1.7 2.4-.35L12 11.2Z" />
+            </svg>
+            <span>功勋</span>
+          </button>
+        </div>
+        <div class="action-group" role="group" aria-label="事务" :style="{ '--chips': 2 }">
+          <span class="action-group-label" aria-hidden="true">事务</span>
+          <button class="action-chip" type="button" aria-label="执事堂：任命宗门执事" @click="openPanel = 'steward'">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M4 20h16M6 20V10m12 10V10M3 10l9-6 9 6M10 20v-5h4v5" />
+            </svg>
+            <span>执事堂</span>
+          </button>
+          <button class="action-chip" type="button" @click="openPanel = 'defense-lineup'">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 3.2 5 6.3v5.2c0 4.1 2.9 7.8 7 9.3 4.1-1.5 7-5.2 7-9.3V6.3L12 3.2Zm-3 8.6h6" />
+            </svg>
+            <span>守擂阵容</span>
+          </button>
+        </div>
+      </div>
     </nav>
 
     <div class="management-grid">
