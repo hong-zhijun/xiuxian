@@ -7656,3 +7656,62 @@ p.steward-bonus-note {
   border-color: rgba(234, 209, 154, 0.75);
   color: var(--gold-bright);
 }
+
+/*
+ * ---------- 名册：按境界区分卡片 ----------
+ * 每个境界一种主题色（--realm-rgb）：顶部色条、边框、境界标签同色，化神起再加一圈微光，越往后越亮。
+ * 翠（炼气）→ 金（筑基）→ 橙（金丹）→ 蓝（元婴）→ 紫（化神）→ 玫红（炼虚）→ 青（合体）→ 银白（大乘）→ 天劫红（渡劫）。
+ * 用 :where() 把优先级压到和 .disciple-row 一样：受伤左边线、在外 / 待领取、多选选中这些状态色仍然优先。
+ */
+.disciple-row[data-realm='qiRefining'] { --realm-rgb: 119, 184, 154; --realm-edge: 0.16; }
+.disciple-row[data-realm='foundationEstablishment'] { --realm-rgb: 202, 169, 106; --realm-edge: 0.28; }
+.disciple-row[data-realm='goldenCore'] { --realm-rgb: 240, 150, 100; --realm-edge: 0.3; }
+.disciple-row[data-realm='nascentSoul'] { --realm-rgb: 100, 160, 230; --realm-edge: 0.34; }
+.disciple-row[data-realm='spiritTransformation'] {
+  --realm-rgb: 170, 130, 235;
+  --realm-edge: 0.38;
+  --realm-glow: 0 0 10px rgba(170, 130, 235, 0.16);
+}
+.disciple-row[data-realm='voidRefinement'] {
+  --realm-rgb: 230, 110, 170;
+  --realm-edge: 0.42;
+  --realm-glow: 0 0 12px rgba(230, 110, 170, 0.18);
+}
+.disciple-row[data-realm='bodyIntegration'] {
+  --realm-rgb: 80, 210, 200;
+  --realm-edge: 0.45;
+  --realm-glow: 0 0 12px rgba(80, 210, 200, 0.2);
+}
+.disciple-row[data-realm='mahayana'] {
+  --realm-rgb: 230, 236, 245;
+  --realm-edge: 0.5;
+  --realm-glow: 0 0 14px rgba(230, 236, 245, 0.22);
+}
+.disciple-row[data-realm='tribulation'] {
+  --realm-rgb: 255, 95, 90;
+  --realm-edge: 0.62;
+  --realm-glow: 0 0 18px rgba(255, 95, 90, 0.34);
+}
+
+.disciple-row:where([data-realm]) {
+  border-color: rgba(var(--realm-rgb), var(--realm-edge));
+  background:
+    linear-gradient(180deg, rgba(var(--realm-rgb), 0.08), transparent 42%),
+    rgba(3, 14, 11, 0.28);
+  box-shadow:
+    inset 0 2px 0 rgba(var(--realm-rgb), 0.75),
+    var(--realm-glow, 0 0 0 transparent);
+}
+
+/* 悬停只提亮上 / 右 / 下三边：左边线留给受伤警示。 */
+.disciple-row:where([data-realm]):hover {
+  border-top-color: rgba(var(--realm-rgb), 0.6);
+  border-right-color: rgba(var(--realm-rgb), 0.6);
+  border-bottom-color: rgba(var(--realm-rgb), 0.6);
+}
+
+.disciple-row:where([data-realm]) .realm-tag {
+  border-color: rgba(var(--realm-rgb), 0.45);
+  color: rgb(var(--realm-rgb));
+  background: rgba(var(--realm-rgb), 0.08);
+}

@@ -542,6 +542,7 @@ watch(
         v-for="(row, index) in rows"
         :key="row.disciple.id"
         class="disciple-row"
+        :data-realm="row.disciple.realmId"
         :class="[
           `status-${row.displayStatus.key}`,
           row.journeyClass,
