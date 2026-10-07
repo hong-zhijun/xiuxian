@@ -379,3 +379,8 @@ export const worldBossExchangeRequestSchema = z.strictObject({
   slot: z.string().min(1).max(16).optional(),
   mainAttr: z.string().min(1).max(16).optional(),
 });
+
+/** 0039 镇妖塔：挑战（固定 5 人；是否不重复、能否出战由 service 校验）。 */
+export const towerChallengeRequestSchema = z.strictObject({
+  discipleIds: z.array(z.string().min(1).max(64)).length(5),
+});

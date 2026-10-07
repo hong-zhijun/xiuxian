@@ -70,7 +70,7 @@ describe('天赋表（计划 1.2）', () => {
 
   it('效果文案按当前境界算，减益类带「−」', () => {
     expect(talentEffectText('mining', 'goldenCore')).toBe('矿石产出 +30%');
-    expect(talentEffectText('ironBody', 'spiritTransformation')).toBe('受伤、重伤概率 −50%');
+    expect(talentEffectText('ironBody', 'spiritTransformation')).toBe('受伤、重伤概率 / 镇妖塔承伤 −50%');
     expect(talentEffectText('combat', 'foundationEstablishment')).toBe('战力 +12.5%');
     expect(talentEffectText('none', 'goldenCore')).toBe('');
   });

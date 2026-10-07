@@ -334,7 +334,30 @@ import {
   type WorldBossRow,
   type WorldBossSectDamageRow,
 } from './repository';
+import {
+  sectTowerGuardStatement,
+  upsertSectTowerStatement,
+  TowerRepository,
+  type SectTowerRow,
+} from './repository';
 import { settleEconomy, resourceRates, type SettleResult } from './settle';
+import {
+  simulateTowerBattle,
+  towerClearEquipment,
+  towerClearReward,
+  towerFailsToday,
+  towerMonsterOf,
+  towerSweepReward,
+  TOWER_AFFIXES,
+  TOWER_DAILY_FAILS,
+  TOWER_LEADERBOARD_SIZE,
+  TOWER_MAX_ROUNDS,
+  TOWER_PARTY_SIZE,
+  TOWER_RARE_FLOOR,
+  TOWER_UNLOCK_SECT_LEVEL,
+  type TowerAffixDef,
+  type TowerFighter,
+} from './tower';
 import {
   findStewardOffice,
   findTalent,
@@ -480,6 +503,11 @@ import {
   type WorldBossMemberOutcomeView,
   type EquipmentView,
   type DiscipleProfileView,
+  type TowerAffixView,
+  type TowerChallengeResultView,
+  type TowerMonsterView,
+  type TowerSweepResultView,
+  type TowerView,
 } from './view';
 /**
  * 游戏服务（一次性可玩版本）。
@@ -752,6 +780,8 @@ class SectDraft {
    * 其余命令返回的 view 里保持 false，前端以 sync 下发的角标为准。
    */
   worldBossAttackable = false;
+  /** 0039 镇妖塔：今天还能扫荡（按钮角标用；与 worldBossAttackable 同理，只有 sync 会算真值）。 */
+  towerSweepable = false;
 
   private readonly statements: ParameterizedQuery[] = [];
   /** 0014：未领取的历练记录（在外中 + 待领取）；本批可能被完成 / 领取而改变。 */
@@ -1093,6 +1123,7 @@ class SectDraft {
       recentJourneys: this.recentRowsForView(),
       activeExploration: this.activeExplorationView(),
       worldBossAttackable: this.worldBossAttackable,
+      towerSweepable: this.towerSweepable,
       stewards: this.stewards,
     });
   }
@@ -1111,6 +1142,8 @@ class SectDraft {
      * 但 A 的 gear 列还算着这件装备」（见 equipmentGuardStatement 注释）。
      */
     equipmentItems?: readonly { id: string; discipleId: string | null }[];
+    /** 0039 镇妖塔：额外的守卫语句（与快照守卫同批执行、同样在末尾清理；id 写进 mutation_guards）。 */
+    extraGuards?: readonly { id: string; statement: ParameterizedQuery }[];
   } = {}): Promise<void> {
     if (this.statements.length === 0) {
       return;
@@ -1137,6 +1170,10 @@ class SectDraft {
       guard.cleanup.push(
         ...equipment.guardIds.map((id) => deleteDiscipleSnapshotGuardStatement(id)),
       );
+    }
+    for (const extra of options.extraGuards ?? []) {
+      guard.guards.push(extra.statement);
+      guard.cleanup.push(deleteDiscipleSnapshotGuardStatement(extra.id));
     }
     try {
       await this.db.batch(prepareStatements(this.db, [
@@ -1744,6 +1781,8 @@ export async function getSectState(
     // 0025 讨伐：按钮角标要的「此刻能不能出手」只在 sync 里算（两条走索引的小查询）；
     // 不在开放时段时 worldBossAttackableFor 提前返回，连查询都省掉。
     const worldBossAttackable = await worldBossAttackableFor(db, now);
+    // 0039 镇妖塔：「今天还能扫荡」角标同理只在 sync 里算（一条主键查询；未解锁时不查）。
+    const towerSweepable = await towerSweepableFor(db, snapshot.sect, now);
     // 省 D1 写入：前端每分钟自动同步一次，若每次都把结算写回，挂机玩家一小时就要写上千行。
     // 产出是按时间确定性计算的，晚几分钟写回结果不变；所以距上次写回不足 SYNC_PERSIST_INTERVAL_MS 时
     // 只在内存里结算并返回（不掷随机事件——事件按经过时长计期望次数，推迟写回不会少发），
@@ -1751,10 +1790,12 @@ export async function getSectState(
     if (now - Number(snapshot.sect.last_settled_at) < SYNC_PERSIST_INTERVAL_MS) {
       const preview = new SectDraft(db, snapshot, now, () => 1);
       preview.worldBossAttackable = worldBossAttackable;
+      preview.towerSweepable = towerSweepable;
       if (!preview.hasJourneyReturns) return preview.view();
     }
     const draft = new SectDraft(db, snapshot, now);
     draft.worldBossAttackable = worldBossAttackable;
+    draft.towerSweepable = towerSweepable;
     try {
       await draft.commit();
       return draft.view();
@@ -9614,4 +9655,371 @@ async function broadcastSystemMessage(db: D1Database, content: string, now: numb
     content,
     now,
   }));
+}
+
+/* ------------------------------------------------------------------ *
+ * 0039 镇妖塔（docs/镇妖塔开发计划.md）
+ *
+ * 规则都在 tower.ts（纯函数）；这里只做：读进度 → 校验 → 模拟 → 发奖 / 记失败 → 一次受保护 batch。
+ * 并发：sect_towers.version 守卫 + 宗门快照守卫，同时点两次只会成功一次。
+ * ------------------------------------------------------------------ */
+
+/** sync 角标：宗门已解锁、至少过了 1 层、今天还没扫荡。 */
+async function towerSweepableFor(db: D1Database, sect: SectRow, now: number): Promise<boolean> {
+  if (Number(sect.level) < TOWER_UNLOCK_SECT_LEVEL) return false;
+  const row = await new TowerRepository(db).findBySectId(sect.id);
+  return row !== null && Number(row.max_floor) > 0 && row.sweep_date_key !== dateKeyUtc8(now);
+}
+
+function requireTowerUnlocked(draft: SectDraft): void {
+  if (Number(draft.sect.level) < TOWER_UNLOCK_SECT_LEVEL) {
+    throw new AppError('INVALID_STATUS', `宗门 ${String(TOWER_UNLOCK_SECT_LEVEL)} 级解锁镇妖塔`);
+  }
+}
+
+function towerAffixViewOf(affix: TowerAffixDef | null): TowerAffixView | null {
+  return affix === null
+    ? null
+    : { id: affix.id, name: affix.name, effect: affix.effect, tip: affix.tip, sortAttribute: affix.sortAttribute };
+}
+
+function towerMonsterViewOf(floor: number): TowerMonsterView {
+  const monster = towerMonsterOf(floor);
+  return {
+    floor: monster.floor,
+    name: monster.name,
+    isBoss: monster.isBoss,
+    affix: towerAffixViewOf(monster.affix),
+    hp: monster.hp,
+    attack: monster.attack,
+    speed: monster.speed,
+    standardAttr: monster.standardAttr,
+    standardPower: monster.standardPower,
+  };
+}
+
+/**
+ * 发奖：每种资源按「容量 − 当前余额」截断，溢出作废（防通胀）；返回实际到账（最小单位）。
+ * 余额本来就高于容量时这一项到账 0。
+ */
+function grantTowerRewards(draft: SectDraft, rewards: Readonly<Record<string, number>>): Record<string, number> {
+  const credited: Record<string, number> = {};
+  for (const [resourceId, amount] of Object.entries(rewards)) {
+    const room = Math.max(0, draft.resourceCapacityOf(resourceId) - draft.balanceOf(resourceId));
+    const actual = Math.max(0, Math.min(amount, room));
+    if (actual > 0) draft.grantResource(resourceId, actual);
+    credited[resourceId] = actual;
+  }
+  return credited;
+}
+
+/** 奖励文案：「灵石 120 · 药材 60」（展示单位，到账为 0 的写「已满」）。 */
+function towerRewardText(draft: SectDraft, credited: Readonly<Record<string, number>>): string {
+  return Object.entries(credited)
+    .map(([resourceId, amount]) =>
+      `${draft.resourceName(resourceId)} ${amount > 0 ? displayAmount(amount) : '已满'}`,
+    )
+    .join(' · ');
+}
+
+/** 镇妖塔面板：进度、下一层妖物、次数、扫荡、排行榜（只读，不写库）。 */
+async function buildTowerView(input: {
+  db: D1Database;
+  draft: SectDraft;
+  row: SectTowerRow | null;
+  now: number;
+}): Promise<TowerView> {
+  const { draft, row, now } = input;
+  const repo = new TowerRepository(input.db);
+  const maxFloor = row === null ? 0 : Number(row.max_floor);
+  const nextFloor = maxFloor + 1;
+  const failsUsed = towerFailsToday(row, dateKeyUtc8(now));
+  const [ranks, myRank, bagCount] = await Promise.all([
+    repo.topRanks(TOWER_LEADERBOARD_SIZE),
+    repo.rankOf(row),
+    new EquipmentRepository(input.db).countBagBySectId(draft.sect.id),
+  ]);
+  const upcoming = Array.from({ length: 5 }, (_, index) => nextFloor + index).map((floor) => {
+    const monster = towerMonsterOf(floor);
+    const equipment = towerClearEquipment(floor);
+    return {
+      floor,
+      name: monster.name,
+      isBoss: monster.isBoss,
+      affixName: monster.affix?.name ?? null,
+      standardPower: monster.standardPower,
+      equipmentQualityName: equipment === null ? null : qualityNameOf(equipment),
+    };
+  });
+  const clearEquipment = towerClearEquipment(nextFloor);
+  return {
+    unlocked: Number(draft.sect.level) >= TOWER_UNLOCK_SECT_LEVEL,
+    unlockSectLevel: TOWER_UNLOCK_SECT_LEVEL,
+    partySize: TOWER_PARTY_SIZE,
+    maxRounds: TOWER_MAX_ROUNDS,
+    maxFloor,
+    nextFloor,
+    monster: towerMonsterViewOf(nextFloor),
+    clearReward: towerClearReward(nextFloor),
+    clearEquipment:
+      clearEquipment === null ? null : { quality: clearEquipment, qualityName: qualityNameOf(clearEquipment) },
+    bagCount,
+    bagCapacity: BAG_CAPACITY,
+    upcoming,
+    dailyFails: TOWER_DAILY_FAILS,
+    failsUsed,
+    failsLeft: Math.max(0, TOWER_DAILY_FAILS - failsUsed),
+    sweptToday: row !== null && row.sweep_date_key === dateKeyUtc8(now),
+    sweepReward: towerSweepReward(maxFloor),
+    rareFloor: TOWER_RARE_FLOOR,
+    affixes: TOWER_AFFIXES.map((affix) => towerAffixViewOf(affix)!),
+    ranks: ranks.map((rank, index) => ({
+      rank: index + 1,
+      sectId: rank.sect_id,
+      sectName: rank.sect_name,
+      maxFloor: Number(rank.max_floor),
+      isMe: rank.sect_id === draft.sect.id,
+    })),
+    myRank,
+  };
+}
+
+/** GET /game/tower：镇妖塔面板（顺带结算并返回 state，不写库）。 */
+export async function getTower(
+  db: D1Database,
+  userId: string,
+  now: number,
+): Promise<{ state: SectStateView; tower: TowerView }> {
+  const draft = await draftFor(db, userId, now);
+  const row = await new TowerRepository(db).findBySectId(draft.sect.id);
+  const tower = await buildTowerView({ db, draft, row, now });
+  // 面板已经知道「今天能不能扫荡」，顺手让 state 里的角标与它一致。
+  draft.towerSweepable = tower.unlocked && tower.maxFloor > 0 && !tower.sweptToday;
+  return { state: draft.view(), tower };
+}
+
+/**
+ * POST /game/tower/challenge：挑战「最高层 + 1」。
+ *
+ * 校验：解锁 → 今日失败次数 → 5 名不重复、属于本宗、能出战（不在外 / 不重伤 / 不是执事）且不在疗伤。
+ * 胜：最高层 +1、发通关奖励（截断到容量）；败：今日失败次数 +1，没有其它惩罚。
+ * 进度写回与奖励同一次受保护 batch（sect_towers.version 守卫）。
+ */
+export async function challengeTower(
+  db: D1Database,
+  userId: string,
+  input: { discipleIds: readonly string[] },
+  now: number,
+): Promise<{ state: SectStateView; tower: TowerView; result: TowerChallengeResultView }> {
+  const draft = await draftFor(db, userId, now);
+  requireTowerUnlocked(draft);
+  const repo = new TowerRepository(db);
+  const row = await repo.findBySectId(draft.sect.id);
+  const todayKey = dateKeyUtc8(now);
+  const failsUsed = towerFailsToday(row, todayKey);
+  if (failsUsed >= TOWER_DAILY_FAILS) {
+    throw new AppError(
+      'DAILY_LIMIT',
+      `今日失败次数已用完（${String(failsUsed)}/${String(TOWER_DAILY_FAILS)}），明日再来`,
+      { failsUsed, dailyFails: TOWER_DAILY_FAILS },
+    );
+  }
+
+  const discipleIds = [...new Set(input.discipleIds)];
+  if (discipleIds.length !== TOWER_PARTY_SIZE) {
+    throw new AppError('VALIDATION_ERROR', `镇妖塔每次需派 ${String(TOWER_PARTY_SIZE)} 名不同的弟子`);
+  }
+  const members = discipleIds.map((discipleId) => draft.discipleById(discipleId));
+  for (const member of members) {
+    requireCanFight(draft, member, '闯塔');
+    if (member.injured_until !== null && Number(member.injured_until) > now) {
+      throw new AppError('INVALID_STATUS', `${member.name}正在疗伤，无法闯塔`);
+    }
+  }
+
+  // 0028 装备 + 天赋重构：战力计入装备与战意，属性用「基础 + 装备」；会心 / 铁骨按境界取加成。
+  const fighters: TowerFighter[] = members.map((member) => {
+    const attrs = battleAttrsOf(member);
+    return {
+      id: member.id,
+      name: member.name,
+      power: gearedCombatPower(member),
+      attack: attrs.attack,
+      defense: attrs.defense,
+      speed: attrs.speed,
+      luck: attrs.luck,
+      physique: attrs.physique,
+      critBonusBp: talentBonusBp(member.talent, member.realm_id, 'critical'),
+      damageReductionBp: talentBonusBp(member.talent, member.realm_id, 'ironBody'),
+    };
+  });
+  const floor = (row === null ? 0 : Number(row.max_floor)) + 1;
+  // 首通发装备的层：背包满了不许开打（不然打赢了装备没地方放），先提示清理背包。
+  const equipmentQuality = towerClearEquipment(floor);
+  if (equipmentQuality !== null) {
+    const bagCount = await new EquipmentRepository(db).countBagBySectId(draft.sect.id);
+    if (bagCount >= BAG_CAPACITY) {
+      throw new AppError(
+        'INVALID_STATUS',
+        `第 ${String(floor)} 层通关奖励有一件${qualityNameOf(equipmentQuality)}装备，${bagFullReason(bagCount)}后再来`,
+      );
+    }
+  }
+  const arenaLevel =
+    draft.buildings.find((building) => building.def_id === ARENA_BUILDING_ID)?.level ?? 0;
+  const battle = simulateTowerBattle({ floor, fighters, arenaLevel, random: Math.random });
+
+  let credited: Record<string, number> = {};
+  let equipment: TowerChallengeResultView['equipment'] = null;
+  if (battle.won) {
+    credited = grantTowerRewards(draft, towerClearReward(floor));
+    if (equipmentQuality !== null) {
+      // 部位随机、法器主属性随机（与讨伐掉落同一做法）。
+      const slot = EQUIPMENT_SLOTS[
+        Math.min(EQUIPMENT_SLOTS.length - 1, Math.max(0, Math.floor(Math.random() * EQUIPMENT_SLOTS.length)))
+      ]!.id;
+      const mainAttr = resolveMainAttr(slot, undefined, Math.random);
+      if (mainAttr !== null) {
+        const generated = generateEquipment({ slot, quality: equipmentQuality, mainAttr, random: Math.random });
+        const equipmentId = crypto.randomUUID();
+        draft.addStatement(
+          insertEquipmentStatement({
+            id: equipmentId,
+            sectId: draft.sect.id,
+            slot: generated.slot,
+            quality: generated.quality,
+            name: generated.name,
+            mainAttr: generated.mainAttr,
+            mainValue: generated.mainValue,
+            subAttr: generated.subAttr,
+            subValue: generated.subValue,
+            source: 'tower',
+            now,
+          }),
+        );
+        equipment = {
+          id: equipmentId,
+          name: generated.name,
+          quality: generated.quality,
+          qualityName: qualityNameOf(generated.quality),
+          slot: generated.slot,
+          slotName: slotNameOf(generated.slot),
+        };
+      }
+    }
+  }
+  draft.addStatement(
+    upsertSectTowerStatement({
+      sectId: draft.sect.id,
+      maxFloor: battle.won ? floor : floor - 1,
+      maxFloorAt: battle.won ? now : (row?.max_floor_at ?? null),
+      failDateKey: battle.won ? (row?.fail_date_key ?? null) : todayKey,
+      failCount: battle.won ? Number(row?.fail_count ?? 0) : failsUsed + 1,
+      sweepDateKey: row?.sweep_date_key ?? null,
+      now,
+    }),
+  );
+  const guardId = `${crypto.randomUUID()}:tower`;
+  await draft.commit({
+    extraGuards: [
+      { id: guardId, statement: sectTowerGuardStatement(guardId, draft.sect.id, Number(row?.version ?? 0)) },
+    ],
+  });
+
+  const monster = towerMonsterOf(floor);
+  if (battle.won && monster.isBoss && floor >= TOWER_RARE_FLOOR) {
+    const gained = equipment === null ? '' : `，获得 ${equipment.name}`;
+    await broadcastWorldBoss(
+      db,
+      `【镇妖塔】${draft.sect.name}斩落第 ${String(floor)} 层守关首领${monster.name}${gained}！`,
+      now,
+    );
+  }
+
+  const after = await repo.findBySectId(draft.sect.id);
+  const failsLeft = Math.max(0, TOWER_DAILY_FAILS - (battle.won ? failsUsed : failsUsed + 1));
+  let message: string;
+  if (battle.won) {
+    const gained = equipment === null ? '' : ` · ${equipment.name}（${equipment.qualityName}${equipment.slotName}）`;
+    message = `第 ${String(floor)} 层 · ${monster.name}已被镇压（${String(battle.rounds.length)} 回合）。获得 ${towerRewardText(draft, credited)}${gained}`;
+  } else if (battle.failReason === 'wiped') {
+    message = `第 ${String(floor)} 层 · 不敌${monster.name}，队伍力竭败退。今日还可失败 ${String(failsLeft)} 次`;
+  } else {
+    message = `第 ${String(floor)} 层 · ${String(TOWER_MAX_ROUNDS)} 回合内未能拿下${monster.name}。今日还可失败 ${String(failsLeft)} 次`;
+  }
+  return {
+    state: draft.view(),
+    tower: await buildTowerView({ db, draft, row: after, now }),
+    result: {
+      floor,
+      monsterName: monster.name,
+      isBoss: monster.isBoss,
+      affix: towerAffixViewOf(monster.affix),
+      won: battle.won,
+      failReason: battle.failReason,
+      rounds: battle.rounds,
+      monsterMaxHp: battle.monsterMaxHp,
+      teamMaxHp: battle.teamMaxHp,
+      vigor: battle.vigor,
+      teamFirst: battle.teamFirst,
+      reward: credited,
+      equipment,
+      members: fighters.map((fighter) => ({
+        discipleId: fighter.id,
+        name: fighter.name,
+        power: fighter.power,
+      })),
+      message,
+    },
+  };
+}
+
+/** POST /game/tower/sweep：每日扫荡（按此刻的历史最高层发奖，截断到容量；一天一次）。 */
+export async function sweepTower(
+  db: D1Database,
+  userId: string,
+  now: number,
+): Promise<{ state: SectStateView; tower: TowerView; result: TowerSweepResultView }> {
+  const draft = await draftFor(db, userId, now);
+  requireTowerUnlocked(draft);
+  const repo = new TowerRepository(db);
+  const row = await repo.findBySectId(draft.sect.id);
+  if (row === null || Number(row.max_floor) <= 0) {
+    throw new AppError('INVALID_STATUS', '先闯过第 1 层才能扫荡');
+  }
+  const todayKey = dateKeyUtc8(now);
+  if (row.sweep_date_key === todayKey) {
+    throw new AppError('DAILY_LIMIT', '今日已扫荡，明日再来');
+  }
+
+  const maxFloor = Number(row.max_floor);
+  const credited = grantTowerRewards(draft, towerSweepReward(maxFloor));
+  draft.addStatement(
+    upsertSectTowerStatement({
+      sectId: draft.sect.id,
+      maxFloor,
+      maxFloorAt: row.max_floor_at,
+      failDateKey: row.fail_date_key,
+      failCount: Number(row.fail_count),
+      sweepDateKey: todayKey,
+      now,
+    }),
+  );
+  const guardId = `${crypto.randomUUID()}:tower`;
+  await draft.commit({
+    extraGuards: [
+      { id: guardId, statement: sectTowerGuardStatement(guardId, draft.sect.id, Number(row.version)) },
+    ],
+  });
+
+  const after = await repo.findBySectId(draft.sect.id);
+  return {
+    state: draft.view(),
+    tower: await buildTowerView({ db, draft, row: after, now }),
+    result: {
+      maxFloor,
+      reward: credited,
+      message: `扫荡镇妖塔（最高第 ${String(maxFloor)} 层）：获得 ${towerRewardText(draft, credited)}`,
+    },
+  };
 }

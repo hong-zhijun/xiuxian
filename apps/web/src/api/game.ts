@@ -265,6 +265,8 @@ export interface SectStateView {
   activeExploration: ActiveExplorationView | null;
   /** 0025 世界 Boss（讨伐）：是否可出手（按钮角标；只有 sync 会给真值）。 */
   worldBoss: { attackable: boolean };
+  /** 0039 镇妖塔：今天还能扫荡（按钮角标；只有 sync / 塔面板会给真值）。 */
+  tower?: { sweepable: boolean };
   /**
    * 坊市面板：材料买卖价 + 可回收的丹药（价格单位都是最小单位灵石，前端只展示、不复算规则）。
    * 买入价 / 卖出价按「1 展示单位材料」计价，买入会被服务端再按材料容量上限挡一次。
@@ -2056,7 +2058,7 @@ export interface EquipmentItemView {
   subAttr: string;
   subAttrName: string;
   subValue: number;
-  source: 'forge' | 'boss';
+  source: 'forge' | 'boss' | 'tower';
   /** 0032 穿在身上时给弟子的战力加成（基点，按品质）。 */
   powerBonusBp: number;
   /** 穿在谁身上；null = 在背包里（背包 = 本宗未穿戴的装备）。 */
@@ -2205,5 +2207,126 @@ export async function salvageEquipment(
   return apiRequest<{ state: SectStateView; outcome: SalvageEquipmentOutcome }>(
     '/api/v1/game/salvage-equipment',
     { method: 'POST', body: { equipmentIds } },
+  );
+}
+
+/* ---------- 0039 镇妖塔 ---------- */
+
+export interface TowerAffixView {
+  id: string;
+  name: string;
+  effect: string;
+  tip: string;
+  /** 前端「推荐排序属性」。 */
+  sortAttribute: 'attack' | 'defense' | 'speed' | 'luck' | 'physique';
+}
+
+/** 守关妖物（血量 / 攻击已 × 100，与战报同一口径；身法、标准属性、标准战力是原值）。 */
+export interface TowerMonsterView {
+  floor: number;
+  name: string;
+  isBoss: boolean;
+  affix: TowerAffixView | null;
+  hp: number;
+  attack: number;
+  speed: number;
+  standardAttr: number;
+  standardPower: number;
+}
+
+/** 镇妖塔面板。资源数量一律是最小单位。 */
+export interface TowerView {
+  unlocked: boolean;
+  unlockSectLevel: number;
+  partySize: number;
+  maxRounds: number;
+  maxFloor: number;
+  nextFloor: number;
+  monster: TowerMonsterView;
+  clearReward: Record<string, number>;
+  /** 下一层首通送的装备品质（每 30 层一件）；背包满时不能挑战这一层。 */
+  clearEquipment: { quality: string; qualityName: string } | null;
+  bagCount: number;
+  bagCapacity: number;
+  upcoming: {
+    floor: number;
+    name: string;
+    isBoss: boolean;
+    affixName: string | null;
+    standardPower: number;
+    equipmentQualityName: string | null;
+  }[];
+  dailyFails: number;
+  failsUsed: number;
+  failsLeft: number;
+  sweptToday: boolean;
+  sweepReward: Record<string, number>;
+  rareFloor: number;
+  affixes: TowerAffixView[];
+  ranks: { rank: number; sectId: string; sectName: string; maxFloor: number; isMe: boolean }[];
+  myRank: number | null;
+}
+
+export interface TowerHitView {
+  discipleId: string;
+  name: string;
+  damage: number;
+  crit: boolean;
+  extra: boolean;
+}
+
+export interface TowerRoundView {
+  round: number;
+  teamFirst: boolean;
+  poisonDamage: number;
+  hits: TowerHitView[];
+  monsterDamage: number;
+  monsterHp: number;
+  teamHp: number;
+}
+
+export interface TowerChallengeResultView {
+  floor: number;
+  monsterName: string;
+  isBoss: boolean;
+  affix: TowerAffixView | null;
+  won: boolean;
+  failReason: 'wiped' | 'timeout' | null;
+  rounds: TowerRoundView[];
+  monsterMaxHp: number;
+  teamMaxHp: number;
+  vigor: number;
+  teamFirst: boolean;
+  reward: Record<string, number>;
+  equipment: { id: string; name: string; quality: string; qualityName: string; slot: string; slotName: string } | null;
+  members: { discipleId: string; name: string; power: number }[];
+  message: string;
+}
+
+export interface TowerSweepResultView {
+  maxFloor: number;
+  reward: Record<string, number>;
+  message: string;
+}
+
+export async function fetchTower(): Promise<{ state: SectStateView; tower: TowerView }> {
+  return apiRequest<{ state: SectStateView; tower: TowerView }>('/api/v1/game/tower');
+}
+
+export async function challengeTower(discipleIds: string[]): Promise<{
+  state: SectStateView;
+  tower: TowerView;
+  result: TowerChallengeResultView;
+}> {
+  return apiRequest<{ state: SectStateView; tower: TowerView; result: TowerChallengeResultView }>(
+    '/api/v1/game/tower/challenge',
+    { method: 'POST', body: { discipleIds } },
+  );
+}
+
+export async function sweepTower(): Promise<{ state: SectStateView; tower: TowerView; result: TowerSweepResultView }> {
+  return apiRequest<{ state: SectStateView; tower: TowerView; result: TowerSweepResultView }>(
+    '/api/v1/game/tower/sweep',
+    { method: 'POST' },
   );
 }

@@ -74,6 +74,7 @@ import { talentNeeds } from '../utils/talentNeeds';
 import SectLevelCatalogDialog from './SectLevelCatalogDialog.vue';
 import WorldBossDialog from './WorldBossDialog.vue';
 import MeritDialog from './MeritDialog.vue';
+import TowerDialog from './TowerDialog.vue';
 import ModalShell from './ModalShell.vue';
 
 /**
@@ -180,6 +181,7 @@ const openPanel = ref<
   | 'shop'
   | 'world-boss'
   | 'merit'
+  | 'tower'
   | 'steward'
   | null
 >(null);
@@ -1924,6 +1926,19 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
         <span>讨伐</span>
         <span v-if="state.worldBoss?.attackable" class="chip-badge">!</span>
       </button>
+      <button
+        class="action-chip"
+        type="button"
+        aria-label="镇妖塔：单人爬塔"
+        title="派 5 名弟子逐层闯塔，每天可扫荡一次"
+        @click="openPanel = 'tower'"
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 2.8 8 6.2h8L12 2.8ZM9 6.2v3.6h6V6.2M7.5 9.8h9l-.8 4.4H8.3l-.8-4.4Zm.8 4.4h7.4l.8 6.6H7.5l.8-6.6ZM10.6 20.8v-3.2h2.8v3.2" />
+        </svg>
+        <span>镇妖塔</span>
+        <span v-if="state.tower?.sweepable" class="chip-badge">!</span>
+      </button>
       <button class="action-chip" type="button" aria-label="功勋兑换" @click="openPanel = 'merit'">
         <svg viewBox="0 0 24 24" aria-hidden="true">
           <path d="M8 3h8l-1.5 5h-5L8 3Zm4 5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13Zm0 3.2 1.1 2.2 2.4.35-1.75 1.7.4 2.4L12 16.7l-2.15 1.15.4-2.4-1.75-1.7 2.4-.35L12 11.2Z" />
@@ -2260,6 +2275,17 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
 
   <ModalShell v-if="openPanel === 'merit'" :loading="busy" label="功勋" @close="openPanel = null">
     <MeritDialog
+      :state="state"
+      :busy="busy"
+      @state-update="(s: SectStateView) => emit('recruited', s)"
+      @notify="onWorldBossNotify"
+      @equipment-changed="loadEquipment"
+    />
+  </ModalShell>
+
+  <!-- 0039 镇妖塔：只在打开时 / 挑战后 / 扫荡后 / 点刷新时请求，不做定时轮询。 -->
+  <ModalShell v-if="openPanel === 'tower'" :loading="busy" label="镇妖塔" @close="openPanel = null">
+    <TowerDialog
       :state="state"
       :busy="busy"
       @state-update="(s: SectStateView) => emit('recruited', s)"

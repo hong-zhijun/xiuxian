@@ -3298,3 +3298,106 @@ export function equipmentGuardStatements(
   }
   return { guards, guardIds };
 }
+
+/* ---------- 0039 镇妖塔 ---------- */
+
+export interface SectTowerRow {
+  sect_id: string;
+  /** 历史最高层（0 = 一层都没过）。 */
+  max_floor: number;
+  /** 到达最高层的时间；排行榜同层先到先排。 */
+  max_floor_at: number | null;
+  /** 最近一次失败的 UTC+8 日期；与今天不同视为今天 0 次。 */
+  fail_date_key: string | null;
+  fail_count: number;
+  /** 最近一次扫荡的 UTC+8 日期。 */
+  sweep_date_key: string | null;
+  /** 每次写入 +1（并发守卫用）。 */
+  version: number;
+  updated_at: number;
+}
+
+export interface TowerRankRow {
+  sect_id: string;
+  sect_name: string;
+  max_floor: number;
+  max_floor_at: number | null;
+}
+
+export class TowerRepository extends ParamRepository {
+  async findBySectId(sectId: string): Promise<SectTowerRow | null> {
+    return this.one<SectTowerRow>({
+      sql: 'SELECT * FROM sect_towers WHERE sect_id = ?',
+      params: [sectId],
+    });
+  }
+
+  /** 排行榜：最高层降序、同层先到者在前；一层都没过的不上榜。 */
+  async topRanks(limit: number): Promise<TowerRankRow[]> {
+    return this.all<TowerRankRow>({
+      sql: `SELECT t.sect_id, s.name AS sect_name, t.max_floor, t.max_floor_at
+            FROM sect_towers t JOIN sects s ON s.id = t.sect_id
+            WHERE t.max_floor > 0
+            ORDER BY t.max_floor DESC, t.max_floor_at ASC
+            LIMIT ?`,
+      params: [limit],
+    });
+  }
+
+  /** 本宗名次（1 起）：排在前面的宗门数 + 1；没上榜（最高层 0）返回 null。 */
+  async rankOf(row: SectTowerRow | null): Promise<number | null> {
+    if (row === null || Number(row.max_floor) <= 0) return null;
+    const ahead = await this.one<{ cnt: number }>({
+      sql: `SELECT COUNT(*) AS cnt FROM sect_towers
+            WHERE max_floor > ? OR (max_floor = ? AND max_floor_at < ?)`,
+      params: [row.max_floor, row.max_floor, row.max_floor_at ?? 0],
+    });
+    return Number(ahead?.cnt ?? 0) + 1;
+  }
+}
+
+/** 镇妖塔进度写回（绝对值；没有行就建一行）：version 每次 +1，守卫靠它挡并发。 */
+export function upsertSectTowerStatement(input: {
+  sectId: string;
+  maxFloor: number;
+  maxFloorAt: number | null;
+  failDateKey: string | null;
+  failCount: number;
+  sweepDateKey: string | null;
+  now: number;
+}): ParameterizedQuery {
+  return {
+    sql: `INSERT INTO sect_towers
+            (sect_id, max_floor, max_floor_at, fail_date_key, fail_count, sweep_date_key, version, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, 1, ?)
+          ON CONFLICT (sect_id) DO UPDATE SET
+            max_floor = excluded.max_floor,
+            max_floor_at = excluded.max_floor_at,
+            fail_date_key = excluded.fail_date_key,
+            fail_count = excluded.fail_count,
+            sweep_date_key = excluded.sweep_date_key,
+            version = sect_towers.version + 1,
+            updated_at = excluded.updated_at`,
+    params: [
+      input.sectId,
+      input.maxFloor,
+      input.maxFloorAt,
+      input.failDateKey,
+      input.failCount,
+      input.sweepDateKey,
+      input.now,
+    ],
+  };
+}
+
+/**
+ * 镇妖塔并发守卫：本宗那一行的 version 必须仍是读到的值（没有行按 0），
+ * 否则整批回滚（同时点两次挑战 / 扫荡只成功一次）。
+ */
+export function sectTowerGuardStatement(guardId: string, sectId: string, version: number): ParameterizedQuery {
+  return {
+    sql: `INSERT INTO mutation_guards (command_id, valid)
+          SELECT ?, CASE WHEN COALESCE((SELECT version FROM sect_towers WHERE sect_id = ?), 0) = ? THEN 1 ELSE 0 END`,
+    params: [guardId, sectId, version],
+  };
+}

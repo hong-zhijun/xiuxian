@@ -16,7 +16,7 @@ export type EquipmentSlot = 'weapon' | 'armor' | 'artifact';
 export type EquipmentQuality = 'common' | 'spirit' | 'treasure' | 'immortal';
 /** 装备能加成的 5 项属性（与弟子表的 5 个 gear_ 列一一对应）。 */
 export type EquipmentAttr = 'attack' | 'defense' | 'speed' | 'luck' | 'physique';
-export type EquipmentSource = 'forge' | 'boss';
+export type EquipmentSource = 'forge' | 'boss' | 'tower';
 
 /** 一组属性的数值（基础属性、装备加成、两者之和都用它）。 */
 export interface AttrSet {

@@ -69,7 +69,7 @@ function dismiss(office: StewardOfficeView): void {
 
     <ul class="steward-rules">
       <li>每个职位只能任命拥有对应天赋的弟子，加成随执事境界提高。</li>
-      <li>执事照常修炼、突破，但<strong>不能出战</strong>（讨伐、秘境、切磋、守擂）。</li>
+      <li>执事照常修炼、突破，但<strong>不能出战</strong>（讨伐、秘境、切磋、守擂、镇妖塔）。</li>
       <li>卸任后有 {{ handoverHours }} 小时交接期，期间同样不能出战。</li>
       <li>同一职位每天只能任命一次；执事外出历练时加成暂停。</li>
     </ul>

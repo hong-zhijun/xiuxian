@@ -1340,6 +1340,8 @@ export interface SectStateView {
   activeExploration: ActiveExplorationView | null;
   /** 0025 世界 Boss（讨伐）：是否可出手（按钮角标用；只有 sync 会算真值）。 */
   worldBoss: { attackable: boolean };
+  /** 0039 镇妖塔：今天还能扫荡（按钮角标用；与 worldBoss 同理，只有 sync / 塔面板会算真值）。 */
+  tower: { sweepable: boolean };
 }
 
 /** 秘境列表视图（GET /game/realms）：规则（锁定/次数）由服务端算好，前端只渲染。 */
@@ -1723,6 +1725,8 @@ export interface SectStateInput {
    * 其他接口一律不给（默认 false）。前端据此在「讨伐」按钮上显示角标。
    */
   worldBossAttackable?: boolean;
+  /** 0039 镇妖塔：今天还能扫荡（与 worldBossAttackable 同理，其他接口默认 false）。 */
+  towerSweepable?: boolean;
   /** 0034 执事堂：本宗职位行。 */
   stewards: readonly SectStewardRow[];
 }
@@ -2265,6 +2269,7 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
     journey: journeySlot,
     activeExploration: input.activeExploration ?? null,
     worldBoss: { attackable: input.worldBossAttackable ?? false },
+    tower: { sweepable: input.towerSweepable ?? false },
     challenge: {
       dailyLimit: CHALLENGE_DAILY_LIMIT,
       usedToday: challengeDay.usedToday,
@@ -2640,4 +2645,127 @@ export function journeySlotView(input: {
     minAtHome: JOURNEY_MIN_DISCIPLES_AT_HOME,
     recent: journeyRecordViews(input.recent, input.now, JOURNEY_HISTORY_LIMIT),
   };
+}
+
+/* ---------- 0039 镇妖塔 ---------- */
+
+export interface TowerAffixView {
+  id: string;
+  name: string;
+  effect: string;
+  tip: string;
+  /** 前端「推荐排序属性」。 */
+  sortAttribute: 'attack' | 'defense' | 'speed' | 'luck' | 'physique';
+}
+
+/** 守关妖物（血量 / 攻击已 × 100，与战报同一口径；身法、标准属性、标准战力是原值）。 */
+export interface TowerMonsterView {
+  floor: number;
+  name: string;
+  isBoss: boolean;
+  affix: TowerAffixView | null;
+  hp: number;
+  /** 每回合攻击（未计防御减免）。 */
+  attack: number;
+  speed: number;
+  /** 本层标准属性（铁壁的门槛）。 */
+  standardAttr: number;
+  /** 本层标准弟子战力：5 名这个战力的弟子普通层基本能过。 */
+  standardPower: number;
+}
+
+/** 镇妖塔面板（GET /game/tower 与挑战 / 扫荡回执里的 tower）。资源数量一律是最小单位。 */
+export interface TowerView {
+  unlocked: boolean;
+  unlockSectLevel: number;
+  partySize: number;
+  maxRounds: number;
+  /** 历史最高层（0 = 一层都没过）。 */
+  maxFloor: number;
+  /** 下一次挑战的层数 = 最高层 + 1。 */
+  nextFloor: number;
+  monster: TowerMonsterView;
+  /** 打过下一层能拿的通关奖励。 */
+  clearReward: Record<string, number>;
+  /** 下一层首通送的装备品质（每 30 层一件）；没有为 null。背包满时不能挑战这一层。 */
+  clearEquipment: { quality: string; qualityName: string } | null;
+  /** 背包占用 / 容量（首通有装备时用来提前提示）。 */
+  bagCount: number;
+  bagCapacity: number;
+  /** 接下来 5 层的预告。 */
+  upcoming: {
+    floor: number;
+    name: string;
+    isBoss: boolean;
+    affixName: string | null;
+    standardPower: number;
+    equipmentQualityName: string | null;
+  }[];
+  dailyFails: number;
+  failsUsed: number;
+  failsLeft: number;
+  sweptToday: boolean;
+  /** 按当前最高层的扫荡奖励（最高层 0 时为空对象）。 */
+  sweepReward: Record<string, number>;
+  /** 玄铁 / 神木开始出现的层数。 */
+  rareFloor: number;
+  /** 词缀总表（规则说明用）。 */
+  affixes: TowerAffixView[];
+  ranks: { rank: number; sectId: string; sectName: string; maxFloor: number; isMe: boolean }[];
+  /** 本宗名次；还没上榜为 null。 */
+  myRank: number | null;
+}
+
+export interface TowerHitView {
+  discipleId: string;
+  name: string;
+  damage: number;
+  crit: boolean;
+  /** 身法追击。 */
+  extra: boolean;
+}
+
+export interface TowerRoundView {
+  round: number;
+  teamFirst: boolean;
+  poisonDamage: number;
+  hits: TowerHitView[];
+  monsterDamage: number;
+  monsterHp: number;
+  teamHp: number;
+}
+
+/** 挑战回执：逐回合战报 + 实际到账的通关奖励（败时为空对象）。 */
+export interface TowerChallengeResultView {
+  floor: number;
+  monsterName: string;
+  isBoss: boolean;
+  affix: TowerAffixView | null;
+  won: boolean;
+  failReason: 'wiped' | 'timeout' | null;
+  rounds: TowerRoundView[];
+  monsterMaxHp: number;
+  teamMaxHp: number;
+  /** 妖物状态（0.9~1.1）。 */
+  vigor: number;
+  teamFirst: boolean;
+  reward: Record<string, number>;
+  /** 首通送的装备（每 30 层一件）；没有为 null。 */
+  equipment: {
+    id: string;
+    name: string;
+    quality: string;
+    qualityName: string;
+    slot: string;
+    slotName: string;
+  } | null;
+  members: { discipleId: string; name: string; power: number }[];
+  message: string;
+}
+
+/** 扫荡回执：实际到账（截断到容量后）。 */
+export interface TowerSweepResultView {
+  maxFloor: number;
+  reward: Record<string, number>;
+  message: string;
 }

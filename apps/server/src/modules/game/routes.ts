@@ -49,6 +49,7 @@ import {
   wheelSpinRequestSchema,
   worldBossAttackRequestSchema,
   worldBossExchangeRequestSchema,
+  towerChallengeRequestSchema,
 } from './schema';
 import {
   abandonRealmExplore,
@@ -83,6 +84,9 @@ import {
   dismissSteward,
   attackWorldBoss,
   exchangeBossMerit,
+  getTower,
+  challengeTower,
+  sweepTower,
   getMeritShop,
   getRaceHistory,
   getRaceState,
@@ -689,6 +693,28 @@ export function createGameRoutes(): Hono<AppEnv> {
   routes.get('/game/merit-shop', (c) => {
     requireUserId(c);
     return respondOk(c, { shop: getMeritShop() });
+  });
+
+  // 0039 镇妖塔：面板（进度、下一层妖物、次数、扫荡、排行榜；不写库）。
+  routes.get('/game/tower', async (c) => {
+    const userId = requireUserId(c);
+    const result = await getTower(getDb(c.env), userId, Date.now());
+    return respondOk(c, { state: result.state, tower: result.tower });
+  });
+
+  // 0039 镇妖塔：挑战「最高层 + 1」（固定 5 人；赢了发通关奖励，输了扣 1 次失败机会；一次受保护 batch）。
+  routes.post('/game/tower/challenge', async (c) => {
+    const userId = requireUserId(c);
+    const body = await parseStrictJson(towerChallengeRequestSchema, c);
+    const result = await challengeTower(getDb(c.env), userId, body, Date.now());
+    return respondOk(c, { state: result.state, tower: result.tower, result: result.result });
+  });
+
+  // 0039 镇妖塔：每日扫荡（按此刻的最高层发奖，一天一次）。
+  routes.post('/game/tower/sweep', async (c) => {
+    const userId = requireUserId(c);
+    const result = await sweepTower(getDb(c.env), userId, Date.now());
+    return respondOk(c, { state: result.state, tower: result.tower, result: result.result });
   });
 
   // 世界 Boss 三期：功勋兑换（结算 → 价目 / 余额 / 背包校验 → 扣功勋 + 发玄铁或装备，一次受保护 batch）。
