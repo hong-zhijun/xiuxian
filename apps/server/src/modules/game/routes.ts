@@ -56,6 +56,8 @@ import {
   auctionLotRequestSchema,
   veinPartyRequestSchema,
   veinWithdrawRequestSchema,
+  marketTradeRequestSchema,
+  marketChartQuerySchema,
 } from './schema';
 import {
   abandonRealmExplore,
@@ -105,6 +107,9 @@ import {
   attackVein,
   setVeinGarrison,
   withdrawVein,
+  getMarket,
+  getMarketChart,
+  tradeStock,
   getMeritShop,
   getRaceHistory,
   getRaceState,
@@ -733,6 +738,32 @@ export function createGameRoutes(): Hono<AppEnv> {
     const userId = requireUserId(c);
     const result = await sweepTower(getDb(c.env), userId, Date.now());
     return respondOk(c, { state: result.state, tower: result.tower, result: result.result });
+  });
+
+  // 0043 灵股：行情面板（价格按服务端此刻分钟现算，不写库）。
+  routes.get('/game/market', async (c) => {
+    const userId = requireUserId(c);
+    const result = await getMarket(getDb(c.env), userId, Date.now());
+    return respondOk(c, { state: result.state, market: result.market });
+  });
+
+  // 0043 灵股：K 线（按需现算）。
+  routes.get('/game/market/chart', async (c) => {
+    requireUserId(c);
+    const query = marketChartQuerySchema.safeParse({ stockId: c.req.query('stockId'), range: c.req.query('range') });
+    if (!query.success) {
+      throw new AppError('VALIDATION_ERROR', '缺少或非法的 stockId / range');
+    }
+    const chart = await getMarketChart(getDb(c.env), query.data.stockId, query.data.range, Date.now());
+    return respondOk(c, { chart });
+  });
+
+  // 0043 灵股：买入 / 卖出（结算 → 次数 / 持仓上限 / 锁定期校验 → 一次受保护 batch）。
+  routes.post('/game/market/trade', async (c) => {
+    const userId = requireUserId(c);
+    const body = await parseStrictJson(marketTradeRequestSchema, c);
+    const result = await tradeStock(getDb(c.env), userId, body, Date.now());
+    return respondOk(c, { state: result.state, market: result.market, result: result.result });
   });
 
   // 0042 灵脉争夺：面板（先顺手结算产出 / 枯竭）。

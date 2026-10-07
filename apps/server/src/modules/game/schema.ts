@@ -417,3 +417,16 @@ export const veinPartyRequestSchema = z.strictObject({
 export const veinWithdrawRequestSchema = z.strictObject({
   veinId: z.string().min(1).max(32),
 });
+
+/** 0043 灵股：买入 / 卖出（股数上限与能否成交由 service 校验）。 */
+export const marketTradeRequestSchema = z.strictObject({
+  stockId: z.string().min(1).max(32),
+  side: z.enum(['buy', 'sell']),
+  shares: z.number().int().min(1).max(100_000),
+});
+
+/** 0043 灵股：K 线查询参数。 */
+export const marketChartQuerySchema = z.strictObject({
+  stockId: z.string().min(1).max(32),
+  range: z.enum(['1h', '6h', '1d', '7d']),
+});

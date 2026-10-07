@@ -414,6 +414,34 @@ import {
   type VeinDef,
   type VeinRound,
 } from './veins';
+import {
+  insertStockTradeStatement,
+  stockHoldingGuardStatement,
+  upsertStockHoldingStatement,
+  MarketRepository,
+  type StockHoldingRow,
+} from './repository';
+import {
+  findStock,
+  marketFee,
+  marketIndexAt,
+  marketMinuteOf,
+  marketPositionCap,
+  marketSellableAt,
+  newsBetween,
+  seedNumberOf,
+  stockCandles,
+  stockPriceAt,
+  CHART_RANGES,
+  MARKET_DAILY_TRADES,
+  MARKET_FEE_BP,
+  MARKET_HOLD_MS,
+  MARKET_MAX_SHARES_PER_TRADE,
+  MARKET_TICK_MS,
+  MARKET_UNLOCK_SECT_LEVEL,
+  STOCKS,
+  type ChartRange,
+} from './market';
 import { settleEconomy, resourceRates, type SettleResult } from './settle';
 import {
   simulateTowerBattle,
@@ -589,6 +617,10 @@ import {
   type VeinBattleResultView,
   type VeinPanelView,
   type VeinView,
+  type MarketChartView,
+  type MarketTradeResultView,
+  type MarketView,
+  type StockView,
 } from './view';
 /**
  * 游戏服务（一次性可玩版本）。
@@ -11384,4 +11416,278 @@ export async function retractAuctionBid(
     now,
     `已撤销对 ${auctionItemLabel(lot)} 的出价：退回 ${displayAmount(price - penalty)} 灵石，违约金 ${displayAmount(penalty)} 灵石赔给卖家`,
   );
+}
+
+/* ------------------------------------------------------------------ *
+ * 0043 灵股行情（docs/灵股行情开发计划.md）
+ *
+ * 系统坐庄：价格由 market.ts 按「库里的种子 + 当前分钟」算出，成交一律用服务端此刻的价格。
+ * 买卖都是一次受保护 batch：宗门快照守卫（灵石余额）+ 这支持仓的 version 守卫。
+ * ------------------------------------------------------------------ */
+
+const MARKET_RECENT_TRADES = 20;
+const MARKET_RANKS = 10;
+
+/** 种子：库里没有就生成一个（INSERT OR IGNORE，并发时以先插入的为准）。 */
+async function marketSeedOf(db: D1Database, now: number): Promise<number> {
+  const repo = new MarketRepository(db);
+  let seed = await repo.seed();
+  if (seed === null) {
+    const bytes = new Uint8Array(16);
+    crypto.getRandomValues(bytes);
+    await repo.ensureSeed(Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join(''), now);
+    seed = await repo.seed();
+  }
+  return seedNumberOf(seed ?? 'fallback');
+}
+
+function requireMarketUnlocked(draft: SectDraft): void {
+  if (Number(draft.sect.level) < MARKET_UNLOCK_SECT_LEVEL) {
+    throw new AppError('INVALID_STATUS', `宗门 ${String(MARKET_UNLOCK_SECT_LEVEL)} 级开放灵股`);
+  }
+}
+
+function pctChange(from: number, to: number): number {
+  return from <= 0 ? 0 : Math.round(((to - from) / from) * 10_000) / 100;
+}
+
+async function buildMarketView(db: D1Database, draft: SectDraft, now: number): Promise<MarketView> {
+  const seed = await marketSeedOf(db, now);
+  const repo = new MarketRepository(db);
+  const [holdings, tradesUsed, trades, ranks, myProfit] = await Promise.all([
+    repo.holdingsOf(draft.sect.id),
+    repo.countTradesSince(draft.sect.id, dayStartMs(now)),
+    repo.recentTradesOf(draft.sect.id, MARKET_RECENT_TRADES),
+    repo.topProfits(MARKET_RANKS),
+    repo.realizedProfitOf(draft.sect.id),
+  ]);
+  const minute = marketMinuteOf(now);
+  const holdingOf = new Map(holdings.map((row) => [row.stock_id, row]));
+  const stocks: StockView[] = STOCKS.map((stock) => {
+    const price = stockPriceAt(seed, stock, minute);
+    let high = price;
+    let low = price;
+    for (let m = minute - 24 * 60; m < minute; m += 15) {
+      const sample = stockPriceAt(seed, stock, m);
+      if (sample > high) high = sample;
+      if (sample < low) low = sample;
+    }
+    const row = holdingOf.get(stock.id);
+    const shares = row === undefined ? 0 : Number(row.shares);
+    const cost = row === undefined ? 0 : Number(row.cost);
+    const marketValue = price * shares;
+    return {
+      id: stock.id,
+      name: stock.name,
+      code: stock.code,
+      sector: stock.sector,
+      description: stock.description,
+      price,
+      prevPrice: stockPriceAt(seed, stock, minute - 1),
+      change24hPct: pctChange(stockPriceAt(seed, stock, minute - 24 * 60), price),
+      high24h: high,
+      low24h: low,
+      holding:
+        shares <= 0
+          ? null
+          : {
+              shares,
+              cost,
+              avgPrice: Math.round(cost / shares),
+              marketValue,
+              profit: marketValue - cost,
+              profitPct: pctChange(cost, marketValue),
+              sellableAt: marketSellableAt(row?.last_buy_at === null || row === undefined ? null : Number(row.last_buy_at)),
+            },
+    };
+  });
+  const indexNow = marketIndexAt(seed, minute);
+  return {
+    unlocked: Number(draft.sect.level) >= MARKET_UNLOCK_SECT_LEVEL,
+    unlockSectLevel: MARKET_UNLOCK_SECT_LEVEL,
+    feeBp: MARKET_FEE_BP,
+    holdMinutes: MARKET_HOLD_MS / 60_000,
+    dailyTrades: MARKET_DAILY_TRADES,
+    tradesUsed,
+    tradesLeft: Math.max(0, MARKET_DAILY_TRADES - tradesUsed),
+    positionCap: marketPositionCap(draft.resourceCapacityOf('spiritStone')),
+    maxSharesPerTrade: MARKET_MAX_SHARES_PER_TRADE,
+    serverNow: now,
+    nextTickAt: (minute + 1) * MARKET_TICK_MS,
+    index: { value: indexNow, change24hPct: pctChange(marketIndexAt(seed, minute - 24 * 60), indexNow) },
+    stocks,
+    news: newsBetween(seed, minute - 24 * 60, minute).map((news) => ({
+      id: news.id,
+      at: news.minute * MARKET_TICK_MS,
+      stockId: news.stockId,
+      stockName: news.stockId === null ? '坊市' : (findStock(news.stockId)?.name ?? news.stockId),
+      direction: news.direction,
+      title: news.title,
+    })),
+    myTrades: trades.map((row) => ({
+      id: row.id,
+      stockId: row.stock_id,
+      stockName: findStock(row.stock_id)?.name ?? row.stock_id,
+      side: row.side === 'sell' ? 'sell' : 'buy',
+      shares: Number(row.shares),
+      price: Number(row.price),
+      amount: Number(row.amount),
+      fee: Number(row.fee),
+      profit: Number(row.profit),
+      createdAt: Number(row.created_at),
+    })),
+    myProfit,
+    ranks: ranks.map((row, index) => ({
+      rank: index + 1,
+      sectName: row.sect_name,
+      profit: Number(row.profit),
+      isMe: row.sect_id === draft.sect.id,
+    })),
+  };
+}
+
+/** GET /game/market：行情面板（不写本宗数据）。 */
+export async function getMarket(
+  db: D1Database,
+  userId: string,
+  now: number,
+): Promise<{ state: SectStateView; market: MarketView }> {
+  const draft = await draftFor(db, userId, now);
+  return { state: draft.view(), market: await buildMarketView(db, draft, now) };
+}
+
+/** GET /game/market/chart：某支股票的 K 线（按需现算）。 */
+export async function getMarketChart(
+  db: D1Database,
+  stockId: string,
+  range: ChartRange,
+  now: number,
+): Promise<MarketChartView> {
+  const stock = findStock(stockId);
+  if (stock === undefined) throw new AppError('NOT_FOUND', '股票不存在');
+  const seed = await marketSeedOf(db, now);
+  return {
+    stockId,
+    range,
+    candleMinutes: CHART_RANGES[range].minutes,
+    candles: stockCandles(seed, stock, marketMinuteOf(now), range),
+  };
+}
+
+/**
+ * POST /game/market/trade：按服务端此刻价格买入 / 卖出。
+ * 买：扣（金额 + 0.3% 手续费）灵石，持仓成本 + 金额，不得超过上限；记最近买入时间。
+ * 卖：最近一次买入 10 分钟后才能卖；得（金额 − 手续费），按比例扣持仓成本，差额记为已实现收益。
+ */
+export async function tradeStock(
+  db: D1Database,
+  userId: string,
+  input: { stockId: string; side: 'buy' | 'sell'; shares: number },
+  now: number,
+): Promise<{ state: SectStateView; market: MarketView; result: MarketTradeResultView }> {
+  const draft = await draftFor(db, userId, now);
+  requireMarketUnlocked(draft);
+  const stock = findStock(input.stockId);
+  if (stock === undefined) throw new AppError('NOT_FOUND', '股票不存在');
+  const shares = input.shares;
+  if (!Number.isInteger(shares) || shares < 1 || shares > MARKET_MAX_SHARES_PER_TRADE) {
+    throw new AppError('VALIDATION_ERROR', `一笔 1～${String(MARKET_MAX_SHARES_PER_TRADE)} 股`);
+  }
+  const repo = new MarketRepository(db);
+  const tradesUsed = await repo.countTradesSince(draft.sect.id, dayStartMs(now));
+  if (tradesUsed >= MARKET_DAILY_TRADES) {
+    throw new AppError('DAILY_LIMIT', `今日成交已达 ${String(MARKET_DAILY_TRADES)} 笔，明日再来`);
+  }
+  const seed = await marketSeedOf(db, now);
+  const price = stockPriceAt(seed, stock, marketMinuteOf(now));
+  const holding: StockHoldingRow | undefined = (await repo.holdingsOf(draft.sect.id)).find(
+    (row) => row.stock_id === stock.id,
+  );
+  const heldShares = holding === undefined ? 0 : Number(holding.shares);
+  const heldCost = holding === undefined ? 0 : Number(holding.cost);
+  const amount = price * shares;
+  const fee = marketFee(amount);
+  let profit = 0;
+  let message: string;
+
+  if (input.side === 'buy') {
+    const cap = marketPositionCap(draft.resourceCapacityOf('spiritStone'));
+    if (heldCost + amount > cap) {
+      throw new AppError(
+        'INVALID_STATUS',
+        `这支股票的持仓成本最多 ${displayAmount(cap)} 灵石（宗门灵石容量的 20%），还能再买 ${displayAmount(Math.max(0, cap - heldCost))} 灵石`,
+      );
+    }
+    draft.requireResource('spiritStone', amount + fee);
+    draft.addStatement(
+      upsertStockHoldingStatement({
+        sectId: draft.sect.id,
+        stockId: stock.id,
+        shares: heldShares + shares,
+        cost: heldCost + amount,
+        lastBuyAt: now,
+        now,
+      }),
+    );
+    message = `以 ${displayAmount(price)} 买入 ${stock.name} ${String(shares)} 股，花费 ${displayAmount(amount + fee)} 灵石（含手续费 ${displayAmount(fee)}）`;
+  } else {
+    if (shares > heldShares) {
+      throw new AppError('INVALID_STATUS', `${stock.name}只持有 ${String(heldShares)} 股`);
+    }
+    const sellableAt = marketSellableAt(holding?.last_buy_at === null || holding === undefined ? null : Number(holding.last_buy_at));
+    if (sellableAt !== null && sellableAt > now) {
+      throw new AppError('INVALID_STATUS', `买入后 10 分钟内不能卖出，还需 ${String(Math.ceil((sellableAt - now) / 60_000))} 分钟`);
+    }
+    const costPortion = shares === heldShares ? heldCost : Math.floor((heldCost * shares) / heldShares);
+    const proceeds = Math.max(0, amount - fee);
+    profit = proceeds - costPortion;
+    draft.grantResource('spiritStone', proceeds);
+    draft.addStatement(
+      upsertStockHoldingStatement({
+        sectId: draft.sect.id,
+        stockId: stock.id,
+        shares: heldShares - shares,
+        cost: heldCost - costPortion,
+        lastBuyAt: holding?.last_buy_at === undefined ? null : holding.last_buy_at,
+        now,
+      }),
+    );
+    message = `以 ${displayAmount(price)} 卖出 ${stock.name} ${String(shares)} 股，到手 ${displayAmount(proceeds)} 灵石，${profit >= 0 ? '盈利' : '亏损'} ${displayAmount(Math.abs(profit))}`;
+  }
+
+  draft.addStatement(
+    insertStockTradeStatement({
+      id: crypto.randomUUID(),
+      sectId: draft.sect.id,
+      stockId: stock.id,
+      side: input.side,
+      shares,
+      price,
+      amount,
+      fee,
+      profit,
+      now,
+    }),
+  );
+  const guardId = `${crypto.randomUUID()}:stock`;
+  try {
+    await draft.commit({
+      extraGuards: [
+        {
+          id: guardId,
+          statement: stockHoldingGuardStatement(guardId, draft.sect.id, stock.id, Number(holding?.version ?? 0)),
+        },
+      ],
+    });
+  } catch (error) {
+    if (error instanceof AppError && error.code === 'INVALID_STATUS') {
+      throw new AppError('INVALID_STATUS', '持仓刚有变动，请刷新后再试');
+    }
+    throw error;
+  }
+  return {
+    state: draft.view(),
+    market: await buildMarketView(db, draft, now),
+    result: { side: input.side, stockId: stock.id, stockName: stock.name, shares, price, amount, fee, profit, message },
+  };
 }

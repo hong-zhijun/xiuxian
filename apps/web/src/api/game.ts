@@ -2546,3 +2546,114 @@ export async function setVeinGarrison(veinId: string, discipleIds: string[]): Pr
 export async function withdrawVein(veinId: string): Promise<VeinActionResponse> {
   return apiRequest<VeinActionResponse>('/api/v1/game/veins/withdraw', { method: 'POST', body: { veinId } });
 }
+
+/* ---------- 0043 灵股行情 ---------- */
+
+export interface StockHoldingView {
+  shares: number;
+  cost: number;
+  avgPrice: number;
+  marketValue: number;
+  profit: number;
+  profitPct: number;
+  sellableAt: number | null;
+}
+
+/** 一支股票（价格 / 金额都是最小单位灵石）。 */
+export interface StockView {
+  id: string;
+  name: string;
+  code: string;
+  sector: string;
+  description: string;
+  price: number;
+  prevPrice: number;
+  change24hPct: number;
+  high24h: number;
+  low24h: number;
+  holding: StockHoldingView | null;
+}
+
+export interface MarketNewsView {
+  id: string;
+  at: number;
+  stockId: string | null;
+  stockName: string;
+  direction: 1 | -1;
+  title: string;
+}
+
+export interface StockTradeView {
+  id: string;
+  stockId: string;
+  stockName: string;
+  side: 'buy' | 'sell';
+  shares: number;
+  price: number;
+  amount: number;
+  fee: number;
+  profit: number;
+  createdAt: number;
+}
+
+export interface MarketView {
+  unlocked: boolean;
+  unlockSectLevel: number;
+  feeBp: number;
+  holdMinutes: number;
+  dailyTrades: number;
+  tradesUsed: number;
+  tradesLeft: number;
+  positionCap: number;
+  maxSharesPerTrade: number;
+  serverNow: number;
+  nextTickAt: number;
+  index: { value: number; change24hPct: number };
+  stocks: StockView[];
+  news: MarketNewsView[];
+  myTrades: StockTradeView[];
+  myProfit: number;
+  ranks: { rank: number; sectName: string; profit: number; isMe: boolean }[];
+}
+
+export type MarketChartRange = '1h' | '6h' | '1d' | '7d';
+
+export interface MarketChartView {
+  stockId: string;
+  range: MarketChartRange;
+  candleMinutes: number;
+  candles: { t: number; o: number; h: number; l: number; c: number }[];
+}
+
+export interface MarketTradeResultView {
+  side: 'buy' | 'sell';
+  stockId: string;
+  stockName: string;
+  shares: number;
+  price: number;
+  amount: number;
+  fee: number;
+  profit: number;
+  message: string;
+}
+
+export async function fetchMarket(): Promise<{ state: SectStateView; market: MarketView }> {
+  return apiRequest<{ state: SectStateView; market: MarketView }>('/api/v1/game/market');
+}
+
+export async function fetchMarketChart(stockId: string, range: MarketChartRange): Promise<{ chart: MarketChartView }> {
+  return apiRequest<{ chart: MarketChartView }>(
+    `/api/v1/game/market/chart?stockId=${encodeURIComponent(stockId)}&range=${range}`,
+  );
+}
+
+export async function tradeStock(
+  stockId: string,
+  side: 'buy' | 'sell',
+  shares: number,
+): Promise<{ state: SectStateView; market: MarketView; result: MarketTradeResultView }> {
+  return apiRequest<{ state: SectStateView; market: MarketView; result: MarketTradeResultView }>(
+    '/api/v1/game/market/trade',
+    { method: 'POST', body: { stockId, side, shares } },
+  );
+}

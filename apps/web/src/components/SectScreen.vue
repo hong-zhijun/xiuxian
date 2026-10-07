@@ -77,6 +77,7 @@ import MeritDialog from './MeritDialog.vue';
 import TowerDialog from './TowerDialog.vue';
 import AuctionDialog from './AuctionDialog.vue';
 import VeinDialog from './VeinDialog.vue';
+import MarketDialog from './MarketDialog.vue';
 import ModalShell from './ModalShell.vue';
 
 /**
@@ -186,6 +187,7 @@ const openPanel = ref<
   | 'tower'
   | 'auction'
   | 'veins'
+  | 'market'
   | 'steward'
   | null
 >(null);
@@ -1978,7 +1980,7 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
           <span>灵脉</span>
         </button>
       </div>
-      <div class="action-group" role="group" aria-label="市集" :style="{ '--chips': 4 }">
+      <div class="action-group" role="group" aria-label="市集" :style="{ '--chips': 5 }">
         <span class="action-group-label" aria-hidden="true">市集</span>
         <button class="action-chip" type="button" @click="openPanel = 'shop'">
           <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -2004,6 +2006,18 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
           </svg>
           <span>拍卖行</span>
           <span v-if="(state.auction?.claimable ?? 0) > 0" class="chip-badge">{{ state.auction?.claimable }}</span>
+        </button>
+        <button
+          class="action-chip"
+          type="button"
+          aria-label="灵股：系统坐庄的股票行情"
+          title="看消息、看 K 线，低买高卖"
+          @click="openPanel = 'market'"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M4 20h16M6 16l4-5 3 3 5-7M15 7h3v3" />
+          </svg>
+          <span>灵股</span>
         </button>
         <button class="action-chip" type="button" aria-label="功勋兑换" @click="openPanel = 'merit'">
           <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -2381,6 +2395,16 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
       @state-update="(s: SectStateView) => emit('recruited', s)"
       @notify="onWorldBossNotify"
       @equipment-changed="loadEquipment"
+    />
+  </ModalShell>
+
+  <!-- 0043 灵股：面板打开期间每分钟（按服务端下一跳时刻）自动刷新一次，关掉即停。 -->
+  <ModalShell v-if="openPanel === 'market'" :loading="busy" label="灵股行情" @close="openPanel = null">
+    <MarketDialog
+      :state="state"
+      :busy="busy"
+      @state-update="(s: SectStateView) => emit('recruited', s)"
+      @notify="onWorldBossNotify"
     />
   </ModalShell>
 

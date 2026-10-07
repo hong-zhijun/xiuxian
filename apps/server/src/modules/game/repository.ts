@@ -3786,3 +3786,148 @@ export function spiritVeinGuardStatement(guardId: string, veinId: string, versio
     params: [guardId, veinId, version],
   };
 }
+
+/* ---------- 0043 灵股行情 ---------- */
+
+export interface StockHoldingRow {
+  sect_id: string;
+  stock_id: string;
+  shares: number;
+  /** 持仓成本（最小单位，不含手续费）。 */
+  cost: number;
+  last_buy_at: number | null;
+  version: number;
+  updated_at: number;
+}
+
+export interface StockTradeRow {
+  id: string;
+  sect_id: string;
+  stock_id: string;
+  side: string;
+  shares: number;
+  price: number;
+  amount: number;
+  fee: number;
+  profit: number;
+  created_at: number;
+}
+
+export class MarketRepository extends ParamRepository {
+  async seed(): Promise<string | null> {
+    const row = await this.one<{ seed: string }>({ sql: "SELECT seed FROM market_state WHERE id = 'main'", params: [] });
+    return row?.seed ?? null;
+  }
+
+  /** 第一次用时生成种子（并发时只有第一条插得进去）。 */
+  async ensureSeed(seed: string, now: number): Promise<void> {
+    await this.execute({
+      sql: "INSERT OR IGNORE INTO market_state (id, seed, created_at) VALUES ('main', ?, ?)",
+      params: [seed, now],
+    });
+  }
+
+  async holdingsOf(sectId: string): Promise<StockHoldingRow[]> {
+    return this.all<StockHoldingRow>({ sql: 'SELECT * FROM stock_holdings WHERE sect_id = ?', params: [sectId] });
+  }
+
+  async countTradesSince(sectId: string, since: number): Promise<number> {
+    const row = await this.one<{ cnt: number }>({
+      sql: 'SELECT COUNT(*) AS cnt FROM stock_trades WHERE sect_id = ? AND created_at >= ?',
+      params: [sectId, since],
+    });
+    return Number(row?.cnt ?? 0);
+  }
+
+  async recentTradesOf(sectId: string, limit: number): Promise<StockTradeRow[]> {
+    return this.all<StockTradeRow>({
+      sql: 'SELECT * FROM stock_trades WHERE sect_id = ? ORDER BY created_at DESC LIMIT ?',
+      params: [sectId, limit],
+    });
+  }
+
+  /** 收益榜：累计已实现收益（只算卖出），带宗门当前名字。 */
+  async topProfits(limit: number): Promise<{ sect_id: string; sect_name: string; profit: number }[]> {
+    return this.all<{ sect_id: string; sect_name: string; profit: number }>({
+      sql: `SELECT t.sect_id, s.name AS sect_name, SUM(t.profit) AS profit
+            FROM stock_trades t JOIN sects s ON s.id = t.sect_id
+            WHERE t.side = 'sell'
+            GROUP BY t.sect_id, s.name
+            ORDER BY profit DESC
+            LIMIT ?`,
+      params: [limit],
+    });
+  }
+
+  async realizedProfitOf(sectId: string): Promise<number> {
+    const row = await this.one<{ profit: number | null }>({
+      sql: "SELECT SUM(profit) AS profit FROM stock_trades WHERE sect_id = ? AND side = 'sell'",
+      params: [sectId],
+    });
+    return Number(row?.profit ?? 0);
+  }
+}
+
+/** 持仓写回（绝对值；没有行就建一行；version +1）。 */
+export function upsertStockHoldingStatement(input: {
+  sectId: string;
+  stockId: string;
+  shares: number;
+  cost: number;
+  lastBuyAt: number | null;
+  now: number;
+}): ParameterizedQuery {
+  return {
+    sql: `INSERT INTO stock_holdings (sect_id, stock_id, shares, cost, last_buy_at, version, updated_at)
+          VALUES (?, ?, ?, ?, ?, 1, ?)
+          ON CONFLICT (sect_id, stock_id) DO UPDATE SET
+            shares = excluded.shares, cost = excluded.cost, last_buy_at = excluded.last_buy_at,
+            version = stock_holdings.version + 1, updated_at = excluded.updated_at`,
+    params: [input.sectId, input.stockId, input.shares, input.cost, input.lastBuyAt, input.now],
+  };
+}
+
+export function insertStockTradeStatement(input: {
+  id: string;
+  sectId: string;
+  stockId: string;
+  side: 'buy' | 'sell';
+  shares: number;
+  price: number;
+  amount: number;
+  fee: number;
+  profit: number;
+  now: number;
+}): ParameterizedQuery {
+  return {
+    sql: `INSERT INTO stock_trades (id, sect_id, stock_id, side, shares, price, amount, fee, profit, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    params: [
+      input.id,
+      input.sectId,
+      input.stockId,
+      input.side,
+      input.shares,
+      input.price,
+      input.amount,
+      input.fee,
+      input.profit,
+      input.now,
+    ],
+  };
+}
+
+/** 并发守卫：这支持仓的 version 必须仍是读到的值（没有行按 0）。 */
+export function stockHoldingGuardStatement(
+  guardId: string,
+  sectId: string,
+  stockId: string,
+  version: number,
+): ParameterizedQuery {
+  return {
+    sql: `INSERT INTO mutation_guards (command_id, valid)
+          SELECT ?, CASE WHEN COALESCE((SELECT version FROM stock_holdings WHERE sect_id = ? AND stock_id = ?), 0) = ?
+            THEN 1 ELSE 0 END`,
+    params: [guardId, sectId, stockId, version],
+  };
+}

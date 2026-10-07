@@ -2954,3 +2954,104 @@ export interface VeinBattleResultView {
   /** 进攻失败时受伤的弟子名。 */
   injured: string[];
 }
+
+/* ---------- 0043 灵股行情 ---------- */
+
+/** 一支股票的持仓（价格 / 金额都是最小单位）。 */
+export interface StockHoldingView {
+  shares: number;
+  /** 持仓成本（不含手续费）。 */
+  cost: number;
+  avgPrice: number;
+  marketValue: number;
+  /** 浮动盈亏 = 市值 − 成本（不含卖出手续费）。 */
+  profit: number;
+  profitPct: number;
+  /** 什么时候能卖（毫秒）；null 或已过 = 现在就能卖。 */
+  sellableAt: number | null;
+}
+
+export interface StockView {
+  id: string;
+  name: string;
+  code: string;
+  sector: string;
+  description: string;
+  /** 现价（最小单位）。 */
+  price: number;
+  /** 上一分钟的价格（涨跌箭头用）。 */
+  prevPrice: number;
+  change24hPct: number;
+  high24h: number;
+  low24h: number;
+  holding: StockHoldingView | null;
+}
+
+export interface MarketNewsView {
+  id: string;
+  at: number;
+  stockId: string | null;
+  /** 全市场消息为「坊市」。 */
+  stockName: string;
+  direction: 1 | -1;
+  title: string;
+}
+
+export interface StockTradeView {
+  id: string;
+  stockId: string;
+  stockName: string;
+  side: 'buy' | 'sell';
+  shares: number;
+  price: number;
+  amount: number;
+  fee: number;
+  /** 卖出的已实现收益；买入为 0。 */
+  profit: number;
+  createdAt: number;
+}
+
+/** 灵股面板（GET /game/market 与成交回执里的 market）。 */
+export interface MarketView {
+  unlocked: boolean;
+  unlockSectLevel: number;
+  feeBp: number;
+  holdMinutes: number;
+  dailyTrades: number;
+  tradesUsed: number;
+  tradesLeft: number;
+  /** 每支股票持仓成本上限（最小单位）。 */
+  positionCap: number;
+  maxSharesPerTrade: number;
+  /** 服务端此刻与下一跳时刻（毫秒），前端据此倒计时刷新。 */
+  serverNow: number;
+  nextTickAt: number;
+  index: { value: number; change24hPct: number };
+  stocks: StockView[];
+  news: MarketNewsView[];
+  myTrades: StockTradeView[];
+  /** 我的累计已实现收益（最小单位）。 */
+  myProfit: number;
+  ranks: { rank: number; sectName: string; profit: number; isMe: boolean }[];
+}
+
+export interface MarketChartView {
+  stockId: string;
+  range: '1h' | '6h' | '1d' | '7d';
+  /** 每根分钟数。 */
+  candleMinutes: number;
+  candles: { t: number; o: number; h: number; l: number; c: number }[];
+}
+
+export interface MarketTradeResultView {
+  side: 'buy' | 'sell';
+  stockId: string;
+  stockName: string;
+  shares: number;
+  price: number;
+  amount: number;
+  fee: number;
+  /** 卖出的已实现收益；买入为 0。 */
+  profit: number;
+  message: string;
+}
