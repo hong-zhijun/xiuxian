@@ -4783,7 +4783,7 @@ ul {
   color: var(--red-bright);
 }
 
-/* ---------- Action bar：分组 + 「更多」折叠 ---------- */
+/* ---------- Action bar：分组；「事务」组原地折叠 ---------- */
 .action-bar {
   display: flex;
   flex-wrap: wrap;
@@ -4794,16 +4794,16 @@ ul {
 
 /*
  * 一组：左边竖排的组名 + 等宽的按钮（按钮数由 --chips 给出）。
- * 按按钮数分配宽度、每个按钮最宽约 124px：宽屏不会拉得过长，中等宽度一起收窄，「更多」不会被挤到下一行。
+ * 按按钮数分配宽度：每个按钮最宽约 124px、最窄约 114px（招贤台带角标也放得下） —— 宽屏不拉长，放不下时整组换行而不是把字挤成省略号。
  */
 .action-group {
   display: grid;
   flex: var(--chips, 3) 1 0;
+  min-width: calc(var(--chips, 3) * 122px + 24px);
   max-width: calc(var(--chips, 3) * 131px + 24px);
   grid-template-columns: auto repeat(var(--chips, 3), minmax(0, 1fr));
   align-items: center;
   gap: 7px;
-  min-width: 0;
   padding: 4px 4px 4px 6px;
   border: 1px solid rgba(202, 169, 106, 0.1);
   border-radius: 4px;
@@ -4818,27 +4818,17 @@ ul {
   user-select: none;
 }
 
-/* 「更多 / 收起」：靠右；展开的那一排独占一行。 */
-.action-more {
-  flex: 0 0 auto;
-  align-self: center;
-  margin-left: auto;
-  min-width: 96px;
+/* 「展开 / 收起」按钮：比普通按钮淡一点，表明它只是开关。 */
+.action-fold {
+  color: #9fb2a8;
 }
 
-.action-more-caret {
+.action-fold-caret {
   transition: transform 150ms ease;
 }
 
-.action-more-caret.is-open {
+.action-fold-caret.is-open {
   transform: rotate(180deg);
-}
-
-.action-bar-more {
-  display: flex;
-  flex: 1 1 100%;
-  flex-wrap: wrap;
-  gap: 8px;
 }
 
 .action-chip {
@@ -6380,19 +6370,16 @@ h2.public-sect-name {
     text-align: left;
   }
 
-  /* 窄屏：每组占一整行、固定 3 列（2 个按钮的组也同宽）；「更多」铺满一行。 */
-  .action-group,
-  .action-more {
-    flex: 1 1 100%;
-  }
-
+  /* 窄屏：每组占一整行、固定 3 列（2 个按钮的组也同宽）；事务展开时「收起」单独占下一行。 */
   .action-group {
+    flex: 1 1 100%;
+    min-width: 0;
     max-width: none;
     grid-template-columns: auto repeat(3, minmax(0, 1fr));
   }
 
-  .action-more {
-    margin-left: 0;
+  .action-group:not(.is-collapsed) .action-fold {
+    grid-column: 2 / -1;
   }
 
   .action-bar .action-chip {

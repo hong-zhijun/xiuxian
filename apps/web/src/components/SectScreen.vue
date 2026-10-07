@@ -1589,7 +1589,7 @@ watch(
 
 const showAccountDialog = ref(false);
 
-/* ---------- 操作条「更多」：不常用的入口折叠起来，展开与否记在本机 ---------- */
+/* ---------- 操作条「事务」组：原地折叠，展开与否记在本机 ---------- */
 
 const MORE_ACTIONS_KEY = 'action-bar-more-open';
 
@@ -1898,26 +1898,12 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
     </div>
 
     <!--
-      操作条：常用的「宗门 / 出战」两组常驻；不常用的「市集 / 事务」收进「更多」，
-      展开与否记在本机（moreActionsOpen），有角标的入口都放在常驻组里，折叠后不会漏看。
+      操作条：「宗门 / 出战 / 市集」常驻；不常用的「事务」原地折叠，展开与否记在本机（moreActionsOpen）。
+      招贤台在事务里：折叠时把它的角标挂到「展开」按钮上，不会漏看。
     -->
     <nav class="action-bar" aria-label="宗门操作" role="toolbar">
-      <div class="action-group" role="group" aria-label="宗门" :style="{ '--chips': 3 }">
+      <div class="action-group" role="group" aria-label="宗门" :style="{ '--chips': 2 }">
         <span class="action-group-label" aria-hidden="true">宗门</span>
-        <button
-          class="action-chip"
-          type="button"
-          :disabled="busy || recruitLoading"
-          :aria-label="recruitBadge > 0 ? `招贤台（还可招募 ${recruitBadge} 人）` : '招贤台'"
-          :title="recruitBadge > 0 ? `还可招募 ${recruitBadge} 人（弟子上限 − 现有门人）` : '张榜招贤'"
-          @click="requestRecruit"
-        >
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm-6.5 9.5a6.5 6.5 0 0 1 13 0M18 14.5v6m3-3h-6" />
-          </svg>
-          <span>招贤台</span>
-          <span v-if="recruitBadge > 0" class="chip-badge">{{ recruitBadge }}</span>
-        </button>
         <button class="action-chip" type="button" @click="openPanel = 'alchemy'">
           <svg viewBox="0 0 24 24" aria-hidden="true">
             <path d="M9 3h6M10 3v4.2a6.5 6.5 0 1 0 4 0V3m-4.8 11h9.6" />
@@ -1966,45 +1952,51 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
           <span v-if="state.tower?.sweepable" class="chip-badge">!</span>
         </button>
       </div>
-      <button
-        class="action-chip action-more"
-        type="button"
-        :aria-expanded="moreActionsOpen"
-        aria-controls="action-bar-more"
-        @click="toggleMoreActions"
+      <div class="action-group" role="group" aria-label="市集" :style="{ '--chips': 3 }">
+        <span class="action-group-label" aria-hidden="true">市集</span>
+        <button class="action-chip" type="button" @click="openPanel = 'shop'">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 4.2v14.6M4.4 7.6h15.2M8.4 18.8h7.2M4.4 7.6 2.4 12.4h4L4.4 7.6Zm15.2 0-2 4.8h4l-2-4.8Z" />
+          </svg>
+          <span>坊市</span>
+        </button>
+        <button class="action-chip" type="button" @click="openPanel = 'gambling'">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M5 5h14v14H5zM8.5 9h.01M12 12h.01M15.5 15h.01" />
+          </svg>
+          <span>赌坊</span>
+        </button>
+        <button class="action-chip" type="button" aria-label="功勋兑换" @click="openPanel = 'merit'">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M8 3h8l-1.5 5h-5L8 3Zm4 5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13Zm0 3.2 1.1 2.2 2.4.35-1.75 1.7.4 2.4L12 16.7l-2.15 1.15.4-2.4-1.75-1.7 2.4-.35L12 11.2Z" />
+          </svg>
+          <span>功勋</span>
+        </button>
+      </div>
+      <div
+        id="action-group-affairs"
+        class="action-group"
+        :class="{ 'is-collapsed': !moreActionsOpen }"
+        role="group"
+        aria-label="事务"
+        :style="{ '--chips': moreActionsOpen ? 4 : 1 }"
       >
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M5 12h.01M12 12h.01M19 12h.01" />
-        </svg>
-        <span>{{ moreActionsOpen ? '收起' : '更多' }}</span>
-        <svg class="action-more-caret" :class="{ 'is-open': moreActionsOpen }" viewBox="0 0 24 24" aria-hidden="true">
-          <path d="m7 10 5 5 5-5" />
-        </svg>
-      </button>
-      <div v-if="moreActionsOpen" id="action-bar-more" class="action-bar-more">
-        <div class="action-group" role="group" aria-label="市集" :style="{ '--chips': 3 }">
-          <span class="action-group-label" aria-hidden="true">市集</span>
-          <button class="action-chip" type="button" @click="openPanel = 'shop'">
+        <span class="action-group-label" aria-hidden="true">事务</span>
+        <template v-if="moreActionsOpen">
+          <button
+            class="action-chip"
+            type="button"
+            :disabled="busy || recruitLoading"
+            :aria-label="recruitBadge > 0 ? `招贤台（还可招募 ${recruitBadge} 人）` : '招贤台'"
+            :title="recruitBadge > 0 ? `还可招募 ${recruitBadge} 人（弟子上限 − 现有门人）` : '张榜招贤'"
+            @click="requestRecruit"
+          >
             <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M12 4.2v14.6M4.4 7.6h15.2M8.4 18.8h7.2M4.4 7.6 2.4 12.4h4L4.4 7.6Zm15.2 0-2 4.8h4l-2-4.8Z" />
+              <path d="M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm-6.5 9.5a6.5 6.5 0 0 1 13 0M18 14.5v6m3-3h-6" />
             </svg>
-            <span>坊市</span>
+            <span>招贤台</span>
+            <span v-if="recruitBadge > 0" class="chip-badge">{{ recruitBadge }}</span>
           </button>
-          <button class="action-chip" type="button" @click="openPanel = 'gambling'">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M5 5h14v14H5zM8.5 9h.01M12 12h.01M15.5 15h.01" />
-            </svg>
-            <span>赌坊</span>
-          </button>
-          <button class="action-chip" type="button" aria-label="功勋兑换" @click="openPanel = 'merit'">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M8 3h8l-1.5 5h-5L8 3Zm4 5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13Zm0 3.2 1.1 2.2 2.4.35-1.75 1.7.4 2.4L12 16.7l-2.15 1.15.4-2.4-1.75-1.7 2.4-.35L12 11.2Z" />
-            </svg>
-            <span>功勋</span>
-          </button>
-        </div>
-        <div class="action-group" role="group" aria-label="事务" :style="{ '--chips': 2 }">
-          <span class="action-group-label" aria-hidden="true">事务</span>
           <button class="action-chip" type="button" aria-label="执事堂：任命宗门执事" @click="openPanel = 'steward'">
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="M4 20h16M6 20V10m12 10V10M3 10l9-6 9 6M10 20v-5h4v5" />
@@ -2017,7 +2009,21 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
             </svg>
             <span>守擂阵容</span>
           </button>
-        </div>
+        </template>
+        <button
+          class="action-chip action-fold"
+          type="button"
+          :aria-expanded="moreActionsOpen"
+          aria-controls="action-group-affairs"
+          :title="moreActionsOpen ? '收起事务' : '展开事务：招贤台 / 执事堂 / 守擂阵容'"
+          @click="toggleMoreActions"
+        >
+          <span>{{ moreActionsOpen ? '收起' : '展开' }}</span>
+          <svg class="action-fold-caret" :class="{ 'is-open': moreActionsOpen }" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="m7 10 5 5 5-5" />
+          </svg>
+          <span v-if="!moreActionsOpen && recruitBadge > 0" class="chip-badge" :title="`还可招募 ${recruitBadge} 人`">{{ recruitBadge }}</span>
+        </button>
       </div>
     </nav>
 
