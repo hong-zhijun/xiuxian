@@ -3401,3 +3401,222 @@ export function sectTowerGuardStatement(guardId: string, sectId: string, version
     params: [guardId, sectId, version],
   };
 }
+
+/* ---------- 0040 拍卖行 ---------- */
+
+export interface AuctionLotRow {
+  id: string;
+  seller_sect_id: string;
+  seller_name: string;
+  /** 'equipment' | 'pill' | 'resource'。 */
+  kind: string;
+  /** 装备品质 / 丹药 id / 资源 id。 */
+  item_id: string;
+  item_name: string;
+  quantity: number;
+  /** 装备快照 JSON（见 auction.ts 的 AuctionEquipmentSnapshot）；非装备为 NULL。 */
+  equipment_json: string | null;
+  start_price: number;
+  buyout_price: number | null;
+  /** 当前最高价；NULL = 还没人出价。 */
+  current_price: number | null;
+  bidder_sect_id: string | null;
+  bidder_name: string | null;
+  bid_count: number;
+  /** 'active' | 'sold' | 'expired' | 'cancelled'。 */
+  status: string;
+  ends_at: number;
+  ended_at: number | null;
+  fee: number;
+  buyer_claimed_at: number | null;
+  seller_claimed_at: number | null;
+  version: number;
+  created_at: number;
+}
+
+export class AuctionRepository extends ParamRepository {
+  async findById(lotId: string): Promise<AuctionLotRow | null> {
+    return this.one<AuctionLotRow>({ sql: 'SELECT * FROM auction_lots WHERE id = ?', params: [lotId] });
+  }
+
+  /** 大厅：竞价中、还没到期的单，按结束时间先后。 */
+  async listActive(now: number, limit: number): Promise<AuctionLotRow[]> {
+    return this.all<AuctionLotRow>({
+      sql: `SELECT * FROM auction_lots WHERE status = 'active' AND ends_at > ?
+            ORDER BY ends_at ASC, id ASC LIMIT ?`,
+      params: [now, limit],
+    });
+  }
+
+  /** 已到期但还没结算的单（定时任务 / 打开面板时顺手结算）。 */
+  async listExpiredActive(now: number, limit: number): Promise<AuctionLotRow[]> {
+    return this.all<AuctionLotRow>({
+      sql: `SELECT * FROM auction_lots WHERE status = 'active' AND ends_at <= ?
+            ORDER BY ends_at ASC LIMIT ?`,
+      params: [now, limit],
+    });
+  }
+
+  /** 我上架的（最近若干单，任何状态）。 */
+  async listBySeller(sectId: string, limit: number): Promise<AuctionLotRow[]> {
+    return this.all<AuctionLotRow>({
+      sql: 'SELECT * FROM auction_lots WHERE seller_sect_id = ? ORDER BY created_at DESC LIMIT ?',
+      params: [sectId, limit],
+    });
+  }
+
+  /** 我出过价的（最近若干单，任何状态；按最后一次出价时间）。 */
+  async listByBidder(sectId: string, limit: number): Promise<AuctionLotRow[]> {
+    return this.all<AuctionLotRow>({
+      sql: `SELECT l.* FROM auction_lots l
+            JOIN (SELECT lot_id, MAX(created_at) AS last_bid FROM auction_bids
+                  WHERE sect_id = ? GROUP BY lot_id) b ON b.lot_id = l.id
+            ORDER BY b.last_bid DESC LIMIT ?`,
+      params: [sectId, limit],
+    });
+  }
+
+  async countActiveBySeller(sectId: string): Promise<number> {
+    const row = await this.one<{ cnt: number }>({
+      sql: "SELECT COUNT(*) AS cnt FROM auction_lots WHERE seller_sect_id = ? AND status = 'active'",
+      params: [sectId],
+    });
+    return Number(row?.cnt ?? 0);
+  }
+
+  /** 待领取：我拍下没领的 + 我流拍没领回的（sync 角标用，两条都走索引）。 */
+  async countClaimable(sectId: string): Promise<number> {
+    const row = await this.one<{ cnt: number }>({
+      sql: `SELECT
+              (SELECT COUNT(*) FROM auction_lots
+                WHERE bidder_sect_id = ? AND status = 'sold' AND buyer_claimed_at IS NULL)
+            + (SELECT COUNT(*) FROM auction_lots
+                WHERE seller_sect_id = ? AND status = 'expired' AND seller_claimed_at IS NULL) AS cnt`,
+      params: [sectId, sectId],
+    });
+    return Number(row?.cnt ?? 0);
+  }
+}
+
+export function insertAuctionLotStatement(input: {
+  id: string;
+  sellerSectId: string;
+  sellerName: string;
+  kind: string;
+  itemId: string;
+  itemName: string;
+  quantity: number;
+  equipmentJson: string | null;
+  startPrice: number;
+  buyoutPrice: number | null;
+  endsAt: number;
+  now: number;
+}): ParameterizedQuery {
+  return {
+    sql: `INSERT INTO auction_lots
+            (id, seller_sect_id, seller_name, kind, item_id, item_name, quantity, equipment_json,
+             start_price, buyout_price, status, ends_at, version, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, 0, ?)`,
+    params: [
+      input.id,
+      input.sellerSectId,
+      input.sellerName,
+      input.kind,
+      input.itemId,
+      input.itemName,
+      input.quantity,
+      input.equipmentJson,
+      input.startPrice,
+      input.buyoutPrice,
+      input.endsAt,
+      input.now,
+    ],
+  };
+}
+
+/** 出价：当前价 / 领先者更新，出价次数 +1。 */
+export function updateAuctionBidStatement(input: {
+  lotId: string;
+  price: number;
+  bidderSectId: string;
+  bidderName: string;
+}): ParameterizedQuery {
+  return {
+    sql: `UPDATE auction_lots SET current_price = ?, bidder_sect_id = ?, bidder_name = ?,
+            bid_count = bid_count + 1, version = version + 1
+          WHERE id = ?`,
+    params: [input.price, input.bidderSectId, input.bidderName, input.lotId],
+  };
+}
+
+export function insertAuctionBidStatement(input: {
+  id: string;
+  lotId: string;
+  sectId: string;
+  price: number;
+  now: number;
+}): ParameterizedQuery {
+  return {
+    sql: 'INSERT INTO auction_bids (id, lot_id, sect_id, price, created_at) VALUES (?, ?, ?, ?, ?)',
+    params: [input.id, input.lotId, input.sectId, input.price, input.now],
+  };
+}
+
+/** 成交：一口价时同时写买家与 buyer_claimed_at（当场交付）；到期成交只写状态与手续费。 */
+export function markAuctionSoldStatement(input: {
+  lotId: string;
+  price: number;
+  bidderSectId: string;
+  bidderName: string;
+  fee: number;
+  now: number;
+  deliveredNow: boolean;
+}): ParameterizedQuery {
+  return {
+    sql: `UPDATE auction_lots SET status = 'sold', current_price = ?, bidder_sect_id = ?, bidder_name = ?,
+            fee = ?, ended_at = ?, buyer_claimed_at = ?, version = version + 1
+          WHERE id = ?`,
+    params: [
+      input.price,
+      input.bidderSectId,
+      input.bidderName,
+      input.fee,
+      input.now,
+      input.deliveredNow ? input.now : null,
+      input.lotId,
+    ],
+  };
+}
+
+/** 流拍（expired）或卖家撤回（cancelled，当场退回，同时写 seller_claimed_at）。 */
+export function markAuctionUnsoldStatement(input: {
+  lotId: string;
+  status: 'expired' | 'cancelled';
+  now: number;
+}): ParameterizedQuery {
+  return {
+    sql: `UPDATE auction_lots SET status = ?, ended_at = ?, seller_claimed_at = ?, version = version + 1
+          WHERE id = ?`,
+    params: [input.status, input.now, input.status === 'cancelled' ? input.now : null, input.lotId],
+  };
+}
+
+/** 领取：买家领拍下的（buyer）或卖家领回流拍的（seller）。 */
+export function markAuctionClaimedStatement(lotId: string, side: 'buyer' | 'seller', now: number): ParameterizedQuery {
+  return {
+    sql:
+      side === 'buyer'
+        ? 'UPDATE auction_lots SET buyer_claimed_at = ?, version = version + 1 WHERE id = ?'
+        : 'UPDATE auction_lots SET seller_claimed_at = ?, version = version + 1 WHERE id = ?',
+    params: [now, lotId],
+  };
+}
+
+/** 并发守卫：这一单的 version 必须仍是读到的值，否则整批回滚。 */
+export function auctionLotGuardStatement(guardId: string, lotId: string, version: number): ParameterizedQuery {
+  return {
+    sql: `INSERT INTO mutation_guards (command_id, valid)
+          SELECT ?, CASE WHEN EXISTS (SELECT 1 FROM auction_lots WHERE id = ? AND version = ?) THEN 1 ELSE 0 END`,
+    params: [guardId, lotId, version],
+  };
+}

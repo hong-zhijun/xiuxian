@@ -166,6 +166,7 @@ import {
   forgeWorkshopUpgradeFrom,
   qualityColorOf,
   qualityNameOf,
+  attrNameOf,
   forgeFailRefund,
   forgeOddsOf,
   lowerQuality,
@@ -340,6 +341,40 @@ import {
   TowerRepository,
   type SectTowerRow,
 } from './repository';
+import {
+  auctionLotGuardStatement,
+  insertAuctionBidStatement,
+  insertAuctionLotStatement,
+  markAuctionClaimedStatement,
+  markAuctionSoldStatement,
+  markAuctionUnsoldStatement,
+  updateAuctionBidStatement,
+  AuctionRepository,
+  type AuctionLotRow,
+} from './repository';
+import {
+  auctionFee,
+  auctionMinNextBid,
+  auctionMinPrice,
+  auctionSellerProceeds,
+  auctionUnitFloor,
+  findAuctionResource,
+  isAuctionEquipmentQuality,
+  isAuctionPill,
+  parseEquipmentSnapshot,
+  AUCTION_BID_STEP_BP,
+  AUCTION_DURATION_MS,
+  AUCTION_FEE_BP,
+  AUCTION_HALL_LIMIT,
+  AUCTION_MAX_ACTIVE_LISTINGS,
+  AUCTION_MAX_PRICE,
+  AUCTION_PILL_MAX_QUANTITY,
+  AUCTION_RESOURCE_MAX_QUANTITY,
+  AUCTION_RESOURCES,
+  AUCTION_UNLOCK_SECT_LEVEL,
+  type AuctionEquipmentSnapshot,
+  type AuctionKind,
+} from './auction';
 import { settleEconomy, resourceRates, type SettleResult } from './settle';
 import {
   simulateTowerBattle,
@@ -508,6 +543,10 @@ import {
   type TowerMonsterView,
   type TowerSweepResultView,
   type TowerView,
+  type AuctionActionResultView,
+  type AuctionEquipmentView,
+  type AuctionLotView,
+  type AuctionView,
 } from './view';
 /**
  * 游戏服务（一次性可玩版本）。
@@ -782,6 +821,8 @@ class SectDraft {
   worldBossAttackable = false;
   /** 0039 镇妖塔：今天还能扫荡（按钮角标用；与 worldBossAttackable 同理，只有 sync 会算真值）。 */
   towerSweepable = false;
+  /** 0040 拍卖行：待领取单数（按钮角标用；与 worldBossAttackable 同理，只有 sync / 拍卖行面板会算真值）。 */
+  auctionClaimable = 0;
 
   private readonly statements: ParameterizedQuery[] = [];
   /** 0014：未领取的历练记录（在外中 + 待领取）；本批可能被完成 / 领取而改变。 */
@@ -1124,6 +1165,7 @@ class SectDraft {
       activeExploration: this.activeExplorationView(),
       worldBossAttackable: this.worldBossAttackable,
       towerSweepable: this.towerSweepable,
+      auctionClaimable: this.auctionClaimable,
       stewards: this.stewards,
     });
   }
@@ -1783,6 +1825,8 @@ export async function getSectState(
     const worldBossAttackable = await worldBossAttackableFor(db, now);
     // 0039 镇妖塔：「今天还能扫荡」角标同理只在 sync 里算（一条主键查询；未解锁时不查）。
     const towerSweepable = await towerSweepableFor(db, snapshot.sect, now);
+    // 0040 拍卖行：「待领取」角标同理（两条走索引的计数；未解锁时不查）。
+    const auctionClaimable = await auctionClaimableFor(db, snapshot.sect);
     // 省 D1 写入：前端每分钟自动同步一次，若每次都把结算写回，挂机玩家一小时就要写上千行。
     // 产出是按时间确定性计算的，晚几分钟写回结果不变；所以距上次写回不足 SYNC_PERSIST_INTERVAL_MS 时
     // 只在内存里结算并返回（不掷随机事件——事件按经过时长计期望次数，推迟写回不会少发），
@@ -1791,11 +1835,13 @@ export async function getSectState(
       const preview = new SectDraft(db, snapshot, now, () => 1);
       preview.worldBossAttackable = worldBossAttackable;
       preview.towerSweepable = towerSweepable;
+      preview.auctionClaimable = auctionClaimable;
       if (!preview.hasJourneyReturns) return preview.view();
     }
     const draft = new SectDraft(db, snapshot, now);
     draft.worldBossAttackable = worldBossAttackable;
     draft.towerSweepable = towerSweepable;
+    draft.auctionClaimable = auctionClaimable;
     try {
       await draft.commit();
       return draft.view();
@@ -10022,4 +10068,599 @@ export async function sweepTower(
       message: `扫荡镇妖塔（最高第 ${String(maxFloor)} 层）：获得 ${towerRewardText(draft, credited)}`,
     },
   };
+}
+
+/* ------------------------------------------------------------------ *
+ * 0040 拍卖行（docs/拍卖行开发计划.md）
+ *
+ * 规则在 auction.ts（纯函数）。托管做法：
+ * - 上架：物品从卖家扣走（装备行删除、快照存进拍卖单；丹药 / 材料扣库存），一次受保护 batch；
+ * - 出价：出价者的灵石当场扣走；前一个领先者的灵石原路退回（对他的余额做相对加法）；
+ * - 一口价：当场交付给买家，卖家所得（扣 10% 手续费）当场入账；
+ * - 到期（定时任务 / 打开面板时顺手）：有人出价 → 成交、卖家所得入账，买家去「待领取」领；
+ *   没人出价 → 流拍，卖家去「待领取」领回。
+ * 每一步都带拍卖单的 version 守卫：并发出价 / 一口价 / 到期结算只会有一个成功。
+ * ------------------------------------------------------------------ */
+
+const AUCTION_LIST_LIMIT = 30;
+
+function requireAuctionUnlocked(draft: SectDraft): void {
+  if (Number(draft.sect.level) < AUCTION_UNLOCK_SECT_LEVEL) {
+    throw new AppError('INVALID_STATUS', `宗门 ${String(AUCTION_UNLOCK_SECT_LEVEL)} 级开放拍卖行`);
+  }
+}
+
+/** sync 角标：待领取单数（未解锁时不查）。 */
+async function auctionClaimableFor(db: D1Database, sect: SectRow): Promise<number> {
+  if (Number(sect.level) < AUCTION_UNLOCK_SECT_LEVEL) return 0;
+  return new AuctionRepository(db).countClaimable(sect.id);
+}
+
+function auctionLotGuard(lot: AuctionLotRow): { id: string; statement: ParameterizedQuery } {
+  const id = `${crypto.randomUUID()}:auction`;
+  return { id, statement: auctionLotGuardStatement(id, lot.id, Number(lot.version)) };
+}
+
+function isGuardFailure(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /CHECK constraint failed: (?:valid = 1|mutation_guards)/i.test(message);
+}
+
+/**
+ * 结算一单到期的拍卖（定时任务与打开面板共用）：有领先者 → 成交（卖家所得当场入账），否则流拍。
+ * 守卫失败（别人刚结算过）静默跳过。
+ */
+async function settleAuctionLot(db: D1Database, lot: AuctionLotRow, now: number): Promise<void> {
+  const guard = auctionLotGuard(lot);
+  const statements: ParameterizedQuery[] = [guard.statement];
+  const sold = lot.bidder_sect_id !== null && lot.current_price !== null;
+  if (sold) {
+    const price = Number(lot.current_price);
+    statements.push(
+      markAuctionSoldStatement({
+        lotId: lot.id,
+        price,
+        bidderSectId: lot.bidder_sect_id!,
+        bidderName: lot.bidder_name ?? '',
+        fee: auctionFee(price),
+        now,
+        deliveredNow: false,
+      }),
+      resourceDeltaStatement(lot.seller_sect_id, 'spiritStone', auctionSellerProceeds(price), now),
+    );
+  } else {
+    statements.push(markAuctionUnsoldStatement({ lotId: lot.id, status: 'expired', now }));
+  }
+  statements.push(deleteDiscipleSnapshotGuardStatement(guard.id));
+  try {
+    await db.batch(prepareStatements(db, statements));
+  } catch (error) {
+    if (isGuardFailure(error)) return;
+    throw error;
+  }
+  if (sold && lot.kind === 'equipment' && lot.item_id === 'immortal') {
+    await broadcastWorldBoss(
+      db,
+      `【拍卖行】${lot.bidder_name ?? ''}以 ${displayAmount(Number(lot.current_price))} 灵石拍得 ${lot.item_name}！`,
+      now,
+    );
+  }
+}
+
+/** 定时任务：结算所有到期的拍卖（每单各自兜错）。 */
+export async function processAuctions(db: D1Database, now: number): Promise<void> {
+  const lots = await new AuctionRepository(db).listExpiredActive(now, 100);
+  for (const lot of lots) {
+    try {
+      await settleAuctionLot(db, lot, now);
+    } catch (error) {
+      console.warn(`auction_settle_failed lot=${lot.id} error=${String(error)}`);
+    }
+  }
+}
+
+function auctionEquipmentViewOf(snapshot: {
+  quality: string;
+  slot: string;
+  mainAttr: string;
+  mainValue: number;
+  subAttr: string;
+  subValue: number;
+}): AuctionEquipmentView {
+  return {
+    quality: snapshot.quality,
+    qualityName: qualityNameOf(snapshot.quality),
+    slot: snapshot.slot,
+    slotName: slotNameOf(snapshot.slot),
+    mainAttr: snapshot.mainAttr,
+    mainAttrName: attrNameOf(snapshot.mainAttr),
+    mainValue: Number(snapshot.mainValue),
+    subAttr: snapshot.subAttr,
+    subAttrName: attrNameOf(snapshot.subAttr),
+    subValue: Number(snapshot.subValue),
+  };
+}
+
+function auctionLotViewOf(row: AuctionLotRow, sectId: string, now: number): AuctionLotView {
+  const snapshot = row.kind === 'equipment' ? parseEquipmentSnapshot(row.equipment_json) : null;
+  const currentPrice = row.current_price === null ? null : Number(row.current_price);
+  const buyoutPrice = row.buyout_price === null ? null : Number(row.buyout_price);
+  const biddable = row.status === 'active' && Number(row.ends_at) > now;
+  let minNextBid: number | null = null;
+  if (biddable) {
+    const next = auctionMinNextBid({ startPrice: Number(row.start_price), currentPrice });
+    minNextBid = buyoutPrice !== null && next >= buyoutPrice ? null : next;
+  }
+  let claimable: AuctionLotView['claimable'] = null;
+  if (row.status === 'sold' && row.bidder_sect_id === sectId && row.buyer_claimed_at === null) claimable = 'buyer';
+  if (row.status === 'expired' && row.seller_sect_id === sectId && row.seller_claimed_at === null) claimable = 'seller';
+  return {
+    id: row.id,
+    kind: row.kind as AuctionKind,
+    itemId: row.item_id,
+    itemName: row.item_name,
+    quantity: Number(row.quantity),
+    equipment: snapshot === null ? null : auctionEquipmentViewOf(snapshot),
+    sellerName: row.seller_name,
+    isMine: row.seller_sect_id === sectId,
+    startPrice: Number(row.start_price),
+    buyoutPrice,
+    currentPrice,
+    minNextBid,
+    bidCount: Number(row.bid_count),
+    leaderName: row.bidder_name,
+    isLeading: row.bidder_sect_id === sectId,
+    status: row.status as AuctionLotView['status'],
+    endsAt: Number(row.ends_at),
+    endedAt: row.ended_at === null ? null : Number(row.ended_at),
+    fee: Number(row.fee),
+    claimable,
+  };
+}
+
+async function buildAuctionView(input: { db: D1Database; draft: SectDraft; now: number }): Promise<AuctionView> {
+  const { db, draft, now } = input;
+  const repo = new AuctionRepository(db);
+  const sectId = draft.sect.id;
+  const [hall, myLots, myBids, { items, bagCount }] = await Promise.all([
+    repo.listActive(now, AUCTION_HALL_LIMIT),
+    repo.listBySeller(sectId, AUCTION_LIST_LIMIT),
+    repo.listByBidder(sectId, AUCTION_LIST_LIMIT),
+    loadEquipment(db, sectId),
+  ]);
+  const myLotViews = myLots.map((row) => auctionLotViewOf(row, sectId, now));
+  const myBidViews = myBids.map((row) => auctionLotViewOf(row, sectId, now));
+  const claimableIds = new Set(
+    [...myLotViews, ...myBidViews].filter((lot) => lot.claimable !== null).map((lot) => lot.id),
+  );
+  return {
+    unlocked: Number(draft.sect.level) >= AUCTION_UNLOCK_SECT_LEVEL,
+    unlockSectLevel: AUCTION_UNLOCK_SECT_LEVEL,
+    feeBp: AUCTION_FEE_BP,
+    bidStepBp: AUCTION_BID_STEP_BP,
+    durationHours: AUCTION_DURATION_MS / 3_600_000,
+    maxActiveListings: AUCTION_MAX_ACTIVE_LISTINGS,
+    myActiveCount: myLots.filter((row) => row.status === 'active').length,
+    maxPrice: AUCTION_MAX_PRICE,
+    pillMaxQuantity: AUCTION_PILL_MAX_QUANTITY,
+    resourceMaxQuantity: AUCTION_RESOURCE_MAX_QUANTITY,
+    bagCount,
+    bagCapacity: BAG_CAPACITY,
+    hall: hall.map((row) => auctionLotViewOf(row, sectId, now)),
+    myLots: myLotViews,
+    myBids: myBidViews,
+    claimableCount: claimableIds.size,
+    listable: {
+      equipment: items
+        .filter((row) => row.disciple_id === null && isAuctionEquipmentQuality(row.quality))
+        .map((row) => ({
+          id: row.id,
+          name: row.name,
+          minPrice: auctionMinPrice('equipment', row.quality, 1),
+          ...auctionEquipmentViewOf({
+            quality: row.quality,
+            slot: row.slot,
+            mainAttr: row.main_attr,
+            mainValue: Number(row.main_value),
+            subAttr: row.sub_attr,
+            subValue: Number(row.sub_value),
+          }),
+        })),
+      pills: draft.pillInventories
+        .filter((row) => Number(row.quantity) > 0 && isAuctionPill(row.pill_id))
+        .map((row) => ({
+          pillId: row.pill_id,
+          name: findPillRecipe(row.pill_id)?.name ?? row.pill_id,
+          quantity: Number(row.quantity),
+          unitMinPrice: auctionUnitFloor('pill', row.pill_id),
+        })),
+      resources: AUCTION_RESOURCES.map((resource) => ({
+        resourceId: resource.id,
+        name: resource.name,
+        quantity: Math.floor(draft.balanceOf(resource.id) / 1000),
+        unitMinPrice: auctionUnitFloor('resource', resource.id),
+      })).filter((resource) => resource.quantity > 0),
+    },
+  };
+}
+
+/** 回执：state + 面板 + 一句话（面板里的待领取数顺手同步到 state 角标）。 */
+async function auctionResponse(
+  db: D1Database,
+  draft: SectDraft,
+  now: number,
+  message: string,
+): Promise<{ state: SectStateView; auction: AuctionView; result: AuctionActionResultView }> {
+  const auction = await buildAuctionView({ db, draft, now });
+  draft.auctionClaimable = auction.claimableCount;
+  return { state: draft.view(), auction, result: { message } };
+}
+
+/** 一单的物品名（数量 > 1 时带「×N」）。 */
+function auctionItemLabel(lot: Pick<AuctionLotRow, 'item_name' | 'quantity' | 'kind'>): string {
+  return lot.kind === 'equipment' || Number(lot.quantity) <= 1
+    ? lot.item_name
+    : `${lot.item_name} ×${String(lot.quantity)}`;
+}
+
+/** 装备要交付时背包得有空位（一口价 / 领取 / 撤回都走这里）。 */
+async function requireBagSpaceFor(db: D1Database, draft: SectDraft, lot: AuctionLotRow): Promise<void> {
+  if (lot.kind !== 'equipment') return;
+  const { bagCount } = await loadEquipment(db, draft.sect.id);
+  if (bagCount >= BAG_CAPACITY) {
+    throw new AppError('INVALID_STATUS', bagFullReason(bagCount));
+  }
+}
+
+/** 把托管的物品交给本宗（装备按快照插新行；丹药入丹库；材料入账，不夹容量）。 */
+function deliverAuctionItem(draft: SectDraft, lot: AuctionLotRow, now: number): void {
+  if (lot.kind === 'equipment') {
+    const snapshot = parseEquipmentSnapshot(lot.equipment_json);
+    if (snapshot === null) {
+      throw new AppError('INVALID_STATUS', '拍卖单里的装备数据损坏，请联系管理员');
+    }
+    draft.addStatement(
+      insertEquipmentStatement({
+        id: crypto.randomUUID(),
+        sectId: draft.sect.id,
+        slot: snapshot.slot,
+        quality: snapshot.quality,
+        name: snapshot.name,
+        mainAttr: snapshot.mainAttr,
+        mainValue: snapshot.mainValue,
+        subAttr: snapshot.subAttr,
+        subValue: snapshot.subValue,
+        source: snapshot.source,
+        now,
+      }),
+    );
+    return;
+  }
+  if (lot.kind === 'pill') {
+    draft.addPill(lot.item_id, Number(lot.quantity));
+    return;
+  }
+  draft.grantResource(lot.item_id, Number(lot.quantity) * 1000);
+}
+
+/** 读一单；不存在 NOT_FOUND。 */
+async function requireAuctionLot(db: D1Database, lotId: string): Promise<AuctionLotRow> {
+  const lot = await new AuctionRepository(db).findById(lotId);
+  if (lot === null) throw new AppError('NOT_FOUND', '拍卖单不存在');
+  return lot;
+}
+
+/** 竞价中且没到期；到期了先顺手结算再拒绝。 */
+async function requireAuctionOpen(db: D1Database, lot: AuctionLotRow, now: number): Promise<void> {
+  if (lot.status === 'active' && Number(lot.ends_at) <= now) {
+    await settleAuctionLot(db, lot, now);
+  }
+  if (lot.status !== 'active' || Number(lot.ends_at) <= now) {
+    throw new AppError('INVALID_STATUS', '这一单的拍卖已经结束');
+  }
+}
+
+/** GET /game/auction：面板（先顺手结算到期的单；不写本宗数据）。 */
+export async function getAuction(
+  db: D1Database,
+  userId: string,
+  now: number,
+): Promise<{ state: SectStateView; auction: AuctionView }> {
+  await processAuctions(db, now);
+  const draft = await draftFor(db, userId, now);
+  const auction = await buildAuctionView({ db, draft, now });
+  draft.auctionClaimable = auction.claimableCount;
+  return { state: draft.view(), auction };
+}
+
+/** POST /game/auction/list：上架（物品当场托管）。价格入参是展示单位整数。 */
+export async function listAuctionItem(
+  db: D1Database,
+  userId: string,
+  input: {
+    kind: AuctionKind;
+    equipmentId?: string;
+    pillId?: string;
+    resourceId?: string;
+    quantity?: number;
+    startPrice: number;
+    buyoutPrice?: number;
+  },
+  now: number,
+): Promise<{ state: SectStateView; auction: AuctionView; result: AuctionActionResultView }> {
+  const draft = await draftFor(db, userId, now);
+  requireAuctionUnlocked(draft);
+  const repo = new AuctionRepository(db);
+  const activeCount = await repo.countActiveBySeller(draft.sect.id);
+  if (activeCount >= AUCTION_MAX_ACTIVE_LISTINGS) {
+    throw new AppError('INVALID_STATUS', `最多同时上架 ${String(AUCTION_MAX_ACTIVE_LISTINGS)} 单，等已有的拍完再来`);
+  }
+  const startPrice = input.startPrice * 1000;
+  const buyoutPrice = input.buyoutPrice === undefined ? null : input.buyoutPrice * 1000;
+  if (buyoutPrice !== null && buyoutPrice < startPrice) {
+    throw new AppError('VALIDATION_ERROR', '一口价不能低于起拍价');
+  }
+
+  let itemId: string;
+  let itemName: string;
+  let quantity = 1;
+  let equipmentJson: string | null = null;
+  let commitOptions: Parameters<SectDraft['commit']>[0] = {};
+
+  if (input.kind === 'equipment') {
+    if (input.pillId !== undefined || input.resourceId !== undefined || (input.quantity ?? 1) !== 1) {
+      throw new AppError('VALIDATION_ERROR', '装备一次只能上架 1 件');
+    }
+    if (input.equipmentId === undefined) throw new AppError('VALIDATION_ERROR', '请选择要上架的装备');
+    const { items } = await loadEquipment(db, draft.sect.id);
+    const row = items.find((item) => item.id === input.equipmentId);
+    if (row === undefined) throw new AppError('NOT_FOUND', '装备不存在');
+    if (row.disciple_id !== null) throw new AppError('INVALID_STATUS', `${row.name}穿在身上，请先卸下再上架`);
+    if (!isAuctionEquipmentQuality(row.quality)) throw new AppError('INVALID_STATUS', '这件装备不能拍卖');
+    itemId = row.quality;
+    itemName = row.name;
+    const snapshot: AuctionEquipmentSnapshot = {
+      slot: row.slot,
+      quality: row.quality,
+      name: row.name,
+      mainAttr: row.main_attr,
+      mainValue: Number(row.main_value),
+      subAttr: row.sub_attr,
+      subValue: Number(row.sub_value),
+      source: row.source,
+    };
+    equipmentJson = JSON.stringify(snapshot);
+    draft.addStatement(deleteBagEquipmentStatement(row.id, draft.sect.id));
+    commitOptions = { equipmentItems: [{ id: row.id, discipleId: null }] };
+  } else if (input.kind === 'pill') {
+    if (input.equipmentId !== undefined || input.resourceId !== undefined) {
+      throw new AppError('VALIDATION_ERROR', '上架丹药只需选丹药与数量');
+    }
+    const recipe = input.pillId === undefined ? undefined : findPillRecipe(input.pillId);
+    if (recipe === undefined || !isAuctionPill(recipe.id)) throw new AppError('VALIDATION_ERROR', '请选择要上架的丹药');
+    quantity = input.quantity ?? 1;
+    if (!Number.isInteger(quantity) || quantity < 1 || quantity > AUCTION_PILL_MAX_QUANTITY) {
+      throw new AppError('VALIDATION_ERROR', `丹药一单 1～${String(AUCTION_PILL_MAX_QUANTITY)} 颗`);
+    }
+    itemId = recipe.id;
+    itemName = recipe.name;
+    draft.removePill(recipe.id, quantity);
+    commitOptions = { pillId: recipe.id };
+  } else {
+    if (input.equipmentId !== undefined || input.pillId !== undefined) {
+      throw new AppError('VALIDATION_ERROR', '上架材料只需选材料与数量');
+    }
+    const resource = input.resourceId === undefined ? undefined : findAuctionResource(input.resourceId);
+    if (resource === undefined) throw new AppError('VALIDATION_ERROR', '只能拍卖玄铁、神木');
+    quantity = input.quantity ?? 1;
+    if (!Number.isInteger(quantity) || quantity < 1 || quantity > AUCTION_RESOURCE_MAX_QUANTITY) {
+      throw new AppError('VALIDATION_ERROR', `材料一单 1～${String(AUCTION_RESOURCE_MAX_QUANTITY)} 个`);
+    }
+    itemId = resource.id;
+    itemName = resource.name;
+    draft.requireResource(resource.id, quantity * 1000);
+  }
+
+  const minPrice = auctionMinPrice(input.kind, itemId, quantity);
+  if (startPrice < minPrice) {
+    throw new AppError('VALIDATION_ERROR', `起拍价不能低于 ${displayAmount(minPrice)} 灵石`, {
+      minPrice,
+    });
+  }
+
+  draft.addStatement(
+    insertAuctionLotStatement({
+      id: crypto.randomUUID(),
+      sellerSectId: draft.sect.id,
+      sellerName: draft.sect.name,
+      kind: input.kind,
+      itemId,
+      itemName,
+      quantity,
+      equipmentJson,
+      startPrice,
+      buyoutPrice,
+      endsAt: now + AUCTION_DURATION_MS,
+      now,
+    }),
+  );
+  await draft.commit(commitOptions);
+  const label = auctionItemLabel({ item_name: itemName, quantity, kind: input.kind });
+  return auctionResponse(
+    db,
+    draft,
+    now,
+    `已上架 ${label}：起拍 ${displayAmount(startPrice)} 灵石${buyoutPrice === null ? '' : `，一口价 ${displayAmount(buyoutPrice)}`}`,
+  );
+}
+
+/** POST /game/auction/bid：出价（灵石当场冻结；前一个领先者原路退回）。 */
+export async function bidAuction(
+  db: D1Database,
+  userId: string,
+  input: { lotId: string; price: number },
+  now: number,
+): Promise<{ state: SectStateView; auction: AuctionView; result: AuctionActionResultView }> {
+  const draft = await draftFor(db, userId, now);
+  requireAuctionUnlocked(draft);
+  const lot = await requireAuctionLot(db, input.lotId);
+  await requireAuctionOpen(db, lot, now);
+  if (lot.seller_sect_id === draft.sect.id) throw new AppError('INVALID_STATUS', '不能给自己上架的物品出价');
+  if (lot.bidder_sect_id === draft.sect.id) throw new AppError('INVALID_STATUS', '你已是最高出价，不必再加价');
+
+  const price = input.price * 1000;
+  const currentPrice = lot.current_price === null ? null : Number(lot.current_price);
+  const minNext = auctionMinNextBid({ startPrice: Number(lot.start_price), currentPrice });
+  if (price < minNext) {
+    throw new AppError('VALIDATION_ERROR', `出价至少 ${displayAmount(minNext)} 灵石`, { minNextBid: minNext });
+  }
+  if (lot.buyout_price !== null && price >= Number(lot.buyout_price)) {
+    throw new AppError('VALIDATION_ERROR', '出价已达到一口价，请直接用一口价买下');
+  }
+
+  draft.requireResource('spiritStone', price);
+  if (lot.bidder_sect_id !== null && currentPrice !== null) {
+    draft.addStatement(resourceDeltaStatement(lot.bidder_sect_id, 'spiritStone', currentPrice, now));
+  }
+  draft.addStatement(
+    updateAuctionBidStatement({
+      lotId: lot.id,
+      price,
+      bidderSectId: draft.sect.id,
+      bidderName: draft.sect.name,
+    }),
+  );
+  draft.addStatement(
+    insertAuctionBidStatement({ id: crypto.randomUUID(), lotId: lot.id, sectId: draft.sect.id, price, now }),
+  );
+  try {
+    await draft.commit({ extraGuards: [auctionLotGuard(lot)] });
+  } catch (error) {
+    if (error instanceof AppError && error.code === 'INVALID_STATUS') {
+      throw new AppError('INVALID_STATUS', '有人抢先出价了，请刷新后再出价');
+    }
+    throw error;
+  }
+  return auctionResponse(
+    db,
+    draft,
+    now,
+    `已出价 ${displayAmount(price)} 灵石竞拍 ${auctionItemLabel(lot)}，暂时领先（灵石已冻结，被超价会退回）`,
+  );
+}
+
+/** POST /game/auction/buyout：一口价买下（当场交付，卖家所得当场入账）。 */
+export async function buyoutAuction(
+  db: D1Database,
+  userId: string,
+  input: { lotId: string },
+  now: number,
+): Promise<{ state: SectStateView; auction: AuctionView; result: AuctionActionResultView }> {
+  const draft = await draftFor(db, userId, now);
+  requireAuctionUnlocked(draft);
+  const lot = await requireAuctionLot(db, input.lotId);
+  await requireAuctionOpen(db, lot, now);
+  if (lot.seller_sect_id === draft.sect.id) throw new AppError('INVALID_STATUS', '不能买自己上架的物品');
+  if (lot.buyout_price === null) throw new AppError('INVALID_STATUS', '这一单没有设一口价');
+  await requireBagSpaceFor(db, draft, lot);
+
+  const price = Number(lot.buyout_price);
+  draft.requireResource('spiritStone', price);
+  // 前一个领先者的冻结灵石退回：是自己就直接加回内存余额，是别人就对他做相对加法。
+  if (lot.bidder_sect_id !== null && lot.current_price !== null) {
+    if (lot.bidder_sect_id === draft.sect.id) {
+      draft.addResource('spiritStone', Number(lot.current_price));
+    } else {
+      draft.addStatement(resourceDeltaStatement(lot.bidder_sect_id, 'spiritStone', Number(lot.current_price), now));
+    }
+  }
+  draft.addStatement(resourceDeltaStatement(lot.seller_sect_id, 'spiritStone', auctionSellerProceeds(price), now));
+  deliverAuctionItem(draft, lot, now);
+  draft.addStatement(
+    markAuctionSoldStatement({
+      lotId: lot.id,
+      price,
+      bidderSectId: draft.sect.id,
+      bidderName: draft.sect.name,
+      fee: auctionFee(price),
+      now,
+      deliveredNow: true,
+    }),
+  );
+  try {
+    await draft.commit({
+      extraGuards: [auctionLotGuard(lot)],
+      ...(lot.kind === 'pill' ? { pillId: lot.item_id } : {}),
+    });
+  } catch (error) {
+    if (error instanceof AppError && error.code === 'INVALID_STATUS') {
+      throw new AppError('INVALID_STATUS', '这一单刚有变动，请刷新后再试');
+    }
+    throw error;
+  }
+  if (lot.kind === 'equipment' && lot.item_id === 'immortal') {
+    await broadcastWorldBoss(db, `【拍卖行】${draft.sect.name}以 ${displayAmount(price)} 灵石一口价买下 ${lot.item_name}！`, now);
+  }
+  return auctionResponse(db, draft, now, `已用一口价 ${displayAmount(price)} 灵石买下 ${auctionItemLabel(lot)}`);
+}
+
+/** POST /game/auction/cancel：撤回（只有还没人出价时可以；物品当场退回）。 */
+export async function cancelAuction(
+  db: D1Database,
+  userId: string,
+  input: { lotId: string },
+  now: number,
+): Promise<{ state: SectStateView; auction: AuctionView; result: AuctionActionResultView }> {
+  const draft = await draftFor(db, userId, now);
+  const lot = await requireAuctionLot(db, input.lotId);
+  if (lot.seller_sect_id !== draft.sect.id) throw new AppError('NOT_FOUND', '拍卖单不存在');
+  await requireAuctionOpen(db, lot, now);
+  if (lot.current_price !== null) throw new AppError('INVALID_STATUS', '已经有人出价，不能撤回');
+  await requireBagSpaceFor(db, draft, lot);
+
+  deliverAuctionItem(draft, lot, now);
+  draft.addStatement(markAuctionUnsoldStatement({ lotId: lot.id, status: 'cancelled', now }));
+  await draft.commit({
+    extraGuards: [auctionLotGuard(lot)],
+    ...(lot.kind === 'pill' ? { pillId: lot.item_id } : {}),
+  });
+  return auctionResponse(db, draft, now, `已撤回 ${auctionItemLabel(lot)}，物品已退回`);
+}
+
+/** POST /game/auction/claim：领取拍下的物品 / 流拍退回的物品。 */
+export async function claimAuction(
+  db: D1Database,
+  userId: string,
+  input: { lotId: string },
+  now: number,
+): Promise<{ state: SectStateView; auction: AuctionView; result: AuctionActionResultView }> {
+  const draft = await draftFor(db, userId, now);
+  let lot = await requireAuctionLot(db, input.lotId);
+  // 到期还没结算的先顺手结算，再按结果领取。
+  if (lot.status === 'active' && Number(lot.ends_at) <= now) {
+    await settleAuctionLot(db, lot, now);
+    lot = await requireAuctionLot(db, input.lotId);
+  }
+  let side: 'buyer' | 'seller';
+  if (lot.status === 'sold' && lot.bidder_sect_id === draft.sect.id && lot.buyer_claimed_at === null) {
+    side = 'buyer';
+  } else if (lot.status === 'expired' && lot.seller_sect_id === draft.sect.id && lot.seller_claimed_at === null) {
+    side = 'seller';
+  } else {
+    throw new AppError('INVALID_STATUS', '这一单没有可领取的物品');
+  }
+  await requireBagSpaceFor(db, draft, lot);
+
+  deliverAuctionItem(draft, lot, now);
+  draft.addStatement(markAuctionClaimedStatement(lot.id, side, now));
+  await draft.commit({
+    extraGuards: [auctionLotGuard(lot)],
+    ...(lot.kind === 'pill' ? { pillId: lot.item_id } : {}),
+  });
+  return auctionResponse(
+    db,
+    draft,
+    now,
+    side === 'buyer' ? `已领取拍得的 ${auctionItemLabel(lot)}` : `已领回流拍的 ${auctionItemLabel(lot)}`,
+  );
 }

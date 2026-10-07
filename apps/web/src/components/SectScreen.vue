@@ -75,6 +75,7 @@ import SectLevelCatalogDialog from './SectLevelCatalogDialog.vue';
 import WorldBossDialog from './WorldBossDialog.vue';
 import MeritDialog from './MeritDialog.vue';
 import TowerDialog from './TowerDialog.vue';
+import AuctionDialog from './AuctionDialog.vue';
 import ModalShell from './ModalShell.vue';
 
 /**
@@ -182,6 +183,7 @@ const openPanel = ref<
   | 'world-boss'
   | 'merit'
   | 'tower'
+  | 'auction'
   | 'steward'
   | null
 >(null);
@@ -1952,7 +1954,7 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
           <span v-if="state.tower?.sweepable" class="chip-badge">!</span>
         </button>
       </div>
-      <div class="action-group" role="group" aria-label="市集" :style="{ '--chips': 3 }">
+      <div class="action-group" role="group" aria-label="市集" :style="{ '--chips': 4 }">
         <span class="action-group-label" aria-hidden="true">市集</span>
         <button class="action-chip" type="button" @click="openPanel = 'shop'">
           <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -1965,6 +1967,19 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
             <path d="M5 5h14v14H5zM8.5 9h.01M12 12h.01M15.5 15h.01" />
           </svg>
           <span>赌坊</span>
+        </button>
+        <button
+          class="action-chip"
+          type="button"
+          :aria-label="(state.auction?.claimable ?? 0) > 0 ? `拍卖行（${state.auction?.claimable} 件待领取）` : '拍卖行'"
+          title="宗门之间竞拍装备、丹药、玄铁、神木"
+          @click="openPanel = 'auction'"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="m13.5 4.5 6 6M10.5 7.5l6 6M12 6l-4.5 4.5 3 3L15 9M9 12l-6 6M4 21h9" />
+          </svg>
+          <span>拍卖行</span>
+          <span v-if="(state.auction?.claimable ?? 0) > 0" class="chip-badge">{{ state.auction?.claimable }}</span>
         </button>
         <button class="action-chip" type="button" aria-label="功勋兑换" @click="openPanel = 'merit'">
           <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -2337,6 +2352,17 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
 
   <ModalShell v-if="openPanel === 'merit'" :loading="busy" label="功勋" @close="openPanel = null">
     <MeritDialog
+      :state="state"
+      :busy="busy"
+      @state-update="(s: SectStateView) => emit('recruited', s)"
+      @notify="onWorldBossNotify"
+      @equipment-changed="loadEquipment"
+    />
+  </ModalShell>
+
+  <!-- 0040 拍卖行：只在打开时 / 操作后 / 点刷新时请求，不做定时轮询。 -->
+  <ModalShell v-if="openPanel === 'auction'" :loading="busy" label="拍卖行" @close="openPanel = null">
+    <AuctionDialog
       :state="state"
       :busy="busy"
       @state-update="(s: SectStateView) => emit('recruited', s)"

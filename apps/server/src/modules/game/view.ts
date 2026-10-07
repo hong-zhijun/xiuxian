@@ -1342,6 +1342,8 @@ export interface SectStateView {
   worldBoss: { attackable: boolean };
   /** 0039 镇妖塔：今天还能扫荡（按钮角标用；与 worldBoss 同理，只有 sync / 塔面板会算真值）。 */
   tower: { sweepable: boolean };
+  /** 0040 拍卖行：待领取的单数（按钮角标用；与 worldBoss 同理，只有 sync / 拍卖行面板会算真值）。 */
+  auction: { claimable: number };
 }
 
 /** 秘境列表视图（GET /game/realms）：规则（锁定/次数）由服务端算好，前端只渲染。 */
@@ -1727,6 +1729,8 @@ export interface SectStateInput {
   worldBossAttackable?: boolean;
   /** 0039 镇妖塔：今天还能扫荡（与 worldBossAttackable 同理，其他接口默认 false）。 */
   towerSweepable?: boolean;
+  /** 0040 拍卖行：待领取单数（与 towerSweepable 同理，其他接口默认 0）。 */
+  auctionClaimable?: number;
   /** 0034 执事堂：本宗职位行。 */
   stewards: readonly SectStewardRow[];
 }
@@ -2270,6 +2274,7 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
     activeExploration: input.activeExploration ?? null,
     worldBoss: { attackable: input.worldBossAttackable ?? false },
     tower: { sweepable: input.towerSweepable ?? false },
+    auction: { claimable: input.auctionClaimable ?? 0 },
     challenge: {
       dailyLimit: CHALLENGE_DAILY_LIMIT,
       usedToday: challengeDay.usedToday,
@@ -2767,5 +2772,86 @@ export interface TowerChallengeResultView {
 export interface TowerSweepResultView {
   maxFloor: number;
   reward: Record<string, number>;
+  message: string;
+}
+
+/* ---------- 0040 拍卖行 ---------- */
+
+/** 拍卖单里装备的展示信息（属性名已翻译好）。 */
+export interface AuctionEquipmentView {
+  quality: string;
+  qualityName: string;
+  slot: string;
+  slotName: string;
+  mainAttr: string;
+  mainAttrName: string;
+  mainValue: number;
+  subAttr: string;
+  subAttrName: string;
+  subValue: number;
+}
+
+/** 一单。价格一律最小单位灵石；时间是毫秒时间戳。 */
+export interface AuctionLotView {
+  id: string;
+  kind: 'equipment' | 'pill' | 'resource';
+  itemId: string;
+  itemName: string;
+  quantity: number;
+  equipment: AuctionEquipmentView | null;
+  sellerName: string;
+  isMine: boolean;
+  startPrice: number;
+  buyoutPrice: number | null;
+  /** 当前最高价；null = 还没人出价。 */
+  currentPrice: number | null;
+  /** 下一口最低出价；不能再出价（已结束 / 已到一口价）为 null。 */
+  minNextBid: number | null;
+  bidCount: number;
+  leaderName: string | null;
+  /** 我是当前领先者（竞价中）或最终买家（已成交）。 */
+  isLeading: boolean;
+  status: 'active' | 'sold' | 'expired' | 'cancelled';
+  endsAt: number;
+  endedAt: number | null;
+  fee: number;
+  /** 我能领取的：buyer = 拍下的物品；seller = 流拍退回的物品；null = 没有可领的。 */
+  claimable: 'buyer' | 'seller' | null;
+}
+
+/** 可上架的库存（背包装备 / 丹药 / 材料），带服务端算好的最低价。 */
+export interface AuctionListableView {
+  equipment: (AuctionEquipmentView & { id: string; name: string; minPrice: number })[];
+  pills: { pillId: string; name: string; quantity: number; unitMinPrice: number }[];
+  resources: { resourceId: string; name: string; quantity: number; unitMinPrice: number }[];
+}
+
+/** 拍卖行面板（GET /game/auction 与各命令回执里的 auction）。 */
+export interface AuctionView {
+  unlocked: boolean;
+  unlockSectLevel: number;
+  feeBp: number;
+  bidStepBp: number;
+  durationHours: number;
+  maxActiveListings: number;
+  myActiveCount: number;
+  maxPrice: number;
+  pillMaxQuantity: number;
+  resourceMaxQuantity: number;
+  /** 背包占用 / 容量（领取 / 一口价买装备时要有空位）。 */
+  bagCount: number;
+  bagCapacity: number;
+  /** 大厅：竞价中的单（含我自己的），按结束时间先后。 */
+  hall: AuctionLotView[];
+  /** 我上架的（最近 30 单）。 */
+  myLots: AuctionLotView[];
+  /** 我出过价的（最近 30 单）。 */
+  myBids: AuctionLotView[];
+  claimableCount: number;
+  listable: AuctionListableView;
+}
+
+/** 命令回执：一句话结果。 */
+export interface AuctionActionResultView {
   message: string;
 }

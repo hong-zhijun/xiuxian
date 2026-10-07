@@ -6378,6 +6378,11 @@ h2.public-sect-name {
     grid-template-columns: auto repeat(3, minmax(0, 1fr));
   }
 
+  /* 第 4、7… 个按钮换行时从第 2 列起排，不占组名那一列（市集 4 个按钮时用得上）。 */
+  .action-group > .action-chip:nth-of-type(3n + 1) {
+    grid-column-start: 2;
+  }
+
   .action-group:not(.is-collapsed) .action-fold {
     grid-column: 2 / -1;
   }

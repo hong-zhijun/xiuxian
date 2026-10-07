@@ -50,6 +50,9 @@ import {
   worldBossAttackRequestSchema,
   worldBossExchangeRequestSchema,
   towerChallengeRequestSchema,
+  auctionListRequestSchema,
+  auctionBidRequestSchema,
+  auctionLotRequestSchema,
 } from './schema';
 import {
   abandonRealmExplore,
@@ -87,6 +90,12 @@ import {
   getTower,
   challengeTower,
   sweepTower,
+  getAuction,
+  listAuctionItem,
+  bidAuction,
+  buyoutAuction,
+  cancelAuction,
+  claimAuction,
   getMeritShop,
   getRaceHistory,
   getRaceState,
@@ -715,6 +724,49 @@ export function createGameRoutes(): Hono<AppEnv> {
     const userId = requireUserId(c);
     const result = await sweepTower(getDb(c.env), userId, Date.now());
     return respondOk(c, { state: result.state, tower: result.tower, result: result.result });
+  });
+
+  // 0040 拍卖行：面板（先顺手结算到期的单）。
+  routes.get('/game/auction', async (c) => {
+    const userId = requireUserId(c);
+    const result = await getAuction(getDb(c.env), userId, Date.now());
+    return respondOk(c, { state: result.state, auction: result.auction });
+  });
+
+  // 0040 拍卖行：上架 / 出价 / 一口价 / 撤回 / 领取（各自一次受保护 batch，带拍卖单 version 守卫）。
+  routes.post('/game/auction/list', async (c) => {
+    const userId = requireUserId(c);
+    const body = await parseStrictJson(auctionListRequestSchema, c);
+    const result = await listAuctionItem(getDb(c.env), userId, body, Date.now());
+    return respondOk(c, { state: result.state, auction: result.auction, result: result.result });
+  });
+
+  routes.post('/game/auction/bid', async (c) => {
+    const userId = requireUserId(c);
+    const body = await parseStrictJson(auctionBidRequestSchema, c);
+    const result = await bidAuction(getDb(c.env), userId, body, Date.now());
+    return respondOk(c, { state: result.state, auction: result.auction, result: result.result });
+  });
+
+  routes.post('/game/auction/buyout', async (c) => {
+    const userId = requireUserId(c);
+    const body = await parseStrictJson(auctionLotRequestSchema, c);
+    const result = await buyoutAuction(getDb(c.env), userId, body, Date.now());
+    return respondOk(c, { state: result.state, auction: result.auction, result: result.result });
+  });
+
+  routes.post('/game/auction/cancel', async (c) => {
+    const userId = requireUserId(c);
+    const body = await parseStrictJson(auctionLotRequestSchema, c);
+    const result = await cancelAuction(getDb(c.env), userId, body, Date.now());
+    return respondOk(c, { state: result.state, auction: result.auction, result: result.result });
+  });
+
+  routes.post('/game/auction/claim', async (c) => {
+    const userId = requireUserId(c);
+    const body = await parseStrictJson(auctionLotRequestSchema, c);
+    const result = await claimAuction(getDb(c.env), userId, body, Date.now());
+    return respondOk(c, { state: result.state, auction: result.auction, result: result.result });
   });
 
   // 世界 Boss 三期：功勋兑换（结算 → 价目 / 余额 / 背包校验 → 扣功勋 + 发玄铁或装备，一次受保护 batch）。

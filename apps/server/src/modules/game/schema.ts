@@ -384,3 +384,25 @@ export const worldBossExchangeRequestSchema = z.strictObject({
 export const towerChallengeRequestSchema = z.strictObject({
   discipleIds: z.array(z.string().min(1).max(64)).length(5),
 });
+
+/** 0040 拍卖行：上架。物品 / 数量组合的合法性由 service 校验，这里只做类型与范围；价格是展示单位整数。 */
+export const auctionListRequestSchema = z.strictObject({
+  kind: z.enum(['equipment', 'pill', 'resource']),
+  equipmentId: z.string().min(1).max(64).optional(),
+  pillId: z.string().min(1).max(32).optional(),
+  resourceId: z.string().min(1).max(32).optional(),
+  quantity: z.number().int().min(1).max(999).optional(),
+  startPrice: z.number().int().min(1).max(99_999_999),
+  buyoutPrice: z.number().int().min(1).max(99_999_999).optional(),
+});
+
+/** 0040 拍卖行：出价（展示单位整数）。 */
+export const auctionBidRequestSchema = z.strictObject({
+  lotId: z.string().min(1).max(64),
+  price: z.number().int().min(1).max(99_999_999),
+});
+
+/** 0040 拍卖行：一口价 / 撤回 / 领取，只带拍卖单 id。 */
+export const auctionLotRequestSchema = z.strictObject({
+  lotId: z.string().min(1).max(64),
+});

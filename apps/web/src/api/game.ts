@@ -267,6 +267,8 @@ export interface SectStateView {
   worldBoss: { attackable: boolean };
   /** 0039 镇妖塔：今天还能扫荡（按钮角标；只有 sync / 塔面板会给真值）。 */
   tower?: { sweepable: boolean };
+  /** 0040 拍卖行：待领取单数（按钮角标；只有 sync / 拍卖行面板会给真值）。 */
+  auction?: { claimable: number };
   /**
    * 坊市面板：材料买卖价 + 可回收的丹药（价格单位都是最小单位灵石，前端只展示、不复算规则）。
    * 买入价 / 卖出价按「1 展示单位材料」计价，买入会被服务端再按材料容量上限挡一次。
@@ -2329,4 +2331,110 @@ export async function sweepTower(): Promise<{ state: SectStateView; tower: Tower
     '/api/v1/game/tower/sweep',
     { method: 'POST' },
   );
+}
+
+/* ---------- 0040 拍卖行 ---------- */
+
+export interface AuctionEquipmentView {
+  quality: string;
+  qualityName: string;
+  slot: string;
+  slotName: string;
+  mainAttr: string;
+  mainAttrName: string;
+  mainValue: number;
+  subAttr: string;
+  subAttrName: string;
+  subValue: number;
+}
+
+/** 一单。价格一律最小单位灵石；时间是毫秒时间戳。 */
+export interface AuctionLotView {
+  id: string;
+  kind: 'equipment' | 'pill' | 'resource';
+  itemId: string;
+  itemName: string;
+  quantity: number;
+  equipment: AuctionEquipmentView | null;
+  sellerName: string;
+  isMine: boolean;
+  startPrice: number;
+  buyoutPrice: number | null;
+  currentPrice: number | null;
+  /** 下一口最低出价；不能再出价时为 null。 */
+  minNextBid: number | null;
+  bidCount: number;
+  leaderName: string | null;
+  isLeading: boolean;
+  status: 'active' | 'sold' | 'expired' | 'cancelled';
+  endsAt: number;
+  endedAt: number | null;
+  fee: number;
+  claimable: 'buyer' | 'seller' | null;
+}
+
+export interface AuctionListableView {
+  equipment: (AuctionEquipmentView & { id: string; name: string; minPrice: number })[];
+  pills: { pillId: string; name: string; quantity: number; unitMinPrice: number }[];
+  resources: { resourceId: string; name: string; quantity: number; unitMinPrice: number }[];
+}
+
+export interface AuctionView {
+  unlocked: boolean;
+  unlockSectLevel: number;
+  feeBp: number;
+  bidStepBp: number;
+  durationHours: number;
+  maxActiveListings: number;
+  myActiveCount: number;
+  maxPrice: number;
+  pillMaxQuantity: number;
+  resourceMaxQuantity: number;
+  bagCount: number;
+  bagCapacity: number;
+  hall: AuctionLotView[];
+  myLots: AuctionLotView[];
+  myBids: AuctionLotView[];
+  claimableCount: number;
+  listable: AuctionListableView;
+}
+
+export interface AuctionActionResponse {
+  state: SectStateView;
+  auction: AuctionView;
+  result: { message: string };
+}
+
+export async function fetchAuction(): Promise<{ state: SectStateView; auction: AuctionView }> {
+  return apiRequest<{ state: SectStateView; auction: AuctionView }>('/api/v1/game/auction');
+}
+
+/** 上架：价格是展示单位整数（灵石个数）。 */
+export async function listAuctionItem(body: {
+  kind: 'equipment' | 'pill' | 'resource';
+  equipmentId?: string;
+  pillId?: string;
+  resourceId?: string;
+  quantity?: number;
+  startPrice: number;
+  buyoutPrice?: number;
+}): Promise<AuctionActionResponse> {
+  return apiRequest<AuctionActionResponse>('/api/v1/game/auction/list', { method: 'POST', body });
+}
+
+/** 出价：价格是展示单位整数。 */
+export async function bidAuction(lotId: string, price: number): Promise<AuctionActionResponse> {
+  return apiRequest<AuctionActionResponse>('/api/v1/game/auction/bid', { method: 'POST', body: { lotId, price } });
+}
+
+export async function buyoutAuction(lotId: string): Promise<AuctionActionResponse> {
+  return apiRequest<AuctionActionResponse>('/api/v1/game/auction/buyout', { method: 'POST', body: { lotId } });
+}
+
+export async function cancelAuction(lotId: string): Promise<AuctionActionResponse> {
+  return apiRequest<AuctionActionResponse>('/api/v1/game/auction/cancel', { method: 'POST', body: { lotId } });
+}
+
+export async function claimAuction(lotId: string): Promise<AuctionActionResponse> {
+  return apiRequest<AuctionActionResponse>('/api/v1/game/auction/claim', { method: 'POST', body: { lotId } });
 }
