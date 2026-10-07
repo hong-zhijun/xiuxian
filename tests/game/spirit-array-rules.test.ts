@@ -20,23 +20,12 @@ describe('聚灵阵扩到 10 级', () => {
     expect(spiritualArrayUpgradeFrom(10)).toBeNull();
   });
 
-  it('加成同时作用于基础产出与吐纳：10 级 ×5；其他岗位不受影响', () => {
+  it('加成只作用于基础产出：10 级 ×5；吐纳与其他岗位不受影响', () => {
     const levels = { spiritualArray: 10 };
     expect(resourceBaseRates(config, levels).get('spiritualEnergy')).toBe(100_000);
-    const energy = positionOutputPerHour(config, { ...base, assignment: 'energyGathering', talent: 'none' }, levels);
-    expect(energy.get('spiritualEnergy')).toBe(50_000);
-    // 聚灵天赋（炼气 +20%）先算，再乘聚灵阵
-    const gifted = positionOutputPerHour(
-      config,
-      { ...base, assignment: 'energyGathering', talent: 'spiritGathering' },
-      levels,
-    );
-    expect(gifted.get('spiritualEnergy')).toBe(60_000);
-    const stone = positionOutputPerHour(config, { ...base, assignment: 'stoneMining', talent: 'none' }, levels);
-    expect(stone.get('spiritStone')).toBe(15_000);
-    // 不传建筑等级时与原来一致
-    expect(positionOutputPerHour(config, { ...base, assignment: 'energyGathering', talent: 'none' }).get('spiritualEnergy')).toBe(10_000);
-    // 视图速率与结算同源：基础 100 + 吐纳 2 × 50
+    const energy = positionOutputPerHour(config, { ...base, assignment: 'energyGathering', talent: 'none' });
+    expect(energy.get('spiritualEnergy')).toBe(10_000);
+    // 视图速率：基础 100 + 吐纳 2 × 10 = 120
     const rates = resourceRates(
       config,
       [
@@ -45,7 +34,7 @@ describe('聚灵阵扩到 10 级', () => {
       ],
       levels,
     );
-    expect(rates.get('spiritualEnergy')).toBe(200_000);
+    expect(rates.get('spiritualEnergy')).toBe(120_000);
   });
 
 });

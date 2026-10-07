@@ -140,8 +140,8 @@ export const BREAKTHROUGH_ARRAY_BONUS_MAX_LEVEL = 5;
 export const SPIRITUAL_ARRAY_BUILDING_ID = 'spiritualArray';
 
 /**
- * 聚灵阵每级给灵气产出的加成（基点，4000 = +40%；v8 由 +20% 提高）。
- * 灵气短缺调整：同时作用于基础产出与吐纳岗位（全宗灵气产出 +40%/级）。
+ * 聚灵阵每级给灵气基础产出的加成（基点，4000 = +40%；v8 由 +20% 提高）。
+ * 只加基础产出、不加吐纳岗位（曾短暂加过，满级灵气接近 3 倍，太多，已撤回）。
  */
 export const SPIRITUAL_ARRAY_ENERGY_BONUS_BP_PER_LEVEL = 4000;
 

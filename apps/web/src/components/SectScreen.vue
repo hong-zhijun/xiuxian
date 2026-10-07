@@ -631,7 +631,7 @@ function levelMarksFor(building: BuildingView): { glyph: string; state: 'dim' | 
 }
 
 function buildingDescription(defId: string): string {
-  if (defId === 'spiritualArray') return '汇聚灵气，每级灵气产出 +40%（含吐纳）';
+  if (defId === 'spiritualArray') return '汇聚天地灵气，每级灵气基础产出 +40%';
   if (defId === 'herbGarden') return '培育灵植，为宗门积蓄药材';
   if (defId === 'missionHall') return '开采地脉灵矿，提升灵石产出';
   if (defId === 'scriptureLibrary') return '典藏万卷，加速弟子修炼';
