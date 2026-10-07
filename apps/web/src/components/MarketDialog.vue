@@ -272,7 +272,7 @@ onUnmounted(() => {
 
 <template>
   <section class="market-panel" aria-labelledby="market-title">
-    <div class="market-head">
+    <div class="market-head modal-head">
       <h3 id="market-title" class="market-title">
         灵股行情
         <small v-if="market" :class="toneOf(market.index.change24hPct)">

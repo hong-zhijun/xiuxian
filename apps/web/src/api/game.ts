@@ -2657,3 +2657,23 @@ export async function tradeStock(
     { method: 'POST', body: { stockId, side, shares } },
   );
 }
+
+/* ---------- 首页功能区：各玩法状态摘要 ---------- */
+
+/** 各玩法此刻的状态摘要（GET /game/hub）；首页状态卡片与待办浮窗用。金额是最小单位。 */
+export interface HubView {
+  worldBoss: {
+    phase: 'before' | 'open' | 'frenzy' | 'closed';
+    stage: number | null;
+    hpPercent: number | null;
+    attackable: boolean;
+  };
+  tower: { unlocked: boolean; maxFloor: number; sweepable: boolean };
+  veins: { unlocked: boolean; holding: { name: string; ratePerHour: number } | null; freeCount: number };
+  auction: { unlocked: boolean; claimable: number; myActive: number };
+  market: { unlocked: boolean; holdings: number; profit: number; profitPct: number };
+}
+
+export async function fetchHub(): Promise<{ hub: HubView }> {
+  return apiRequest<{ hub: HubView }>('/api/v1/game/hub');
+}

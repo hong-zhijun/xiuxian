@@ -280,7 +280,7 @@ onMounted(() => {
 
 <template>
   <section class="tower-panel" aria-labelledby="tower-title" @click="onPanelClick">
-    <div class="tower-head">
+    <div class="tower-head modal-head">
       <h3 id="tower-title" class="tower-title">
         <span>镇妖塔</span>
         <span v-if="panel" class="tower-sub">最高第 {{ panel.maxFloor }} 层</span>

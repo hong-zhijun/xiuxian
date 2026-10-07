@@ -3055,3 +3055,34 @@ export interface MarketTradeResultView {
   profit: number;
   message: string;
 }
+
+/* ---------- 首页功能区：状态卡片 / 待办浮窗的状态（GET /game/hub） ---------- */
+
+/** 各玩法此刻的状态摘要（只读，不结算、不写库）；首页卡片第二行与待办浮窗都用它。 */
+export interface HubView {
+  worldBoss: {
+    phase: 'before' | 'open' | 'frenzy' | 'closed';
+    /** 今天当前（最新）一关；还没出现为 null。 */
+    stage: number | null;
+    /** 当前关剩余血量百分比（0～100）；没有进行中的关为 null。 */
+    hpPercent: number | null;
+    attackable: boolean;
+  };
+  tower: { unlocked: boolean; maxFloor: number; sweepable: boolean };
+  veins: {
+    unlocked: boolean;
+    /** 本宗正占着的灵脉；没有为 null。 */
+    holding: { name: string; ratePerHour: number } | null;
+    /** 本宗现在就能进驻的无主灵脉条数（够等级、不在枯竭冷却）。 */
+    freeCount: number;
+  };
+  auction: { unlocked: boolean; claimable: number; myActive: number };
+  market: {
+    unlocked: boolean;
+    /** 持有的股票支数。 */
+    holdings: number;
+    /** 浮动盈亏（最小单位）与百分比。 */
+    profit: number;
+    profitPct: number;
+  };
+}

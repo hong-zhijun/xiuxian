@@ -198,7 +198,7 @@ function submitEquipment(): void {
 
 <template>
   <section class="merit-dialog" aria-labelledby="merit-dialog-title">
-    <header class="merit-head">
+    <header class="merit-head modal-head">
       <h2 id="merit-dialog-title" class="merit-title">功勋兑换</h2>
     </header>
 

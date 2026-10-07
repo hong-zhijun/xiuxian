@@ -10,7 +10,8 @@ import LoadingState from './LoadingState.vue';
  * 关闭方式：点遮罩、点关闭、按 Esc（多层叠加时只关最上面那层）；打开期间锁住页面滚动，
  * 并把焦点移进弹窗。只要这一层在最上面，Tab / Shift+Tab 就被约束在本弹窗内的可操作控件之间，
  * 不会跑到被遮住的页面上（二级弹窗因此不会把焦点丢给底下的详情）。
- * 内容自己滚（`.modal-card` 与弹窗内的滚动区各自滚动，滚动条全局隐藏）。
+ * 内容自己滚：外层 `.modal-card` 不滚动（关闭按钮因此始终停在右上角），内容放在 `.modal-body` 里滚动；
+ * 内容第一行的标题栏（`.section-heading` 或 `.modal-head`）吸附在滚动层顶部，不随内容滚走。滚动条全局隐藏。
  * 关闭后把焦点还给打开它的那个控件（二级弹窗因此回到「服用丹药」这类入口）。
  */
 const props = defineProps<{
@@ -165,7 +166,9 @@ function restoreFocus(): void {
             <path d="m5 5 10 10M15 5 5 15" />
           </svg>
         </button>
-        <slot />
+        <div class="modal-body">
+          <slot />
+        </div>
         <div v-if="loading" class="modal-loading-layer">
           <LoadingState :label="loadingText ?? '正在处理请求'" />
         </div>

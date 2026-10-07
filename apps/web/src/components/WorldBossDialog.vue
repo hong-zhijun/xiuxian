@@ -398,7 +398,7 @@ const RULES_TEXT = `讨伐 · 玩法说明
 
 <template>
   <section class="boss-panel" aria-labelledby="world-boss-title">
-    <div class="boss-head">
+    <div class="boss-head modal-head">
       <h3 id="world-boss-title" class="boss-title">
         <span>{{ boss?.def.displayName ?? '讨伐' }}</span>
         <span v-if="panel" class="boss-day">{{ panel.boss?.dayKey ?? '' }}</span>

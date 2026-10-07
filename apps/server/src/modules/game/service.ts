@@ -621,6 +621,7 @@ import {
   type MarketTradeResultView,
   type MarketView,
   type StockView,
+  type HubView,
 } from './view';
 /**
  * 游戏服务（一次性可玩版本）。
@@ -11689,5 +11690,89 @@ export async function tradeStock(
     state: draft.view(),
     market: await buildMarketView(db, draft, now),
     result: { side: input.side, stockId: stock.id, stockName: stock.name, shares, price, amount, fee, profit, message },
+  };
+}
+
+/* ------------------------------------------------------------------ *
+ * 首页功能区：各玩法状态摘要（GET /game/hub）
+ *
+ * 首页状态卡片第二行与 PC 待办浮窗用；首页打开、关掉弹窗后、以及每分钟各取一次。
+ * 只读：不结算、不写库（灵股种子第一次用时会生成一次，与行情面板同一逻辑）。
+ * ------------------------------------------------------------------ */
+
+export async function getHub(db: D1Database, userId: string, now: number): Promise<HubView> {
+  const sect = await new SectRepository(db).findByUserId(userId);
+  if (sect === null) throw new AppError('NOT_FOUND', '尚未创建宗门');
+  const level = Number(sect.level);
+  const todayKey = dateKeyUtc8(now);
+
+  const [boss, towerRow, veinRows, claimable, myActive, holdings] = await Promise.all([
+    new WorldBossRepository(db).findLatestByDayKey(todayKey),
+    new TowerRepository(db).findBySectId(sect.id),
+    new VeinRepository(db).listAll(),
+    level >= AUCTION_UNLOCK_SECT_LEVEL ? new AuctionRepository(db).countClaimable(sect.id) : Promise.resolve(0),
+    level >= AUCTION_UNLOCK_SECT_LEVEL ? new AuctionRepository(db).countActiveBySeller(sect.id) : Promise.resolve(0),
+    level >= MARKET_UNLOCK_SECT_LEVEL ? new MarketRepository(db).holdingsOf(sect.id) : Promise.resolve([]),
+  ]);
+
+  // 讨伐
+  const phase = worldBossPhaseOf(now);
+  const bossActive = boss !== null && boss.status === 'active';
+  const worldBoss = {
+    phase,
+    stage: boss === null ? null : Number(boss.stage),
+    hpPercent:
+      bossActive && Number(boss.max_hp) > 0 ? Math.max(0, Math.round((Number(boss.hp) / Number(boss.max_hp)) * 100)) : null,
+    attackable: bossActive && isWorldBossAttackable(phase),
+  };
+
+  // 镇妖塔
+  const towerUnlocked = level >= TOWER_UNLOCK_SECT_LEVEL;
+  const maxFloor = towerRow === null ? 0 : Number(towerRow.max_floor);
+
+  // 灵脉
+  const mine = veinRows.find((row) => row.holder_sect_id === sect.id);
+  const mineDef = mine === undefined ? undefined : findVein(mine.id);
+  const freeCount = veinRows.filter((row) => {
+    if (row.holder_sect_id !== null) return false;
+    const def = findVein(row.id);
+    if (def === undefined || level < veinTierOf(def.tier).minSectLevel) return false;
+    return !(row.exhausted_sect_id === sect.id && row.exhausted_until !== null && Number(row.exhausted_until) > now);
+  }).length;
+
+  // 灵股：浮动盈亏
+  const held = holdings.filter((row) => Number(row.shares) > 0);
+  let value = 0;
+  let cost = 0;
+  if (held.length > 0) {
+    const seed = await marketSeedOf(db, now);
+    const minute = marketMinuteOf(now);
+    for (const row of held) {
+      const stock = findStock(row.stock_id);
+      if (stock === undefined) continue;
+      value += stockPriceAt(seed, stock, minute) * Number(row.shares);
+      cost += Number(row.cost);
+    }
+  }
+
+  return {
+    worldBoss,
+    tower: {
+      unlocked: towerUnlocked,
+      maxFloor,
+      sweepable: towerUnlocked && maxFloor > 0 && towerRow?.sweep_date_key !== todayKey,
+    },
+    veins: {
+      unlocked: level >= VEIN_UNLOCK_SECT_LEVEL,
+      holding: mineDef === undefined ? null : { name: mineDef.name, ratePerHour: veinTierOf(mineDef.tier).ratePerHour },
+      freeCount,
+    },
+    auction: { unlocked: level >= AUCTION_UNLOCK_SECT_LEVEL, claimable, myActive },
+    market: {
+      unlocked: level >= MARKET_UNLOCK_SECT_LEVEL,
+      holdings: held.length,
+      profit: value - cost,
+      profitPct: pctChange(cost, value),
+    },
   };
 }

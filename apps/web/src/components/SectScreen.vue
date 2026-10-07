@@ -23,6 +23,7 @@ import type {
   SectStateView,
   ShopResourceId,
   WheelSpinResult,
+  HubView,
 } from '../api/game';
 import type { ToastTone } from '../types/ui';
 import type { AvatarFrameId } from '../utils/avatarFrames';
@@ -32,6 +33,7 @@ import { formatAmount, formatBp, formatRate, formatTime } from '../utils/format'
 import {
   equipItem,
   fetchEquipment,
+  fetchHub,
   fetchJourneyPreview,
   fetchRecruitPreview,
   fetchSecretRealms,
@@ -78,6 +80,7 @@ import TowerDialog from './TowerDialog.vue';
 import AuctionDialog from './AuctionDialog.vue';
 import VeinDialog from './VeinDialog.vue';
 import MarketDialog from './MarketDialog.vue';
+import TodoFloat, { type TodoItem } from './TodoFloat.vue';
 import ModalShell from './ModalShell.vue';
 
 /**
@@ -1605,26 +1608,261 @@ watch(
 
 const showAccountDialog = ref(false);
 
-/* ---------- 操作条「事务」组：原地折叠，展开与否记在本机 ---------- */
+/* ---------- 首页功能区：状态卡片 + PC 待办浮窗 ---------- */
 
-const MORE_ACTIONS_KEY = 'action-bar-more-open';
+/**
+ * 各玩法此刻的状态摘要（讨伐血量、镇妖塔层数、灵脉、拍卖行、灵股持仓……），GET /game/hub。
+ * 首页打开时、关掉功能弹窗后、以及每分钟（标签页可见时）各取一次；取不到时卡片退回默认文案。
+ */
+const hub = ref<HubView | null>(null);
+let hubTimer: number | undefined;
 
-function readMoreActionsOpen(): boolean {
+async function loadHub(): Promise<void> {
   try {
-    return localStorage.getItem(MORE_ACTIONS_KEY) === '1';
+    hub.value = (await fetchHub()).hub;
   } catch {
-    return false;
+    /* 状态摘要只是锦上添花：失败时保留上一次的，不打扰玩家 */
   }
 }
 
-const moreActionsOpen = ref(readMoreActionsOpen());
+watch(openPanel, (panel) => {
+  if (panel === null) void loadHub();
+});
 
-function toggleMoreActions(): void {
-  moreActionsOpen.value = !moreActionsOpen.value;
-  try {
-    localStorage.setItem(MORE_ACTIONS_KEY, moreActionsOpen.value ? '1' : '0');
-  } catch {
-    /* 存不下只是下次打开页面又是收起的 */
+onMounted(() => {
+  void loadHub();
+  hubTimer = window.setInterval(() => {
+    if (!document.hidden) void loadHub();
+  }, 60_000);
+});
+
+onUnmounted(() => {
+  if (hubTimer !== undefined) window.clearInterval(hubTimer);
+});
+
+/** 受伤（不含重伤）可疗伤的弟子。 */
+const healableIds = computed(() =>
+  props.state.disciples
+    .filter((disciple) => isInjured(disciple, serverNowMs.value) && severeInjuryStatusLabel(disciple, serverNowMs.value) === null)
+    .map((disciple) => disciple.id),
+);
+/** 除灵气外破境条件都满足的弟子。 */
+const breakthroughReadyIds = computed(() =>
+  props.state.disciples.filter((disciple) => disciple.breakthroughReadyExceptEnergy).map((disciple) => disciple.id),
+);
+const readyJourneys = computed(() => props.state.journey.recent.filter((record) => record.status === 'ready'));
+const vacantStewards = computed(() => props.state.stewards.offices.filter((office) => office.discipleId === null).length);
+
+function signedPct(value: number): string {
+  return `${value > 0 ? '+' : ''}${value.toFixed(1)}%`;
+}
+
+type HubCardId =
+  | 'alchemy' | 'forge' | 'recruit' | 'steward' | 'defense'
+  | 'boss' | 'tower' | 'explore' | 'veins'
+  | 'shop' | 'gambling' | 'auction' | 'market' | 'merit';
+
+interface HubCard {
+  id: HubCardId;
+  name: string;
+  glyph: string;
+  status: string;
+}
+
+/** 状态卡片：按分组固定顺序，第二行写这个功能此刻的状态。 */
+const hubGroups = computed<{ label: string; cards: HubCard[] }[]>(() => {
+  const h = hub.value;
+  const boss = h?.worldBoss;
+  const bossStatus =
+    boss === undefined
+      ? '全服共讨妖王'
+      : boss.hpPercent !== null
+        ? `第 ${String(boss.stage ?? 1)} 关 · 剩 ${String(boss.hpPercent)}%`
+        : boss.phase === 'before'
+          ? '每日 08:00 降临'
+          : '今日讨伐已结束';
+  const tower = h?.tower;
+  const veins = h?.veins;
+  const auction = h?.auction;
+  const market = h?.market;
+  const merit = props.state.resources.find((resource) => resource.id === 'bossMerit');
+  return [
+    {
+      label: '宗门',
+      cards: [
+        { id: 'alchemy', name: '炼丹', glyph: '丹', status: healableIds.value.length > 0 ? `${String(healableIds.value.length)} 人受伤可疗伤` : '炼制丹药' },
+        { id: 'forge', name: '炼器', glyph: '器', status: equipment.value ? `背包 ${String(equipment.value.bagCount)} / ${String(equipment.value.bagCapacity)}` : '打造装备' },
+        { id: 'recruit', name: '招贤台', glyph: '招', status: recruitBadge.value > 0 ? `还可招 ${String(recruitBadge.value)} 人` : '张榜招贤' },
+        { id: 'steward', name: '执事堂', glyph: '执', status: vacantStewards.value > 0 ? `${String(vacantStewards.value)} 个执事空缺` : '执事齐全' },
+        { id: 'defense', name: '守擂阵容', glyph: '擂', status: props.state.sect.defenseLineup ? '已布阵' : '尚未布阵' },
+      ],
+    },
+    {
+      label: '出战',
+      cards: [
+        { id: 'boss', name: '讨伐', glyph: '讨', status: bossStatus },
+        {
+          id: 'tower',
+          name: '镇妖塔',
+          glyph: '塔',
+          status:
+            tower === undefined
+              ? '单人逐层闯塔'
+              : !tower.unlocked
+                ? '宗门 2 级开放'
+                : tower.sweepable
+                  ? `第 ${String(tower.maxFloor)} 层 · 可扫荡`
+                  : `最高第 ${String(tower.maxFloor)} 层`,
+        },
+        { id: 'explore', name: '秘境探索', glyph: '秘', status: props.state.activeExploration ? '探索进行中' : '派弟子探秘境' },
+        {
+          id: 'veins',
+          name: '灵脉',
+          glyph: '脉',
+          status:
+            veins === undefined
+              ? '占灵脉产灵气'
+              : !veins.unlocked
+                ? '宗门 3 级开放'
+                : veins.holding
+                  ? `${veins.holding.name} · +${formatAmount(veins.holding.ratePerHour)}/时`
+                  : veins.freeCount > 0
+                    ? `${String(veins.freeCount)} 条无主可进驻`
+                    : '未占领灵脉',
+        },
+      ],
+    },
+    {
+      label: '市集',
+      cards: [
+        { id: 'shop', name: '坊市', glyph: '坊', status: '买卖药材矿石' },
+        { id: 'gambling', name: '赌坊', glyph: '赌', status: props.state.gambling.unlocked ? `今日还剩 ${String(props.state.gambling.remaining)} 次` : '宗门 2 级开放' },
+        {
+          id: 'auction',
+          name: '拍卖行',
+          glyph: '拍',
+          status:
+            auction === undefined
+              ? '竞拍装备丹药'
+              : !auction.unlocked
+                ? '宗门 3 级开放'
+                : auction.claimable > 0
+                  ? `${String(auction.claimable)} 件待领取`
+                  : auction.myActive > 0
+                    ? `${String(auction.myActive)} 单在拍`
+                    : '竞拍装备丹药',
+        },
+        {
+          id: 'market',
+          name: '灵股',
+          glyph: '股',
+          status:
+            market === undefined
+              ? '看行情 · 低买高卖'
+              : !market.unlocked
+                ? '宗门 3 级开放'
+                : market.holdings > 0
+                  ? `持仓 ${signedPct(market.profitPct)}`
+                  : '看行情 · 低买高卖',
+        },
+        { id: 'merit', name: '功勋', glyph: '勋', status: `可用 ${formatAmount(merit?.balance ?? '0')} 功勋` },
+      ],
+    },
+  ];
+});
+
+function openHubCard(id: HubCardId): void {
+  if (id === 'recruit') {
+    void requestRecruit();
+    return;
+  }
+  if (id === 'forge') {
+    openEquipment();
+    return;
+  }
+  const panels: Record<Exclude<HubCardId, 'recruit' | 'forge'>, NonNullable<typeof openPanel.value>> = {
+    alchemy: 'alchemy',
+    steward: 'steward',
+    defense: 'defense-lineup',
+    boss: 'world-boss',
+    tower: 'tower',
+    explore: 'explore',
+    veins: 'veins',
+    shop: 'shop',
+    gambling: 'gambling',
+    auction: 'auction',
+    market: 'market',
+    merit: 'merit',
+  };
+  openPanel.value = panels[id];
+}
+
+/** 待办（只在 PC 浮窗里显示）：可领取 → 提醒 → 可操作。 */
+const todoItems = computed<TodoItem[]>(() => {
+  const h = hub.value;
+  const items: TodoItem[] = [];
+  if (readyJourneys.value.length > 0) {
+    items.push({ id: 'journey', tone: 'claim', text: `${String(readyJourneys.value.length)} 名弟子历练归队`, action: '去领取' });
+  }
+  if (h?.tower.sweepable) items.push({ id: 'tower', tone: 'claim', text: '镇妖塔今日可扫荡', action: '去扫荡' });
+  if ((h?.auction.claimable ?? 0) > 0) {
+    items.push({ id: 'auction', tone: 'claim', text: `拍卖行 ${String(h?.auction.claimable)} 件待领取`, action: '去领取' });
+  }
+  const capped = props.state.resources.filter((resource) => resource.capped && resource.id !== 'bossMerit');
+  if (capped.length > 0) {
+    items.push({ id: 'resources', tone: 'warn', text: `${capped.map((resource) => resource.name).join('、')}已满仓，产出在溢出`, action: '去看看' });
+  }
+  if (healableIds.value.length > 0) {
+    items.push({ id: 'heal', tone: 'warn', text: `${String(healableIds.value.length)} 名弟子受伤`, action: '去疗伤' });
+  }
+  if (breakthroughReadyIds.value.length > 0) {
+    items.push({ id: 'breakthrough', tone: 'act', text: `${String(breakthroughReadyIds.value.length)} 名弟子可突破`, action: '去突破' });
+  }
+  if (props.state.sectUpgrade?.canUpgrade) {
+    items.push({ id: 'upgrade', tone: 'act', text: `宗门可晋升为${props.state.sectUpgrade.nextLevelName}`, action: '去晋升' });
+  }
+  if (h?.worldBoss.attackable) {
+    items.push({ id: 'boss', tone: 'act', text: `讨伐开放中 · 第 ${String(h.worldBoss.stage ?? 1)} 关`, action: '去讨伐' });
+  }
+  if (h?.veins.unlocked && h.veins.holding === null && h.veins.freeCount > 0) {
+    items.push({ id: 'veins', tone: 'act', text: `${String(h.veins.freeCount)} 条灵脉无主`, action: '去进驻' });
+  }
+  if (recruitBadge.value > 0) {
+    items.push({ id: 'recruit', tone: 'act', text: `招贤台还可招 ${String(recruitBadge.value)} 人`, action: '去招贤' });
+  }
+  if (vacantStewards.value > 0) {
+    items.push({ id: 'steward', tone: 'act', text: `${String(vacantStewards.value)} 个执事空缺`, action: '去任命' });
+  }
+  if (dispatchCount.value > 0) {
+    items.push({ id: 'dispatch', tone: 'act', text: `门人调度有 ${String(dispatchCount.value)} 项建议`, action: '去调度' });
+  }
+  return items;
+});
+
+function scrollToSection(elementId: string): void {
+  document.getElementById(elementId)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+function onTodo(id: string): void {
+  if (id === 'journey') {
+    const first = readyJourneys.value[0];
+    if (first !== undefined) openDetail(first.discipleId);
+  } else if (id === 'tower' || id === 'auction' || id === 'veins' || id === 'steward') {
+    openPanel.value = id;
+  } else if (id === 'boss') {
+    openPanel.value = 'world-boss';
+  } else if (id === 'resources') {
+    scrollToSection('resource-title');
+  } else if (id === 'heal') {
+    openBatchHeal(healableIds.value);
+  } else if (id === 'breakthrough') {
+    openBatchBreakthrough(breakthroughReadyIds.value);
+  } else if (id === 'upgrade') {
+    scrollToSection('sect-upgrade-title');
+  } else if (id === 'recruit') {
+    void requestRecruit();
+  } else if (id === 'dispatch') {
+    showDispatch.value = true;
   }
 }
 
@@ -1727,6 +1965,7 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
 
 <template>
   <main class="game-shell" :aria-busy="busy">
+    <TodoFloat :items="todoItems" @select="onTodo" />
     <header class="game-topbar">
       <div class="sect-identity">
         <img class="sect-logo" src="/brand-logo.png" alt="" aria-hidden="true" />
@@ -1914,169 +2153,25 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
     </div>
 
     <!--
-      操作条：「宗门 / 出战 / 市集」常驻；不常用的「事务」原地折叠，展开与否记在本机（moreActionsOpen）。
-      招贤台在事务里：折叠时把它的角标挂到「展开」按钮上，不会漏看。
+      首页功能区：按分组固定顺序的状态卡片，第二行写这个功能此刻的状态（数据来自 /game/hub 与 state）。
+      待办不放这里，放在 PC 端左上角的浮窗（TodoFloat）；手机端不显示待办。
     -->
-    <nav class="action-bar" aria-label="宗门操作" role="toolbar">
-      <div class="action-group" role="group" aria-label="宗门" :style="{ '--chips': 2 }">
-        <span class="action-group-label" aria-hidden="true">宗门</span>
-        <button class="action-chip" type="button" @click="openPanel = 'alchemy'">
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M9 3h6M10 3v4.2a6.5 6.5 0 1 0 4 0V3m-4.8 11h9.6" />
-          </svg>
-          <span>炼丹</span>
-        </button>
-        <button class="action-chip" type="button" @click="openEquipment">
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M4 4h9l7 7-6 6-7-7V4Zm3 3h.01M15 18l2.5 2.5M18 15l2.5 2.5" />
-          </svg>
-          <span>炼器</span>
-        </button>
-      </div>
-      <div class="action-group" role="group" aria-label="出战" :style="{ '--chips': 4 }">
-        <span class="action-group-label" aria-hidden="true">出战</span>
-        <button class="action-chip" type="button" @click="openPanel = 'explore'">
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Zm3.4 5.6-2.1 5-5 2.1 2.1-5 5-2.1Z" />
-          </svg>
-          <span>秘境探索</span>
-        </button>
-        <button
-          class="action-chip"
-          type="button"
-          aria-label="讨伐：全服共讨妖王"
-          title="每日 08:00 妖王降临，全服共讨"
-          @click="openPanel = 'world-boss'"
-        >
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M14.5 3.2 20.8 9.5 9.6 20.7 3.3 21l.3-6.3L14.5 3.2Zm-8.6 12.5 3.4 3.4M16.2 6.9l1 1" />
-          </svg>
-          <span>讨伐</span>
-          <span v-if="state.worldBoss?.attackable" class="chip-badge">!</span>
-        </button>
-        <button
-          class="action-chip"
-          type="button"
-          aria-label="镇妖塔：单人爬塔"
-          title="派 5 名弟子逐层闯塔，每天可扫荡一次"
-          @click="openPanel = 'tower'"
-        >
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M12 2.8 8 6.2h8L12 2.8ZM9 6.2v3.6h6V6.2M7.5 9.8h9l-.8 4.4H8.3l-.8-4.4Zm.8 4.4h7.4l.8 6.6H7.5l.8-6.6ZM10.6 20.8v-3.2h2.8v3.2" />
-          </svg>
-          <span>镇妖塔</span>
-          <span v-if="state.tower?.sweepable" class="chip-badge">!</span>
-        </button>
-        <button
-          class="action-chip"
-          type="button"
-          aria-label="灵脉争夺：占领灵脉产出灵气"
-          title="全服 10 条灵脉，派弟子占领、互相抢夺"
-          @click="openPanel = 'veins'"
-        >
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M12 3c-3 4-6 6.5-6 10a6 6 0 0 0 12 0c0-3.5-3-6-6-10Zm0 7c-1.2 1.6-2.4 2.6-2.4 4a2.4 2.4 0 0 0 4.8 0c0-1.4-1.2-2.4-2.4-4Z" />
-          </svg>
-          <span>灵脉</span>
-        </button>
-      </div>
-      <div class="action-group" role="group" aria-label="市集" :style="{ '--chips': 5 }">
-        <span class="action-group-label" aria-hidden="true">市集</span>
-        <button class="action-chip" type="button" @click="openPanel = 'shop'">
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M12 4.2v14.6M4.4 7.6h15.2M8.4 18.8h7.2M4.4 7.6 2.4 12.4h4L4.4 7.6Zm15.2 0-2 4.8h4l-2-4.8Z" />
-          </svg>
-          <span>坊市</span>
-        </button>
-        <button class="action-chip" type="button" @click="openPanel = 'gambling'">
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M5 5h14v14H5zM8.5 9h.01M12 12h.01M15.5 15h.01" />
-          </svg>
-          <span>赌坊</span>
-        </button>
-        <button
-          class="action-chip"
-          type="button"
-          :aria-label="(state.auction?.claimable ?? 0) > 0 ? `拍卖行（${state.auction?.claimable} 件待领取）` : '拍卖行'"
-          title="宗门之间竞拍装备、丹药、玄铁、神木"
-          @click="openPanel = 'auction'"
-        >
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="m13.5 4.5 6 6M10.5 7.5l6 6M12 6l-4.5 4.5 3 3L15 9M9 12l-6 6M4 21h9" />
-          </svg>
-          <span>拍卖行</span>
-          <span v-if="(state.auction?.claimable ?? 0) > 0" class="chip-badge">{{ state.auction?.claimable }}</span>
-        </button>
-        <button
-          class="action-chip"
-          type="button"
-          aria-label="灵股：系统坐庄的股票行情"
-          title="看消息、看 K 线，低买高卖"
-          @click="openPanel = 'market'"
-        >
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M4 20h16M6 16l4-5 3 3 5-7M15 7h3v3" />
-          </svg>
-          <span>灵股</span>
-        </button>
-        <button class="action-chip" type="button" aria-label="功勋兑换" @click="openPanel = 'merit'">
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M8 3h8l-1.5 5h-5L8 3Zm4 5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13Zm0 3.2 1.1 2.2 2.4.35-1.75 1.7.4 2.4L12 16.7l-2.15 1.15.4-2.4-1.75-1.7 2.4-.35L12 11.2Z" />
-          </svg>
-          <span>功勋</span>
-        </button>
-      </div>
-      <div
-        id="action-group-affairs"
-        class="action-group"
-        :class="{ 'is-collapsed': !moreActionsOpen }"
-        role="group"
-        aria-label="事务"
-        :style="{ '--chips': moreActionsOpen ? 4 : 1 }"
-      >
-        <span class="action-group-label" aria-hidden="true">事务</span>
-        <template v-if="moreActionsOpen">
+    <nav class="hub-cards" aria-label="宗门功能">
+      <div v-for="group in hubGroups" :key="group.label" class="hub-group" role="group" :aria-label="group.label">
+        <span class="hub-group-label" aria-hidden="true">{{ group.label }}</span>
+        <div class="hub-group-cards">
           <button
-            class="action-chip"
+            v-for="card in group.cards"
+            :key="card.id"
+            class="hub-card"
             type="button"
-            :disabled="busy || recruitLoading"
-            :aria-label="recruitBadge > 0 ? `招贤台（还可招募 ${recruitBadge} 人）` : '招贤台'"
-            :title="recruitBadge > 0 ? `还可招募 ${recruitBadge} 人（弟子上限 − 现有门人）` : '张榜招贤'"
-            @click="requestRecruit"
+            :disabled="card.id === 'recruit' && (busy || recruitLoading)"
+            @click="openHubCard(card.id)"
           >
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm-6.5 9.5a6.5 6.5 0 0 1 13 0M18 14.5v6m3-3h-6" />
-            </svg>
-            <span>招贤台</span>
-            <span v-if="recruitBadge > 0" class="chip-badge">{{ recruitBadge }}</span>
+            <span class="hub-card-name"><i aria-hidden="true">{{ card.glyph }}</i>{{ card.name }}</span>
+            <span class="hub-card-status">{{ card.status }}</span>
           </button>
-          <button class="action-chip" type="button" aria-label="执事堂：任命宗门执事" @click="openPanel = 'steward'">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M4 20h16M6 20V10m12 10V10M3 10l9-6 9 6M10 20v-5h4v5" />
-            </svg>
-            <span>执事堂</span>
-          </button>
-          <button class="action-chip" type="button" @click="openPanel = 'defense-lineup'">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M12 3.2 5 6.3v5.2c0 4.1 2.9 7.8 7 9.3 4.1-1.5 7-5.2 7-9.3V6.3L12 3.2Zm-3 8.6h6" />
-            </svg>
-            <span>守擂阵容</span>
-          </button>
-        </template>
-        <button
-          class="action-chip action-fold"
-          type="button"
-          :aria-expanded="moreActionsOpen"
-          aria-controls="action-group-affairs"
-          :title="moreActionsOpen ? '收起事务' : '展开事务：招贤台 / 执事堂 / 守擂阵容'"
-          @click="toggleMoreActions"
-        >
-          <span>{{ moreActionsOpen ? '收起' : '展开' }}</span>
-          <svg class="action-fold-caret" :class="{ 'is-open': moreActionsOpen }" viewBox="0 0 24 24" aria-hidden="true">
-            <path d="m7 10 5 5 5-5" />
-          </svg>
-          <span v-if="!moreActionsOpen && recruitBadge > 0" class="chip-badge" :title="`还可招募 ${recruitBadge} 人`">{{ recruitBadge }}</span>
-        </button>
+        </div>
       </div>
     </nav>
 

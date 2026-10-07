@@ -110,6 +110,7 @@ import {
   getMarket,
   getMarketChart,
   tradeStock,
+  getHub,
   getMeritShop,
   getRaceHistory,
   getRaceState,
@@ -738,6 +739,13 @@ export function createGameRoutes(): Hono<AppEnv> {
     const userId = requireUserId(c);
     const result = await sweepTower(getDb(c.env), userId, Date.now());
     return respondOk(c, { state: result.state, tower: result.tower, result: result.result });
+  });
+
+  // 首页功能区：各玩法状态摘要（只读，不结算、不写库）。
+  routes.get('/game/hub', async (c) => {
+    const userId = requireUserId(c);
+    const hub = await getHub(getDb(c.env), userId, Date.now());
+    return respondOk(c, { hub });
   });
 
   // 0043 灵股：行情面板（价格按服务端此刻分钟现算，不写库）。

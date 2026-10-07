@@ -364,7 +364,7 @@ onUnmounted(() => {
 
 <template>
   <section class="auction-panel" aria-labelledby="auction-title">
-    <div class="auction-head">
+    <div class="auction-head modal-head">
       <h3 id="auction-title" class="auction-title">拍卖行</h3>
       <div class="auction-head-actions">
         <button class="auction-quiet-button" type="button" @click="showRules = !showRules">

@@ -231,7 +231,7 @@ onUnmounted(() => {
 
 <template>
   <section class="vein-panel" aria-labelledby="vein-title">
-    <div class="vein-head">
+    <div class="vein-head modal-head">
       <h3 id="vein-title" class="vein-title">灵脉争夺</h3>
       <div class="vein-head-actions">
         <button class="vein-quiet-button" type="button" @click="showRules = !showRules">

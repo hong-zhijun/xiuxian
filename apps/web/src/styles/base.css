@@ -68,7 +68,8 @@ html::-webkit-scrollbar,
 .event-list::-webkit-scrollbar,
 .realm-list::-webkit-scrollbar,
 .disciple-tab-panels::-webkit-scrollbar,
-.modal-card::-webkit-scrollbar {
+.modal-card::-webkit-scrollbar,
+.modal-body::-webkit-scrollbar {
   width: 0;
   height: 0;
 }
@@ -76,7 +77,8 @@ html::-webkit-scrollbar,
 .event-list,
 .realm-list,
 .disciple-tab-panels,
-.modal-card {
+.modal-card,
+.modal-body {
   scrollbar-width: none;
   -ms-overflow-style: none;
 }
@@ -4790,52 +4792,104 @@ ul {
   color: var(--red-bright);
 }
 
-/* ---------- Action bar：分组；「事务」组原地折叠 ---------- */
-.action-bar {
+/* ---------- 首页功能区：分组的状态卡片 ---------- */
+.hub-cards {
   display: flex;
-  flex-wrap: wrap;
-  align-items: stretch;
+  flex-direction: column;
   gap: 8px;
   margin-top: 14px;
 }
 
-/*
- * 一组：左边竖排的组名 + 等宽的按钮（按钮数由 --chips 给出）。
- * 按按钮数分配宽度：每个按钮最宽约 124px、最窄约 114px（招贤台带角标也放得下） —— 宽屏不拉长，放不下时整组换行而不是把字挤成省略号。
- */
-.action-group {
+/* 一组：左边竖排组名 + 卡片网格（宽屏一行 5 张，固定顺序）。 */
+.hub-group {
   display: grid;
-  flex: var(--chips, 3) 1 0;
-  min-width: calc(var(--chips, 3) * 122px + 24px);
-  max-width: calc(var(--chips, 3) * 131px + 24px);
-  grid-template-columns: auto repeat(var(--chips, 3), minmax(0, 1fr));
-  align-items: center;
-  gap: 7px;
-  padding: 4px 4px 4px 6px;
-  border: 1px solid rgba(202, 169, 106, 0.1);
-  border-radius: 4px;
-  background: rgba(255, 255, 255, 0.012);
+  grid-template-columns: 22px minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
 }
 
-.action-group-label {
+.hub-group-label {
+  padding-top: 9px;
   color: #7d9186;
-  font-size: 11px;
-  letter-spacing: 0.2em;
+  font-size: 12px;
+  letter-spacing: 0.25em;
   writing-mode: vertical-rl;
   user-select: none;
 }
 
-/* 「展开 / 收起」按钮：比普通按钮淡一点，表明它只是开关。 */
-.action-fold {
-  color: #9fb2a8;
+.hub-group-cards {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
 }
 
-.action-fold-caret {
-  transition: transform 150ms ease;
+.hub-card {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px 10px;
+  border: 1px solid rgba(202, 169, 106, 0.22);
+  border-radius: 4px;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.02), transparent 40%),
+    rgba(13, 32, 27, 0.9);
+  color: #cbd8d0;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 150ms ease, background-color 150ms ease, transform 150ms ease;
 }
 
-.action-fold-caret.is-open {
-  transform: rotate(180deg);
+.hub-card:hover {
+  border-color: rgba(234, 209, 154, 0.6);
+  background: rgba(202, 169, 106, 0.09);
+  transform: translateY(-1px);
+}
+
+.hub-card:disabled,
+.hub-card:disabled:hover {
+  border-color: rgba(167, 184, 173, 0.11);
+  color: #63756c;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.hub-card-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--gold-bright);
+  font-size: 13px;
+  letter-spacing: 0.04em;
+}
+
+.hub-card-name i {
+  display: inline-flex;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(202, 169, 106, 0.4);
+  border-radius: 50%;
+  color: var(--gold);
+  font-size: 10px;
+  font-style: normal;
+}
+
+.hub-card-status {
+  overflow: hidden;
+  color: var(--muted, #92a79d);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 中等宽度：一行 3 张，状态文字不至于被挤成省略号（手机见 680px 断点：一行 2 张）。 */
+@media (max-width: 900px) {
+  .hub-group-cards {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
 }
 
 .action-chip {
@@ -4917,19 +4971,50 @@ ul {
   animation: modal-fade 150ms ease-out;
 }
 
+/*
+ * 外层卡片不滚动：关闭按钮（绝对定位）因此始终停在右上角；
+ * 内容在 .modal-body 里滚动，内边距也挪到滚动层上。
+ */
 .modal-card {
   position: relative;
+  display: flex;
+  flex-direction: column;
   width: min(600px, 100%);
   max-height: min(86vh, 820px);
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  padding: 18px;
+  overflow: hidden;
   border-color: var(--line-strong);
   animation: modal-rise 180ms ease-out;
 }
 
+.modal-body {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 18px;
+}
+
+/*
+ * 内容第一行的标题栏吸附在滚动层顶部：`.section-heading` 是大多数弹窗的标题栏，
+ * 自定义标题栏加 `.modal-head` 即可。用不透明底色盖住滚上来的内容；
+ * 向上的同色阴影补齐滚动层内边距那一条（不同浏览器对 sticky 是否计入内边距不一致，补上就都不漏）。
+ */
+.modal-body > * > .section-heading:first-child,
+.modal-body > * > .modal-head:first-child {
+  position: sticky;
+  top: 0;
+  /* 层级：标题栏 3 < 关闭按钮 4 < 加载遮罩 5 */
+  z-index: 3;
+  padding-bottom: 8px;
+  background: var(--modal-head-bg, #0c1e1a);
+  box-shadow: 0 -18px 0 0 var(--modal-head-bg, #0c1e1a);
+}
+
 .modal-card.is-loading {
   min-height: 230px;
+}
+
+.modal-card.is-loading .modal-body {
   overflow: hidden;
 }
 
@@ -4954,6 +5039,9 @@ ul {
  */
 .modal-card.is-fixed-height {
   height: min(760px, 86vh);
+}
+
+.modal-card.is-fixed-height .modal-body {
   overflow: hidden;
 }
 
@@ -4967,13 +5055,14 @@ ul {
   width: min(440px, 100%);
 }
 
-.modal-card .section-heading {
+.modal-card .section-heading,
+.modal-card .modal-head {
   padding-right: 40px;
 }
 
 .modal-close {
   position: absolute;
-  z-index: 1;
+  z-index: 4;
   top: 11px;
   right: 11px;
   display: flex;
@@ -6334,8 +6423,11 @@ h2.public-sect-name {
   }
 
   .modal-card {
-    padding: 14px;
     max-height: 88vh;
+  }
+
+  .modal-body {
+    padding: 14px;
   }
 
   .section-heading {
@@ -6377,26 +6469,9 @@ h2.public-sect-name {
     text-align: left;
   }
 
-  /* 窄屏：每组占一整行、固定 3 列（2 个按钮的组也同宽）；事务展开时「收起」单独占下一行。 */
-  .action-group {
-    flex: 1 1 100%;
-    min-width: 0;
-    max-width: none;
-    grid-template-columns: auto repeat(3, minmax(0, 1fr));
-  }
-
-  /* 第 4、7… 个按钮换行时从第 2 列起排，不占组名那一列（市集 4 个按钮时用得上）。 */
-  .action-group > .action-chip:nth-of-type(3n + 1) {
-    grid-column-start: 2;
-  }
-
-  .action-group:not(.is-collapsed) .action-fold {
-    grid-column: 2 / -1;
-  }
-
-  .action-bar .action-chip {
-    padding-right: 5px;
-    padding-left: 5px;
+  /* 窄屏：功能卡片两列。 */
+  .hub-group-cards {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .disciple-list {
