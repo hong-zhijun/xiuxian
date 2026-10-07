@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { RecruitPreview } from '../api/game';
+import { formatAmount } from '../utils/format';
 
 /**
  * 招贤台（弹窗内容）：展示本次三位候选人（六项精确数值 + 综合评分），选一位迎入山门。
@@ -11,6 +12,10 @@ import type { RecruitPreview } from '../api/game';
  */
 defineProps<{
   preview: RecruitPreview;
+  /** 宗门紧缺的天赋（id → 缺口说明，来自门人调度的「人才」页）：候选人有这些天赋时标「宗门紧缺」。 */
+  shortTalents: Record<string, string>;
+  /** 灵石够不够付下一次刷新（免费时恒为 true）。 */
+  refreshAffordable: boolean;
   /** 招募消耗（已格式化的展示文本）。 */
   costText: string;
   /** 全局忙碌（有写操作在途）。 */
@@ -39,17 +44,28 @@ const emit = defineEmits<{
     </header>
 
     <div class="recruit-refresh">
-      <span class="recruit-refresh-count">
-        本境界可刷新 <strong>{{ preview.refreshRemaining }}</strong>/{{ preview.refreshLimit }} 次
+      <span v-if="preview.refreshRemaining > 0" class="recruit-refresh-count">
+        本境界免费刷新 <strong>{{ preview.refreshRemaining }}</strong>/{{ preview.refreshLimit }} 次
         <small>（宗门晋升后重置）</small>
+      </span>
+      <span v-else class="recruit-refresh-count">
+        免费刷新已用完，每次 <strong>{{ formatAmount(preview.refreshCost) }}</strong> 灵石
+        <small>（宗门晋升后重置免费次数）</small>
       </span>
       <button
         class="quiet-button recruit-refresh-button"
         type="button"
-        :disabled="busy || refreshing || preview.refreshRemaining <= 0"
+        :disabled="busy || refreshing || !refreshAffordable"
+        :title="refreshAffordable ? undefined : '灵石不足'"
         @click="emit('refresh')"
       >
-        {{ refreshing ? '天机推演中…' : '换一批' }}
+        {{
+          refreshing
+            ? '天机推演中…'
+            : preview.refreshCost > 0
+              ? `换一批 · ${formatAmount(preview.refreshCost)} 灵石`
+              : '换一批'
+        }}
       </button>
     </div>
 
@@ -64,6 +80,11 @@ const emit = defineEmits<{
             <strong>{{ candidate.name }}</strong>
             <span class="candidate-gender">{{ candidate.gender === 'female' ? '坤' : '乾' }}</span>
             <span class="candidate-talent" :title="candidate.talentEffect">{{ candidate.talentName }}</span>
+            <span
+              v-if="shortTalents[candidate.talent] !== undefined"
+              class="candidate-needed"
+              :title="shortTalents[candidate.talent]"
+            >宗门紧缺</span>
           </div>
         </div>
 

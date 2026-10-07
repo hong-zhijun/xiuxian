@@ -5787,6 +5787,17 @@ h2.public-sect-name {
   font-size: 11px;
 }
 
+/* 候选人天赋正是宗门紧缺的（门人调度「人才」页的急缺 / 不足）。 */
+.candidate-needed {
+  flex: 0 0 auto;
+  padding: 1px 7px;
+  border: 1px solid rgba(224, 123, 104, 0.7);
+  border-radius: 999px;
+  color: var(--red-bright);
+  background: rgba(224, 123, 104, 0.08);
+  font-size: 11px;
+}
+
 .candidate-button {
   width: 100%;
   min-height: 38px;

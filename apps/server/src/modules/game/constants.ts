@@ -509,6 +509,11 @@ export const DEFENSE_LINEUP_SIZE = 3;
  */
 export const RECRUIT_REFRESH_PER_LEVEL = 3;
 
+/**
+ * 免费额度用完后，每次刷新花 100 灵石（最小单位，1 灵石 = 1000）；不限次数，宗门升级后先用新的免费额度。
+ */
+export const RECRUIT_PAID_REFRESH_COST = 100 * 1000;
+
 /* ---------- 世界 Boss 二期 · 阶段一：重伤 ---------- */
 
 /** 重伤持续时间：1 天（被世界 Boss 打成重伤后要静养这么久）。 */

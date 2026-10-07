@@ -1010,8 +1010,10 @@ export interface RecruitPreview {
   refreshUsed: number;
   /** 本境界刷新额度（宗门晋升后重置）。 */
   refreshLimit: number;
-  /** 还剩几次刷新。 */
+  /** 还剩几次免费刷新。 */
   refreshRemaining: number;
+  /** 下一次刷新要花的灵石（最小单位）：还有免费次数时为 0，用完后每次 100 灵石。 */
+  refreshCost: number;
 }
 
 export async function fetchRecruitPreview(): Promise<RecruitPreview> {

@@ -109,6 +109,7 @@ import {
 import {
   DEFENSE_LINEUP_SIZE,
   IDLE_ASSIGNMENT,
+  RECRUIT_PAID_REFRESH_COST,
   RECRUIT_REFRESH_PER_LEVEL,
   SPIRITUAL_ARRAY_BUILDING_ID,
   assignmentLimitOf,
@@ -1973,8 +1974,10 @@ export interface RecruitPreview {
   refreshUsed: number;
   /** V5.2：本境界的招贤刷新额度（RECRUIT_REFRESH_PER_LEVEL）。 */
   refreshLimit: number;
-  /** V5.2：还剩几次刷新（= limit - used，不小于 0）。 */
+  /** V5.2：还剩几次免费刷新（= limit - used，不小于 0）。 */
   refreshRemaining: number;
+  /** 下一次刷新要花多少灵石（最小单位）：免费额度还有时为 0，用完后为 RECRUIT_PAID_REFRESH_COST。 */
+  refreshCost: number;
 }
 
 /**
@@ -2075,7 +2078,13 @@ export async function previewRecruit(
     refreshUsed: quota.used,
     refreshLimit: quota.limit,
     refreshRemaining: quota.remaining,
+    refreshCost: refreshCostFor(quota.used),
   };
+}
+
+/** 下一次刷新的花费：本境界免费额度用完后每次 RECRUIT_PAID_REFRESH_COST 灵石。 */
+function refreshCostFor(used: number): number {
+  return used >= RECRUIT_REFRESH_PER_LEVEL ? RECRUIT_PAID_REFRESH_COST : 0;
 }
 
 /**
@@ -2222,10 +2231,11 @@ export async function recruitDisciple(
  * 招贤台刷新（V5.2）：结算 → 校验本境界刷新额度 → used+1（并把授予等级写成当前等级）
  * → 用「刷新后的 used」作刷新序号生成新一批候选人。
  *
- * 刷新免费：不扣资源、不动每日招募次数（recruit_count 与刷新计数相互独立）；
+ * 每个境界前 RECRUIT_REFRESH_PER_LEVEL 次免费；用完后每次扣 RECRUIT_PAID_REFRESH_COST 灵石（余额不足报错），
+ * 不限次数。都不动每日招募次数（recruit_count 与刷新计数相互独立）；
  * 额度按「升级即重置」归一化（见 recruitRefreshQuota）。只做一次 `draft.commit()`。
  * 返回的 preview 与随后 recruitDisciple 使用同一组 seed 参数（refreshSeq = 刷新后的 used），
- * 保证「预览第 N 张 = 招募时 candidates[N]」。次数用尽抛 DAILY_LIMIT。
+ * 保证「预览第 N 张 = 招募时 candidates[N]」。
  */
 export async function refreshRecruit(
   db: D1Database,
@@ -2235,11 +2245,9 @@ export async function refreshRecruit(
   const draft = await draftFor(db, userId, now);
   const quota = recruitRefreshQuota(draft.sect);
 
-  if (quota.used >= RECRUIT_REFRESH_PER_LEVEL) {
-    throw new AppError('DAILY_LIMIT', '本境界的招贤刷新次数已用完（宗门晋升后重置）', {
-      refreshLimit: RECRUIT_REFRESH_PER_LEVEL,
-      refreshUsed: quota.used,
-    });
+  const cost = refreshCostFor(quota.used);
+  if (cost > 0) {
+    draft.requireResource('spiritStone', cost);
   }
 
   const nextUsed = quota.used + 1;
@@ -2278,6 +2286,7 @@ export async function refreshRecruit(
       refreshUsed: nextUsed,
       refreshLimit: RECRUIT_REFRESH_PER_LEVEL,
       refreshRemaining: Math.max(0, RECRUIT_REFRESH_PER_LEVEL - nextUsed),
+      refreshCost: refreshCostFor(nextUsed),
     },
   };
 }

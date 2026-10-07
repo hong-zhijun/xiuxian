@@ -745,6 +745,34 @@ describe('招贤批次：预览等于招募、过期批次不扣资源/次数', 
     expect(await discipleRowCount(sect.sectId)).toBe(countBefore);
   });
 
+  it('每个境界前 3 次免费；用完后每次扣 100 灵石照样能刷，灵石不足则拒绝且不动额度', async () => {
+    const sect = await makeSect('dr-recruit-paid');
+    await freezeSettlement(sect.sectId);
+    await setBalance(sect.sectId, 'spiritStone', 150_000);
+
+    for (let index = 0; index < 3; index += 1) {
+      const free = await sect.refresh();
+      expect(free.status).toBe(200);
+      expect(await dbBalance(sect.sectId, 'spiritStone')).toBe(150_000);
+    }
+    const preview = dataOf(await sect.recruitPreview()) as Record<string, any>;
+    expect(preview.refreshRemaining).toBe(0);
+    expect(preview.refreshCost).toBe(100_000);
+
+    const paid = await sect.refresh();
+    expect(paid.status).toBe(200);
+    expect(await dbBalance(sect.sectId, 'spiritStone')).toBe(50_000);
+    const paidPreview = (dataOf(paid) as Record<string, any>).preview as Record<string, any>;
+    expect(paidPreview.refreshUsed).toBe(4);
+    expect(paidPreview.batch).not.toBe(preview.batch);
+
+    const poor = await sect.refresh();
+    expect(poor.status).toBe(409);
+    expect(errorOf(poor).code).toBe('INSUFFICIENT_RESOURCE');
+    expect(await dbBalance(sect.sectId, 'spiritStone')).toBe(50_000);
+    expect((dataOf(await sect.recruitPreview()) as Record<string, any>).refreshUsed).toBe(4);
+  });
+
   it('刷新后旧批次 → 410，新批次可招募且与刷新返回的候选一致', async () => {
     const sect = await makeSect('dr-recruit-refresh');
     await freezeSettlement(sect.sectId);

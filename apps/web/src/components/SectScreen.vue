@@ -649,6 +649,7 @@ async function requestRecruitRefresh(): Promise<void> {
   if (props.busy || recruitRefreshing.value || recruitSubmitting.value) return;
   recruitRefreshing.value = true;
   try {
+    const paid = recruitPreview.value?.refreshCost ?? 0;
     const { state: next, preview } = await props.refreshRecruitAction();
     recruitPreview.value = preview;
     emit('recruit-refreshed', next);
@@ -656,7 +657,11 @@ async function requestRecruitRefresh(): Promise<void> {
       'notify',
       'success',
       '天机已转',
-      `换了一批有缘人，本境界还剩 ${preview.refreshRemaining} 次刷新。`,
+      paid > 0
+        ? `花了 ${formatAmount(paid)} 灵石，换了一批有缘人。`
+        : preview.refreshRemaining > 0
+          ? `换了一批有缘人，本境界还剩 ${preview.refreshRemaining} 次免费刷新。`
+          : `换了一批有缘人，免费刷新已用完，之后每次 ${formatAmount(preview.refreshCost)} 灵石。`,
     );
   } catch (caught) {
     emit('notify', 'error', '推演未成', caught instanceof Error ? caught.message : '刷新失败');
@@ -1273,6 +1278,23 @@ const talentRows = computed(() =>
     assignments: props.state.assignments,
   }),
 );
+
+/** 招贤台「宗门紧缺」标记：人才页里急缺 / 不足的天赋 → 缺口说明。 */
+const shortTalents = computed<Record<string, string>>(() =>
+  Object.fromEntries(
+    talentRows.value
+      .filter((row) => row.level === 'urgent' || row.level === 'short')
+      .map((row) => [row.talentId, row.advice]),
+  ),
+);
+
+/** 下一次招贤刷新付不付得起（免费额度内恒为 true；服务端仍会再校验余额）。 */
+const recruitRefreshAffordable = computed(() => {
+  const cost = recruitPreview.value?.refreshCost ?? 0;
+  if (cost <= 0) return true;
+  const balance = Number(props.state.resources.find((item) => item.id === 'spiritStone')?.balance ?? 0);
+  return balance >= cost;
+});
 
 /** 按钮角标：一键调度能解决的问题数（推荐调整条数）。 */
 const dispatchCount = computed(() => dispatchPlan.value.moves.length + dispatchPlan.value.appointments.length);
@@ -1952,6 +1974,7 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
           :busy="busy"
           :detail-id="detailId"
           :breakthrough-confirm-id="breakthroughConfirmId"
+          :misplaced-ids="dispatchPlan.misplacedIds"
           @open-detail="openDetail"
           @request-breakthrough="onRequestBreakthrough"
           @request-batch-breakthrough="openBatchBreakthrough"
@@ -2314,6 +2337,8 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
       <RecruitDialog
         v-if="recruitPreview"
         :preview="recruitPreview"
+        :short-talents="shortTalents"
+        :refresh-affordable="recruitRefreshAffordable"
         :cost-text="costText(state.recruit.cost)"
         :busy="busy || recruitRefreshing || recruitSubmitting"
         :refreshing="recruitRefreshing"
