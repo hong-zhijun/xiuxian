@@ -18,6 +18,7 @@ import {
   getSectState,
   listAuctionItem,
   processAuctions,
+  retractAuctionBid,
 } from '../src/modules/game/service';
 
 import { dataOf, errorOf, TestClient } from './support/authClient';
@@ -293,6 +294,38 @@ describe('拍卖行', () => {
     const apiLotId = (dataOf(viaApi) as Record<string, any>).auction.myLots[0].id as string;
     const blocked = await homeBuyer.api.post('/api/v1/game/auction/bid', { lotId: apiLotId, price: 600 });
     expect(errorOf(blocked).code).toBe('INVALID_STATUS');
+  });
+
+  it('撤销出价：领先者退回 95%、5% 赔给卖家，这一单回到无人出价；别人不能撤；结束前 2 小时内不能撤', async () => {
+    const seller = await makeSect('rt-s');
+    const alice = await makeSect('rt-a');
+    const bob = await makeSect('rt-b');
+    const lotId = await listXuantie(seller);
+    await bidAuction(env.DB, alice.userId, { lotId, price: 600 }, NOW + 1);
+    const bobBefore = await balanceOf(bob.sectId, 'spiritStone');
+    const leading = await bidAuction(env.DB, bob.userId, { lotId, price: 700 }, NOW + 2);
+    const bobLot = leading.auction.hall.find((lot) => lot.id === lotId)!;
+    expect(bobLot.retractable).toBe(true);
+    expect(bobLot.retractPenalty).toBe(35_000);
+
+    // 被超价的人没有可撤的出价
+    await expect(retractAuctionBid(env.DB, alice.userId, { lotId }, NOW + 3)).rejects.toMatchObject({
+      code: 'INVALID_STATUS',
+    });
+
+    const sellerBefore = await balanceOf(seller.sectId, 'spiritStone');
+    const retracted = await retractAuctionBid(env.DB, bob.userId, { lotId }, NOW + 3);
+    expect(await balanceOf(bob.sectId, 'spiritStone')).toBe(bobBefore - 35_000);
+    expect(await balanceOf(seller.sectId, 'spiritStone')).toBe(sellerBefore + 35_000);
+    const lot = retracted.auction.hall.find((item) => item.id === lotId)!;
+    expect(lot).toMatchObject({ currentPrice: null, leaderName: null, bidCount: 0, minNextBid: 600_000 });
+    expect(retracted.auction.myBids).toHaveLength(0);
+
+    // 回到起拍价，别人可以重新出价；快到期时不能撤
+    await bidAuction(env.DB, alice.userId, { lotId, price: 600 }, NOW + 4);
+    await expect(
+      retractAuctionBid(env.DB, alice.userId, { lotId }, NOW + AUCTION_DURATION_MS - 60_000),
+    ).rejects.toMatchObject({ code: 'INVALID_STATUS' });
   });
 
   it('装备：上架即离开背包；一口价时买家背包满拒绝，腾出位置后买到、按快照入背包', async () => {

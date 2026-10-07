@@ -19,6 +19,15 @@ export const MAX_ENTRIES = 5;
 
 export const CHANGELOG: readonly ChangelogEntry[] = [
   {
+    id: '2026-10-09-auction-retract',
+    time: '2026-10-09 15:00',
+    title: '拍卖行 · 撤销出价',
+    items: [
+      '当前最高出价的人可以「撤销出价」（拍卖大厅与「我的拍卖 → 我出价的」都有按钮）：扣出价的 5% 作为违约金赔给卖家，其余退回，这一单回到无人出价、按起拍价重新竞拍。',
+      '拍卖结束前 2 小时内不能撤销，防止临到期抢价再撤、让卖家白挂一场。',
+    ],
+  },
+  {
     id: '2026-10-09-spirit-veins',
     time: '2026-10-09 10:00',
     title: '新玩法 · 灵脉争夺',

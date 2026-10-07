@@ -345,6 +345,8 @@ import {
 } from './repository';
 import {
   auctionLotGuardStatement,
+  deleteAuctionBidsStatement,
+  retractAuctionBidStatement,
   insertAuctionBidStatement,
   insertAuctionLotStatement,
   markAuctionClaimedStatement,
@@ -357,6 +359,10 @@ import {
 import {
   auctionFee,
   auctionMinNextBid,
+  auctionRetractPenalty,
+  canRetractAuctionBid,
+  AUCTION_RETRACT_CUTOFF_MS,
+  AUCTION_RETRACT_PENALTY_BP,
   auctionNetworkKey,
   auctionMinPrice,
   auctionSellerProceeds,
@@ -10235,6 +10241,7 @@ function auctionLotViewOf(row: AuctionLotRow, sectId: string, now: number): Auct
   let claimable: AuctionLotView['claimable'] = null;
   if (row.status === 'sold' && row.bidder_sect_id === sectId && row.buyer_claimed_at === null) claimable = 'buyer';
   if (row.status === 'expired' && row.seller_sect_id === sectId && row.seller_claimed_at === null) claimable = 'seller';
+  const isLeading = row.bidder_sect_id === sectId;
   return {
     id: row.id,
     kind: row.kind as AuctionKind,
@@ -10250,12 +10257,18 @@ function auctionLotViewOf(row: AuctionLotRow, sectId: string, now: number): Auct
     minNextBid,
     bidCount: Number(row.bid_count),
     leaderName: row.bidder_name,
-    isLeading: row.bidder_sect_id === sectId,
+    isLeading,
     status: row.status as AuctionLotView['status'],
     endsAt: Number(row.ends_at),
     endedAt: row.ended_at === null ? null : Number(row.ended_at),
     fee: Number(row.fee),
     claimable,
+    retractable: canRetractAuctionBid(
+      { endsAt: Number(row.ends_at), isLeading, active: row.status === 'active' },
+      now,
+    ),
+    retractPenalty:
+      row.status === 'active' && isLeading && currentPrice !== null ? auctionRetractPenalty(currentPrice) : null,
   };
 }
 
@@ -10279,6 +10292,8 @@ async function buildAuctionView(input: { db: D1Database; draft: SectDraft; now: 
     unlockSectLevel: AUCTION_UNLOCK_SECT_LEVEL,
     feeBp: AUCTION_FEE_BP,
     bidStepBp: AUCTION_BID_STEP_BP,
+    retractPenaltyBp: AUCTION_RETRACT_PENALTY_BP,
+    retractCutoffHours: AUCTION_RETRACT_CUTOFF_MS / 3_600_000,
     durationHours: AUCTION_DURATION_MS / 3_600_000,
     maxActiveListings: AUCTION_MAX_ACTIVE_LISTINGS,
     myActiveCount: myLots.filter((row) => row.status === 'active').length,
@@ -11324,4 +11339,49 @@ export async function withdrawVein(
     veinCommitError(error);
   }
   return veinResponse(db, userId, now, `已撤离「${def.name}」`);
+}
+
+/**
+ * POST /game/auction/retract：撤销出价（只有当前领先者、离结束超过 2 小时）。
+ * 退回出价 − 5% 违约金，违约金赔给卖家；这一单回到「无人出价」，出价流水清掉。
+ * 被超价的人在被超价时就已退款，不受影响。一次受保护 batch（拍卖单 version 守卫）。
+ */
+export async function retractAuctionBid(
+  db: D1Database,
+  userId: string,
+  input: { lotId: string },
+  now: number,
+): Promise<{ state: SectStateView; auction: AuctionView; result: AuctionActionResultView }> {
+  const draft = await draftFor(db, userId, now);
+  const lot = await requireAuctionLot(db, input.lotId);
+  await requireAuctionOpen(db, lot, now);
+  if (lot.bidder_sect_id !== draft.sect.id || lot.current_price === null) {
+    throw new AppError('INVALID_STATUS', '你不是这一单的最高出价，没有可撤销的出价');
+  }
+  if (Number(lot.ends_at) - now <= AUCTION_RETRACT_CUTOFF_MS) {
+    throw new AppError('INVALID_STATUS', `拍卖结束前 ${String(AUCTION_RETRACT_CUTOFF_MS / 3_600_000)} 小时内不能撤销出价`);
+  }
+
+  const price = Number(lot.current_price);
+  const penalty = auctionRetractPenalty(price);
+  draft.addResource('spiritStone', price - penalty);
+  if (penalty > 0) {
+    draft.addStatement(resourceDeltaStatement(lot.seller_sect_id, 'spiritStone', penalty, now));
+  }
+  draft.addStatement(retractAuctionBidStatement(lot.id));
+  draft.addStatement(deleteAuctionBidsStatement(lot.id));
+  try {
+    await draft.commit({ extraGuards: [auctionLotGuard(lot)] });
+  } catch (error) {
+    if (error instanceof AppError && error.code === 'INVALID_STATUS') {
+      throw new AppError('INVALID_STATUS', '这一单刚有变动，请刷新后再试');
+    }
+    throw error;
+  }
+  return auctionResponse(
+    db,
+    draft,
+    now,
+    `已撤销对 ${auctionItemLabel(lot)} 的出价：退回 ${displayAmount(price - penalty)} 灵石，违约金 ${displayAmount(penalty)} 灵石赔给卖家`,
+  );
 }

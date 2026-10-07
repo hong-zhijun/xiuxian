@@ -23,6 +23,10 @@ export const AUCTION_DURATION_MS = 24 * 3_600_000;
 export const AUCTION_MAX_ACTIVE_LISTINGS = 10;
 /** 成交手续费（基点，1000 = 10%）：从卖家所得里扣，灵石直接销毁。 */
 export const AUCTION_FEE_BP = 1000;
+/** 撤销出价的违约金（基点，500 = 5%）：从退款里扣，赔给卖家。 */
+export const AUCTION_RETRACT_PENALTY_BP = 500;
+/** 拍卖结束前这么久之内不能撤销出价（留时间给别人重新出价）。 */
+export const AUCTION_RETRACT_CUTOFF_MS = 2 * 3_600_000;
 /** 加价幅度：下一口至少比当前价高 5%（且至少 1 灵石）。 */
 export const AUCTION_BID_STEP_BP = 500;
 /** 价格上限（展示单位）。 */
@@ -100,6 +104,16 @@ export function auctionMinNextBid(lot: { startPrice: number; currentPrice: numbe
 /** 手续费（最小单位，向下取整）。 */
 export function auctionFee(price: number): number {
   return Math.floor((Math.max(0, price) * AUCTION_FEE_BP) / 10_000);
+}
+
+/** 撤销出价的违约金（最小单位，向下取整）：赔给卖家，其余退回出价者。 */
+export function auctionRetractPenalty(price: number): number {
+  return Math.floor((Math.max(0, price) * AUCTION_RETRACT_PENALTY_BP) / 10_000);
+}
+
+/** 现在还能不能撤销：领先者、竞价中，且离结束超过 2 小时。 */
+export function canRetractAuctionBid(lot: { endsAt: number; isLeading: boolean; active: boolean }, now: number): boolean {
+  return lot.active && lot.isLeading && lot.endsAt - now > AUCTION_RETRACT_CUTOFF_MS;
 }
 
 /** 卖家实得 = 成交价 − 手续费。 */

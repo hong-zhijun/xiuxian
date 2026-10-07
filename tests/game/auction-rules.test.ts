@@ -5,6 +5,8 @@ import {
   auctionMinNextBid,
   auctionMinPrice,
   auctionNetworkKey,
+  auctionRetractPenalty,
+  canRetractAuctionBid,
   auctionSellerProceeds,
   auctionUnitFloor,
   findAuctionResource,
@@ -83,5 +85,21 @@ describe('拍卖行 · 同网络标识', () => {
     expect(auctionNetworkKey('2001:db8::')).toBe('2001:db8:0:0');
     expect(auctionNetworkKey('fe80::1%eth0')).toBe('fe80:0:0:0');
     expect(auctionNetworkKey('1::2::3')).toBeNull();
+  });
+});
+
+describe('拍卖行 · 撤销出价', () => {
+  it('违约金 5%（向下取整）', () => {
+    expect(auctionRetractPenalty(630_000)).toBe(31_500);
+    expect(auctionRetractPenalty(1_001)).toBe(50);
+  });
+
+  it('只有领先者、竞价中、离结束超过 2 小时才能撤', () => {
+    const now = 1_000_000;
+    const twoHours = 2 * 3_600_000;
+    expect(canRetractAuctionBid({ endsAt: now + twoHours + 1, isLeading: true, active: true }, now)).toBe(true);
+    expect(canRetractAuctionBid({ endsAt: now + twoHours, isLeading: true, active: true }, now)).toBe(false);
+    expect(canRetractAuctionBid({ endsAt: now + 10 * twoHours, isLeading: false, active: true }, now)).toBe(false);
+    expect(canRetractAuctionBid({ endsAt: now + 10 * twoHours, isLeading: true, active: false }, now)).toBe(false);
   });
 });

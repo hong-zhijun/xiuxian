@@ -9,6 +9,7 @@ import {
   claimAuction,
   fetchAuction,
   listAuctionItem,
+  retractAuctionBid,
 } from '../api/game';
 import { formatAmount } from '../utils/format';
 
@@ -288,6 +289,17 @@ function onCancel(lot: AuctionLotView): void {
   void run(() => cancelAuction(lot.id), lot.kind === 'equipment');
 }
 
+function onRetract(lot: AuctionLotView): void {
+  if (!lot.retractable) return;
+  const penalty = lot.retractPenalty ?? 0;
+  const refund = (lot.currentPrice ?? 0) - penalty;
+  const ok = window.confirm(
+    `撤销对「${lotTitle(lot)}」的出价？\n退回 ${stone(refund)} 灵石，违约金 ${stone(penalty)} 灵石赔给卖家；这一单回到无人出价。`,
+  );
+  if (!ok) return;
+  void run(() => retractAuctionBid(lot.id));
+}
+
 function onClaim(lot: AuctionLotView): void {
   void run(() => claimAuction(lot.id), lot.kind === 'equipment');
 }
@@ -331,6 +343,7 @@ const RULES_TEXT = `拍卖行 · 规则
       起拍价不能低于物品成本的 20%（装备按炼器成本、丹药按炼丹成本，玄铁 / 神木每个 10 灵石）。
       还没人出价时可以下架（大厅和「我的拍卖」里都能点），物品当场退回；有人出价后不能下架。
 出价：出价的灵石立刻冻结；被别人超价时原数退回。下一口至少比当前价高 5%。
+      领先时可以撤销出价：扣 5% 违约金赔给卖家，其余退回，这一单回到无人出价；拍卖结束前 2 小时内不能撤销。
       同一网络下（同一宽带 / 同一 Wi-Fi）的宗门之间不能互相出价、一口价。
       出价达到一口价时请直接一口价买下。
 一口价：当场成交，物品直接到手（装备需要背包有空位）。
@@ -449,6 +462,16 @@ onUnmounted(() => {
               </button>
             </div>
             <div v-else class="auction-lot-actions">
+              <button
+                v-if="lot.isLeading"
+                class="auction-action"
+                type="button"
+                :disabled="disabled || !lot.retractable"
+                :title="lot.retractable ? `扣 ${stone(lot.retractPenalty)} 灵石违约金给卖家` : '拍卖结束前 2 小时内不能撤销'"
+                @click="onRetract(lot)"
+              >
+                撤销出价
+              </button>
               <template v-if="lot.minNextBid !== null && !lot.isLeading">
                 <input
                   class="auction-input"
@@ -620,6 +643,17 @@ onUnmounted(() => {
               </div>
               <div class="auction-lot-price">
                 <p><span class="auction-label">当前</span><strong>{{ stone(lot.currentPrice) }}</strong></p>
+              </div>
+              <div v-if="lot.status === 'active' && lot.isLeading" class="auction-lot-actions">
+                <button
+                  class="auction-action"
+                  type="button"
+                  :disabled="disabled || !lot.retractable"
+                  :title="lot.retractable ? `扣 ${stone(lot.retractPenalty)} 灵石违约金给卖家` : '拍卖结束前 2 小时内不能撤销'"
+                  @click="onRetract(lot)"
+                >
+                  撤销出价
+                </button>
               </div>
             </li>
           </ul>

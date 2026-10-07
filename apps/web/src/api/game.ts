@@ -2371,6 +2371,10 @@ export interface AuctionLotView {
   endedAt: number | null;
   fee: number;
   claimable: 'buyer' | 'seller' | null;
+  /** 我是领先者且离结束超过 2 小时：可以撤销出价。 */
+  retractable: boolean;
+  /** 撤销要赔给卖家的违约金（最小单位）；我不是领先者时为 null。 */
+  retractPenalty: number | null;
 }
 
 export interface AuctionListableView {
@@ -2384,6 +2388,8 @@ export interface AuctionView {
   unlockSectLevel: number;
   feeBp: number;
   bidStepBp: number;
+  retractPenaltyBp: number;
+  retractCutoffHours: number;
   durationHours: number;
   maxActiveListings: number;
   myActiveCount: number;
@@ -2433,6 +2439,11 @@ export async function buyoutAuction(lotId: string): Promise<AuctionActionRespons
 
 export async function cancelAuction(lotId: string): Promise<AuctionActionResponse> {
   return apiRequest<AuctionActionResponse>('/api/v1/game/auction/cancel', { method: 'POST', body: { lotId } });
+}
+
+/** 撤销出价（领先者、离结束超过 2 小时；扣 5% 违约金给卖家）。 */
+export async function retractAuctionBid(lotId: string): Promise<AuctionActionResponse> {
+  return apiRequest<AuctionActionResponse>('/api/v1/game/auction/retract', { method: 'POST', body: { lotId } });
 }
 
 export async function claimAuction(lotId: string): Promise<AuctionActionResponse> {

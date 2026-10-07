@@ -99,6 +99,7 @@ import {
   buyoutAuction,
   cancelAuction,
   claimAuction,
+  retractAuctionBid,
   getVeins,
   occupyVein,
   attackVein,
@@ -804,6 +805,14 @@ export function createGameRoutes(): Hono<AppEnv> {
     const userId = requireUserId(c);
     const body = await parseStrictJson(auctionLotRequestSchema, c);
     const result = await cancelAuction(getDb(c.env), userId, body, Date.now());
+    return respondOk(c, { state: result.state, auction: result.auction, result: result.result });
+  });
+
+  // 撤销出价（领先者、离结束超过 2 小时；退回出价 − 5% 违约金，违约金赔给卖家）。
+  routes.post('/game/auction/retract', async (c) => {
+    const userId = requireUserId(c);
+    const body = await parseStrictJson(auctionLotRequestSchema, c);
+    const result = await retractAuctionBid(getDb(c.env), userId, body, Date.now());
     return respondOk(c, { state: result.state, auction: result.auction, result: result.result });
   });
 

@@ -2824,6 +2824,10 @@ export interface AuctionLotView {
   fee: number;
   /** 我能领取的：buyer = 拍下的物品；seller = 流拍退回的物品；null = 没有可领的。 */
   claimable: 'buyer' | 'seller' | null;
+  /** 我是领先者且离结束超过 2 小时：可以撤销出价。 */
+  retractable: boolean;
+  /** 撤销要赔给卖家的违约金（最小单位）；我不是领先者时为 null。 */
+  retractPenalty: number | null;
 }
 
 /** 可上架的库存（背包装备 / 丹药 / 材料），带服务端算好的最低价。 */
@@ -2839,6 +2843,9 @@ export interface AuctionView {
   unlockSectLevel: number;
   feeBp: number;
   bidStepBp: number;
+  /** 撤销出价的违约金（基点）与截止（结束前几小时不能撤）。 */
+  retractPenaltyBp: number;
+  retractCutoffHours: number;
   durationHours: number;
   maxActiveListings: number;
   myActiveCount: number;

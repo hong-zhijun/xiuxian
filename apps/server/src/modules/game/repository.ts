@@ -3616,6 +3616,21 @@ export function markAuctionClaimedStatement(lotId: string, side: 'buyer' | 'sell
   };
 }
 
+/** 撤销出价：这一单回到「无人出价」（领先者、当前价、出价次数清空）。 */
+export function retractAuctionBidStatement(lotId: string): ParameterizedQuery {
+  return {
+    sql: `UPDATE auction_lots SET current_price = NULL, bidder_sect_id = NULL, bidder_name = NULL,
+            bid_count = 0, version = version + 1
+          WHERE id = ?`,
+    params: [lotId],
+  };
+}
+
+/** 撤销出价后删掉这一单的全部出价流水（被超价的人早已退款；「我出价的」里不再显示）。 */
+export function deleteAuctionBidsStatement(lotId: string): ParameterizedQuery {
+  return { sql: 'DELETE FROM auction_bids WHERE lot_id = ?', params: [lotId] };
+}
+
 /** 并发守卫：这一单的 version 必须仍是读到的值，否则整批回滚。 */
 export function auctionLotGuardStatement(guardId: string, lotId: string, version: number): ParameterizedQuery {
   return {
