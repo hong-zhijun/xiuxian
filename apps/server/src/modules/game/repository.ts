@@ -3432,6 +3432,8 @@ export interface AuctionLotRow {
   seller_claimed_at: number | null;
   version: number;
   created_at: number;
+  /** 0041：上架时卖家网络标识的哈希；NULL = 不做同网络检查。 */
+  seller_net_hash: string | null;
 }
 
 export class AuctionRepository extends ParamRepository {
@@ -3510,13 +3512,14 @@ export function insertAuctionLotStatement(input: {
   startPrice: number;
   buyoutPrice: number | null;
   endsAt: number;
+  sellerNetHash: string | null;
   now: number;
 }): ParameterizedQuery {
   return {
     sql: `INSERT INTO auction_lots
             (id, seller_sect_id, seller_name, kind, item_id, item_name, quantity, equipment_json,
-             start_price, buyout_price, status, ends_at, version, created_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, 0, ?)`,
+             start_price, buyout_price, status, ends_at, version, created_at, seller_net_hash)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, 0, ?, ?)`,
     params: [
       input.id,
       input.sellerSectId,
@@ -3530,6 +3533,7 @@ export function insertAuctionLotStatement(input: {
       input.buyoutPrice,
       input.endsAt,
       input.now,
+      input.sellerNetHash,
     ],
   };
 }

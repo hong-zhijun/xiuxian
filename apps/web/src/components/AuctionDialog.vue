@@ -87,7 +87,7 @@ const STATUS_LABELS: Record<AuctionLotView['status'], string> = {
   active: '竞价中',
   sold: '已成交',
   expired: '流拍',
-  cancelled: '已撤回',
+  cancelled: '已下架',
 };
 
 /** 我视角下的一单状态标签。 */
@@ -283,7 +283,8 @@ function onBuyout(lot: AuctionLotView): void {
 }
 
 function onCancel(lot: AuctionLotView): void {
-  if (!window.confirm(`撤回「${lotTitle(lot)}」？物品会退回。`)) return;
+  if (lot.currentPrice !== null) return;
+  if (!window.confirm(`下架「${lotTitle(lot)}」？物品会退回。`)) return;
   void run(() => cancelAuction(lot.id), lot.kind === 'equipment');
 }
 
@@ -328,8 +329,9 @@ const RULES_TEXT = `拍卖行 · 规则
 开放：宗门 3 级。可拍卖背包里的装备（穿在身上的要先卸下）、丹药、玄铁、神木。
 上架：物品立刻交给拍卖行保管，竞价 24 小时；可另设一口价。每个宗门最多同时上架 10 单。
       起拍价不能低于物品成本的 20%（装备按炼器成本、丹药按炼丹成本，玄铁 / 神木每个 10 灵石）。
-      还没人出价时可以撤回，物品当场退回。
+      还没人出价时可以下架（大厅和「我的拍卖」里都能点），物品当场退回；有人出价后不能下架。
 出价：出价的灵石立刻冻结；被别人超价时原数退回。下一口至少比当前价高 5%。
+      同一网络下（同一宽带 / 同一 Wi-Fi）的宗门之间不能互相出价、一口价。
       出价达到一口价时请直接一口价买下。
 一口价：当场成交，物品直接到手（装备需要背包有空位）。
 到期：价高者得，物品放进「我的拍卖 → 待领取」；没人出价则流拍，卖家在待领取里领回。
@@ -435,7 +437,18 @@ onUnmounted(() => {
                 <span class="auction-label">一口价</span>{{ stone(lot.buyoutPrice) }}
               </p>
             </div>
-            <div v-if="!lot.isMine" class="auction-lot-actions">
+            <div v-if="lot.isMine" class="auction-lot-actions">
+              <button
+                class="auction-action"
+                type="button"
+                :disabled="disabled || lot.currentPrice !== null"
+                :title="lot.currentPrice !== null ? '已有人出价，不能下架' : '下架并退回物品'"
+                @click="onCancel(lot)"
+              >
+                下架
+              </button>
+            </div>
+            <div v-else class="auction-lot-actions">
               <template v-if="lot.minNextBid !== null && !lot.isLeading">
                 <input
                   class="auction-input"
@@ -579,8 +592,16 @@ onUnmounted(() => {
                   <strong>{{ stone(lot.currentPrice ?? lot.startPrice) }}</strong>
                 </p>
               </div>
-              <div v-if="lot.status === 'active' && lot.currentPrice === null" class="auction-lot-actions">
-                <button class="auction-action" type="button" :disabled="disabled" @click="onCancel(lot)">撤回</button>
+              <div v-if="lot.status === 'active'" class="auction-lot-actions">
+                <button
+                  class="auction-action"
+                  type="button"
+                  :disabled="disabled || lot.currentPrice !== null"
+                  :title="lot.currentPrice !== null ? '已有人出价，不能下架' : '下架并退回物品'"
+                  @click="onCancel(lot)"
+                >
+                  下架
+                </button>
               </div>
             </li>
           </ul>

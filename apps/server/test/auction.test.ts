@@ -46,9 +46,11 @@ interface SectFixture {
   sectId: string;
 }
 
-async function makeSect(prefix: string, level = 3): Promise<SectFixture> {
+async function makeSect(prefix: string, level = 3, ip?: string): Promise<SectFixture> {
   seq += 1;
-  const api = new TestClient(app, env, { 'cf-connecting-ip': `10.11.${Math.floor(seq / 250)}.${seq % 250}` });
+  const api = new TestClient(app, env, {
+    'cf-connecting-ip': ip ?? `10.11.${Math.floor(seq / 250)}.${seq % 250}`,
+  });
   const registered = await api.post('/api/v1/auth/register', { account: `${prefix}-${seq}`, password: PASSWORD });
   expect(registered.status).toBe(200);
   const created = await api.post('/api/v1/game/create-sect', { name: `拍卖${seq}号` });
@@ -250,6 +252,47 @@ describe('拍卖行', () => {
     const xuantieBefore = await balanceOf(seller.sectId, 'xuantie');
     await cancelAuction(env.DB, seller.userId, { lotId: second }, NOW + 3);
     expect(await balanceOf(seller.sectId, 'xuantie')).toBe(xuantieBefore + 10_000);
+  });
+
+  it('同一网络不能互相交易：同 IP / 同 IPv6 /64 拒绝出价与一口价，换网络正常', async () => {
+    const seller = await makeSect('net-s');
+    const buyer = await makeSect('net-b');
+    await setBalance(seller.sectId, 'xuantie', 50_000);
+    const listed = await listAuctionItem(
+      env.DB,
+      seller.userId,
+      { kind: 'resource', resourceId: 'xuantie', quantity: 10, startPrice: 600, buyoutPrice: 1000 },
+      NOW,
+      '2408:8207:1851:a1c0::10',
+    );
+    const lotId = listed.auction.myLots[0]!.id;
+    await expect(
+      bidAuction(env.DB, buyer.userId, { lotId, price: 600 }, NOW + 1, '2408:8207:1851:a1c0:aaaa::2'),
+    ).rejects.toMatchObject({ code: 'INVALID_STATUS' });
+    await expect(
+      buyoutAuction(env.DB, buyer.userId, { lotId }, NOW + 1, '2408:8207:1851:a1c0::10'),
+    ).rejects.toMatchObject({ code: 'INVALID_STATUS' });
+    // 拿不到来源时不拦；换一个网络正常出价
+    await bidAuction(env.DB, buyer.userId, { lotId, price: 600 }, NOW + 2, '198.51.100.20');
+    const row = await env.DB.prepare('SELECT seller_net_hash FROM auction_lots WHERE id = ?')
+      .bind(lotId)
+      .first<{ seller_net_hash: string | null }>();
+    expect(row?.seller_net_hash).toMatch(/^[0-9a-f]{64}$/);
+
+    // 走接口：两个宗门的请求带同一个 cf-connecting-ip
+    const homeSeller = await makeSect('net-api-s', 3, '203.0.113.9');
+    const homeBuyer = await makeSect('net-api-b', 3, '203.0.113.9');
+    await setBalance(homeSeller.sectId, 'xuantie', 50_000);
+    const viaApi = await homeSeller.api.post('/api/v1/game/auction/list', {
+      kind: 'resource',
+      resourceId: 'xuantie',
+      quantity: 10,
+      startPrice: 600,
+    });
+    expect(viaApi.status).toBe(200);
+    const apiLotId = (dataOf(viaApi) as Record<string, any>).auction.myLots[0].id as string;
+    const blocked = await homeBuyer.api.post('/api/v1/game/auction/bid', { lotId: apiLotId, price: 600 });
+    expect(errorOf(blocked).code).toBe('INVALID_STATUS');
   });
 
   it('装备：上架即离开背包；一口价时买家背包满拒绝，腾出位置后买到、按快照入背包', async () => {

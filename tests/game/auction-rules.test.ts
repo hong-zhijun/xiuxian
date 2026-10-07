@@ -4,6 +4,7 @@ import {
   auctionFee,
   auctionMinNextBid,
   auctionMinPrice,
+  auctionNetworkKey,
   auctionSellerProceeds,
   auctionUnitFloor,
   findAuctionResource,
@@ -61,5 +62,26 @@ describe('拍卖行 · 竞价与手续费', () => {
     expect(parseEquipmentSnapshot('{"slot":"weapon"}')).toBeNull();
     expect(parseEquipmentSnapshot('not json')).toBeNull();
     expect(parseEquipmentSnapshot(null)).toBeNull();
+  });
+});
+
+describe('拍卖行 · 同网络标识', () => {
+  it('IPv4 原样；拿不到来源返回 null', () => {
+    expect(auctionNetworkKey('203.0.113.7')).toBe('203.0.113.7');
+    expect(auctionNetworkKey(' 203.0.113.7 ')).toBe('203.0.113.7');
+    expect(auctionNetworkKey('unknown')).toBeNull();
+    expect(auctionNetworkKey('')).toBeNull();
+    expect(auctionNetworkKey('not-an-ip')).toBeNull();
+  });
+
+  it('IPv6 取前 64 位：同一宽带下后半段不同也算同一网络', () => {
+    const phone = auctionNetworkKey('2408:8207:1851:a1c0:1d2e:3f40:5a6b:7c8d');
+    const laptop = auctionNetworkKey('2408:8207:1851:a1c0::1');
+    expect(phone).toBe('2408:8207:1851:a1c0');
+    expect(laptop).toBe(phone);
+    expect(auctionNetworkKey('2408:8207:1851:a1c1::1')).not.toBe(phone);
+    expect(auctionNetworkKey('2001:db8::')).toBe('2001:db8:0:0');
+    expect(auctionNetworkKey('fe80::1%eth0')).toBe('fe80:0:0:0');
+    expect(auctionNetworkKey('1::2::3')).toBeNull();
   });
 });

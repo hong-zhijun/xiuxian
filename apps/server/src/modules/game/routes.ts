@@ -4,6 +4,7 @@ import { AppError, authOf, type AppContext, type AppEnv } from '../../http/appEr
 import { respondOk } from '../../http/envelope';
 import { parseStrictJson } from '../../http/validation';
 import { getDb } from '../../infra/db/client';
+import { clientIpOf } from '../../middleware/rateLimit';
 import { AVATAR_HASH_PATTERN } from './avatarImage';
 import {
   abandonExplorationSchema,
@@ -733,25 +734,26 @@ export function createGameRoutes(): Hono<AppEnv> {
     return respondOk(c, { state: result.state, auction: result.auction });
   });
 
-  // 0040 拍卖行：上架 / 出价 / 一口价 / 撤回 / 领取（各自一次受保护 batch，带拍卖单 version 守卫）。
+  // 0040 拍卖行：上架 / 出价 / 一口价 / 下架 / 领取（各自一次受保护 batch，带拍卖单 version 守卫）。
+  // 0041：上架记下卖家网络标识的哈希，出价 / 一口价时同一网络拒绝（clientIpOf 与登录限频同一来源）。
   routes.post('/game/auction/list', async (c) => {
     const userId = requireUserId(c);
     const body = await parseStrictJson(auctionListRequestSchema, c);
-    const result = await listAuctionItem(getDb(c.env), userId, body, Date.now());
+    const result = await listAuctionItem(getDb(c.env), userId, body, Date.now(), clientIpOf(c));
     return respondOk(c, { state: result.state, auction: result.auction, result: result.result });
   });
 
   routes.post('/game/auction/bid', async (c) => {
     const userId = requireUserId(c);
     const body = await parseStrictJson(auctionBidRequestSchema, c);
-    const result = await bidAuction(getDb(c.env), userId, body, Date.now());
+    const result = await bidAuction(getDb(c.env), userId, body, Date.now(), clientIpOf(c));
     return respondOk(c, { state: result.state, auction: result.auction, result: result.result });
   });
 
   routes.post('/game/auction/buyout', async (c) => {
     const userId = requireUserId(c);
     const body = await parseStrictJson(auctionLotRequestSchema, c);
-    const result = await buyoutAuction(getDb(c.env), userId, body, Date.now());
+    const result = await buyoutAuction(getDb(c.env), userId, body, Date.now(), clientIpOf(c));
     return respondOk(c, { state: result.state, auction: result.auction, result: result.result });
   });
 

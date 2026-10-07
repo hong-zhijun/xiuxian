@@ -19,6 +19,15 @@ export const MAX_ENTRIES = 5;
 
 export const CHANGELOG: readonly ChangelogEntry[] = [
   {
+    id: '2026-10-08-auction-guard',
+    time: '2026-10-08 12:00',
+    title: '拍卖行 · 防小号与下架',
+    items: [
+      '同一网络下（同一宽带 / 同一 Wi-Fi）的宗门之间不能互相出价、一口价，防止开小号转移装备。',
+      '自己上架的物品在拍卖大厅里也能直接「下架」，物品当场退回；已有人出价的单不能下架。',
+    ],
+  },
+  {
     id: '2026-10-08-auction',
     time: '2026-10-08 10:00',
     title: '新玩法 · 拍卖行',

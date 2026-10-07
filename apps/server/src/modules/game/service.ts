@@ -3,6 +3,7 @@ import type { GameConfigContent } from '@xiuxian/game-core';
 import { validatedGameConfig } from '../../config/loadGameConfig';
 import { AppError } from '../../http/appError';
 import { classifyDbError } from '../../infra/db/errors';
+import { sha256Hex } from '../../infra/crypto/sha256';
 import { prepareStatements, type ParameterizedQuery } from '../../infra/db/repository';
 import {
   decide,
@@ -355,6 +356,7 @@ import {
 import {
   auctionFee,
   auctionMinNextBid,
+  auctionNetworkKey,
   auctionMinPrice,
   auctionSellerProceeds,
   auctionUnitFloor,
@@ -10296,6 +10298,21 @@ async function auctionResponse(
   return { state: draft.view(), auction, result: { message } };
 }
 
+/** 网络标识的哈希（拿不到来源返回 null）；库里只存它，不存明文 IP。 */
+async function auctionNetHashOf(clientIp: string | undefined): Promise<string | null> {
+  const key = clientIp === undefined ? null : auctionNetworkKey(clientIp);
+  return key === null ? null : sha256Hex(`auction-net:${key}`);
+}
+
+/** 同一网络下的宗门不能互相交易（防小号低价转移）：买家网络与卖家上架时的网络相同就拒绝。 */
+async function requireDifferentNetwork(lot: AuctionLotRow, clientIp: string | undefined): Promise<void> {
+  if (lot.seller_net_hash === null) return;
+  const buyerHash = await auctionNetHashOf(clientIp);
+  if (buyerHash !== null && buyerHash === lot.seller_net_hash) {
+    throw new AppError('INVALID_STATUS', '你与卖家处在同一网络下，不能交易这一单');
+  }
+}
+
 /** 一单的物品名（数量 > 1 时带「×N」）。 */
 function auctionItemLabel(lot: Pick<AuctionLotRow, 'item_name' | 'quantity' | 'kind'>): string {
   return lot.kind === 'equipment' || Number(lot.quantity) <= 1
@@ -10303,7 +10320,7 @@ function auctionItemLabel(lot: Pick<AuctionLotRow, 'item_name' | 'quantity' | 'k
     : `${lot.item_name} ×${String(lot.quantity)}`;
 }
 
-/** 装备要交付时背包得有空位（一口价 / 领取 / 撤回都走这里）。 */
+/** 装备要交付时背包得有空位（一口价 / 领取 / 下架都走这里）。 */
 async function requireBagSpaceFor(db: D1Database, draft: SectDraft, lot: AuctionLotRow): Promise<void> {
   if (lot.kind !== 'equipment') return;
   const { bagCount } = await loadEquipment(db, draft.sect.id);
@@ -10387,6 +10404,7 @@ export async function listAuctionItem(
     buyoutPrice?: number;
   },
   now: number,
+  clientIp?: string,
 ): Promise<{ state: SectStateView; auction: AuctionView; result: AuctionActionResultView }> {
   const draft = await draftFor(db, userId, now);
   requireAuctionUnlocked(draft);
@@ -10481,6 +10499,7 @@ export async function listAuctionItem(
       startPrice,
       buyoutPrice,
       endsAt: now + AUCTION_DURATION_MS,
+      sellerNetHash: await auctionNetHashOf(clientIp),
       now,
     }),
   );
@@ -10500,12 +10519,14 @@ export async function bidAuction(
   userId: string,
   input: { lotId: string; price: number },
   now: number,
+  clientIp?: string,
 ): Promise<{ state: SectStateView; auction: AuctionView; result: AuctionActionResultView }> {
   const draft = await draftFor(db, userId, now);
   requireAuctionUnlocked(draft);
   const lot = await requireAuctionLot(db, input.lotId);
   await requireAuctionOpen(db, lot, now);
   if (lot.seller_sect_id === draft.sect.id) throw new AppError('INVALID_STATUS', '不能给自己上架的物品出价');
+  await requireDifferentNetwork(lot, clientIp);
   if (lot.bidder_sect_id === draft.sect.id) throw new AppError('INVALID_STATUS', '你已是最高出价，不必再加价');
 
   const price = input.price * 1000;
@@ -10555,12 +10576,14 @@ export async function buyoutAuction(
   userId: string,
   input: { lotId: string },
   now: number,
+  clientIp?: string,
 ): Promise<{ state: SectStateView; auction: AuctionView; result: AuctionActionResultView }> {
   const draft = await draftFor(db, userId, now);
   requireAuctionUnlocked(draft);
   const lot = await requireAuctionLot(db, input.lotId);
   await requireAuctionOpen(db, lot, now);
   if (lot.seller_sect_id === draft.sect.id) throw new AppError('INVALID_STATUS', '不能买自己上架的物品');
+  await requireDifferentNetwork(lot, clientIp);
   if (lot.buyout_price === null) throw new AppError('INVALID_STATUS', '这一单没有设一口价');
   await requireBagSpaceFor(db, draft, lot);
 
@@ -10604,7 +10627,7 @@ export async function buyoutAuction(
   return auctionResponse(db, draft, now, `已用一口价 ${displayAmount(price)} 灵石买下 ${auctionItemLabel(lot)}`);
 }
 
-/** POST /game/auction/cancel：撤回（只有还没人出价时可以；物品当场退回）。 */
+/** POST /game/auction/cancel：下架（只有还没人出价时可以；物品当场退回）。 */
 export async function cancelAuction(
   db: D1Database,
   userId: string,
@@ -10615,7 +10638,7 @@ export async function cancelAuction(
   const lot = await requireAuctionLot(db, input.lotId);
   if (lot.seller_sect_id !== draft.sect.id) throw new AppError('NOT_FOUND', '拍卖单不存在');
   await requireAuctionOpen(db, lot, now);
-  if (lot.current_price !== null) throw new AppError('INVALID_STATUS', '已经有人出价，不能撤回');
+  if (lot.current_price !== null) throw new AppError('INVALID_STATUS', '已经有人出价，不能下架');
   await requireBagSpaceFor(db, draft, lot);
 
   deliverAuctionItem(draft, lot, now);
@@ -10624,7 +10647,7 @@ export async function cancelAuction(
     extraGuards: [auctionLotGuard(lot)],
     ...(lot.kind === 'pill' ? { pillId: lot.item_id } : {}),
   });
-  return auctionResponse(db, draft, now, `已撤回 ${auctionItemLabel(lot)}，物品已退回`);
+  return auctionResponse(db, draft, now, `已下架 ${auctionItemLabel(lot)}，物品已退回`);
 }
 
 /** POST /game/auction/claim：领取拍下的物品 / 流拍退回的物品。 */

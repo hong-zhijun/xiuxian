@@ -153,3 +153,31 @@ export function parseEquipmentSnapshot(raw: string | null): AuctionEquipmentSnap
     return null;
   }
 }
+
+/* ---------- 同一网络不能互相交易 ---------- */
+
+/**
+ * 交易用的「网络标识」：IPv4 原样；IPv6 取前 64 位（同一宽带下的手机 / 电脑前缀相同，后半段常变）。
+ * 拿不到来源（'unknown' / 空串 / 解析失败）返回 null —— 这时不做同网络检查，不误拦正常玩家。
+ * 只用于比对；落库前由调用方再做一次哈希，库里不存明文。
+ */
+export function auctionNetworkKey(ip: string): string | null {
+  const raw = ip.trim().toLowerCase();
+  if (raw === '' || raw === 'unknown') return null;
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(raw)) return raw;
+  if (!raw.includes(':')) return null;
+  // IPv6：去掉 zone（%eth0），展开 :: 后取前 4 段。
+  const address = raw.split('%')[0]!;
+  const [head = '', tail] = address.split('::');
+  if (address.split('::').length > 2) return null;
+  const headParts = head === '' ? [] : head.split(':');
+  const tailParts = tail === undefined || tail === '' ? [] : tail.split(':');
+  const missing = 8 - headParts.length - tailParts.length;
+  if (tail === undefined ? headParts.length !== 8 : missing < 0) return null;
+  const parts = [...headParts, ...Array<string>(tail === undefined ? 0 : missing).fill('0'), ...tailParts];
+  if (parts.some((part) => !/^[0-9a-f]{1,4}$/.test(part))) return null;
+  return parts
+    .slice(0, 4)
+    .map((part) => part.replace(/^0+(?=.)/, ''))
+    .join(':');
+}
