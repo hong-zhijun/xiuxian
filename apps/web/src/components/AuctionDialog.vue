@@ -12,6 +12,8 @@ import {
   retractAuctionBid,
 } from '../api/game';
 import { formatAmount } from '../utils/format';
+import ConfirmDialog from './ConfirmDialog.vue';
+import ModalShell from './ModalShell.vue';
 
 /**
  * 0040 拍卖行面板（docs/拍卖行开发计划.md）。
@@ -19,6 +21,7 @@ import { formatAmount } from '../utils/format';
  * 只在「打开时 / 操作后 / 点刷新」请求接口，不轮询；剩余时间由前端每 30 秒自己回算。
  * 最低价、下一口最低出价、可上架库存都由服务端算好，这里只渲染与收集输入。
  * 价格输入是灵石个数（展示单位）；服务端下发的价格是最小单位，显示时用 formatAmount。
+ * 上架表单、一口价 / 下架 / 撤销出价的二次确认、规则说明都是叠在面板之上的二级弹窗。
  */
 const props = defineProps<{
   state: SectStateView;
@@ -277,27 +280,51 @@ async function onBid(lot: AuctionLotView): Promise<void> {
   if (ok) delete bidInputs.value[lot.id];
 }
 
+/** 等待二次确认的操作（null = 确认弹窗没开）：一口价 / 下架 / 撤销出价。 */
+const pendingConfirm = ref<{
+  title: string;
+  message: string;
+  confirmText: string;
+  action: () => Promise<boolean>;
+} | null>(null);
+
+async function runConfirmed(): Promise<void> {
+  const pending = pendingConfirm.value;
+  if (pending === null) return;
+  await pending.action();
+  pendingConfirm.value = null;
+}
+
 function onBuyout(lot: AuctionLotView): void {
   if (lot.buyoutPrice === null) return;
-  if (!window.confirm(`确定用一口价 ${stone(lot.buyoutPrice)} 灵石买下「${lotTitle(lot)}」？`)) return;
-  void run(() => buyoutAuction(lot.id), lot.kind === 'equipment');
+  pendingConfirm.value = {
+    title: `一口价买下「${lotTitle(lot)}」`,
+    message: `花 ${stone(lot.buyoutPrice)} 灵石当场成交，物品直接到手${lot.kind === 'equipment' ? '（背包需要有空位）' : ''}。`,
+    confirmText: '确认买下',
+    action: () => run(() => buyoutAuction(lot.id), lot.kind === 'equipment'),
+  };
 }
 
 function onCancel(lot: AuctionLotView): void {
   if (lot.currentPrice !== null) return;
-  if (!window.confirm(`下架「${lotTitle(lot)}」？物品会退回。`)) return;
-  void run(() => cancelAuction(lot.id), lot.kind === 'equipment');
+  pendingConfirm.value = {
+    title: `下架「${lotTitle(lot)}」`,
+    message: '还没有人出价，下架后物品当场退回。',
+    confirmText: '确认下架',
+    action: () => run(() => cancelAuction(lot.id), lot.kind === 'equipment'),
+  };
 }
 
 function onRetract(lot: AuctionLotView): void {
   if (!lot.retractable) return;
   const penalty = lot.retractPenalty ?? 0;
   const refund = (lot.currentPrice ?? 0) - penalty;
-  const ok = window.confirm(
-    `撤销对「${lotTitle(lot)}」的出价？\n退回 ${stone(refund)} 灵石，违约金 ${stone(penalty)} 灵石赔给卖家；这一单回到无人出价。`,
-  );
-  if (!ok) return;
-  void run(() => retractAuctionBid(lot.id));
+  pendingConfirm.value = {
+    title: `撤销对「${lotTitle(lot)}」的出价`,
+    message: `退回 ${stone(refund)} 灵石，违约金 ${stone(penalty)} 灵石赔给卖家；这一单回到无人出价。`,
+    confirmText: '确认撤销',
+    action: () => run(() => retractAuctionBid(lot.id)),
+  };
 }
 
 function onClaim(lot: AuctionLotView): void {
@@ -336,6 +363,11 @@ function numberOrUndefined(event: Event): number | undefined {
   return Number.isFinite(value) ? value : undefined;
 }
 
+/** 关掉上架弹窗：只清掉选中的物品，填过的价格随下次选物品重置。 */
+function closeSellForm(): void {
+  sellItemId.value = '';
+}
+
 const RULES_TEXT = `拍卖行 · 规则
 
 开放：宗门 3 级。可拍卖背包里的装备（穿在身上的要先卸下）、丹药、玄铁、神木。
@@ -349,6 +381,9 @@ const RULES_TEXT = `拍卖行 · 规则
 一口价：当场成交，物品直接到手（装备需要背包有空位）。
 到期：价高者得，物品放进「我的拍卖 → 待领取」；没人出价则流拍，卖家在待领取里领回。
 手续费：成交扣 10%，卖家实得 = 成交价 − 10%（灵石成交时直接到账）。`;
+
+/** 说明弹窗正文：首行标题已由弹窗标题栏给出。 */
+const RULES_BODY = RULES_TEXT.slice(RULES_TEXT.indexOf('\n\n') + 2);
 
 onMounted(() => {
   void refresh();
@@ -367,18 +402,14 @@ onUnmounted(() => {
     <div class="auction-head modal-head">
       <h3 id="auction-title" class="auction-title">拍卖行</h3>
       <div class="auction-head-actions">
-        <button class="auction-quiet-button" type="button" @click="showRules = !showRules">
-          {{ showRules ? '收起说明' : '说明' }}
-        </button>
+        <button class="auction-quiet-button" type="button" @click="showRules = true">说明</button>
         <button class="auction-quiet-button" type="button" :disabled="loading" @click="refresh">
           {{ loading ? '刷新中…' : '刷新' }}
         </button>
       </div>
     </div>
 
-    <p v-if="showRules" class="auction-rules">{{ RULES_TEXT }}</p>
-
-    <p v-else-if="panel === null" class="auction-empty">{{ loading ? '拍卖行加载中…' : '面板加载失败，请点刷新。' }}</p>
+    <p v-if="panel === null" class="auction-empty">{{ loading ? '拍卖行加载中…' : '面板加载失败，请点刷新。' }}</p>
 
     <p v-else-if="!panel.unlocked" class="auction-locked">宗门 {{ panel.unlockSectLevel }} 级开放拍卖行。</p>
 
@@ -538,39 +569,6 @@ onUnmounted(() => {
             </button>
           </li>
         </ul>
-
-        <div v-if="sellChosen" class="auction-form">
-          <label v-if="sellKind !== 'equipment'" class="auction-field">
-            <span>数量（最多 {{ sellChosen.max }}）</span>
-            <input v-model.number="sellQuantity" class="auction-input" type="number" min="1" :max="sellChosen.max" />
-          </label>
-          <label class="auction-field">
-            <span>起拍价（灵石，至少 {{ sellMinStart }}）</span>
-            <input
-              class="auction-input"
-              type="number"
-              :min="sellMinStart"
-              :value="sellStartValue"
-              @input="sellStart = numberOrUndefined($event)"
-            />
-          </label>
-          <label class="auction-field">
-            <span>一口价（可不填）</span>
-            <input
-              class="auction-input"
-              type="number"
-              :min="sellStartValue"
-              :value="sellBuyout ?? ''"
-              placeholder="不设"
-              @input="sellBuyout = numberOrUndefined($event)"
-            />
-          </label>
-          <p class="auction-hint">按起拍价成交，到手约 {{ sellProceeds }} 灵石（已扣 {{ feePercent }}% 手续费）。</p>
-          <p v-if="sellError" class="auction-error">{{ sellError }}</p>
-          <button class="auction-main-button" type="button" :disabled="disabled || sellError !== null" @click="onList">
-            上架「{{ sellChosen.label }}」
-          </button>
-        </div>
       </template>
 
       <!-- 我的 -->
@@ -660,6 +658,79 @@ onUnmounted(() => {
         </section>
       </template>
     </template>
+
+    <!-- 二级弹窗：上架表单（点选物品后弹出；Esc / 点遮罩只关这一层）。 -->
+    <ModalShell
+      v-if="tab === 'sell' && sellChosen"
+      narrow
+      :label="`上架 · ${sellChosen.label}`"
+      :loading="submitting"
+      loading-text="上架中…"
+      @close="closeSellForm"
+    >
+      <section class="auction-form" aria-labelledby="auction-sell-title">
+        <header class="section-heading panel-heading compact-heading">
+          <div>
+            <p class="eyebrow">拍卖行 · 上架</p>
+            <h2 id="auction-sell-title" :style="{ color: sellChosen.color }">{{ sellChosen.label }}</h2>
+          </div>
+        </header>
+        <p class="auction-hint">{{ sellChosen.detail }}</p>
+        <label v-if="sellKind !== 'equipment'" class="auction-field">
+          <span>数量（最多 {{ sellChosen.max }}）</span>
+          <input v-model.number="sellQuantity" class="auction-input" type="number" min="1" :max="sellChosen.max" />
+        </label>
+        <label class="auction-field">
+          <span>起拍价（灵石，至少 {{ sellMinStart }}）</span>
+          <input
+            class="auction-input"
+            type="number"
+            :min="sellMinStart"
+            :value="sellStartValue"
+            @input="sellStart = numberOrUndefined($event)"
+          />
+        </label>
+        <label class="auction-field">
+          <span>一口价（可不填）</span>
+          <input
+            class="auction-input"
+            type="number"
+            :min="sellStartValue"
+            :value="sellBuyout ?? ''"
+            placeholder="不设"
+            @input="sellBuyout = numberOrUndefined($event)"
+          />
+        </label>
+        <p class="auction-hint">按起拍价成交，到手约 {{ sellProceeds }} 灵石（已扣 {{ feePercent }}% 手续费）。</p>
+        <p v-if="sellError" class="auction-error">{{ sellError }}</p>
+        <button class="auction-main-button" type="button" :disabled="disabled || sellError !== null" @click="onList">
+          上架「{{ sellChosen.label }}」
+        </button>
+      </section>
+    </ModalShell>
+
+    <ConfirmDialog
+      v-if="pendingConfirm"
+      eyebrow="拍卖行"
+      :title="pendingConfirm.title"
+      :message="pendingConfirm.message"
+      :confirm-text="submitting ? '处理中…' : pendingConfirm.confirmText"
+      :busy="disabled"
+      @cancel="pendingConfirm = null"
+      @confirm="runConfirmed"
+    />
+
+    <ModalShell v-if="showRules" label="拍卖行规则" @close="showRules = false">
+      <section aria-labelledby="auction-rules-title">
+        <header class="section-heading panel-heading compact-heading">
+          <div>
+            <p class="eyebrow">拍卖行</p>
+            <h2 id="auction-rules-title">规则说明</h2>
+          </div>
+        </header>
+        <p class="auction-rules">{{ RULES_BODY }}</p>
+      </section>
+    </ModalShell>
   </section>
 </template>
 
@@ -947,10 +1018,7 @@ onUnmounted(() => {
 .auction-form {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 10px;
-  border: 1px solid var(--line, rgba(202, 169, 106, 0.2));
-  border-radius: 3px;
+  gap: 10px;
 }
 
 .auction-field {

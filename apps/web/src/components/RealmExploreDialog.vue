@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, ref } from 'vue';
 
 import type { ActiveExplorationView, ExploreChoiceResult, SectStateView } from '../api/game';
 import { formatAmount, formatTime } from '../utils/format';
+import ConfirmDialog from './ConfirmDialog.vue';
 
 /**
  * 交互式秘境探索（弹窗内容，外层由 SectScreen 的 ModalShell 包裹）。
@@ -107,11 +108,17 @@ function choose(choiceId: string): void {
   emit('choose', props.exploration.id, choiceId);
 }
 
-/** 放弃：二次确认在本地完成（服务端只认已确认的请求），已获奖励照常入账。 */
+/** 放弃：二次确认弹窗在本地完成（服务端只认已确认的请求），已获奖励照常入账。 */
+const confirmingAbandon = ref(false);
+
 function requestAbandon(): void {
   if (props.busy) return;
-  const confirmed = window.confirm('放弃本次探索？已获奖励照常入账，入场费不予退还。');
-  if (!confirmed) return;
+  confirmingAbandon.value = true;
+}
+
+function confirmAbandon(): void {
+  confirmingAbandon.value = false;
+  if (props.busy) return;
   emit('abandon', props.exploration.id);
 }
 </script>
@@ -251,5 +258,16 @@ function requestAbandon(): void {
       </button>
       <p class="explore-footer-note">放弃后已获奖励照常入账，入场费不予退还。</p>
     </footer>
+
+    <ConfirmDialog
+      v-if="confirmingAbandon"
+      eyebrow="秘境"
+      :title="`放弃「${exploration.realmName}」探索`"
+      message="已获奖励照常入账，入场费不予退还。"
+      confirm-text="确认放弃"
+      :busy="busy"
+      @cancel="confirmingAbandon = false"
+      @confirm="confirmAbandon"
+    />
   </section>
 </template>

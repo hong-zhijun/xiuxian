@@ -4,6 +4,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import type { MarketChartRange, MarketChartView, MarketView, SectStateView, StockView } from '../api/game';
 import { fetchMarket, fetchMarketChart, tradeStock } from '../api/game';
 import { formatAmount } from '../utils/format';
+import ModalShell from './ModalShell.vue';
 
 /**
  * 0043 灵股行情面板（docs/灵股行情开发计划.md）。
@@ -257,6 +258,9 @@ const RULES_TEXT = `灵股 · 规则
 限制：某支股票买入后 10 分钟内不能卖出；每天最多成交 30 笔；每支股票的持仓成本不超过宗门灵石容量的 20%。
 收益榜：按累计已实现收益（卖出的盈亏）排名。`;
 
+/** 说明弹窗正文：首行标题已由弹窗标题栏给出。 */
+const RULES_BODY = RULES_TEXT.slice(RULES_TEXT.indexOf('\n\n') + 2);
+
 onMounted(() => {
   void refresh();
   clockTimer = window.setInterval(() => {
@@ -281,18 +285,14 @@ onUnmounted(() => {
       </h3>
       <div class="market-head-actions">
         <span v-if="market" class="market-tick">{{ nextTickLeft }} 秒后下一跳</span>
-        <button class="market-quiet-button" type="button" @click="showRules = !showRules">
-          {{ showRules ? '收起说明' : '说明' }}
-        </button>
+        <button class="market-quiet-button" type="button" @click="showRules = true">说明</button>
         <button class="market-quiet-button" type="button" :disabled="loading" @click="refresh()">
           {{ loading ? '刷新中…' : '刷新' }}
         </button>
       </div>
     </div>
 
-    <p v-if="showRules" class="market-rules">{{ RULES_TEXT }}</p>
-
-    <p v-else-if="market === null" class="market-empty">{{ loading ? '行情加载中…' : '行情加载失败，请点刷新。' }}</p>
+    <p v-if="market === null" class="market-empty">{{ loading ? '行情加载中…' : '行情加载失败，请点刷新。' }}</p>
 
     <template v-else>
       <p v-if="!market.unlocked" class="market-locked">宗门 {{ market.unlockSectLevel }} 级开放灵股交易，现在可以先看行情。</p>
@@ -471,6 +471,19 @@ onUnmounted(() => {
         </li>
       </ul>
     </template>
+
+    <!-- 二级弹窗：规则说明（Esc / 点遮罩只关这一层）。 -->
+    <ModalShell v-if="showRules" label="灵股规则" @close="showRules = false">
+      <section aria-labelledby="market-rules-title">
+        <header class="section-heading panel-heading compact-heading">
+          <div>
+            <p class="eyebrow">灵股</p>
+            <h2 id="market-rules-title">规则说明</h2>
+          </div>
+        </header>
+        <p class="market-rules">{{ RULES_BODY }}</p>
+      </section>
+    </ModalShell>
   </section>
 </template>
 

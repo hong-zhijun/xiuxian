@@ -847,7 +847,7 @@ function onExploreChoose(explorationId: string, choiceId: string): void {
   emit('explore-choose', explorationId, choiceId);
 }
 
-/** 放弃探索：二次确认已在弹窗里完成（window.confirm），这里只转发。 */
+/** 放弃探索：二次确认已在探索弹窗的确认层里完成，这里只转发。 */
 function onExploreAbandon(explorationId: string): void {
   if (props.busy) return;
   emit('explore-abandon', explorationId);

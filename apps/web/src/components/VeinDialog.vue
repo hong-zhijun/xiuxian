@@ -10,13 +10,16 @@ import type {
 } from '../api/game';
 import { attackVein, fetchVeins, occupyVein, setVeinGarrison, withdrawVein } from '../api/game';
 import { formatAmount } from '../utils/format';
+import ConfirmDialog from './ConfirmDialog.vue';
 import DisciplePicker from './DisciplePicker.vue';
+import ModalShell from './ModalShell.vue';
 
 /**
  * 0042 灵脉争夺面板（docs/灵脉争夺开发计划.md）。
  *
  * 只在「打开时 / 操作后 / 点刷新」请求接口，不轮询；倒计时由前端每 30 秒回算。
  * 能不能进驻 / 抢夺、守军战力、计时全部由服务端算好，这里只渲染与选人。
+ * 进驻 / 抢夺 / 换守军的选人、撤离确认、规则说明都是叠在面板之上的二级弹窗，面板本身只放列表。
  */
 const props = defineProps<{
   state: SectStateView;
@@ -84,13 +87,25 @@ function timerLine(vein: VeinView): string {
 
 const pickingVein = computed(() => panel.value?.veins.find((vein) => vein.id === picking.value?.veinId) ?? null);
 
+/** 选人弹窗的标题与一句说明。 */
 const pickingTitle = computed(() => {
   const vein = pickingVein.value;
   const mode = picking.value?.mode;
   if (vein === null || mode === undefined) return '';
-  if (mode === 'occupy') return `进驻「${vein.name}」：选 3 名守军`;
-  if (mode === 'attack') return `抢夺「${vein.name}」：选 3 名出战弟子（按顺序对阵守军）`;
-  return `更换「${vein.name}」的守军`;
+  if (mode === 'occupy') return `进驻「${vein.name}」`;
+  if (mode === 'attack') return `抢夺「${vein.name}」`;
+  return `更换「${vein.name}」守军`;
+});
+
+const pickingHint = computed(() => {
+  const vein = pickingVein.value;
+  const mode = picking.value?.mode;
+  if (vein === null || mode === undefined) return '';
+  if (mode === 'occupy') return `无主灵脉，派 ${String(panel.value?.partySize ?? 3)} 名弟子直接进驻，不算抢夺次数。`;
+  if (mode === 'attack') {
+    return `守方 ${vein.holder?.name ?? ''} · 守军战力 ${formatPower(vein.garrisonPower)}；按点选顺序逐回合对阵守军，三局两胜。`;
+  }
+  return '守军没有代价：照常产出、修炼、历练，随时可以再换。';
 });
 
 /** 抢夺时逐回合的战力对照（守方含 +10%）。 */
@@ -193,9 +208,14 @@ async function confirmPick(): Promise<void> {
   }
 }
 
-function onWithdraw(vein: VeinView): void {
-  if (!window.confirm(`撤离「${vein.name}」？撤离后灵脉变为无主，别人可以直接进驻。`)) return;
-  void run(() => withdrawVein(vein.id));
+/** 等待确认撤离的灵脉（null = 确认弹窗没开）。 */
+const withdrawTarget = ref<VeinView | null>(null);
+
+async function confirmWithdraw(): Promise<void> {
+  const vein = withdrawTarget.value;
+  if (vein === null) return;
+  await run(() => withdrawVein(vein.id));
+  withdrawTarget.value = null;
 }
 
 function timeText(ms: number): string {
@@ -217,6 +237,9 @@ const RULES_TEXT = `灵脉争夺 · 规则
 枯竭：大灵脉 / 灵眼被同一宗门连续占满上限后灵气枯竭，守军撤回、灵脉无主，原占领者 24 小时内不能再占这一条。
       被抢走再抢回，连续占领时间重新算。`;
 
+/** 说明弹窗正文：首行标题已由弹窗标题栏给出。 */
+const RULES_BODY = RULES_TEXT.slice(RULES_TEXT.indexOf('\n\n') + 2);
+
 onMounted(() => {
   void refresh();
   clock = window.setInterval(() => {
@@ -234,18 +257,14 @@ onUnmounted(() => {
     <div class="vein-head modal-head">
       <h3 id="vein-title" class="vein-title">灵脉争夺</h3>
       <div class="vein-head-actions">
-        <button class="vein-quiet-button" type="button" @click="showRules = !showRules">
-          {{ showRules ? '收起说明' : '说明' }}
-        </button>
+        <button class="vein-quiet-button" type="button" @click="showRules = true">说明</button>
         <button class="vein-quiet-button" type="button" :disabled="loading" @click="refresh">
           {{ loading ? '刷新中…' : '刷新' }}
         </button>
       </div>
     </div>
 
-    <p v-if="showRules" class="vein-rules">{{ RULES_TEXT }}</p>
-
-    <p v-else-if="panel === null" class="vein-empty">{{ loading ? '灵脉加载中…' : '面板加载失败，请点刷新。' }}</p>
+    <p v-if="panel === null" class="vein-empty">{{ loading ? '灵脉加载中…' : '面板加载失败，请点刷新。' }}</p>
 
     <template v-else>
       <p v-if="!panel.unlocked" class="vein-locked">宗门 {{ panel.unlockSectLevel }} 级开放灵脉争夺，下面可以先看看各灵脉的归属。</p>
@@ -258,37 +277,6 @@ onUnmounted(() => {
         <span class="vein-label">累计获得</span>
         <strong>{{ formatAmount(panel.harvested) }} 灵气</strong>
       </p>
-
-      <!-- 选人：进驻 / 抢夺 / 换守军 -->
-      <section v-if="picking && pickingVein" class="vein-picking">
-        <p class="vein-picking-title">{{ pickingTitle }}</p>
-        <ul v-if="picking.mode === 'attack' && matchups.length > 0" class="vein-matchups">
-          <li v-for="item in matchups" :key="item.round">
-            第 {{ item.round }} 回合：{{ item.mine }} <span class="vein-vs">对</span> {{ item.theirs }}
-          </li>
-        </ul>
-        <DisciplePicker
-          v-model:selected="selected"
-          :disciples="state.disciples"
-          :min="panel.partySize"
-          :max="panel.partySize"
-          :busy="disabled"
-          sort="power"
-          show-order
-          :title="`选择 ${panel.partySize} 名弟子（点选顺序即出场顺序）`"
-        />
-        <div class="vein-picking-actions">
-          <button class="vein-action" type="button" :disabled="disabled" @click="picking = null">取消</button>
-          <button
-            class="vein-action is-primary"
-            type="button"
-            :disabled="disabled || selected.length !== panel.partySize"
-            @click="confirmPick"
-          >
-            {{ submitting ? '处理中…' : confirmText }}
-          </button>
-        </div>
-      </section>
 
       <!-- 上一场抢夺 -->
       <div v-if="lastBattle" class="vein-result" :class="lastBattle.won ? 'is-won' : 'is-lost'">
@@ -343,7 +331,7 @@ onUnmounted(() => {
                 <button class="vein-action" type="button" :disabled="disabled" @click="startPicking(vein, 'garrison')">
                   换守军
                 </button>
-                <button class="vein-action" type="button" :disabled="disabled" @click="onWithdraw(vein)">撤离</button>
+                <button class="vein-action" type="button" :disabled="disabled" @click="withdrawTarget = vein">撤离</button>
               </template>
               <button
                 v-else-if="vein.action === 'occupy'"
@@ -387,6 +375,75 @@ onUnmounted(() => {
         </ul>
       </section>
     </template>
+
+    <!-- 二级弹窗：进驻 / 抢夺 / 换守军选人（Esc / 点遮罩只关这一层，不发请求）。 -->
+    <ModalShell
+      v-if="panel && picking && pickingVein"
+      :label="pickingTitle"
+      :loading="submitting"
+      loading-text="处理中…"
+      @close="picking = null"
+    >
+      <section class="vein-picking" aria-labelledby="vein-picking-title">
+        <header class="section-heading panel-heading compact-heading">
+          <div>
+            <p class="eyebrow">灵脉 · {{ pickingVein.tierName }}</p>
+            <h2 id="vein-picking-title">{{ pickingTitle }}</h2>
+          </div>
+          <span class="count-badge">{{ selected.length }}/{{ panel.partySize }} 人</span>
+        </header>
+        <p class="vein-picking-hint">{{ pickingHint }}</p>
+        <ul v-if="picking.mode === 'attack' && matchups.length > 0" class="vein-matchups">
+          <li v-for="item in matchups" :key="item.round">
+            第 {{ item.round }} 回合：{{ item.mine }} <span class="vein-vs">对</span> {{ item.theirs }}
+          </li>
+        </ul>
+        <DisciplePicker
+          v-model:selected="selected"
+          :disciples="state.disciples"
+          :min="panel.partySize"
+          :max="panel.partySize"
+          :busy="disabled"
+          sort="power"
+          show-order
+          :title="`选择 ${panel.partySize} 名弟子（点选顺序即出场顺序）`"
+        />
+        <div class="disciple-break-confirm-actions">
+          <button class="action-button" type="button" :disabled="disabled" @click="picking = null">取消</button>
+          <button
+            class="action-button primary-action"
+            type="button"
+            :disabled="disabled || selected.length !== panel.partySize"
+            @click="confirmPick"
+          >
+            <span>{{ submitting ? '处理中…' : confirmText }}</span>
+          </button>
+        </div>
+      </section>
+    </ModalShell>
+
+    <ConfirmDialog
+      v-if="withdrawTarget"
+      eyebrow="灵脉"
+      :title="`撤离「${withdrawTarget.name}」`"
+      message="撤离后灵脉变为无主，别人可以直接进驻；守军撤回宗门。"
+      :confirm-text="submitting ? '撤离中…' : '确认撤离'"
+      :busy="disabled"
+      @cancel="withdrawTarget = null"
+      @confirm="confirmWithdraw"
+    />
+
+    <ModalShell v-if="showRules" label="灵脉争夺规则" @close="showRules = false">
+      <section aria-labelledby="vein-rules-title">
+        <header class="section-heading panel-heading compact-heading">
+          <div>
+            <p class="eyebrow">灵脉</p>
+            <h2 id="vein-rules-title">规则说明</h2>
+          </div>
+        </header>
+        <p class="vein-rules">{{ RULES_BODY }}</p>
+      </section>
+    </ModalShell>
   </section>
 </template>
 
@@ -486,17 +543,14 @@ onUnmounted(() => {
 .vein-picking {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 10px;
-  border: 1px solid rgba(119, 184, 154, 0.4);
-  border-radius: 3px;
-  background: rgba(119, 184, 154, 0.05);
+  gap: 10px;
 }
 
-.vein-picking-title {
+.vein-picking-hint {
   margin: 0;
-  color: var(--gold-bright, #ead19a);
-  font-size: 13px;
+  color: #93a99e;
+  font-size: 12px;
+  line-height: 1.6;
 }
 
 .vein-matchups {
@@ -510,12 +564,6 @@ onUnmounted(() => {
 
 .vein-vs {
   color: #7d9186;
-}
-
-.vein-picking-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
 }
 
 .vein-result {

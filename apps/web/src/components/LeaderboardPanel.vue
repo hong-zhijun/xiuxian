@@ -4,12 +4,13 @@ import { ref, watch } from 'vue';
 import type { LeaderboardEntryView, PublicSectView, SectStateView } from '../api/game';
 import { fetchLeaderboard } from '../api/game';
 import LoadingState from './LoadingState.vue';
+import ModalShell from './ModalShell.vue';
 import PublicSectPanel from './PublicSectPanel.vue';
 
 /**
  * 江湖榜（弹窗内容）。
  *
- * 列表按服务端给的顺序展示（等级 → 声望 → 创建时间）；点别人那行看公开档案（同一弹窗内切换），
+ * 列表按服务端给的顺序展示（等级 → 声望 → 创建时间）；点别人那行弹出公开档案（二级弹窗，关掉回到榜单原位），
  * 自己的行不可点。
  */
 const props = defineProps<{
@@ -54,16 +55,7 @@ function openSect(entry: LeaderboardEntryView): void {
 </script>
 
 <template>
-  <PublicSectPanel
-    v-if="selectedSectId"
-    :sect-id="selectedSectId"
-    :state="state"
-    :busy="busy"
-    @back="selectedSectId = null"
-    @challenge="emit('challenge', $event)"
-  />
-
-  <section v-else class="leaderboard-panel" aria-labelledby="leaderboard-title">
+  <section class="leaderboard-panel" aria-labelledby="leaderboard-title">
     <header class="section-heading panel-heading compact-heading">
       <div>
         <p class="eyebrow">江湖榜</p>
@@ -108,5 +100,15 @@ function openSect(entry: LeaderboardEntryView): void {
     </div>
 
     <p class="leaderboard-note">点其他宗门可查看公开档案并发起挑战；每日 3 次机会，同一宗门每天限挑战 1 次。</p>
+
+    <!-- 二级弹窗：别人宗门的公开档案；挑战弹窗由 SectScreen 叠在它上面。 -->
+    <ModalShell v-if="selectedSectId" label="宗门档案" @close="selectedSectId = null">
+      <PublicSectPanel
+        :sect-id="selectedSectId"
+        :state="state"
+        :busy="busy"
+        @challenge="emit('challenge', $event)"
+      />
+    </ModalShell>
   </section>
 </template>

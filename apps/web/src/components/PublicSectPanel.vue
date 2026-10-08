@@ -8,7 +8,7 @@ import DiscipleAvatar from './DiscipleAvatar.vue';
 import LoadingState from './LoadingState.vue';
 
 /**
- * 别人宗门的公开档案（嵌在江湖榜弹窗里）。
+ * 别人宗门的公开档案（江湖榜里点一行弹出的二级弹窗内容，外壳由 LeaderboardPanel 用 ModalShell 提供）。
  *
  * 只显示服务端给的公开字段：没有资源余额、修为进度、岗位、伤势、招募次数。
  * 挑战预览（剩余次数/等级差/奖励/守擂方式/阻止原因）都由服务端相对当前玩家算好。
@@ -20,7 +20,6 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-  back: [];
   challenge: [sect: PublicSectView];
 }>();
 
@@ -76,13 +75,12 @@ function requestChallenge(): void {
 
 <template>
   <section class="public-sect" aria-labelledby="public-sect-title">
-    <button class="quiet-button back-button" type="button" @click="emit('back')">← 返回榜单</button>
-
     <LoadingState v-if="loading" label="正在翻阅宗门档案" detail="正在读取对方门人与挑战情报。" />
 
     <template v-else-if="sect">
       <header class="section-heading panel-heading compact-heading">
         <div>
+          <p class="eyebrow">宗门档案</p>
           <h2 id="public-sect-title" class="public-sect-name">{{ sect.name }}</h2>
         </div>
         <button
