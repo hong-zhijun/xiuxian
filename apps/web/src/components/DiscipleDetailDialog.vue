@@ -42,6 +42,7 @@ import DiscipleAvatar from './DiscipleAvatar.vue';
 import DiscipleRadarChart from './DiscipleRadarChart.vue';
 import HelpTip from './HelpTip.vue';
 import LoadingState from './LoadingState.vue';
+import ModalShell from './ModalShell.vue';
 import TalentCatalogDialog from './TalentCatalogDialog.vue';
 import TalentRerollDialog from './TalentRerollDialog.vue';
 import RealmCatalogDialog from './RealmCatalogDialog.vue';
