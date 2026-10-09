@@ -68,7 +68,8 @@ import ChatPanel from './ChatPanel.vue';
 import DiscipleLeaderboardPanel from './DiscipleLeaderboardPanel.vue';
 import LeaderboardPanel from './LeaderboardPanel.vue';
 import RecruitDialog from './RecruitDialog.vue';
-import RefineDialog from './RefineDialog.vue';
+import RefineDialog, { type RefineResult } from './RefineDialog.vue';
+import RefineHallDialog from './RefineHallDialog.vue';
 import { REFINE_LEVEL_NAMES } from './RefineTag.vue';
 import ShopDialog from './ShopDialog.vue';
 import StewardDialog from './StewardDialog.vue';
@@ -185,6 +186,7 @@ const openPanel = ref<
   | 'challenge-history'
   | 'alchemy'
   | 'equipment'
+  | 'refine'
   | 'bag'
   | 'gambling'
   | 'shop'
@@ -1070,6 +1072,12 @@ const refineTargetId = ref<string | null>(null);
 const refineItem = computed(
   () => equipment.value?.items.find((item) => item.id === refineTargetId.value) ?? null,
 );
+/**
+ * 最近一次祭炼的结果：交给祭炼弹窗播放成功 / 失败动画（seq 每次 +1，弹窗按它触发）。
+ * error = 请求失败（材料不足、状态变化等），弹窗只收起动画，原因走 toast。
+ */
+const refineResult = ref<RefineResult | null>(null);
+let refineSeq = 0;
 
 /**
  * 装备回执里的 state：与坊市同一处理 —— App.vue 上「SectScreen 自己拿到新 state」的入口只有
@@ -1109,6 +1117,21 @@ function openBag(): void {
   openPanel.value = 'bag';
   void loadEquipment();
 }
+
+/** 打开祭炼堂（首页「祭炼」卡片）：弟子身上与背包里的装备都在这里挑。 */
+function openRefineHall(): void {
+  openPanel.value = 'refine';
+  void loadEquipment();
+}
+
+/** 首页「祭炼」卡片的状态行：本宗祭炼得最高的一件。 */
+const refineCardStatus = computed(() => {
+  const view = equipment.value;
+  if (view === null) return '提升装备重数';
+  if (!view.unlocked) return '宗门 2 级开放';
+  const best = Math.max(0, ...view.items.map((item) => item.refineLevel));
+  return best > 0 ? `最高 ${REFINE_LEVEL_NAMES[best] ?? ''}` : '装备尚未祭炼';
+});
 
 // 资源栏的「背包 x/50」需要装备视图：进页面时取一次（之后炼器 / 分解 / 穿卸 / 打开面板时刷新；不做轮询）。
 onMounted(() => {
@@ -1177,12 +1200,19 @@ async function onRefineEquipment(equipmentId: string): Promise<void> {
     const { state: next, outcome } = await refineEquipment(equipmentId);
     handOffEquipmentState(next);
     await loadEquipment();
-    if (outcome.success) {
-      emit('notify', 'success', '祭炼成功', `${outcome.name} 已至${REFINE_LEVEL_NAMES[outcome.toLevel] ?? ''}`);
-    } else {
-      emit('notify', 'warning', '祭炼未成', '材料已耗去，装备完好无损。');
+    refineSeq += 1;
+    refineResult.value = { seq: refineSeq, equipmentId, success: outcome.success, toLevel: outcome.toLevel, error: false };
+    // 弹窗还开着就交给动画；中途关掉了才用 toast 补一句结果。
+    if (refineTargetId.value !== equipmentId) {
+      if (outcome.success) {
+        emit('notify', 'success', '祭炼成功', `${outcome.name} 已至${REFINE_LEVEL_NAMES[outcome.toLevel] ?? ''}`);
+      } else {
+        emit('notify', 'warning', '祭炼未成', '材料已耗去，装备完好无损。');
+      }
     }
   } catch (caught) {
+    refineSeq += 1;
+    refineResult.value = { seq: refineSeq, equipmentId, success: false, toLevel: 0, error: true };
     emit('notify', 'error', '祭炼未成', caught instanceof Error ? caught.message : '祭炼失败，请稍后重试。');
   } finally {
     equipmentSubmitting.value = false;
@@ -1693,7 +1723,7 @@ function signedPct(value: number): string {
 }
 
 type HubCardId =
-  | 'alchemy' | 'forge' | 'recruit' | 'steward' | 'defense'
+  | 'alchemy' | 'forge' | 'refine' | 'recruit' | 'steward' | 'defense'
   | 'boss' | 'tower' | 'explore' | 'veins'
   | 'shop' | 'gambling' | 'auction' | 'market' | 'merit';
 
@@ -1727,6 +1757,7 @@ const hubGroups = computed<{ label: string; cards: HubCard[] }[]>(() => {
       cards: [
         { id: 'alchemy', name: '炼丹', glyph: '丹', status: healableIds.value.length > 0 ? `${String(healableIds.value.length)} 人受伤可疗伤` : '炼制丹药' },
         { id: 'forge', name: '炼器', glyph: '器', status: equipment.value ? `背包 ${String(equipment.value.bagCount)} / ${String(equipment.value.bagCapacity)}` : '打造装备' },
+        { id: 'refine', name: '祭炼', glyph: '祭', status: refineCardStatus.value },
         { id: 'recruit', name: '招贤台', glyph: '招', status: recruitBadge.value > 0 ? `还可招 ${String(recruitBadge.value)} 人` : '张榜招贤' },
         { id: 'steward', name: '执事堂', glyph: '执', status: vacantStewards.value > 0 ? `${String(vacantStewards.value)} 个执事空缺` : '执事齐全' },
         { id: 'defense', name: '守擂阵容', glyph: '擂', status: props.state.sect.defenseLineup ? '已布阵' : '尚未布阵' },
@@ -1828,7 +1859,11 @@ function openHubCard(id: HubCardId): void {
     openEquipment();
     return;
   }
-  const panels: Record<Exclude<HubCardId, 'recruit' | 'forge'>, NonNullable<typeof openPanel.value>> = {
+  if (id === 'refine') {
+    openRefineHall();
+    return;
+  }
+  const panels: Record<Exclude<HubCardId, 'recruit' | 'forge' | 'refine'>, NonNullable<typeof openPanel.value>> = {
     alchemy: 'alchemy',
     steward: 'steward',
     defense: 'defense-lineup',
@@ -2440,6 +2475,18 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
       <LoadingState v-else label="正在清点宗门装备" />
     </ModalShell>
 
+    <!-- 祭炼堂（首页「祭炼」卡片）：挑弟子身上或背包里的装备，点「祭炼」叠出祭炼弹窗。 -->
+    <ModalShell v-if="openPanel === 'refine'" label="祭炼" @close="openPanel = null">
+      <RefineHallDialog
+        v-if="equipment"
+        :state="state"
+        :equipment="equipment"
+        :busy="busy || equipmentSubmitting"
+        @refine="refineTargetId = $event"
+      />
+      <LoadingState v-else label="正在清点宗门装备" />
+    </ModalShell>
+
     <!-- 选人出征：叠在秘境列表之上，Esc / 点遮罩只关这一层。 -->
     <ModalShell
       v-if="exploreRealm"
@@ -3002,6 +3049,7 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
       :item="refineItem"
       :resources="state.resources"
       :busy="busy || equipmentSubmitting"
+      :result="refineResult"
       @refine="onRefineEquipment"
       @close="refineTargetId = null"
     />

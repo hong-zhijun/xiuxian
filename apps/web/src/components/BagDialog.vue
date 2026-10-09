@@ -77,13 +77,17 @@ watch(qualityOptions, (options) => {
   }
 });
 
-const visibleItems = computed<EquipmentItemView[]>(() =>
-  baseItems.value.filter(
+/** 排序：默认 = 服务端顺序（新的在前）；祭炼 = 重数高的在前，同重数保持默认顺序（sort 是稳定排序）。 */
+const sortKey = ref<'default' | 'refine'>('default');
+
+const visibleItems = computed<EquipmentItemView[]>(() => {
+  const filtered = baseItems.value.filter(
     (item) =>
       (slotFilter.value === SLOT_ALL || item.slot === slotFilter.value) &&
       (qualityFilter.value === SLOT_ALL || item.quality === qualityFilter.value),
-  ),
-);
+  );
+  return sortKey.value === 'refine' ? [...filtered].sort((a, b) => b.refineLevel - a.refineLevel) : filtered;
+});
 
 /** 可分解 = 在背包里（穿在身上的不占背包，也不能分解）。 */
 function isSalvageable(item: EquipmentItemView): boolean {
@@ -182,6 +186,28 @@ function confirmSalvage(): void {
             @click="qualityFilter = option.id"
           >
             {{ option.name }}
+          </button>
+        </div>
+
+        <div class="equipment-filter-row" role="group" aria-label="排序">
+          <span class="eyebrow">排序</span>
+          <button
+            class="equipment-chip"
+            :class="{ 'is-active': sortKey === 'default' }"
+            type="button"
+            :aria-pressed="sortKey === 'default'"
+            @click="sortKey = 'default'"
+          >
+            最新
+          </button>
+          <button
+            class="equipment-chip"
+            :class="{ 'is-active': sortKey === 'refine' }"
+            type="button"
+            :aria-pressed="sortKey === 'refine'"
+            @click="sortKey = 'refine'"
+          >
+            祭炼重数
           </button>
         </div>
 

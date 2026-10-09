@@ -4811,7 +4811,7 @@ ul {
   margin-top: 14px;
 }
 
-/* 一组：左边竖排组名 + 卡片网格（宽屏一行 5 张，固定顺序）。 */
+/* 一组：左边竖排组名 + 卡片网格（宽屏一行 6 张，固定顺序；宗门组正好 6 张）。 */
 .hub-group {
   display: grid;
   grid-template-columns: 22px minmax(0, 1fr);
@@ -4830,7 +4830,7 @@ ul {
 
 .hub-group-cards {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 8px;
 }
 
