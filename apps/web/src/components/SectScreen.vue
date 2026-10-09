@@ -3050,6 +3050,7 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
       :resources="state.resources"
       :busy="busy || equipmentSubmitting"
       :result="refineResult"
+      :guide="equipment!.refineGuide"
       @refine="onRefineEquipment"
       @close="refineTargetId = null"
     />

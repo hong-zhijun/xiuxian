@@ -2131,6 +2131,26 @@ export interface EquipmentView {
   salvageOre: Record<string, number>;
   /** 本宗全部装备（背包 + 已穿戴），新的在前。 */
   items: EquipmentItemView[];
+  /** 0044 祭炼说明（「说明」弹窗用）：每个品质冲 1～12 重的基础成功率、消耗与加成。 */
+  refineGuide: RefineGuideView;
+}
+
+/** 祭炼说明表：成功率只给基础值；消耗是最小单位字符串，只含 > 0 的资源。 */
+export interface RefineGuideView {
+  maxLevel: number;
+  qualities: {
+    id: string;
+    name: string;
+    color: string;
+    rows: {
+      level: number;
+      successBp: number;
+      cost: Record<string, string>;
+      mainGain: number;
+      subGain: number;
+      powerBonusGainBp: number;
+    }[];
+  }[];
 }
 
 /** 炼器回执（POST /game/forge-equipment 的 outcome）。 */

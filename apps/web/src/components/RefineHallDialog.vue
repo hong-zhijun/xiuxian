@@ -3,6 +3,7 @@ import { computed, ref } from 'vue';
 
 import type { EquipmentItemView, EquipmentView, SectStateView } from '../api/game';
 import ModalShell from './ModalShell.vue';
+import RefineGuideDialog from './RefineGuideDialog.vue';
 import RefineTag, { REFINE_LEVEL_NAMES } from './RefineTag.vue';
 
 /**
@@ -23,6 +24,9 @@ const props = defineProps<{
 const emit = defineEmits<{
   refine: [equipmentId: string];
 }>();
+
+/** 「说明」：叠出概率与花费表。 */
+const showGuide = ref(false);
 
 type Tab = 'worn' | 'bag';
 const tab = ref<Tab>('worn');
@@ -84,7 +88,10 @@ function nextText(item: EquipmentItemView): string {
         <p class="eyebrow">宗门</p>
         <h2 id="refine-hall-title">祭炼</h2>
       </div>
-      <span class="count-badge">{{ equipment.items.length }} 件装备</span>
+      <div class="refine-hall-head-actions">
+        <button class="quiet-button refine-hall-guide" type="button" @click="showGuide = true">说明</button>
+        <span class="count-badge">{{ equipment.items.length }} 件装备</span>
+      </div>
     </header>
 
     <p v-if="!equipment.unlocked" class="blocked-hint">{{ equipment.blockedReason ?? '宗门 2 级开放祭炼。' }}</p>
@@ -165,6 +172,13 @@ function nextText(item: EquipmentItemView): string {
       </template>
     </template>
 
+    <RefineGuideDialog
+      v-if="showGuide"
+      :guide="equipment.refineGuide"
+      :resources="state.resources"
+      @close="showGuide = false"
+    />
+
     <!-- 二级弹窗：选中弟子身上的装备（Esc / 点遮罩只关这一层；点「祭炼」再叠出祭炼弹窗）。 -->
     <ModalShell v-if="pickedGroup" narrow :label="`祭炼 · ${pickedGroup.name}的装备`" @close="pickedDiscipleId = null">
       <section class="refine-hall" aria-labelledby="refine-hall-picked-title">
@@ -209,6 +223,18 @@ function nextText(item: EquipmentItemView): string {
   min-width: 0;
   flex-direction: column;
   gap: 10px;
+}
+
+.refine-hall-head-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.refine-hall-guide {
+  padding: 4px 10px;
+  font-size: 12px;
 }
 
 .refine-hall-rules {

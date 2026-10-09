@@ -13,9 +13,10 @@ export interface RefineResult {
 <script setup lang="ts">
 import { computed, onUnmounted, ref, watch } from 'vue';
 
-import type { EquipmentItemView, ResourceView } from '../api/game';
+import type { EquipmentItemView, RefineGuideView, ResourceView } from '../api/game';
 import { formatAmount, formatBp } from '../utils/format';
 import ModalShell from './ModalShell.vue';
+import RefineGuideDialog from './RefineGuideDialog.vue';
 import RefineTag, { REFINE_LEVEL_NAMES } from './RefineTag.vue';
 
 /**
@@ -32,7 +33,12 @@ const props = defineProps<{
   resources: ResourceView[];
   busy: boolean;
   result: RefineResult | null;
+  /** 「说明」弹窗的数据（装备面板里的 refineGuide）。 */
+  guide: RefineGuideView;
 }>();
+
+/** 「说明」：叠出概率与花费表（默认选中这件装备的品质）。 */
+const showGuide = ref(false);
 
 const emit = defineEmits<{
   refine: [equipmentId: string];
@@ -165,6 +171,7 @@ onUnmounted(clearTimer);
           <p class="eyebrow">祭炼</p>
           <h2 id="refine-title" :style="{ color: view.color }">{{ view.name }}<RefineTag :level="view.refineLevel" /></h2>
         </div>
+        <button class="quiet-button refine-guide-button" type="button" @click="showGuide = true">说明</button>
       </header>
 
       <p class="refine-owner">{{ ownerText }}</p>
@@ -277,6 +284,14 @@ onUnmounted(clearTimer);
         </div>
       </template>
     </section>
+
+    <RefineGuideDialog
+      v-if="showGuide"
+      :guide="guide"
+      :resources="resources"
+      :initial-quality="view.quality"
+      @close="showGuide = false"
+    />
   </ModalShell>
 </template>
 
@@ -286,6 +301,13 @@ onUnmounted(clearTimer);
   min-width: 0;
   flex-direction: column;
   gap: 10px;
+}
+
+.refine-guide-button {
+  flex: 0 0 auto;
+  align-self: center;
+  padding: 4px 10px;
+  font-size: 12px;
 }
 
 .refine-owner {

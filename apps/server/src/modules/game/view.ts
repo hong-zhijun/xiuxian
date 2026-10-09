@@ -527,6 +527,28 @@ export interface EquipmentView {
   salvageOre: Record<string, number>;
   /** 本宗全部装备（背包 + 已穿戴），新的在前。 */
   items: EquipmentItemView[];
+  /** 0044 祭炼说明（「说明」弹窗用）：每个品质冲 1～12 重的基础成功率、消耗与加成，全部由服务端给。 */
+  refineGuide: RefineGuideView;
+}
+
+/** 祭炼说明表：成功率只给基础值（不含隐藏补偿）。 */
+export interface RefineGuideView {
+  maxLevel: number;
+  qualities: {
+    id: string;
+    name: string;
+    color: string;
+    rows: {
+      /** 冲到第几重。 */
+      level: number;
+      successBp: number;
+      /** 最小单位字符串，只含 > 0 的资源。 */
+      cost: Record<string, string>;
+      mainGain: number;
+      subGain: number;
+      powerBonusGainBp: number;
+    }[];
+  }[];
 }
 
 /** 可选部位（炼器与功勋兑换共用）：法器的 mainAttrChoices 非空（必须选身法或幸运）。 */
@@ -663,6 +685,32 @@ export function buildEquipmentView(input: {
         row.disciple_id === null ? null : (input.discipleNames.get(row.disciple_id) ?? null),
       ),
     ),
+    refineGuide: refineGuideView(),
+  };
+}
+
+/** 祭炼说明表（纯数据，按 equipment.ts 的祭炼常量现算；成功率按 0 次失败给基础值）。 */
+export function refineGuideView(): RefineGuideView {
+  return {
+    maxLevel: REFINE_MAX_LEVEL,
+    qualities: EQUIPMENT_QUALITIES.map((quality) => ({
+      id: quality.id,
+      name: quality.name,
+      color: quality.color,
+      rows: Array.from({ length: REFINE_MAX_LEVEL }, (_, index) => {
+        const level = index + 1;
+        return {
+          level,
+          successBp: refineSuccessBp(level, 0),
+          cost: Object.fromEntries(
+            Object.entries(refineCostUnits(quality.id, level)).map(([resourceId, units]) => [resourceId, String(units)]),
+          ),
+          mainGain: refineMainGain(quality.id, level),
+          subGain: refineSubGain(quality.id, level),
+          powerBonusGainBp: refinePowerBonusBp(level) - refinePowerBonusBp(level - 1),
+        };
+      }),
+    })),
   };
 }
 

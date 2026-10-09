@@ -566,5 +566,41 @@ describe('0044 祭炼：视图不泄露隐藏补偿', () => {
     )!;
     expect(item.refine.next.level).toBe(5);
     expect(item.refine.next.successBp).toBe(8000);
+    // 「说明」表同样只给基础值，不受失败次数影响。
+    const guide = (dataOf(panel) as Record<string, any>).equipment.refineGuide;
+    const immortal = (guide.qualities as Record<string, any>[]).find((quality) => quality.id === 'immortal')!;
+    expect(immortal.rows[4].successBp).toBe(8000);
+  });
+});
+
+describe('0044 祭炼：说明表（装备面板 refineGuide）', () => {
+  it('4 个品质 × 12 重；成功率、消耗、加成与计划第 2 节一致', async () => {
+    const { fixture } = await frozenSect('refine-guide');
+    const panel = dataOf(await fixture.api.get('/api/v1/game/equipment')) as Record<string, any>;
+    const guide = panel.equipment.refineGuide as {
+      maxLevel: number;
+      qualities: { id: string; rows: Record<string, any>[] }[];
+    };
+    expect(guide.maxLevel).toBe(12);
+    expect(guide.qualities.map((quality) => quality.id)).toEqual(['common', 'spirit', 'treasure', 'immortal']);
+    for (const quality of guide.qualities) {
+      expect(quality.rows.map((row) => row.level)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+    }
+
+    const immortal = guide.qualities.find((quality) => quality.id === 'immortal')!.rows;
+    expect(immortal[8]).toEqual({
+      level: 9,
+      successBp: 3500,
+      cost: { spiritStone: '490000', ore: '300000', xuantie: '4000' },
+      mainGain: 4,
+      subGain: 0,
+      powerBonusGainBp: 100,
+    });
+    expect(immortal[11]).toMatchObject({ level: 12, successBp: 2000, subGain: 6, powerBonusGainBp: 300 });
+    expect(immortal[4]).toMatchObject({ level: 5, mainGain: 3, subGain: 4, powerBonusGainBp: 0 });
+
+    const common = guide.qualities.find((quality) => quality.id === 'common')!.rows;
+    expect(common[0]).toMatchObject({ level: 1, successBp: 10000, cost: { spiritStone: '12000', ore: '9000' } });
+    expect(common[0]!.cost).not.toHaveProperty('xuantie');
   });
 });
