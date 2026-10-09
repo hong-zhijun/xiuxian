@@ -91,6 +91,13 @@ import {
   qualityPowerBonusBp,
   qualityColorOf,
   qualityNameOf,
+  isEquipmentQuality,
+  REFINE_MAX_LEVEL,
+  refineCostUnits,
+  refineMainGain,
+  refinePowerBonusBp,
+  refineSubGain,
+  refineSuccessBp,
   slotNameOf,
   withGear,
   type AttrSet,
@@ -452,8 +459,25 @@ export interface EquipmentItemView {
   subValue: number;
   /** forge | boss。 */
   source: string;
-  /** 0032 穿在身上时给弟子的战力加成（基点，按品质：凡 200 / 灵 400 / 宝 700 / 仙 1000）。 */
+  /** 0032 穿在身上时给弟子的战力加成（基点，按品质：凡 200 / 灵 400 / 宝 700 / 仙 1000；0044 起再加祭炼重数的部分）。 */
   powerBonusBp: number;
+  /** 0044 祭炼重数 0~12。 */
+  refineLevel: number;
+  /** 0044 祭炼预览（全部由服务端算好；next = null 表示已到十二重）。 */
+  refine: {
+    maxLevel: number;
+    next: {
+      level: number;
+      /** 基础成功率（基点）。**不含**隐藏补偿，也不要加任何「补偿」字段。 */
+      successBp: number;
+      /** 本次消耗（最小单位字符串），只含 > 0 的资源。 */
+      cost: Record<string, string>;
+      mainGain: number;
+      subGain: number;
+      /** 成功后这件装备的战力加成增加多少（基点）：refinePowerBonusBp(next) - refinePowerBonusBp(当前)。 */
+      powerBonusGainBp: number;
+    } | null;
+  };
   /** 穿在谁身上；null = 在背包里（背包 = 本宗门未穿戴的装备）。 */
   discipleId: string | null;
   discipleName: string | null;
@@ -539,8 +563,33 @@ export interface MeritShopView {
   maxResourceQuantity: number;
 }
 
+/**
+ * 祭炼预览（0044）：下一重的成功率 / 消耗 / 增量都由服务端算好，前端不复制成功率表。
+ * 品质不认识或已到十二重时 next 为 null；successBp 固定按 0 次失败算（不读隐藏的失败次数）。
+ */
+function refineViewOf(quality: string, refineLevel: number): EquipmentItemView['refine'] {
+  if (!isEquipmentQuality(quality) || refineLevel >= REFINE_MAX_LEVEL) {
+    return { maxLevel: REFINE_MAX_LEVEL, next: null };
+  }
+  const level = refineLevel + 1;
+  return {
+    maxLevel: REFINE_MAX_LEVEL,
+    next: {
+      level,
+      successBp: refineSuccessBp(level, 0),
+      cost: Object.fromEntries(
+        Object.entries(refineCostUnits(quality, level)).map(([resourceId, units]) => [resourceId, String(units)]),
+      ),
+      mainGain: refineMainGain(quality, level),
+      subGain: refineSubGain(quality, level),
+      powerBonusGainBp: refinePowerBonusBp(level) - refinePowerBonusBp(refineLevel),
+    },
+  };
+}
+
 /** 装备行 → 视图（纯映射；discipleName 由调用方按本宗弟子表查好）。 */
 export function equipmentItemViewOf(row: EquipmentRow, discipleName: string | null): EquipmentItemView {
+  const refineLevel = Number(row.refine_level ?? 0);
   return {
     id: row.id,
     slot: row.slot,
@@ -556,7 +605,9 @@ export function equipmentItemViewOf(row: EquipmentRow, discipleName: string | nu
     subAttrName: attrNameOf(row.sub_attr),
     subValue: Number(row.sub_value),
     source: row.source,
-    powerBonusBp: qualityPowerBonusBp(row.quality),
+    powerBonusBp: qualityPowerBonusBp(row.quality) + refinePowerBonusBp(refineLevel),
+    refineLevel,
+    refine: refineViewOf(row.quality, refineLevel),
     discipleId: row.disciple_id,
     discipleName: row.disciple_id === null ? null : discipleName,
     createdAt: new Date(Number(row.created_at)).toISOString(),
@@ -2796,6 +2847,8 @@ export interface AuctionEquipmentView {
   subAttr: string;
   subAttrName: string;
   subValue: number;
+  /** 0044 祭炼重数（拍卖单里装备的重数，上架 / 下架都保留）。 */
+  refineLevel: number;
 }
 
 /** 一单。价格一律最小单位灵石；时间是毫秒时间戳。 */

@@ -2061,8 +2061,25 @@ export interface EquipmentItemView {
   subAttrName: string;
   subValue: number;
   source: 'forge' | 'boss' | 'tower';
-  /** 0032 穿在身上时给弟子的战力加成（基点，按品质）。 */
+  /** 0032 穿在身上时给弟子的战力加成（基点，按品质；0044 起再加祭炼重数的部分）。 */
   powerBonusBp: number;
+  /** 0044 祭炼重数 0~12。 */
+  refineLevel: number;
+  /** 0044 祭炼预览（全部由服务端算好；next = null 表示已到十二重）。 */
+  refine: {
+    maxLevel: number;
+    next: {
+      level: number;
+      /** 基础成功率（基点）。**不含**隐藏补偿，也不要加任何「补偿」字段。 */
+      successBp: number;
+      /** 本次消耗（最小单位字符串），只含 > 0 的资源。 */
+      cost: Record<string, string>;
+      mainGain: number;
+      subGain: number;
+      /** 成功后这件装备的战力加成增加多少（基点）：refinePowerBonusBp(next) - refinePowerBonusBp(当前)。 */
+      powerBonusGainBp: number;
+    } | null;
+  };
   /** 穿在谁身上；null = 在背包里（背包 = 本宗未穿戴的装备）。 */
   discipleId: string | null;
   discipleName: string | null;
@@ -2154,6 +2171,18 @@ export interface SalvageEquipmentOutcome {
   xuantie: number;
 }
 
+/** 祭炼回执（POST /game/refine-equipment 的 outcome）。 */
+export interface RefineEquipmentOutcome {
+  equipmentId: string;
+  name: string;
+  success: boolean;
+  /** 祭炼前 / 后的重数（失败时两者相等）。 */
+  fromLevel: number;
+  toLevel: number;
+  /** 本次实际扣掉的材料（最小单位字符串）。 */
+  cost: Record<string, string>;
+}
+
 /** 0028 读取装备面板（GET /game/equipment）：只读，不结算；装备明细不放进 /game/sync。 */
 export async function fetchEquipment(): Promise<{
   state: SectStateView;
@@ -2209,6 +2238,16 @@ export async function salvageEquipment(
   return apiRequest<{ state: SectStateView; outcome: SalvageEquipmentOutcome }>(
     '/api/v1/game/salvage-equipment',
     { method: 'POST', body: { equipmentIds } },
+  );
+}
+
+/** 0044 祭炼（POST /game/refine-equipment）：一次冲 1 重；成败、扣料都以服务端为准。 */
+export async function refineEquipment(
+  equipmentId: string,
+): Promise<{ state: SectStateView; outcome: RefineEquipmentOutcome }> {
+  return apiRequest<{ state: SectStateView; outcome: RefineEquipmentOutcome }>(
+    '/api/v1/game/refine-equipment',
+    { method: 'POST', body: { equipmentId } },
   );
 }
 
@@ -2346,6 +2385,8 @@ export interface AuctionEquipmentView {
   subAttr: string;
   subAttrName: string;
   subValue: number;
+  /** 0044 祭炼重数（拍卖单里装备的重数，上架 / 下架都保留）。 */
+  refineLevel: number;
 }
 
 /** 一单。价格一律最小单位灵石；时间是毫秒时间戳。 */

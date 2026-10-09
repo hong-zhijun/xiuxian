@@ -189,7 +189,13 @@ import {
   generateEquipment,
   isEquipmentQuality,
   isEquipmentSlot,
+  nextRefineFails,
+  REFINE_MAX_LEVEL,
+  refineCostUnits,
+  refineMainGain,
+  refineSubGain,
   resolveMainAttr,
+  rollRefine,
   salvageOreUnits,
   slotNameOf,
   withGear,
@@ -249,6 +255,7 @@ import {
   refreshDiscipleGearStatement,
   updateResourceSettledStatement,
   updateEquipmentHolderStatement,
+  updateEquipmentRefineStatement,
   updateSectChallengeCounterStatement,
   updateSectDefenseLineupStatement,
   updateSectLevelStatement,
@@ -258,6 +265,7 @@ import {
   updateSectReputationStatement,
   updateSectSettledStatement,
   upsertPillInventoryStatement,
+  upsertRefineFailsStatement,
   type BuildingRow,
   type DiscipleRow,
   type EventLogRow,
@@ -5698,6 +5706,114 @@ export async function salvageEquipment(
   return { state: draft.view(), outcome: { count: chosen.length, ore, xuantie } };
 }
 
+/** 祭炼回执（POST /game/refine-equipment 的 outcome）。 */
+export interface RefineEquipmentOutcome {
+  equipmentId: string;
+  name: string;
+  success: boolean;
+  /** 祭炼前 / 后的重数（失败时两者相等）。 */
+  fromLevel: number;
+  toLevel: number;
+  /** 本次实际扣掉的材料（最小单位字符串）。 */
+  cost: Record<string, string>;
+}
+
+/**
+ * 祭炼（POST /game/refine-equipment，0044，docs/装备祭炼开发计划.md 4.5）：一次只冲 1 重（当前重数 + 1）。
+ *
+ * - 成功：重数 +1，主 / 副属性增量直接写进装备行；穿在身上的装备同批重算弟子 gear 列（战力立刻变）；
+ * - 失败：只扣材料，重数与属性都不变，不碎装备、不降级；
+ * - 隐藏补偿：宗门级、按目标重数计数的连续失败次数，只在这里用，不进任何返回 / 日志。
+ *
+ * 结算 → 解锁 / 在外校验 → 扣材料 + 判定成败 → 写回，一次受保护 batch（资源余额守卫挡并发）。
+ */
+export async function refineEquipment(
+  db: D1Database,
+  userId: string,
+  equipmentId: string,
+  now: number,
+): Promise<{ state: SectStateView; outcome: RefineEquipmentOutcome }> {
+  const draft = await draftFor(db, userId, now);
+  requireForgeUnlocked(draft);
+  const { items } = await loadEquipment(db, draft.sect.id);
+  const item = items.find((row) => row.id === equipmentId);
+  if (item === undefined) {
+    throw new AppError('NOT_FOUND', '装备不存在');
+  }
+  if (!isEquipmentQuality(item.quality)) {
+    throw new AppError('INVALID_STATUS', '这件装备不能祭炼');
+  }
+  const fromLevel = Number(item.refine_level ?? 0);
+  if (fromLevel >= REFINE_MAX_LEVEL) {
+    throw new AppError('INVALID_STATUS', `${item.name}已祭炼至十二重圆满`);
+  }
+  // 穿在身上的：持有人在外历练 / 重伤卧床时不能祭炼（与穿卸同一套校验）。
+  const holder = item.disciple_id === null ? null : draft.discipleById(item.disciple_id);
+  if (holder !== null) {
+    requireNotAway(draft, holder, '祭炼装备');
+  }
+
+  const target = fromLevel + 1;
+  const cost = refineCostUnits(item.quality, target);
+  for (const [resourceId, amount] of Object.entries(cost)) {
+    draft.requireResource(resourceId, amount);
+  }
+
+  // 隐藏补偿：按宗门 + 目标重数读连续失败次数（没有记录为 0），只参与判定。
+  const fails = await new EquipmentRepository(db).findRefineFails(draft.sect.id, target);
+  const success = rollRefine(target, fails, Math.random);
+  const nextFails = nextRefineFails(fails, success);
+  if (nextFails !== fails) {
+    draft.addStatement(upsertRefineFailsStatement(draft.sect.id, target, nextFails, now));
+  }
+
+  if (success) {
+    const mainValue = Number(item.main_value) + refineMainGain(item.quality, target);
+    const subValue = Number(item.sub_value) + refineSubGain(item.quality, target);
+    draft.addStatement(
+      updateEquipmentRefineStatement({
+        equipmentId: item.id,
+        sectId: draft.sect.id,
+        refineLevel: target,
+        mainValue,
+        subValue,
+      }),
+    );
+    if (holder !== null) {
+      // 内存里同步改成新值（随命令返回的 state 立刻带上新战力）；库里的 SUM 排在 update 之后。
+      const nextItems = items.map((row) =>
+        row.id === item.id ? { ...row, refine_level: target, main_value: mainValue, sub_value: subValue } : row,
+      );
+      applyGearRefresh(draft, holder.id, nextItems);
+    }
+  }
+
+  // 装备行进守卫：防止同一件装备同时被上架 / 卸下；扣料与失败次数已在 draft 里，同批提交。
+  if (holder === null) {
+    await draft.commit({ equipmentItems: [{ id: item.id, discipleId: null }] });
+  } else {
+    await draft.commitDisciple([{ id: holder.id }], undefined, {
+      equipmentItems: [{ id: item.id, discipleId: item.disciple_id }],
+    });
+  }
+  if (success && target === REFINE_MAX_LEVEL && item.quality === 'immortal') {
+    await broadcastWorldBoss(db, `【祭炼】${draft.sect.name}将 ${item.name} 祭炼至十二重圆满！`, now);
+  }
+  return {
+    state: draft.view(),
+    outcome: {
+      equipmentId: item.id,
+      name: item.name,
+      success,
+      fromLevel,
+      toLevel: success ? target : fromLevel,
+      cost: Object.fromEntries(
+        Object.entries(cost).map(([resourceId, units]) => [resourceId, String(units)]),
+      ),
+    },
+  };
+}
+
 /**
  * GET /game/equipment：装备面板（顺带结算并返回 state）。
  * 装备明细**不进** /game/sync（额度考虑），只有这个接口返回。
@@ -10246,6 +10362,7 @@ function auctionEquipmentViewOf(snapshot: {
   mainValue: number;
   subAttr: string;
   subValue: number;
+  refineLevel: number;
 }): AuctionEquipmentView {
   return {
     quality: snapshot.quality,
@@ -10258,6 +10375,7 @@ function auctionEquipmentViewOf(snapshot: {
     subAttr: snapshot.subAttr,
     subAttrName: attrNameOf(snapshot.subAttr),
     subValue: Number(snapshot.subValue),
+    refineLevel: Number(snapshot.refineLevel),
   };
 }
 
@@ -10281,7 +10399,9 @@ function auctionLotViewOf(row: AuctionLotRow, sectId: string, now: number): Auct
     itemId: row.item_id,
     itemName: row.item_name,
     quantity: Number(row.quantity),
-    equipment: snapshot === null ? null : auctionEquipmentViewOf(snapshot),
+    equipment: snapshot === null
+      ? null
+      : auctionEquipmentViewOf({ ...snapshot, refineLevel: snapshot.refineLevel ?? 0 }),
     sellerName: row.seller_name,
     isMine: row.seller_sect_id === sectId,
     startPrice: Number(row.start_price),
@@ -10353,6 +10473,7 @@ async function buildAuctionView(input: { db: D1Database; draft: SectDraft; now: 
             mainValue: Number(row.main_value),
             subAttr: row.sub_attr,
             subValue: Number(row.sub_value),
+            refineLevel: Number(row.refine_level ?? 0),
           }),
         })),
       pills: draft.pillInventories
@@ -10434,6 +10555,7 @@ function deliverAuctionItem(draft: SectDraft, lot: AuctionLotRow, now: number): 
         mainValue: snapshot.mainValue,
         subAttr: snapshot.subAttr,
         subValue: snapshot.subValue,
+        refineLevel: snapshot.refineLevel ?? 0,
         source: snapshot.source,
         now,
       }),
@@ -10533,6 +10655,7 @@ export async function listAuctionItem(
       subAttr: row.sub_attr,
       subValue: Number(row.sub_value),
       source: row.source,
+      refineLevel: Number(row.refine_level ?? 0),
     };
     equipmentJson = JSON.stringify(snapshot);
     draft.addStatement(deleteBagEquipmentStatement(row.id, draft.sect.id));

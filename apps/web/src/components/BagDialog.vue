@@ -7,6 +7,7 @@ import type {
   EquipmentView,
   SectStateView,
 } from '../api/game';
+import RefineTag from './RefineTag.vue';
 
 /**
  * 装备背包（弹窗内容，外壳由 SectScreen 用 ModalShell 提供）：筛选、多选分解。
@@ -22,6 +23,8 @@ const props = defineProps<{
 const emit = defineEmits<{
   /** 分解选中的背包装备（穿在身上的不可选；件数与返还矿石由服务端复核）。 */
   salvage: [equipmentIds: string[]];
+  /** 0044 祭炼：只打开祭炼弹窗，请求与刷新由上层处理。 */
+  refine: [equipmentId: string];
 }>();
 
 /* ---------- 台账：余额、背包容量（名字与数值都取自服务端） ---------- */
@@ -207,7 +210,10 @@ function confirmSalvage(): void {
 
             <div class="equipment-card-copy">
               <div class="equipment-card-title">
-                <strong :style="{ color: item.color }">{{ item.name }}</strong>
+                <span class="equipment-card-name">
+                  <strong :style="{ color: item.color }">{{ item.name }}</strong>
+                  <RefineTag :level="item.refineLevel" />
+                </span>
                 <span class="equipment-card-slot">{{ item.slotName }}</span>
               </div>
               <p class="equipment-card-attrs">
@@ -220,6 +226,11 @@ function confirmSalvage(): void {
                   · 分解返还{{ oreName }} {{ equipment.salvageOre[item.quality] ?? 0 }}
                 </template>
               </p>
+              <div class="equipment-card-actions">
+                <button class="quiet-button" type="button" :disabled="busy" @click="emit('refine', item.id)">
+                  祭炼
+                </button>
+              </div>
             </div>
           </li>
         </ul>
@@ -381,8 +392,23 @@ function confirmSalvage(): void {
   letter-spacing: 0.04em;
 }
 
+.equipment-card-name {
+  min-width: 0;
+}
+
 .equipment-card-slot {
   color: #7d9186;
+  font-size: 11px;
+}
+
+.equipment-card-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 6px;
+}
+
+.equipment-card-actions .quiet-button {
+  padding: 4px 10px;
   font-size: 11px;
 }
 

@@ -207,8 +207,12 @@ export function absenceDurations(
 /**
  * 把事件效果叠加到结算结果余额上：资源不低于 0、不超过该资源容量（P3 第 3 节）。
  * 只改 balance（整数最小单位），不动产量/余数/丢弃量这类产量结算字段。
+ *
+ * 余额本来就高于容量时（拍卖交付、0045 祭炼贺礼都不夹容量），事件不能把它「夹」回容量：
+ * 收益事件最多加到容量、已满则不加；损失事件照常扣，只保证不低于 0。
+ * 余额在容量以内时与原来的 `min(容量, max(0, 余额 + 变化))` 完全等价。
  */
-function applyEventEffects(
+export function applyEventEffects(
   resources: SettledResource[],
   config: GameConfigContent,
   events: readonly TriggeredEvent[],
@@ -226,7 +230,10 @@ function applyEventEffects(
         definition === undefined
           ? Number.MAX_SAFE_INTEGER
           : effectiveCapacity(definition.capacity, capacityMultiplier);
-      settled.balance = Math.min(capacity, Math.max(0, settled.balance + Number(amountText)));
+      const amount = Number(amountText);
+      const next = settled.balance + amount;
+      settled.balance =
+        amount >= 0 ? Math.max(settled.balance, Math.min(capacity, next)) : Math.max(0, next);
     }
   }
 }

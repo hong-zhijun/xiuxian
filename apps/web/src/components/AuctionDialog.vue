@@ -14,6 +14,7 @@ import {
 import { formatAmount } from '../utils/format';
 import ConfirmDialog from './ConfirmDialog.vue';
 import ModalShell from './ModalShell.vue';
+import RefineTag from './RefineTag.vue';
 
 /**
  * 0040 拍卖行面板（docs/拍卖行开发计划.md）。
@@ -151,6 +152,7 @@ const sellOptions = computed(() => {
       color: QUALITY_COLORS[item.quality] ?? '#cbd8d0',
       max: 1,
       unitMin: item.minPrice,
+      refineLevel: item.refineLevel,
     }));
   }
   if (sellKind.value === 'pill') {
@@ -161,6 +163,7 @@ const sellOptions = computed(() => {
       color: '#e0cd97',
       max: Math.min(item.quantity, panel.value?.pillMaxQuantity ?? 99),
       unitMin: item.unitMinPrice,
+      refineLevel: 0,
     }));
   }
   return listable.resources.map((item) => ({
@@ -170,6 +173,7 @@ const sellOptions = computed(() => {
     color: '#e0cd97',
     max: Math.min(item.quantity, panel.value?.resourceMaxQuantity ?? 999),
     unitMin: item.unitMinPrice,
+    refineLevel: 0,
   }));
 });
 
@@ -464,6 +468,7 @@ onUnmounted(() => {
             <div class="auction-lot-main">
               <p class="auction-lot-name">
                 <strong>{{ lotTitle(lot) }}</strong>
+                <RefineTag :level="lot.equipment?.refineLevel ?? 0" />
                 <span v-if="lot.isMine" class="auction-tag">我上架的</span>
                 <span v-else-if="lot.isLeading" class="auction-tag is-good">我领先</span>
               </p>
@@ -564,7 +569,10 @@ onUnmounted(() => {
               type="button"
               @click="pickSellItem(item.id)"
             >
-              <strong>{{ item.label }}</strong>
+              <span>
+                <strong>{{ item.label }}</strong>
+                <RefineTag :level="item.refineLevel" />
+              </span>
               <span>{{ item.detail }}</span>
             </button>
           </li>
@@ -579,7 +587,7 @@ onUnmounted(() => {
           <ul v-else class="auction-list">
             <li v-for="lot in claimLots" :key="lot.id" class="auction-lot" :style="{ '--lot-color': lotColor(lot) }">
               <div class="auction-lot-main">
-                <p class="auction-lot-name"><strong>{{ lotTitle(lot) }}</strong></p>
+                <p class="auction-lot-name"><strong>{{ lotTitle(lot) }}</strong><RefineTag :level="lot.equipment?.refineLevel ?? 0" /></p>
                 <p class="auction-lot-sub">
                   {{ lot.claimable === 'buyer' ? `以 ${stone(lot.currentPrice)} 灵石拍得` : '流拍，物品退回' }}
                 </p>
@@ -602,7 +610,7 @@ onUnmounted(() => {
           <ul v-else class="auction-list">
             <li v-for="lot in panel.myLots" :key="lot.id" class="auction-lot" :style="{ '--lot-color': lotColor(lot) }">
               <div class="auction-lot-main">
-                <p class="auction-lot-name"><strong>{{ lotTitle(lot) }}</strong></p>
+                <p class="auction-lot-name"><strong>{{ lotTitle(lot) }}</strong><RefineTag :level="lot.equipment?.refineLevel ?? 0" /></p>
                 <p class="auction-lot-sub">
                   {{ myStatus(lot) }}<template v-if="lot.status === 'active'"> · 剩 {{ timeLeft(lot.endsAt) }}</template>
                 </p>
@@ -634,7 +642,7 @@ onUnmounted(() => {
           <ul v-else class="auction-list">
             <li v-for="lot in panel.myBids" :key="lot.id" class="auction-lot" :style="{ '--lot-color': lotColor(lot) }">
               <div class="auction-lot-main">
-                <p class="auction-lot-name"><strong>{{ lotTitle(lot) }}</strong></p>
+                <p class="auction-lot-name"><strong>{{ lotTitle(lot) }}</strong><RefineTag :level="lot.equipment?.refineLevel ?? 0" /></p>
                 <p class="auction-lot-sub">
                   {{ myStatus(lot) }}<template v-if="lot.status === 'active'"> · 剩 {{ timeLeft(lot.endsAt) }}</template>
                 </p>
@@ -672,7 +680,7 @@ onUnmounted(() => {
         <header class="section-heading panel-heading compact-heading">
           <div>
             <p class="eyebrow">拍卖行 · 上架</p>
-            <h2 id="auction-sell-title" :style="{ color: sellChosen.color }">{{ sellChosen.label }}</h2>
+            <h2 id="auction-sell-title" :style="{ color: sellChosen.color }">{{ sellChosen.label }}<RefineTag :level="sellChosen.refineLevel" /></h2>
           </div>
         </header>
         <p class="auction-hint">{{ sellChosen.detail }}</p>
@@ -907,6 +915,11 @@ onUnmounted(() => {
 
 .auction-lot-name strong {
   color: var(--lot-color, #e0cd97);
+}
+
+/* 标题行本身有 6px 间距，重数标签不再额外留左边距。 */
+.auction-lot-name .refine-tag {
+  margin-left: 0;
 }
 
 .auction-lot-sub {

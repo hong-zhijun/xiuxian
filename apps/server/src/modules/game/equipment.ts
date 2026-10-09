@@ -505,9 +505,15 @@ export function qualityPowerBonusBp(qualityId: string): number {
   return findQuality(qualityId)?.powerBonusBp ?? 0;
 }
 
-/** 一组装备的战力加成之和（基点）：按品质逐件相加。 */
-export function gearPowerBonusBpOf(items: readonly { quality: string }[]): number {
-  return items.reduce((sum, item) => sum + qualityPowerBonusBp(item.quality), 0);
+/**
+ * 一组装备的战力加成之和（基点）：每件 = 品质加成 + 祭炼战力加成（按重数，0044）。
+ * 与 repository.ts 的 GEAR_POWER_BP_CASE 同一口径，两处必须同时改。
+ */
+export function gearPowerBonusBpOf(items: readonly { quality: string; refine_level?: number }[]): number {
+  return items.reduce(
+    (sum, item) => sum + qualityPowerBonusBp(item.quality) + refinePowerBonusBp(Number(item.refine_level ?? 0)),
+    0,
+  );
 }
 
 /**
@@ -527,4 +533,171 @@ export function withGear(base: AttrSet, gear: AttrSet): AttrSet {
     luck: base.luck + gear.luck,
     physique: base.physique + gear.physique,
   };
+}
+
+/* ---------- 祭炼（docs/装备祭炼开发计划.md） ---------- */
+
+export const REFINE_MAX_LEVEL = 12;
+export const REFINE_FAILS_CAP = 50;
+
+/** 冲到第 N 重（下标 N - 1）的成功率：基础 / 每次失败加成 / 上限（基点）。 */
+export const REFINE_ODDS: readonly { baseBp: number; stepBp: number; capBp: number }[] = [
+  { baseBp: 10000, stepBp: 0, capBp: 10000 },
+  { baseBp: 10000, stepBp: 0, capBp: 10000 },
+  { baseBp: 10000, stepBp: 0, capBp: 10000 },
+  { baseBp: 9000, stepBp: 500, capBp: 10000 },
+  { baseBp: 8000, stepBp: 500, capBp: 9500 },
+  { baseBp: 6500, stepBp: 500, capBp: 8500 },
+  { baseBp: 5500, stepBp: 400, capBp: 7500 },
+  { baseBp: 4500, stepBp: 400, capBp: 6500 },
+  { baseBp: 3500, stepBp: 300, capBp: 5500 },
+  { baseBp: 3000, stepBp: 300, capBp: 4800 },
+  { baseBp: 2500, stepBp: 200, capBp: 4000 },
+  { baseBp: 2000, stepBp: 200, capBp: 3500 },
+];
+
+/** 冲到第 N 重（下标 N - 1）的消耗，展示单位。0 表示不消耗。 */
+export const REFINE_COSTS: Readonly<Record<EquipmentQuality, readonly { spiritStone: number; ore: number; xuantie: number }[]>> = {
+  common: [
+    { spiritStone: 12, ore: 9, xuantie: 0 },
+    { spiritStone: 17, ore: 14, xuantie: 0 },
+    { spiritStone: 23, ore: 18, xuantie: 0 },
+    { spiritStone: 33, ore: 27, xuantie: 0 },
+    { spiritStone: 45, ore: 36, xuantie: 0 },
+    { spiritStone: 68, ore: 45, xuantie: 1 },
+    { spiritStone: 90, ore: 54, xuantie: 1 },
+    { spiritStone: 113, ore: 72, xuantie: 1 },
+    { spiritStone: 147, ore: 90, xuantie: 1 },
+    { spiritStone: 180, ore: 108, xuantie: 2 },
+    { spiritStone: 225, ore: 135, xuantie: 2 },
+    { spiritStone: 282, ore: 162, xuantie: 2 },
+  ],
+  spirit: [
+    { spiritStone: 20, ore: 15, xuantie: 0 },
+    { spiritStone: 28, ore: 23, xuantie: 0 },
+    { spiritStone: 38, ore: 30, xuantie: 0 },
+    { spiritStone: 55, ore: 45, xuantie: 0 },
+    { spiritStone: 75, ore: 60, xuantie: 0 },
+    { spiritStone: 113, ore: 75, xuantie: 1 },
+    { spiritStone: 150, ore: 90, xuantie: 1 },
+    { spiritStone: 188, ore: 120, xuantie: 2 },
+    { spiritStone: 245, ore: 150, xuantie: 2 },
+    { spiritStone: 300, ore: 180, xuantie: 3 },
+    { spiritStone: 375, ore: 225, xuantie: 3 },
+    { spiritStone: 470, ore: 270, xuantie: 4 },
+  ],
+  treasure: [
+    { spiritStone: 28, ore: 21, xuantie: 0 },
+    { spiritStone: 39, ore: 32, xuantie: 0 },
+    { spiritStone: 53, ore: 42, xuantie: 0 },
+    { spiritStone: 77, ore: 63, xuantie: 0 },
+    { spiritStone: 105, ore: 84, xuantie: 0 },
+    { spiritStone: 158, ore: 105, xuantie: 1 },
+    { spiritStone: 210, ore: 126, xuantie: 1 },
+    { spiritStone: 263, ore: 168, xuantie: 2 },
+    { spiritStone: 343, ore: 210, xuantie: 3 },
+    { spiritStone: 420, ore: 252, xuantie: 4 },
+    { spiritStone: 525, ore: 315, xuantie: 4 },
+    { spiritStone: 658, ore: 378, xuantie: 6 },
+  ],
+  immortal: [
+    { spiritStone: 40, ore: 30, xuantie: 0 },
+    { spiritStone: 55, ore: 45, xuantie: 0 },
+    { spiritStone: 75, ore: 60, xuantie: 0 },
+    { spiritStone: 110, ore: 90, xuantie: 0 },
+    { spiritStone: 150, ore: 120, xuantie: 0 },
+    { spiritStone: 225, ore: 150, xuantie: 1 },
+    { spiritStone: 300, ore: 180, xuantie: 2 },
+    { spiritStone: 375, ore: 240, xuantie: 3 },
+    { spiritStone: 490, ore: 300, xuantie: 4 },
+    { spiritStone: 600, ore: 360, xuantie: 5 },
+    { spiritStone: 750, ore: 450, xuantie: 6 },
+    { spiritStone: 940, ore: 540, xuantie: 8 },
+  ],
+};
+
+/** 主属性增量：[冲 1～5 重, 冲 6～12 重]。 */
+const REFINE_MAIN_GAIN: Readonly<Record<EquipmentQuality, readonly [number, number]>> = {
+  common: [1, 1],
+  spirit: [2, 3],
+  treasure: [2, 3],
+  immortal: [3, 4],
+};
+
+/** 副属性增量：[冲到 5 重, 冲到 12 重]。 */
+const REFINE_SUB_GAIN: Readonly<Record<EquipmentQuality, readonly [number, number]>> = {
+  common: [1, 2],
+  spirit: [2, 3],
+  treasure: [3, 4],
+  immortal: [4, 6],
+};
+
+/** 当前重数 → 祭炼战力加成（基点，累计值）；下标 = 重数 0..12。 */
+const REFINE_POWER_BP: readonly number[] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 100, 200, 300, 600];
+
+/** 中文重数（下标 = 重数）：一～十二重，与前端 RefineTag 同一张表。 */
+const REFINE_CHINESE_LEVELS: readonly string[] = [
+  '', '一重', '二重', '三重', '四重', '五重', '六重',
+  '七重', '八重', '九重', '十重', '十一重', '十二重',
+];
+
+/** 第 N 重的中文名（1 → 「一重」… 12 → 「十二重」）；0 与越界返回空串。 */
+export function refineChineseLevel(level: number): string {
+  return REFINE_CHINESE_LEVELS[level] ?? '';
+}
+
+/** 冲到第 targetLevel 重的基础成功率（基点，不含隐藏补偿）；targetLevel 不在 1..12 返回 0。 */
+export function refineSuccessBp(targetLevel: number, fails: number): number {
+  const odds = REFINE_ODDS[targetLevel - 1];
+  if (odds === undefined) return 0;
+  return Math.min(odds.capBp, odds.baseBp + Math.max(0, fails) * odds.stepBp);
+}
+
+/** 按成功率判定本次祭炼是否成功；random 注入便于测试（取值 [0, 1)）。 */
+export function rollRefine(targetLevel: number, fails: number, random: () => number): boolean {
+  return random() * 10000 < refineSuccessBp(targetLevel, fails);
+}
+
+/** 祭炼后的连续失败次数：成功清零；失败 +1，封顶 REFINE_FAILS_CAP。 */
+export function nextRefineFails(fails: number, success: boolean): number {
+  return success ? 0 : Math.min(REFINE_FAILS_CAP, fails + 1);
+}
+
+/**
+ * 冲到第 targetLevel 重的消耗（最小单位 = 展示值 × 1000），只放 > 0 的资源。
+ * 例：仙品 9 重 → { spiritStone: 490000, ore: 300000, xuantie: 4000 }。
+ */
+export function refineCostUnits(quality: EquipmentQuality, targetLevel: number): Record<string, number> {
+  const units: Record<string, number> = {};
+  const row = REFINE_COSTS[quality][targetLevel - 1];
+  if (row === undefined) return units;
+  const costs: [string, number][] = [
+    ['spiritStone', row.spiritStone],
+    ['ore', row.ore],
+    [XUANTIE_RESOURCE_ID, row.xuantie],
+  ];
+  for (const [resourceId, amount] of costs) {
+    if (amount > 0) units[resourceId] = amount * ORE_UNITS_PER_DISPLAY;
+  }
+  return units;
+}
+
+/** 冲到第 targetLevel 重成功后主属性增加多少：冲 1～5 重与 6～12 重两档。 */
+export function refineMainGain(quality: EquipmentQuality, targetLevel: number): number {
+  if (targetLevel < 1 || targetLevel > REFINE_MAX_LEVEL) return 0;
+  const [early, late] = REFINE_MAIN_GAIN[quality];
+  return targetLevel <= 5 ? early : late;
+}
+
+/** 冲到第 targetLevel 重成功后副属性增加多少：只有冲到 5 重 / 12 重时有，其余各重为 0。 */
+export function refineSubGain(quality: EquipmentQuality, targetLevel: number): number {
+  const [atFive, atTwelve] = REFINE_SUB_GAIN[quality];
+  if (targetLevel === 5) return atFive;
+  if (targetLevel === REFINE_MAX_LEVEL) return atTwelve;
+  return 0;
+}
+
+/** 当前重数对应的祭炼战力加成（基点，累计值）；越界（<0 或 >12）返回 0。 */
+export function refinePowerBonusBp(level: number): number {
+  return REFINE_POWER_BP[level] ?? 0;
 }

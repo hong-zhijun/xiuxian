@@ -1,5 +1,5 @@
 import { PILL_RECIPES, findPillRecipe } from './alchemy';
-import { FORGE_RECIPES, type EquipmentQuality } from './equipment';
+import { FORGE_RECIPES, REFINE_MAX_LEVEL, type EquipmentQuality } from './equipment';
 
 /**
  * 拍卖行（docs/拍卖行开发计划.md）——纯定义与纯计算。
@@ -143,6 +143,8 @@ export interface AuctionEquipmentSnapshot {
   subAttr: string;
   subValue: number;
   source: string;
+  /** 0044 祭炼重数（可选：老拍卖单的 JSON 没有这个字段，解析时按 0 补上）。 */
+  refineLevel?: number;
 }
 
 /** 解析快照；脏数据返回 null（交付时按 INVALID_STATUS 拒绝，不会插出坏装备）。 */
@@ -162,7 +164,12 @@ export function parseEquipmentSnapshot(raw: string | null): AuctionEquipmentSnap
     ) {
       return null;
     }
-    return value as AuctionEquipmentSnapshot;
+    // 0044：字段不存在 → 0 重；存在但不是 0..12 的整数（含 null）→ 脏数据。
+    const refineLevel = value.refineLevel === undefined ? 0 : value.refineLevel;
+    if (!Number.isInteger(refineLevel) || refineLevel < 0 || refineLevel > REFINE_MAX_LEVEL) {
+      return null;
+    }
+    return { ...value, refineLevel } as AuctionEquipmentSnapshot;
   } catch {
     return null;
   }

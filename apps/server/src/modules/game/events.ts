@@ -136,11 +136,12 @@ export function eventDefinition(eventId: string): EventDef | undefined {
   return EVENT_POOL.find((event) => event.id === eventId);
 }
 
-/** 不在随机事件池里、由玩法直接写进 event_log 的系统事件（0042 灵脉争夺）。 */
+/** 不在随机事件池里、由玩法直接写进 event_log 的系统事件（0042 灵脉争夺；0045 祭炼上线贺礼）。 */
 const SYSTEM_EVENT_NAMES: Readonly<Record<string, string>> = {
   veinLost: '灵脉失守',
   veinHeld: '灵脉守住',
   veinExhausted: '灵脉枯竭',
+  refineLaunchGift: '祭炼贺礼',
 };
 
 /** 事件的展示名；定义里查不到时先查系统事件，再用 event_id 兜底（event_log 没有 name 列）。 */

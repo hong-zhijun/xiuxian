@@ -27,6 +27,7 @@ import {
   raceBetRequestSchema,
   journeyPreviewQuerySchema,
   recruitRequestSchema,
+  refineEquipmentRequestSchema,
   renameDiscipleRequestSchema,
   renameSectRequestSchema,
   salvageEquipmentRequestSchema,
@@ -124,6 +125,7 @@ import {
   previewJourney,
   previewRecruit,
   recruitDisciple,
+  refineEquipment,
   refreshRecruit,
   renameDisciple,
   renameSect,
@@ -412,6 +414,14 @@ export function createGameRoutes(): Hono<AppEnv> {
     const userId = requireUserId(c);
     const body = await parseStrictJson(salvageEquipmentRequestSchema, c);
     const result = await salvageEquipment(getDb(c.env), userId, body.equipmentIds, Date.now());
+    return respondOk(c, { state: result.state, outcome: result.outcome });
+  });
+
+  // 0044 装备祭炼（结算 → 解锁 / 归属 / 在外校验 → 扣材料 + 判定成败，一次受保护 batch）。
+  routes.post('/game/refine-equipment', async (c) => {
+    const userId = requireUserId(c);
+    const body = await parseStrictJson(refineEquipmentRequestSchema, c);
+    const result = await refineEquipment(getDb(c.env), userId, body.equipmentId, Date.now());
     return respondOk(c, { state: result.state, outcome: result.outcome });
   });
 

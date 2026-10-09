@@ -164,6 +164,11 @@ export const salvageEquipmentRequestSchema = z.strictObject({
   equipmentIds: z.array(z.string().min(1).max(64)).min(1).max(BAG_CAPACITY),
 });
 
+/** 0044 祭炼：只带装备 id（一次冲 1 重，重数与成败都由服务端判定）。 */
+export const refineEquipmentRequestSchema = z.strictObject({
+  equipmentId: z.string().min(1).max(64),
+});
+
 /**
  * 0013 弟子私有备注：只做「类型 + 宽松长度上限」的第一道防线，
  * 真正的规则（trim / 单行纯文本 / 无控制字符 / ≤60 个 Unicode 字符）在

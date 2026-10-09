@@ -1,7 +1,7 @@
 import { ParamRepository, type ParameterizedQuery } from '../../infra/db/repository';
 
 import type { PillAttribute } from './alchemy';
-import { EQUIPMENT_QUALITIES } from './equipment';
+import { EQUIPMENT_QUALITIES, REFINE_MAX_LEVEL, refinePowerBonusBp } from './equipment';
 import type { BettableAttribute } from './gambling';
 
 /**
@@ -3068,6 +3068,8 @@ export interface EquipmentRow {
   main_value: number;
   sub_attr: string;
   sub_value: number;
+  /** 0044 祭炼重数 0~12。 */
+  refine_level: number;
   /** forge | boss（一期的两个来源）。 */
   source: string;
   created_at: number;
@@ -3078,7 +3080,7 @@ export class EquipmentRepository extends ParamRepository {
   async findBySectId(sectId: string): Promise<EquipmentRow[]> {
     return this.all<EquipmentRow>({
       sql: `SELECT id, sect_id, disciple_id, slot, quality, name, main_attr, main_value,
-                   sub_attr, sub_value, source, created_at
+                   sub_attr, sub_value, refine_level, source, created_at
             FROM equipment WHERE sect_id = ? ORDER BY created_at DESC, id DESC`,
       params: [sectId],
     });
@@ -3088,7 +3090,7 @@ export class EquipmentRepository extends ParamRepository {
   async findByDiscipleId(discipleId: string): Promise<EquipmentRow[]> {
     return this.all<EquipmentRow>({
       sql: `SELECT id, sect_id, disciple_id, slot, quality, name, main_attr, main_value,
-                   sub_attr, sub_value, source, created_at
+                   sub_attr, sub_value, refine_level, source, created_at
             FROM equipment WHERE disciple_id = ? ORDER BY slot ASC, id ASC`,
       params: [discipleId],
     });
@@ -3125,6 +3127,15 @@ export class EquipmentRepository extends ParamRepository {
     });
     return Number(row?.forge_pity ?? 0);
   }
+
+  /** 0044 某宗门冲第 level 重的连续失败次数；没有记录为 0。 */
+  async findRefineFails(sectId: string, level: number): Promise<number> {
+    const row = await this.one<{ fails: number }>({
+      sql: 'SELECT fails FROM equipment_refine_fails WHERE sect_id = ? AND level = ?',
+      params: [sectId, level],
+    });
+    return Number(row?.fails ?? 0);
+  }
 }
 
 /**
@@ -3148,6 +3159,8 @@ export interface NewEquipment {
   mainValue: number;
   subAttr: string;
   subValue: number;
+  /** 0044 祭炼重数：只有拍卖交付会带回上架前的重数；炼器 / Boss 掉落不传 = 0。 */
+  refineLevel?: number;
   source: string;
   now: number;
 }
@@ -3157,8 +3170,8 @@ export function insertEquipmentStatement(row: NewEquipment): ParameterizedQuery 
   return {
     sql: `INSERT INTO equipment
             (id, sect_id, disciple_id, slot, quality, name, main_attr, main_value,
-             sub_attr, sub_value, source, created_at)
-          VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             sub_attr, sub_value, refine_level, source, created_at)
+          VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     params: [
       row.id,
       row.sectId,
@@ -3169,6 +3182,7 @@ export function insertEquipmentStatement(row: NewEquipment): ParameterizedQuery 
       row.mainValue,
       row.subAttr,
       row.subValue,
+      row.refineLevel ?? 0,
       row.source,
       row.now,
     ],
@@ -3184,6 +3198,35 @@ export function updateEquipmentHolderStatement(
   return {
     sql: 'UPDATE equipment SET disciple_id = ? WHERE id = ? AND sect_id = ?',
     params: [discipleId, equipmentId, sectId],
+  };
+}
+
+/** 0044 祭炼成功：重数与主 / 副属性一起写（绝对值）。 */
+export function updateEquipmentRefineStatement(input: {
+  equipmentId: string;
+  sectId: string;
+  refineLevel: number;
+  mainValue: number;
+  subValue: number;
+}): ParameterizedQuery {
+  return {
+    sql: 'UPDATE equipment SET refine_level = ?, main_value = ?, sub_value = ? WHERE id = ? AND sect_id = ?',
+    params: [input.refineLevel, input.mainValue, input.subValue, input.equipmentId, input.sectId],
+  };
+}
+
+/** 0044 隐藏补偿：写某宗门某一重的连续失败次数（绝对值，upsert）。 */
+export function upsertRefineFailsStatement(
+  sectId: string,
+  level: number,
+  fails: number,
+  now: number,
+): ParameterizedQuery {
+  return {
+    sql: `INSERT INTO equipment_refine_fails (sect_id, level, fails, updated_at) VALUES (?, ?, ?, ?)
+          ON CONFLICT (sect_id, level)
+          DO UPDATE SET fails = excluded.fails, updated_at = excluded.updated_at`,
+    params: [sectId, level, fails, now],
   };
 }
 
@@ -3214,8 +3257,21 @@ export function deleteEquipmentStatement(equipmentId: string, sectId: string): P
  * 品质 → 战力加成（基点）的 SQL CASE 表达式：由 EQUIPMENT_QUALITIES 生成（常量，不含请求数据），
  * 0032 迁移里手写的是同一张表。
  */
-const GEAR_POWER_BP_CASE =
+const QUALITY_POWER_BP_CASE =
   `CASE quality ${EQUIPMENT_QUALITIES.map((quality) => `WHEN '${quality.id}' THEN ${String(quality.powerBonusBp)}`).join(' ')} ELSE 0 END`;
+
+/**
+ * 重数 → 祭炼战力加成（基点）的 SQL CASE 表达式（0044）：由 refinePowerBonusBp 生成，只列非 0 的档位。
+ * 与 equipment.ts 的 gearPowerBonusBpOf 同一口径。
+ */
+const REFINE_POWER_BP_CASE =
+  `CASE refine_level ${Array.from({ length: REFINE_MAX_LEVEL + 1 }, (_, level) => level)
+    .filter((level) => refinePowerBonusBp(level) > 0)
+    .map((level) => `WHEN ${String(level)} THEN ${String(refinePowerBonusBp(level))}`)
+    .join(' ')} ELSE 0 END`;
+
+/** 一件装备的战力加成（基点）SQL：品质加成 + 祭炼加成（0032 / 0044）。 */
+const GEAR_POWER_BP_CASE = `(${QUALITY_POWER_BP_CASE} + ${REFINE_POWER_BP_CASE})`;
 
 /**
  * 按**装备表重新求和**写回这名弟子的 6 个冗余列（计划 2.2；0032 起多一列 gear_power_bp）。

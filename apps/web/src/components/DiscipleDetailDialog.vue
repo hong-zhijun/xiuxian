@@ -46,6 +46,7 @@ import ModalShell from './ModalShell.vue';
 import TalentCatalogDialog from './TalentCatalogDialog.vue';
 import TalentRerollDialog from './TalentRerollDialog.vue';
 import RealmCatalogDialog from './RealmCatalogDialog.vue';
+import RefineTag from './RefineTag.vue';
 /**
  * 弟子详情（弹窗内容）：固定紧凑头部 + 五个 Tab（概览 / 修行 / 装备 / 历练 / 档案）。
  *
@@ -113,6 +114,8 @@ const emit = defineEmits<{
   equip: [equipmentId: string, discipleId: string];
   /** 0028 卸下：本弟子身上的这件装备回背包（背包满时服务端会拒绝）。 */
   unequip: [equipmentId: string];
+  /** 0044 祭炼：本弟子身上的这件装备打开祭炼弹窗（只 emit，请求在上层）。 */
+  refine: [equipmentId: string];
   notify: [tone: ToastTone, title: string, message: string];
 }>();
 
@@ -979,7 +982,7 @@ const POWER_HELP = [
   '战力 = 境界基数 ×（1 + 属性加权）×（1 + 装备战力加成）',
   '境界基数 =（境界序号 × 3 + 层数）× 10：炼气一层为 10，每升一层 +10。',
   '属性加权 =（攻击 × 0.4 + 防御 × 0.35 + 身法 × 0.25）÷ 100，攻防身法都含装备加成。',
-  '装备战力加成：每件穿着的装备按品质 凡 2% / 灵 4% / 宝 7% / 仙 10%，三件相加。',
+  '装备战力加成：每件穿着的装备按品质 凡 2% / 灵 4% / 宝 7% / 仙 10%，祭炼九重起每重 +1%、十二重再 +2%，三件相加。',
   '战意天赋：最后再 ×（1 + 战意加成），加成随境界提高（金丹 +15%、化神 +25%）。',
 ].join('\n');
 
@@ -1060,6 +1063,12 @@ function chooseGear(item: EquipmentItemView): void {
 function unequipGear(item: EquipmentItemView | null): void {
   if (item === null || props.busy || gearBlocked.value) return;
   emit('unequip', item.id);
+}
+
+/** 祭炼：在外 / 重伤时与穿卸同样置灰（服务端 requireNotAway 也会拒）。 */
+function refineGear(item: EquipmentItemView | null): void {
+  if (item === null || props.busy || gearBlocked.value) return;
+  emit('refine', item.id);
 }
 </script>
 
@@ -1424,7 +1433,7 @@ function unequipGear(item: EquipmentItemView | null): void {
 
           <template v-else>
             <p v-if="gearBlocked" class="blocked-hint">
-              {{ actionBlockHint ?? '在外历练或重伤卧床期间不能穿、卸装备。' }}
+              {{ actionBlockHint ?? '在外历练或重伤卧床期间不能穿、卸、祭炼装备。' }}
             </p>
 
             <ul class="gear-slots">
@@ -1444,7 +1453,10 @@ function unequipGear(item: EquipmentItemView | null): void {
                 >
                   <span class="gear-slot-label">{{ slot.name }}</span>
                   <template v-if="slot.worn !== null">
-                    <strong class="gear-slot-name" :style="{ color: slot.worn.color }">{{ slot.worn.name }}</strong>
+                    <span>
+                      <strong class="gear-slot-name" :style="{ color: slot.worn.color }">{{ slot.worn.name }}</strong>
+                      <RefineTag :level="slot.worn.refineLevel" />
+                    </span>
                     <span class="gear-slot-attrs">
                       主属性 {{ slot.worn.mainAttrName }} +{{ slot.worn.mainValue }} · 副属性
                       {{ slot.worn.subAttrName }} +{{ slot.worn.subValue }} · 战力
@@ -1454,22 +1466,33 @@ function unequipGear(item: EquipmentItemView | null): void {
                   <span v-else class="gear-slot-empty">未装备</span>
                 </button>
 
-                <button
-                  v-if="slot.worn !== null"
-                  class="quiet-button gear-unequip"
-                  type="button"
-                  :disabled="busy || gearBlocked"
-                  :aria-disabled="busy || gearBlocked"
-                  :aria-label="`卸下 ${slot.worn.name}`"
-                  @click="unequipGear(slot.worn)"
-                >
-                  卸下
-                </button>
+                <div v-if="slot.worn !== null" class="gear-slot-actions">
+                  <button
+                    class="quiet-button gear-unequip"
+                    type="button"
+                    :disabled="busy || gearBlocked"
+                    :aria-disabled="busy || gearBlocked"
+                    :aria-label="`卸下 ${slot.worn.name}`"
+                    @click="unequipGear(slot.worn)"
+                  >
+                    卸下
+                  </button>
+                  <button
+                    class="quiet-button gear-refine"
+                    type="button"
+                    :disabled="busy || gearBlocked"
+                    :aria-disabled="busy || gearBlocked"
+                    :aria-label="`祭炼 ${slot.worn.name}`"
+                    @click="refineGear(slot.worn)"
+                  >
+                    祭炼
+                  </button>
+                </div>
               </li>
             </ul>
 
             <p class="disciple-detail-hint">
-              装备战力加成合计 +{{ powerBonusPercent(disciple.gearPowerBonusBp) }}（凡 2% / 灵 4% / 宝 7% / 仙 10%，三件相加）。
+              装备战力加成合计 +{{ powerBonusPercent(disciple.gearPowerBonusBp) }}（凡 2% / 灵 4% / 宝 7% / 仙 10%，祭炼九重起每重 +1%、十二重再 +2%，三件相加）。
               点格子从背包里挑一件同部位的装备穿上；换下来的那件自动回背包（穿在身上的不占背包）。
             </p>
           </template>
@@ -1990,6 +2013,7 @@ function unequipGear(item: EquipmentItemView | null): void {
           >
             <div class="gear-picker-copy">
               <strong :style="{ color: item.color }">{{ item.name }}</strong>
+              <RefineTag :level="item.refineLevel" />
               <p>
                 主属性 {{ item.mainAttrName }} +{{ item.mainValue }} · 副属性 {{ item.subAttrName }} +{{ item.subValue }}
                 · 战力 +{{ powerBonusPercent(item.powerBonusBp) }}
@@ -2011,3 +2035,19 @@ function unequipGear(item: EquipmentItemView | null): void {
     </ModalShell>
   </section>
 </template>
+
+<style scoped>
+/* 装备格里「卸下」「祭炼」并排放；按钮自身的大小沿用 base.css 里 .gear-unequip 的写法。 */
+.gear-slot-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  align-self: flex-start;
+}
+
+.gear-slot-actions .gear-refine {
+  padding: 4px 10px;
+  font-size: 11px;
+}
+</style>

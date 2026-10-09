@@ -7,6 +7,7 @@ import DiscipleAvatar from './DiscipleAvatar.vue';
 import DiscipleRadarChart from './DiscipleRadarChart.vue';
 import LoadingState from './LoadingState.vue';
 import ModalShell from './ModalShell.vue';
+import RefineTag from './RefineTag.vue';
 
 /**
  * 天骄榜点开的弟子公开档案（只读）：境界、天赋、战力、综合评分、六轴雷达图、属性（含装备加成）、
@@ -136,7 +137,10 @@ const injuryText = computed(() => {
           :style="{ borderColor: item.color }"
         >
           <span class="gear-slot-label">{{ item.slotName }}</span>
-          <strong class="gear-slot-name" :style="{ color: item.color }">{{ item.name }}</strong>
+          <span>
+            <strong class="gear-slot-name" :style="{ color: item.color }">{{ item.name }}</strong>
+            <RefineTag :level="item.refineLevel" />
+          </span>
           <span class="gear-slot-attrs">
             {{ item.mainAttrName }} +{{ item.mainValue }} · {{ item.subAttrName }} +{{ item.subValue }}
           </span>

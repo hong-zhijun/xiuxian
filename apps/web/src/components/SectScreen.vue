@@ -38,6 +38,7 @@ import {
   fetchRecruitPreview,
   fetchSecretRealms,
   forgeEquipment,
+  refineEquipment,
   salvageEquipment,
   shopBuy,
   shopSell,
@@ -67,6 +68,8 @@ import ChatPanel from './ChatPanel.vue';
 import DiscipleLeaderboardPanel from './DiscipleLeaderboardPanel.vue';
 import LeaderboardPanel from './LeaderboardPanel.vue';
 import RecruitDialog from './RecruitDialog.vue';
+import RefineDialog from './RefineDialog.vue';
+import { REFINE_LEVEL_NAMES } from './RefineTag.vue';
 import ShopDialog from './ShopDialog.vue';
 import StewardDialog from './StewardDialog.vue';
 import DispatchDialog from './DispatchDialog.vue';
@@ -1061,6 +1064,12 @@ async function onShopSellPill(pillId: string, quantity: number): Promise<void> {
 const equipment = ref<EquipmentView | null>(null);
 /** 装备写请求在途：与 props.busy 分开，只锁装备相关的按钮（避免连点重复炼器 / 分解）。 */
 const equipmentSubmitting = ref(false);
+/** 祭炼弹窗对准的装备 id（从背包或弟子详情的装备格打开；null = 没打开）。 */
+const refineTargetId = ref<string | null>(null);
+/** 祭炼弹窗里的装备：每次装备视图刷新后都取最新一份，所以连续祭炼时数据会跟着变。 */
+const refineItem = computed(
+  () => equipment.value?.items.find((item) => item.id === refineTargetId.value) ?? null,
+);
 
 /**
  * 装备回执里的 state：与坊市同一处理 —— App.vue 上「SectScreen 自己拿到新 state」的入口只有
@@ -1152,6 +1161,29 @@ async function onSalvageEquipment(equipmentIds: string[]): Promise<void> {
     );
   } catch (caught) {
     emit('notify', 'error', '分解未成', caught instanceof Error ? caught.message : '无法分解，请稍后重试。');
+  } finally {
+    equipmentSubmitting.value = false;
+  }
+}
+
+/**
+ * 祭炼（POST /game/refine-equipment）：一次冲 1 重；成败与扣料都以服务端回执为准。
+ * 弹窗保持打开（连续祭炼），装备视图刷新后自动显示下一重。
+ */
+async function onRefineEquipment(equipmentId: string): Promise<void> {
+  if (props.busy || equipmentSubmitting.value) return;
+  equipmentSubmitting.value = true;
+  try {
+    const { state: next, outcome } = await refineEquipment(equipmentId);
+    handOffEquipmentState(next);
+    await loadEquipment();
+    if (outcome.success) {
+      emit('notify', 'success', '祭炼成功', `${outcome.name} 已至${REFINE_LEVEL_NAMES[outcome.toLevel] ?? ''}`);
+    } else {
+      emit('notify', 'warning', '祭炼未成', '材料已耗去，装备完好无损。');
+    }
+  } catch (caught) {
+    emit('notify', 'error', '祭炼未成', caught instanceof Error ? caught.message : '祭炼失败，请稍后重试。');
   } finally {
     equipmentSubmitting.value = false;
   }
@@ -2403,6 +2435,7 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
         :equipment="equipment"
         :busy="busy || equipmentSubmitting"
         @salvage="onSalvageEquipment"
+        @refine="refineTargetId = $event"
       />
       <LoadingState v-else label="正在清点宗门装备" />
     </ModalShell>
@@ -2692,6 +2725,7 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
         @rename-disciple="onDetailRenameDisciple"
         @equip="onDetailEquip"
         @unequip="onDetailUnequip"
+        @refine="refineTargetId = $event"
       />
     </ModalShell>
 
@@ -2958,5 +2992,18 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
         </div>
       </section>
     </ModalShell>
+
+    <!--
+      0044 装备祭炼：二级弹窗，叠在背包 / 弟子详情之上（Esc / 点遮罩只关它）。
+      点「祭炼」不关弹窗，装备视图刷新后自动显示下一重。
+    -->
+    <RefineDialog
+      v-if="refineItem"
+      :item="refineItem"
+      :resources="state.resources"
+      :busy="busy || equipmentSubmitting"
+      @refine="onRefineEquipment"
+      @close="refineTargetId = null"
+    />
   </main>
 </template>
