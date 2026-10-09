@@ -10,6 +10,7 @@ import type {
 
 /**
  * 装备背包（弹窗内容，外壳由 SectScreen 用 ModalShell 提供）：筛选、多选分解。
+ * 默认只列背包里的装备；勾选「显示已穿戴」才把穿在弟子身上的也列出来（只能看，不能分解）。
  * 名称、颜色、分解返还都取自服务端的 `equipment` 视图。
  */
 const props = defineProps<{
@@ -39,6 +40,15 @@ const SLOT_ALL = 'all';
 
 const slotFilter = ref<typeof SLOT_ALL | EquipmentSlotId>(SLOT_ALL);
 const qualityFilter = ref<string>(SLOT_ALL);
+/** 是否列出穿在弟子身上的装备：默认不列，背包只看可处理的。 */
+const showWorn = ref(false);
+
+const wornCount = computed(() => props.equipment.items.filter((item) => item.discipleId !== null).length);
+
+/** 筛选的基础集合：未勾选「显示已穿戴」时去掉穿在身上的。 */
+const baseItems = computed<EquipmentItemView[]>(() =>
+  showWorn.value ? props.equipment.items : props.equipment.items.filter((item) => item.discipleId === null),
+);
 
 const slotOptions = computed<{ id: typeof SLOT_ALL | EquipmentSlotId; name: string }[]>(() => [
   { id: SLOT_ALL, name: '全部' },
@@ -51,7 +61,7 @@ const slotOptions = computed<{ id: typeof SLOT_ALL | EquipmentSlotId; name: stri
  */
 const qualityOptions = computed<{ id: string; name: string }[]>(() => {
   const names = new Map<string, string>();
-  for (const item of props.equipment.items) {
+  for (const item of baseItems.value) {
     if (!names.has(item.quality)) names.set(item.quality, item.qualityName);
   }
   return [...names].map(([id, name]) => ({ id, name }));
@@ -65,7 +75,7 @@ watch(qualityOptions, (options) => {
 });
 
 const visibleItems = computed<EquipmentItemView[]>(() =>
-  props.equipment.items.filter(
+  baseItems.value.filter(
     (item) =>
       (slotFilter.value === SLOT_ALL || item.slot === slotFilter.value) &&
       (qualityFilter.value === SLOT_ALL || item.quality === qualityFilter.value),
@@ -172,6 +182,11 @@ function confirmSalvage(): void {
           </button>
         </div>
 
+        <label v-if="wornCount > 0" class="equipment-worn-toggle">
+          <input v-model="showWorn" type="checkbox" />
+          显示已穿戴（{{ wornCount }} 件）
+        </label>
+
         <ul v-if="visibleItems.length > 0" class="equipment-list">
           <li
             v-for="item in visibleItems"
@@ -211,6 +226,9 @@ function confirmSalvage(): void {
 
         <p v-else-if="equipment.items.length === 0" class="blocked-hint">
           还没有装备：去「炼器」打造，或讨伐妖王碰运气。
+        </p>
+        <p v-else-if="baseItems.length === 0" class="blocked-hint">
+          背包里没有闲置装备，{{ wornCount }} 件都穿在弟子身上（勾选「显示已穿戴」查看）。
         </p>
         <p v-else class="blocked-hint">没有符合条件的装备。</p>
 
@@ -270,6 +288,25 @@ function confirmSalvage(): void {
   align-items: center;
   gap: 6px;
   margin-top: 10px;
+}
+
+.equipment-worn-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  color: #9fb2a8;
+  font-size: 12px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.equipment-worn-toggle input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: #caa96a;
+  cursor: pointer;
 }
 
 .equipment-filter-row .eyebrow {
