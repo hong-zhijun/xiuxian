@@ -9731,14 +9731,15 @@ export async function stoneGamble(
     throw new AppError('INVALID_STATUS', blockedReason);
   }
 
-  // 玄铁容量：按该档天价算还能切几块（room = floor((容量 − 余额) / (天价 × 1000))），不够整批拒绝。
+  // 玄铁容量：剩余容量装得下一块该档的天价就放行，连切 10 块也只看这一块；
+  // 放行后整批照常入账（grantResource 不夹容量），玄铁没有自然产出，顶过容量没有副作用。
   const capacity = draft.resourceCapacityOf(XUANTIE_RESOURCE_ID);
   const balance = draft.balanceOf(XUANTIE_RESOURCE_ID);
   const room = Math.max(0, Math.floor((capacity - balance) / toMinUnits(stoneTopPrize(tier))));
-  if (room < count) {
+  if (room < 1) {
     throw new AppError(
       'CAPACITY_FULL',
-      `玄铁库存快满了（最多还能切 ${String(room)} 块${tier.name}）`,
+      `玄铁库存快满了（装不下一块${tier.name}的天价 ${String(stoneTopPrize(tier))} 个）`,
       {
         resourceId: XUANTIE_RESOURCE_ID,
         capacity: String(capacity),

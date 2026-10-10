@@ -100,7 +100,7 @@ function perStoneDisplay(tier: StoneTierView, pay: StonePayResource): number {
   return pay === 'spiritStone' ? tier.price : tier.price * materialPerStone.value;
 }
 
-/** 玄铁还能再切几块该档（与服务端 room 同口径：floor((容量 − 余额) / (天价 × 1000))）。 */
+/** 玄铁剩余容量够装几块该档的天价（与服务端 room 同口径）；≥ 1 就能切，连切 10 块也只看这一块。 */
 function xuantieRoomOf(tier: StoneTierView): number {
   const xuantie = resourceOf(XUANTIE_ID);
   if (xuantie === null) return 0;
@@ -115,8 +115,7 @@ function blockReasonOf(tier: StoneTierView | null, count: 1 | 10): string | null
   if (!tier.unlocked) return tier.blockedReason ?? `${tier.name}尚未解锁`;
   const need = perStoneDisplay(tier, payResource.value) * UNITS_PER_DISPLAY * count;
   if (balanceMinOf(payResource.value) < need) return `${resourceName(payResource.value)}不足`;
-  const room = xuantieRoomOf(tier);
-  if (room < count) return `玄铁库存快满了（最多还能切 ${String(room)} 块${tier.name}）`;
+  if (xuantieRoomOf(tier) < 1) return `玄铁库存快满了（装不下一块${tier.name}的天价 ${String(tier.topPrize)} 个）`;
   return null;
 }
 
@@ -428,7 +427,7 @@ onUnmounted(() => {
         <h2 id="stone-rules-title" class="disciple-detail-title">赌石说明</h2>
         <p class="stone-rules-text">
           每块原石独立开一次，四种结果按下表概率决定，开出的玄铁个数固定。
-          药材与矿石按坊市卖出价折算（2 材料 = 1 灵石）。玄铁库存装不下整批时，整批拒绝。
+          药材与矿石按坊市卖出价折算（2 材料 = 1 灵石）。玄铁剩余容量装不下一块该档的天价时不能切；能切时连切 10 块照常全部入账。
         </p>
         <ul class="stone-odds-list">
           <li v-for="tier in tiers" :key="tier.id" class="stone-odds-item">
