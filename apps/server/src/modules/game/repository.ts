@@ -4042,7 +4042,6 @@ export interface DailyTaskCounts {
   bossHit: number;
   explore: number;
   challenge: number;
-  spar: number;
   journey: number;
   stockTrade: number;
   veinAttack: number;
@@ -4070,7 +4069,6 @@ export class DailyTaskRepository extends ParamRepository {
       boss_hit: number;
       explore: number;
       challenge: number;
-      spar: number;
       journey: number;
       stock_trade: number;
       vein_attack: number;
@@ -4080,18 +4078,16 @@ export class DailyTaskRepository extends ParamRepository {
               (SELECT COUNT(*) FROM explorations WHERE sect_id = ? AND created_at >= ?)
                 + (SELECT COUNT(*) FROM realm_explorations WHERE sect_id = ? AND created_at >= ?) AS explore,
               (SELECT COUNT(*) FROM challenge_log WHERE attacker_sect_id = ? AND created_at >= ?) AS challenge,
-              (SELECT COUNT(*) FROM sparring_log WHERE attacker_sect_id = ? AND created_at >= ?) AS spar,
               (SELECT COUNT(*) FROM disciple_journeys WHERE sect_id = ? AND started_at >= ?) AS journey,
               (SELECT COUNT(*) FROM stock_trades WHERE sect_id = ? AND created_at >= ?) AS stock_trade,
               (SELECT COUNT(*) FROM vein_battles WHERE attacker_sect_id = ? AND created_at >= ?) AS vein_attack`,
-      // 占位符一共 8 组 (sect_id, dayStart)：explore 占两组，其余 6 个子查询各一组，顺序与 SQL 一致。
-      params: Array.from({ length: 8 }, () => [sectId, dayStart]).flat(),
+      // 占位符一共 7 组 (sect_id, dayStart)：explore 占两组，其余 5 个子查询各一组，顺序与 SQL 一致。
+      params: Array.from({ length: 7 }, () => [sectId, dayStart]).flat(),
     });
     return {
       bossHit: Number(row?.boss_hit ?? 0),
       explore: Number(row?.explore ?? 0),
       challenge: Number(row?.challenge ?? 0),
-      spar: Number(row?.spar ?? 0),
       journey: Number(row?.journey ?? 0),
       stockTrade: Number(row?.stock_trade ?? 0),
       veinAttack: Number(row?.vein_attack ?? 0),

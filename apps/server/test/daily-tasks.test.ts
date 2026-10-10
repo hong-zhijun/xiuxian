@@ -168,14 +168,24 @@ async function dailyRowCount(sectId: string): Promise<number> {
 
 /* ---------- 进度来源：直接写入真实业务表 ---------- */
 
-async function insertSparring(sectId: string, createdAt: number): Promise<void> {
+/** 镇妖塔闯塔：写一行 sect_towers（失败日期 / 次数、最近过层时间由参数决定）；赢输都算闯过。 */
+async function setTower(
+  sectId: string,
+  tower: { failDateKey?: string | null; failCount?: number; maxFloorAt?: number | null },
+): Promise<void> {
   await env.DB.prepare(
-    `INSERT INTO sparring_log (id, attacker_sect_id, defender_sect_id, attacker_disciple_id, defender_disciple_id,
-       attacker_power, defender_power, result, reputation_gained, created_at)
-     VALUES (?, ?, ?, '', '', 100, 100, 'win', 0, ?)`,
+    `INSERT INTO sect_towers (sect_id, max_floor, max_floor_at, fail_date_key, fail_count, sweep_date_key, version, updated_at)
+     VALUES (?, 1, ?, ?, ?, NULL, 0, ?)
+     ON CONFLICT (sect_id) DO UPDATE SET max_floor_at = excluded.max_floor_at,
+       fail_date_key = excluded.fail_date_key, fail_count = excluded.fail_count`,
   )
-    .bind(crypto.randomUUID(), sectId, sectId, createdAt)
+    .bind(sectId, tower.maxFloorAt ?? null, tower.failDateKey ?? null, tower.failCount ?? 0, Date.now())
     .run();
+}
+
+/** 今天闯塔失败过一次（失败也算闯塔）。 */
+async function failTowerToday(sectId: string): Promise<void> {
+  await setTower(sectId, { failDateKey: todayKey(), failCount: 1 });
 }
 
 async function insertChallenge(sectId: string, createdAt: number): Promise<void> {
@@ -289,8 +299,8 @@ describe('宗门日课：首次生成与稳定性', () => {
     expect(first.status).toBe(200);
     const view = dailyOf(first);
     expect(view.dateKey).toBe(todayKey());
-    // 1 级、3 名弟子（容量 6）、没建演武场：可选的正好是这 5 个，全部抽中，顺序即任务池顺序。
-    expect(view.tasks.map((task) => task.id)).toEqual(['bossHit', 'challenge', 'spar', 'journey', 'recruit']);
+    // 1 级、3 名弟子（容量 6）、没建演武场：可选的只有这 4 个，全部抽中，顺序即任务池顺序。
+    expect(view.tasks.map((task) => task.id)).toEqual(['bossHit', 'challenge', 'journey', 'recruit']);
     expect(view.tasks.every((task) => task.reward === dailyTaskReward(1))).toBe(true);
     expect(view.chest).toEqual({ available: false, claimed: false, description: '玄铁 3~5、神木 1~2、随机丹药 1 颗' });
 
@@ -343,10 +353,6 @@ describe('宗门日课：进度统计（只数本宗、今天的记录）', () =
     // 登门挑战：今天 1（目标 1），昨天不计。
     await insertChallenge(sect.sectId, today);
     await insertChallenge(sect.sectId, yesterday);
-    // 切磋：今天 3 次（目标 2，截到 2）。
-    await insertSparring(sect.sectId, today);
-    await insertSparring(sect.sectId, today);
-    await insertSparring(sect.sectId, today);
     // 赌坊玩法：论道计数 debate_date_key = 今天 时才算（目标 3，这里 2）。
     await env.DB.prepare('UPDATE sects SET debate_date_key = ?, debate_count = 2 WHERE id = ?')
       .bind(todayKey(), sect.sectId)
@@ -354,7 +360,7 @@ describe('宗门日课：进度统计（只数本宗、今天的记录）', () =
     // 派弟子历练：今天 1（目标 1），昨天的不计。
     await insertJourney(sect.sectId, today);
     await insertJourney(sect.sectId, yesterday);
-    // 镇妖塔扫荡：sweep_date_key = 今天 → 1。
+    // 镇妖塔扫荡：sweep_date_key = 今天 → 1；闯塔：max_floor_at 是今天（今天过了新层）→ 1。
     await env.DB.prepare(
       `INSERT INTO sect_towers (sect_id, max_floor, max_floor_at, fail_count, sweep_date_key, version, updated_at)
        VALUES (?, 1, ?, 0, ?, 0, ?)`,
@@ -377,7 +383,7 @@ describe('宗门日课：进度统计（只数本宗、今天的记录）', () =
     expect(taskOf(view, 'bossHit')).toMatchObject({ progress: 2, target: 3, completed: false });
     expect(taskOf(view, 'explore')).toMatchObject({ progress: 2, target: 2, completed: true });
     expect(taskOf(view, 'challenge')).toMatchObject({ progress: 1, target: 1, completed: true });
-    expect(taskOf(view, 'spar')).toMatchObject({ progress: 2, target: 2, completed: true });
+    expect(taskOf(view, 'towerClimb')).toMatchObject({ progress: 1, target: 1, completed: true });
     expect(taskOf(view, 'gamble')).toMatchObject({ progress: 2, target: 3, completed: false });
     expect(taskOf(view, 'journey')).toMatchObject({ progress: 1, target: 1, completed: true });
     expect(taskOf(view, 'towerSweep')).toMatchObject({ progress: 1, target: 1, completed: true });
@@ -391,11 +397,11 @@ describe('宗门日课：进度统计（只数本宗、今天的记录）', () =
     const yesterday = yesterdayTs();
     const bossId = await insertWorldBoss();
     await insertBossHit(bossId, sect.sectId, yesterday);
-    await insertSparring(sect.sectId, yesterday);
-    await insertSparring(sect.sectId, yesterday);
+    // 镇妖塔：昨天失败过、昨天过过层，今天都不算闯塔。
+    await setTower(sect.sectId, { failDateKey: dateKeyUtc8(yesterday), failCount: 2, maxFloorAt: yesterday });
     await insertChallenge(sect.sectId, yesterday);
     await insertJourney(sect.sectId, yesterday);
-    await seedDailyRow(sect.sectId, ['bossHit', 'challenge', 'spar', 'journey']);
+    await seedDailyRow(sect.sectId, ['bossHit', 'challenge', 'towerClimb', 'journey']);
 
     const view = dailyOf(await getDaily(sect));
     for (const task of view.tasks) {
@@ -411,23 +417,23 @@ describe('宗门日课：领取单个任务', () => {
     const sect = await makeSect('dt-claim');
     await freezeSettlement(sect.sectId);
     await setBalance(sect.sectId, 'spiritStone', 0);
-    await seedDailyRow(sect.sectId, ['spar', 'journey']);
+    await seedDailyRow(sect.sectId, ['towerClimb', 'journey']);
 
-    const early = await claimTask(sect, 'spar');
+    const early = await claimTask(sect, 'towerClimb');
     expect(early.status).toBe(409);
     expect(errorOf(early).code).toBe('INVALID_STATUS');
 
-    await insertSparring(sect.sectId, Date.now());
-    await insertSparring(sect.sectId, Date.now());
-    const claimed = await claimTask(sect, 'spar');
+    // 闯塔失败也算完成。
+    await failTowerToday(sect.sectId);
+    const claimed = await claimTask(sect, 'towerClimb');
     expect(claimed.status).toBe(200);
     const payload = dataOf(claimed) as { result: Record<string, unknown>; dailyTasks: DailyView };
     // 1 级宗门：1 × 50 灵石 = 50000 最小单位。
-    expect(payload.result).toMatchObject({ taskId: 'spar', spiritStone: 50_000 });
+    expect(payload.result).toMatchObject({ taskId: 'towerClimb', spiritStone: 50_000 });
     expect(await balanceOf(sect.sectId, 'spiritStone')).toBe(50_000);
-    expect(taskOf(payload.dailyTasks, 'spar')).toMatchObject({ claimed: true, completed: true });
+    expect(taskOf(payload.dailyTasks, 'towerClimb')).toMatchObject({ claimed: true, completed: true });
 
-    const again = await claimTask(sect, 'spar');
+    const again = await claimTask(sect, 'towerClimb');
     expect(again.status).toBe(409);
     expect(errorOf(again).code).toBe('INVALID_STATUS');
 
@@ -462,11 +468,10 @@ describe('宗门日课：领取单个任务', () => {
     const sect = await makeSect('dt-double');
     await freezeSettlement(sect.sectId);
     await setBalance(sect.sectId, 'spiritStone', 0);
-    await seedDailyRow(sect.sectId, ['spar']);
-    await insertSparring(sect.sectId, Date.now());
-    await insertSparring(sect.sectId, Date.now());
+    await seedDailyRow(sect.sectId, ['towerClimb']);
+    await failTowerToday(sect.sectId);
 
-    const results = await Promise.all([claimTask(sect, 'spar'), claimTask(sect, 'spar')]);
+    const results = await Promise.all([claimTask(sect, 'towerClimb'), claimTask(sect, 'towerClimb')]);
     expect(results.map((result) => result.status).sort()).toEqual([200, 409]);
     expect(await balanceOf(sect.sectId, 'spiritStone')).toBe(50_000);
   });
@@ -481,16 +486,15 @@ describe('宗门日课：日课宝箱', () => {
     await setBalance(sect.sectId, 'spiritStone', 0);
     await setBalance(sect.sectId, 'xuantie', 0);
     await setBalance(sect.sectId, 'shenmu', 0);
-    await seedDailyRow(sect.sectId, ['spar', 'journey']);
+    await seedDailyRow(sect.sectId, ['towerClimb', 'journey']);
 
     const tooEarly = await openChest(sect);
     expect(tooEarly.status).toBe(409);
     expect(errorOf(tooEarly).code).toBe('INVALID_STATUS');
 
-    await insertSparring(sect.sectId, Date.now());
-    await insertSparring(sect.sectId, Date.now());
+    await failTowerToday(sect.sectId);
     await insertJourney(sect.sectId, Date.now());
-    expect((await claimTask(sect, 'spar')).status).toBe(200);
+    expect((await claimTask(sect, 'towerClimb')).status).toBe(200);
 
     // 还差 journey 没领。
     const halfway = await openChest(sect);
@@ -572,5 +576,37 @@ describe('宗门日课：跨天', () => {
     expect(JSON.parse(old?.claimed ?? '[]')).toEqual(['journey']);
     expect(Number(old?.chest_claimed)).toBe(1);
     expect(await dailyRowCount(sect.sectId)).toBe(2);
+  });
+});
+
+/* ---------- 切磋换成闯塔：旧日课行兼容 ---------- */
+
+describe('宗门日课：旧日课行里的切磋', () => {
+  it('当天已抽到「切磋」的行：读取时去掉切磋，剩下的任务领完就能开宝箱', async () => {
+    const sect = await makeSect('dt-legacy-spar');
+    await freezeSettlement(sect.sectId);
+    await seedDailyRow(sect.sectId, ['bossHit', 'spar', 'journey']);
+
+    const view = dailyOf(await getDaily(sect));
+    expect(view.tasks.map((task) => task.id)).toEqual(['bossHit', 'journey']);
+
+    const bossId = await insertWorldBoss();
+    for (let index = 0; index < 3; index += 1) {
+      await insertBossHit(bossId, sect.sectId, Date.now());
+    }
+    await insertJourney(sect.sectId, Date.now());
+    expect((await claimTask(sect, 'bossHit')).status).toBe(200);
+    expect((await claimTask(sect, 'journey')).status).toBe(200);
+
+    const chest = await openChest(sect);
+    expect(chest.status).toBe(200);
+    expect(dailyOf(chest).chest).toMatchObject({ claimed: true, available: false });
+  });
+
+  it('闯塔赢输都算：今天过了新层（没有失败）也算完成', async () => {
+    const sect = await makeSect('dt-climb-win');
+    await seedDailyRow(sect.sectId, ['towerClimb']);
+    await setTower(sect.sectId, { maxFloorAt: Date.now() });
+    expect(taskOf(dailyOf(await getDaily(sect)), 'towerClimb')).toMatchObject({ progress: 1, completed: true });
   });
 });

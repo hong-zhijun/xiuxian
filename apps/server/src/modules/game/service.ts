@@ -12214,16 +12214,26 @@ async function dailyActualCountsOf(
   tasks: readonly DailyTaskId[],
   now: number,
 ): Promise<Record<DailyTaskId, number>> {
-  const counts = await new DailyTaskRepository(db).todayCounts(draft.sect.id, dayStartMs(now));
-  const tower = tasks.includes('towerSweep') ? await new TowerRepository(db).findBySectId(draft.sect.id) : null;
+  const dayStart = dayStartMs(now);
+  const todayKey = dateKeyUtc8(now);
+  const counts = await new DailyTaskRepository(db).todayCounts(draft.sect.id, dayStart);
+  const tower =
+    tasks.includes('towerSweep') || tasks.includes('towerClimb')
+      ? await new TowerRepository(db).findBySectId(draft.sect.id)
+      : null;
+  // 闯塔赢输都算：今天失败过（fail_date_key 是今天且次数 > 0），或今天过了新层（max_floor_at 是今天）。
+  const climbedToday =
+    tower !== null &&
+    ((tower.fail_date_key === todayKey && Number(tower.fail_count) > 0) ||
+      (tower.max_floor_at !== null && Number(tower.max_floor_at) >= dayStart));
   return {
     bossHit: counts.bossHit,
     explore: counts.explore,
     challenge: counts.challenge,
-    spar: counts.spar,
+    towerClimb: climbedToday ? 1 : 0,
     gamble: draft.debateDay.usedToday,
     journey: counts.journey,
-    towerSweep: tower?.sweep_date_key === dateKeyUtc8(now) ? 1 : 0,
+    towerSweep: tower?.sweep_date_key === todayKey ? 1 : 0,
     recruit: draft.recruitUsedToday,
     stockTrade: counts.stockTrade,
     veinAttack: counts.veinAttack,
