@@ -61,6 +61,8 @@ import {
   veinWithdrawRequestSchema,
   marketTradeRequestSchema,
   marketChartQuerySchema,
+  dailyTaskClaimRequestSchema,
+  dailyChestRequestSchema,
 } from './schema';
 import {
   abandonRealmExplore,
@@ -98,6 +100,9 @@ import {
   getTower,
   challengeTower,
   sweepTower,
+  getDailyTasks,
+  claimDailyTask,
+  openDailyChest,
   getAuction,
   listAuctionItem,
   bidAuction,
@@ -761,6 +766,29 @@ export function createGameRoutes(): Hono<AppEnv> {
     const userId = requireUserId(c);
     const result = await sweepTower(getDb(c.env), userId, Date.now());
     return respondOk(c, { state: result.state, tower: result.tower, result: result.result });
+  });
+
+  // 0048 宗门日课：今天的面板（第一次读取时抽好 5 个任务落库；进度现算，不进 /game/sync）。
+  routes.get('/game/daily-tasks', async (c) => {
+    const userId = requireUserId(c);
+    const result = await getDailyTasks(getDb(c.env), userId, Date.now());
+    return respondOk(c, { state: result.state, dailyTasks: result.dailyTasks });
+  });
+
+  // 0048 宗门日课：领取一个已完成的任务（灵石 = 宗门等级 × 50；一次受保护 batch，双击只成功一次）。
+  routes.post('/game/daily-tasks/claim', async (c) => {
+    const userId = requireUserId(c);
+    const body = await parseStrictJson(dailyTaskClaimRequestSchema, c);
+    const result = await claimDailyTask(getDb(c.env), userId, body.taskId, Date.now());
+    return respondOk(c, { state: result.state, dailyTasks: result.dailyTasks, result: result.result });
+  });
+
+  // 0048 宗门日课：开日课宝箱（当天任务全部领取后可开，一天一次）。
+  routes.post('/game/daily-tasks/chest', async (c) => {
+    const userId = requireUserId(c);
+    await parseStrictJson(dailyChestRequestSchema, c);
+    const result = await openDailyChest(getDb(c.env), userId, Date.now());
+    return respondOk(c, { state: result.state, dailyTasks: result.dailyTasks, result: result.result });
   });
 
   // 首页功能区：各玩法状态摘要（只读，不结算、不写库）。

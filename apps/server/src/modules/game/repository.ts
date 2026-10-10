@@ -4019,3 +4019,130 @@ export function stockHoldingGuardStatement(
     params: [guardId, sectId, stockId, version],
   };
 }
+
+/* ---------- 0048 宗门日课（docs/每日任务开发计划.md） ---------- */
+
+export interface DailyTaskRow {
+  sect_id: string;
+  /** UTC+8 日期键：每宗门每天一行。 */
+  date_key: string;
+  /** JSON 数组：当天抽到的任务 id（顺序即展示顺序）。 */
+  tasks: string;
+  /** JSON 数组：已领取的任务 id。 */
+  claimed: string;
+  chest_claimed: number;
+  /** 每次写入 +1（并发守卫用）。 */
+  version: number;
+  created_at: number;
+  updated_at: number;
+}
+
+/** 今天（dayStart 起）本宗各来源的次数；不截断（截断在 service 里做）。 */
+export interface DailyTaskCounts {
+  bossHit: number;
+  explore: number;
+  challenge: number;
+  spar: number;
+  journey: number;
+  stockTrade: number;
+  veinAttack: number;
+}
+
+export class DailyTaskRepository extends ParamRepository {
+  async find(sectId: string, dateKey: string): Promise<DailyTaskRow | null> {
+    return this.one<DailyTaskRow>({
+      sql: 'SELECT * FROM daily_tasks WHERE sect_id = ? AND date_key = ?',
+      params: [sectId, dateKey],
+    });
+  }
+
+  /** 第一次读取时写入当天的任务；同一 (sect_id, date_key) 已有行则忽略（并发首读只会留下一份）。 */
+  async insertIfAbsent(input: { sectId: string; dateKey: string; tasks: readonly string[]; now: number }): Promise<void> {
+    await this.execute(insertDailyTasksStatement(input));
+  }
+
+  /**
+   * 今天（dayStart 起）本宗各来源的次数：一条 SQL 用多个子查询返回，减少 D1 往返。
+   * 每个子查询都只数「本宗、今天」的行，昨天的记录不计入。
+   */
+  async todayCounts(sectId: string, dayStart: number): Promise<DailyTaskCounts> {
+    const row = await this.one<{
+      boss_hit: number;
+      explore: number;
+      challenge: number;
+      spar: number;
+      journey: number;
+      stock_trade: number;
+      vein_attack: number;
+    }>({
+      sql: `SELECT
+              (SELECT COUNT(*) FROM world_boss_hits WHERE sect_id = ? AND created_at >= ?) AS boss_hit,
+              (SELECT COUNT(*) FROM explorations WHERE sect_id = ? AND created_at >= ?)
+                + (SELECT COUNT(*) FROM realm_explorations WHERE sect_id = ? AND created_at >= ?) AS explore,
+              (SELECT COUNT(*) FROM challenge_log WHERE attacker_sect_id = ? AND created_at >= ?) AS challenge,
+              (SELECT COUNT(*) FROM sparring_log WHERE attacker_sect_id = ? AND created_at >= ?) AS spar,
+              (SELECT COUNT(*) FROM disciple_journeys WHERE sect_id = ? AND started_at >= ?) AS journey,
+              (SELECT COUNT(*) FROM stock_trades WHERE sect_id = ? AND created_at >= ?) AS stock_trade,
+              (SELECT COUNT(*) FROM vein_battles WHERE attacker_sect_id = ? AND created_at >= ?) AS vein_attack`,
+      // 占位符一共 8 组 (sect_id, dayStart)：explore 占两组，其余 6 个子查询各一组，顺序与 SQL 一致。
+      params: Array.from({ length: 8 }, () => [sectId, dayStart]).flat(),
+    });
+    return {
+      bossHit: Number(row?.boss_hit ?? 0),
+      explore: Number(row?.explore ?? 0),
+      challenge: Number(row?.challenge ?? 0),
+      spar: Number(row?.spar ?? 0),
+      journey: Number(row?.journey ?? 0),
+      stockTrade: Number(row?.stock_trade ?? 0),
+      veinAttack: Number(row?.vein_attack ?? 0),
+    };
+  }
+}
+
+/** 当天日课的首次写入：(sect_id, date_key) 冲突即忽略，已有的那一份保持不变。 */
+export function insertDailyTasksStatement(input: {
+  sectId: string;
+  dateKey: string;
+  tasks: readonly string[];
+  now: number;
+}): ParameterizedQuery {
+  return {
+    sql: `INSERT INTO daily_tasks (sect_id, date_key, tasks, claimed, chest_claimed, version, created_at, updated_at)
+          VALUES (?, ?, ?, '[]', 0, 0, ?, ?)
+          ON CONFLICT (sect_id, date_key) DO NOTHING`,
+    params: [input.sectId, input.dateKey, JSON.stringify(input.tasks), input.now, input.now],
+  };
+}
+
+/** 领取 / 开箱的写回（绝对值）：nextVersion 必须是守卫读到的 version + 1。 */
+export function updateDailyTasksClaimStatement(
+  sectId: string,
+  dateKey: string,
+  claimed: readonly string[],
+  chestClaimed: boolean,
+  nextVersion: number,
+  now: number,
+): ParameterizedQuery {
+  return {
+    sql: 'UPDATE daily_tasks SET claimed = ?, chest_claimed = ?, version = ?, updated_at = ? WHERE sect_id = ? AND date_key = ?',
+    params: [JSON.stringify(claimed), chestClaimed ? 1 : 0, nextVersion, now, sectId, dateKey],
+  };
+}
+
+/**
+ * 日课并发守卫：当天那一行的 version 必须仍是读到的值（没有行按 0），
+ * 否则整批回滚（同时点两次领取 / 开箱只成功一次）。
+ */
+export function dailyTasksGuardStatement(
+  guardId: string,
+  sectId: string,
+  dateKey: string,
+  version: number,
+): ParameterizedQuery {
+  return {
+    sql: `INSERT INTO mutation_guards (command_id, valid)
+          SELECT ?, CASE WHEN COALESCE((SELECT version FROM daily_tasks WHERE sect_id = ? AND date_key = ?), 0) = ?
+            THEN 1 ELSE 0 END`,
+    params: [guardId, sectId, dateKey, version],
+  };
+}

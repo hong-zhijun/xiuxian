@@ -2505,6 +2505,94 @@ export async function sweepTower(): Promise<{ state: SectStateView; tower: Tower
   );
 }
 
+/* ---------- 0048 宗门日课（每天 5 个小任务 + 日课宝箱） ---------- */
+
+/** 日课任务 id（与后端 dailyTasks.ts 的 DAILY_TASK_IDS 同口径）。 */
+export type DailyTaskId =
+  | 'bossHit'
+  | 'explore'
+  | 'challenge'
+  | 'spar'
+  | 'gamble'
+  | 'journey'
+  | 'towerSweep'
+  | 'recruit'
+  | 'stockTrade'
+  | 'veinAttack';
+
+/** 日课里的一个任务：进度已截到目标；奖励是领取时的灵石（最小单位）。 */
+export interface DailyTaskView {
+  id: DailyTaskId;
+  name: string;
+  target: number;
+  progress: number;
+  completed: boolean;
+  claimed: boolean;
+  /** 领取可得的灵石（最小单位）。 */
+  reward: number;
+}
+
+export interface DailyChestView {
+  /** 可开：当天任务全部领取且宝箱还没开。 */
+  available: boolean;
+  claimed: boolean;
+  description: string;
+}
+
+/** 日课面板（GET /game/daily-tasks 的 dailyTasks）。 */
+export interface DailyTasksView {
+  /** UTC+8 日期键：跨天后整份日课换新。 */
+  dateKey: string;
+  tasks: DailyTaskView[];
+  chest: DailyChestView;
+}
+
+/** 领取回执（与后端 view.ts 的 DailyTaskClaimResultView 一一对应）。 */
+export interface DailyTaskClaimResult {
+  taskId: DailyTaskId;
+  /** 入账的灵石（最小单位）。 */
+  spiritStone: number;
+  message: string;
+}
+
+/** 开箱回执（与后端 view.ts 的 DailyChestResultView 一一对应）：玄铁 / 神木为展示单位整数。 */
+export interface DailyChestResult {
+  xuantie: number;
+  shenmu: number;
+  pillId: string;
+  pillName: string;
+  message: string;
+}
+
+/** 今天的日课（GET /game/daily-tasks）：第一次读取时服务端抽好任务落库，之后一整天不变。 */
+export async function fetchDailyTasks(): Promise<{ state: SectStateView; dailyTasks: DailyTasksView }> {
+  return apiRequest<{ state: SectStateView; dailyTasks: DailyTasksView }>('/api/v1/game/daily-tasks');
+}
+
+/** 领取一个已完成的任务（POST /game/daily-tasks/claim）：完成与否、是否已领都由服务端裁决。 */
+export async function claimDailyTask(taskId: DailyTaskId): Promise<{
+  state: SectStateView;
+  dailyTasks: DailyTasksView;
+  result: DailyTaskClaimResult;
+}> {
+  return apiRequest<{ state: SectStateView; dailyTasks: DailyTasksView; result: DailyTaskClaimResult }>(
+    '/api/v1/game/daily-tasks/claim',
+    { method: 'POST', body: { taskId } },
+  );
+}
+
+/** 开日课宝箱（POST /game/daily-tasks/chest）：当天任务全部领取后才能开，一天一次。 */
+export async function openDailyChest(): Promise<{
+  state: SectStateView;
+  dailyTasks: DailyTasksView;
+  result: DailyChestResult;
+}> {
+  return apiRequest<{ state: SectStateView; dailyTasks: DailyTasksView; result: DailyChestResult }>(
+    '/api/v1/game/daily-tasks/chest',
+    { method: 'POST', body: {} },
+  );
+}
+
 /* ---------- 0040 拍卖行 ---------- */
 
 export interface AuctionEquipmentView {

@@ -85,6 +85,7 @@ import {
   type WheelTier,
 } from './gambling';
 import {
+  SHOP_SHENMU_ID,
   UNITS_PER_DISPLAY,
   asShopTradableResource,
   shopBuyCost,
@@ -109,6 +110,17 @@ import {
   type StonePayResource,
 } from './stoneGamble';
 import { StoneGambleRepository, upsertStoneBustsStatement } from './repository';
+import {
+  DAILY_CHEST_DESCRIPTION,
+  dailyTaskAvailableIds,
+  dailyTaskReward,
+  findDailyTask,
+  isDailyTaskId,
+  pickDailyTasks,
+  rollDailyChest,
+  type DailyTaskId,
+} from './dailyTasks';
+import { DailyTaskRepository, dailyTasksGuardStatement, updateDailyTasksClaimStatement, type DailyTaskRow } from './repository';
 import {
   CHALLENGE_DAILY_LIMIT,
   availableDefenders,
@@ -651,6 +663,10 @@ import {
   type MarketView,
   type StockView,
   type HubView,
+  type DailyChestResultView,
+  type DailyTaskClaimResultView,
+  type DailyTasksView,
+  type DailyTaskView,
 } from './view';
 /**
  * 游戏服务（一次性可玩版本）。
@@ -12125,6 +12141,271 @@ export async function getHub(db: D1Database, userId: string, now: number): Promi
       holdings: held.length,
       profit: value - cost,
       profitPct: pctChange(cost, value),
+    },
+  };
+}
+
+/* ---------- 0048 宗门日课（dailyTasks.ts 纯规则 + 受保护 batch） ---------- */
+
+/**
+ * 宗门日课（GET /game/daily-tasks、POST /game/daily-tasks/claim、POST /game/daily-tasks/chest，
+ * docs/每日任务开发计划.md 2.4）：每宗门每天 5 个任务，进度全部从现有记录按「本宗、今天」现算；
+ * 完成后领灵石；当天任务全部领完再开一个日课宝箱。
+ *
+ * - 每天第一次读取时按当时的处境抽出任务并落库，之后一整天不变（见 ensureDailyTasksRow）；
+ * - 领取 / 开箱都是一次受保护 batch：宗门快照守卫 + daily_tasks.version 守卫，双击只会成功一次；
+ * - 不进 /game/sync（每次同步都数一遍会多出 D1 读取），只由日课接口返回。
+ */
+
+/** 读库里的 JSON 任务列表：只留任务池里的 id（脏数据直接丢掉，不让界面或守卫出错）。 */
+function parseDailyTaskIds(text: string): DailyTaskId[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(parsed)) return [];
+  return (parsed as unknown[]).filter(
+    (item): item is DailyTaskId => typeof item === 'string' && isDailyTaskId(item),
+  );
+}
+
+/**
+ * 当天日课的一行：没有就按此刻的处境抽 5 个任务落库。
+ * 并发首读：INSERT ... ON CONFLICT DO NOTHING 只会留下一份，再读一次拿到的一定是先写入的那一行。
+ */
+async function ensureDailyTasksRow(db: D1Database, draft: SectDraft, now: number): Promise<DailyTaskRow> {
+  const repo = new DailyTaskRepository(db);
+  const sectId = draft.sect.id;
+  const dateKey = dateKeyUtc8(now);
+  const existing = await repo.find(sectId, dateKey);
+  if (existing !== null) return existing;
+
+  const level = Number(draft.sect.level);
+  const arenaLevel = draft.buildings.find((building) => building.def_id === ARENA_BUILDING_ID)?.level ?? 0;
+  // 镇妖塔没解锁就不可能有扫荡，不用查。
+  const tower = level >= TOWER_UNLOCK_SECT_LEVEL ? await new TowerRepository(db).findBySectId(sectId) : null;
+  const tasks = pickDailyTasks(
+    dailyTaskAvailableIds({
+      sectLevel: level,
+      arenaLevel,
+      towerMaxFloor: tower === null ? 0 : tower.max_floor,
+      discipleCount: draft.disciples.length,
+      discipleCapacity: draft.discipleCapacity,
+    }),
+    `${sectId}:${dateKey}`,
+  );
+  await repo.insertIfAbsent({ sectId, dateKey, tasks, now });
+  const row = await repo.find(sectId, dateKey);
+  if (row === null) {
+    throw new AppError('INVALID_STATUS', '今日日课还没备好，请稍后重试');
+  }
+  return row;
+}
+
+/**
+ * 今天各任务的实际次数（未截断，展示时再截到目标）。
+ * 记录表只数「本宗、今天」（dayStartMs 起）；赌坊次数、招募次数、扫荡本来就按日期键记当天的数，直接读快照 / 镇妖塔行。
+ */
+async function dailyActualCountsOf(
+  db: D1Database,
+  draft: SectDraft,
+  tasks: readonly DailyTaskId[],
+  now: number,
+): Promise<Record<DailyTaskId, number>> {
+  const counts = await new DailyTaskRepository(db).todayCounts(draft.sect.id, dayStartMs(now));
+  const tower = tasks.includes('towerSweep') ? await new TowerRepository(db).findBySectId(draft.sect.id) : null;
+  return {
+    bossHit: counts.bossHit,
+    explore: counts.explore,
+    challenge: counts.challenge,
+    spar: counts.spar,
+    gamble: draft.debateDay.usedToday,
+    journey: counts.journey,
+    towerSweep: tower?.sweep_date_key === dateKeyUtc8(now) ? 1 : 0,
+    recruit: draft.recruitUsedToday,
+    stockTrade: counts.stockTrade,
+    veinAttack: counts.veinAttack,
+  };
+}
+
+/** 日课面板视图：进度截到目标；宝箱「可开」= 当天任务全部领取且宝箱还没开。 */
+function dailyTasksViewOf(input: {
+  dateKey: string;
+  tasks: readonly DailyTaskId[];
+  claimed: readonly DailyTaskId[];
+  chestClaimed: boolean;
+  actual: Readonly<Record<DailyTaskId, number>>;
+  reward: number;
+}): DailyTasksView {
+  const items: DailyTaskView[] = [];
+  for (const taskId of input.tasks) {
+    const def = findDailyTask(taskId);
+    if (def === null) continue;
+    const actual = input.actual[taskId];
+    items.push({
+      id: taskId,
+      name: def.name,
+      target: def.target,
+      progress: Math.min(actual, def.target),
+      completed: actual >= def.target,
+      claimed: input.claimed.includes(taskId),
+      reward: input.reward,
+    });
+  }
+  const allClaimed = items.length > 0 && items.every((item) => item.claimed);
+  return {
+    dateKey: input.dateKey,
+    tasks: items,
+    chest: {
+      available: allClaimed && !input.chestClaimed,
+      claimed: input.chestClaimed,
+      description: DAILY_CHEST_DESCRIPTION,
+    },
+  };
+}
+
+/** GET /game/daily-tasks：今天的日课面板（第一次读取时抽好落库；顺带结算并返回 state，不写结算）。 */
+export async function getDailyTasks(
+  db: D1Database,
+  userId: string,
+  now: number,
+): Promise<{ state: SectStateView; dailyTasks: DailyTasksView }> {
+  const draft = await draftFor(db, userId, now);
+  const row = await ensureDailyTasksRow(db, draft, now);
+  const tasks = parseDailyTaskIds(row.tasks);
+  return {
+    state: draft.view(),
+    dailyTasks: dailyTasksViewOf({
+      dateKey: row.date_key,
+      tasks,
+      claimed: parseDailyTaskIds(row.claimed),
+      chestClaimed: row.chest_claimed === 1,
+      actual: await dailyActualCountsOf(db, draft, tasks, now),
+      reward: dailyTaskReward(Number(draft.sect.level)),
+    }),
+  };
+}
+
+/**
+ * POST /game/daily-tasks/claim：领取一个已完成的任务（灵石 = 领取时宗门等级 × 50）。
+ * 校验（全部只读，通过后才写）：任务在今天的列表里 → 今天还没领过 → 进度已达标。
+ * 写回：灵石入账、claimed 追加、version +1，与宗门快照守卫、日课守卫同一个 batch。
+ */
+export async function claimDailyTask(
+  db: D1Database,
+  userId: string,
+  taskId: DailyTaskId,
+  now: number,
+): Promise<{ state: SectStateView; dailyTasks: DailyTasksView; result: DailyTaskClaimResultView }> {
+  const draft = await draftFor(db, userId, now);
+  const row = await ensureDailyTasksRow(db, draft, now);
+  const tasks = parseDailyTaskIds(row.tasks);
+  if (!tasks.includes(taskId)) {
+    throw new AppError('VALIDATION_ERROR', '这个任务不在今天的日课里');
+  }
+  const claimed = parseDailyTaskIds(row.claimed);
+  if (claimed.includes(taskId)) {
+    throw new AppError('INVALID_STATUS', '今天已经领过了');
+  }
+  const def = findDailyTask(taskId);
+  if (def === null) {
+    throw new AppError('VALIDATION_ERROR', '未知的日课任务');
+  }
+  const actual = await dailyActualCountsOf(db, draft, tasks, now);
+  if (actual[taskId] < def.target) {
+    throw new AppError('INVALID_STATUS', '任务还没完成', {
+      progress: String(Math.min(actual[taskId], def.target)),
+      target: String(def.target),
+    });
+  }
+
+  const reward = dailyTaskReward(Number(draft.sect.level));
+  draft.grantResource('spiritStone', reward);
+  const nextClaimed = [...claimed, taskId];
+  const version = Number(row.version);
+  draft.addStatement(
+    updateDailyTasksClaimStatement(draft.sect.id, row.date_key, nextClaimed, row.chest_claimed === 1, version + 1, now),
+  );
+  const guardId = `${crypto.randomUUID()}:daily-tasks`;
+  await draft.commit({
+    extraGuards: [
+      { id: guardId, statement: dailyTasksGuardStatement(guardId, draft.sect.id, row.date_key, version) },
+    ],
+  });
+
+  return {
+    state: draft.view(),
+    dailyTasks: dailyTasksViewOf({
+      dateKey: row.date_key,
+      tasks,
+      claimed: nextClaimed,
+      chestClaimed: row.chest_claimed === 1,
+      actual,
+      reward,
+    }),
+    result: {
+      taskId,
+      spiritStone: reward,
+      message: `完成「${def.name}」，获得灵石 ${shopAmountText(reward)}`,
+    },
+  };
+}
+
+/**
+ * POST /game/daily-tasks/chest：开日课宝箱（当天任务全部领取后可开，一天一次）。
+ * 玄铁 / 神木走 grantResource（不夹容量，与赌石同口径）；丹药是绝对值写回，所以 commit 带 pillId，
+ * 守卫会核对那条丹药库存仍是读到的数量。
+ */
+export async function openDailyChest(
+  db: D1Database,
+  userId: string,
+  now: number,
+): Promise<{ state: SectStateView; dailyTasks: DailyTasksView; result: DailyChestResultView }> {
+  const draft = await draftFor(db, userId, now);
+  const row = await ensureDailyTasksRow(db, draft, now);
+  if (row.chest_claimed === 1) {
+    throw new AppError('INVALID_STATUS', '今天的日课宝箱已经开过了');
+  }
+  const tasks = parseDailyTaskIds(row.tasks);
+  const claimed = parseDailyTaskIds(row.claimed);
+  if (tasks.length === 0 || tasks.some((taskId) => !claimed.includes(taskId))) {
+    throw new AppError('INVALID_STATUS', '领完今天的任务后才能开宝箱');
+  }
+
+  const actual = await dailyActualCountsOf(db, draft, tasks, now);
+  const roll = rollDailyChest(Math.random);
+  const pillName = findPillRecipe(roll.pillId)?.name ?? roll.pillId;
+  const version = Number(row.version);
+  draft.grantResource(XUANTIE_RESOURCE_ID, toMinUnits(roll.xuantie));
+  draft.grantResource(SHOP_SHENMU_ID, toMinUnits(roll.shenmu));
+  draft.addPill(roll.pillId, 1);
+  draft.addStatement(updateDailyTasksClaimStatement(draft.sect.id, row.date_key, claimed, true, version + 1, now));
+  const guardId = `${crypto.randomUUID()}:daily-tasks`;
+  await draft.commit({
+    pillId: roll.pillId,
+    extraGuards: [
+      { id: guardId, statement: dailyTasksGuardStatement(guardId, draft.sect.id, row.date_key, version) },
+    ],
+  });
+
+  return {
+    state: draft.view(),
+    dailyTasks: dailyTasksViewOf({
+      dateKey: row.date_key,
+      tasks,
+      claimed,
+      chestClaimed: true,
+      actual,
+      reward: dailyTaskReward(Number(draft.sect.level)),
+    }),
+    result: {
+      xuantie: roll.xuantie,
+      shenmu: roll.shenmu,
+      pillId: roll.pillId,
+      pillName,
+      message: `开启日课宝箱：玄铁 ×${String(roll.xuantie)}、神木 ×${String(roll.shenmu)}、${pillName} ×1`,
     },
   };
 }
