@@ -5,6 +5,7 @@ import { AVATAR_IMAGE_MAX_BASE64_CHARS, AVATAR_IMAGE_MIMES } from './avatarImage
 import { BETTABLE_ATTRIBUTES, RACE_BEAST_COUNT, RACE_BET_MAX, RACE_BET_MIN } from './gambling';
 import { BAG_CAPACITY } from './equipment';
 import { SHOP_EXCHANGE_DIRECTIONS, SHOP_MAX_EXCHANGE_AMOUNT, SHOP_MAX_PILL_QUANTITY, SHOP_MAX_TRADE_AMOUNT, SHOP_TRADABLE_RESOURCES } from './shop';
+import { STONE_PAY_RESOURCES, STONE_TIER_IDS } from './stoneGamble';
 
 /**
  * 游戏接口的请求 schema（严格：未声明字段一律拒绝）。
@@ -326,6 +327,16 @@ export const allocateDaoInsightRequestSchema = z.strictObject({
  */
 export const wheelSpinRequestSchema = z.strictObject({
   tier: z.number().int().min(1).max(5),
+});
+
+/**
+ * 0046 赌石切开：tier / payResource 用 stoneGamble.ts 的枚举，count 只能是 1 或 10（「切石」与「连切 10 块」）。
+ * 余额、宗门等级、玄铁容量与保底全部在 service 里判定。
+ */
+export const stoneGambleRequestSchema = z.strictObject({
+  tier: z.enum(STONE_TIER_IDS),
+  payResource: z.enum(STONE_PAY_RESOURCES),
+  count: z.union([z.literal(1), z.literal(10)]),
 });
 
 /**

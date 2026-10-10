@@ -97,6 +97,24 @@ import {
   type ShopTradableResource,
 } from './shop';
 import {
+  STONE_HISTORY_LIMIT,
+  cutStones,
+  findStoneTier,
+  stoneCostUnits,
+  stoneJackpotBroadcast,
+  stoneOutcomeOf,
+  stoneResultMessage,
+  stoneTierBlockedReason,
+  stoneTopPrize,
+  type StoneBatchCount,
+  type StonePayResource,
+} from './stoneGamble';
+import {
+  StoneGambleRepository,
+  insertStoneGambleLogStatement,
+  upsertStoneBustsStatement,
+} from './repository';
+import {
   CHALLENGE_DAILY_LIMIT,
   availableDefenders,
   asDefenseMode,
@@ -602,6 +620,8 @@ import {
   type ShopSellResultView,
   type ShopSellPillResultView,
   type ShopExchangeResultView,
+  type StoneGambleHistoryEntryView,
+  type StoneGambleResultView,
   type DiscipleLeaderboardEntryView,
   type DiscipleLeaderboardView,
   type ChatMessageView,
@@ -9676,6 +9696,143 @@ export async function exchangeBossMerit(
       },
     },
   };
+}
+
+/* ---------- 赌石（0046 迁移 + stoneGamble.ts：赌坊第四个玩法） ---------- */
+
+/**
+ * 赌石（POST /game/stone-gamble，docs/赌石开发计划.md 2.4）：花灵石 / 药材 / 矿石买原石，当场切开，开出玄铁。
+ *
+ * 与其它写命令同一套路：结算 → 解锁 / 档位门槛 / 玄铁容量 / 余额校验（全部只读）→ 扣料、抽结果、
+ * 写保底与记录 → **一次**受保护 batch（`commit()` 的守卫核对全部资源余额，并发的赌石只会让这一批回滚）。
+ *
+ * - 不占赌坊每日次数：论道 / 天机轮 / 灵兽竞逐的 20 次都不动；
+ * - 玄铁容量在扣料之前判定：剩余容量 < count × 天价时整批拒绝（不切半批）；
+ * - 随机只在这里取（Math.random）；概率、保底与文案全在 stoneGamble.ts；
+ * - 保底次数只参与抽取，不进任何返回、界面与日志。
+ */
+export async function stoneGamble(
+  db: D1Database,
+  userId: string,
+  tierId: string,
+  payResource: StonePayResource,
+  count: StoneBatchCount,
+  now: number,
+): Promise<{ state: SectStateView; result: StoneGambleResultView }> {
+  const draft = await draftFor(db, userId, now);
+  requireGamblingUnlocked(draft);
+
+  const tier = findStoneTier(tierId);
+  if (tier === null) {
+    throw new AppError('VALIDATION_ERROR', '未知的原石档位');
+  }
+  const blockedReason = stoneTierBlockedReason(tier, Number(draft.sect.level));
+  if (blockedReason !== null) {
+    throw new AppError('INVALID_STATUS', blockedReason);
+  }
+
+  // 玄铁容量：按该档天价算还能切几块（room = floor((容量 − 余额) / (天价 × 1000))），不够整批拒绝。
+  const capacity = draft.resourceCapacityOf(XUANTIE_RESOURCE_ID);
+  const balance = draft.balanceOf(XUANTIE_RESOURCE_ID);
+  const room = Math.max(0, Math.floor((capacity - balance) / toMinUnits(stoneTopPrize(tier))));
+  if (room < count) {
+    throw new AppError(
+      'CAPACITY_FULL',
+      `玄铁库存快满了（最多还能切 ${String(room)} 块${tier.name}）`,
+      {
+        resourceId: XUANTIE_RESOURCE_ID,
+        capacity: String(capacity),
+        balance: String(balance),
+        room: String(room),
+      },
+    );
+  }
+
+  // 校验全部通过后才扣料：requireResource 同时完成余额检查与扣减（不足抛 INSUFFICIENT_RESOURCE）。
+  const cost = stoneCostUnits(tier, payResource, count);
+  draft.requireResource(payResource, cost);
+
+  // 隐藏保底：按宗门 + 档位读连续垮了次数（没有记录为 0），只参与抽取。
+  const busts = await new StoneGambleRepository(db).findBusts(draft.sect.id, tier.id);
+  const cut = cutStones(tier, count, busts, Math.random);
+  const xuantie = toMinUnits(cut.xuantie);
+  if (xuantie > 0) {
+    draft.addResource(XUANTIE_RESOURCE_ID, xuantie);
+  }
+  if (cut.nextBusts !== busts) {
+    draft.addStatement(upsertStoneBustsStatement(draft.sect.id, tier.id, cut.nextBusts, now));
+  }
+  draft.addStatement(
+    insertStoneGambleLogStatement({
+      id: crypto.randomUUID(),
+      sectId: draft.sect.id,
+      tier: tier.id,
+      count,
+      payResource,
+      cost,
+      xuantie,
+      bustCount: cut.counts.bust,
+      smallCount: cut.counts.small,
+      bigCount: cut.counts.big,
+      jackpotCount: cut.counts.jackpot,
+      now,
+    }),
+  );
+
+  // 唯一的一次受保护提交：扣料 / 玄铁 / 保底 / 记录同一个 batch。
+  await draft.commit();
+
+  // 天价全服播报：每块天价各播一条，必须在 commit 之后并且 await（失败不影响主流程）。
+  const jackpotXuantie = stoneOutcomeOf(tier, 'jackpot').xuantie;
+  for (let index = 0; index < cut.counts.jackpot; index += 1) {
+    await broadcastWorldBoss(db, stoneJackpotBroadcast(draft.sect.name, tier.name, jackpotXuantie), now);
+  }
+
+  return {
+    state: draft.view(),
+    result: {
+      tier: tier.id,
+      tierName: tier.name,
+      count,
+      payResource,
+      cost,
+      xuantie,
+      outcomes: cut.outcomes,
+      counts: cut.counts,
+      message: stoneResultMessage(tier.name, cut),
+    },
+  };
+}
+
+/**
+ * 赌石记录（GET /game/stone-gamble/history）：只读，本宗最近 20 条，时间倒序；不结算、不写库。
+ * 取宗门方式与 listDebateHistory 一致。
+ */
+export async function listStoneGambleHistory(
+  db: D1Database,
+  userId: string,
+): Promise<StoneGambleHistoryEntryView[]> {
+  const sect = await new SectRepository(db).findByUserId(userId);
+  if (sect === null) {
+    return [];
+  }
+  const rows = await new StoneGambleRepository(db).listRecent(sect.id, STONE_HISTORY_LIMIT);
+  return rows.map((row) => ({
+    id: row.id,
+    tier: row.tier,
+    tierName: findStoneTier(row.tier)?.name ?? row.tier,
+    count: Number(row.count),
+    payResource: row.pay_resource,
+    cost: Number(row.cost),
+    xuantie: Number(row.xuantie),
+    counts: {
+      bust: Number(row.bust_count),
+      small: Number(row.small_count),
+      big: Number(row.big_count),
+      jackpot: Number(row.jackpot_count),
+    },
+    createdAt: new Date(Number(row.created_at)).toISOString(),
+  }));
 }
 
 /* ---------- 坊市（shop.ts 的纯规则 + 受保护 batch 提交） ---------- */

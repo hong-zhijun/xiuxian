@@ -258,6 +258,8 @@ export interface SectStateView {
     } | null;
     /** 0020 天机轮：赌坊未解锁时为 null；解锁后带当前格局与档位费用（全部服务端口径）。 */
     wheel: WheelView | null;
+    /** 0046 赌石：赌坊未解锁时为 null；解锁后四档（门槛、概率、玄铁个数都是服务端口径）。 */
+    stones: StoneGambleView | null;
   };
   /** 0014 宗门历练名额与最近 10 条历练摘要（仅本宗可见，结果由服务端决定）。 */
   journey: JourneyView;
@@ -1720,6 +1722,107 @@ export interface RaceHistoryView {
 
 export async function fetchRaceHistory(page: number): Promise<RaceHistoryView> {
   return apiRequest<RaceHistoryView>(`/api/v1/game/race-history?page=${String(page)}`);
+}
+
+/* ---------- 0046 赌石（赌坊第四个玩法） ---------- */
+
+/** 赌石档位 id（与后端 stoneGamble.ts 的 STONE_TIER_IDS 同口径）。 */
+export type StoneTierId = 'gravel' | 'mountain' | 'oldPit' | 'meteor';
+
+/** 赌石支付方式（与后端 STONE_PAY_RESOURCES 同口径）：灵石按价格扣，药材 / 矿石按卖出价折算。 */
+export type StonePayResource = 'spiritStone' | 'herb' | 'ore';
+
+/** 赌石结果 id（与后端 STONE_OUTCOME_IDS 同口径）。 */
+export type StoneOutcomeId = 'bust' | 'small' | 'big' | 'jackpot';
+
+/** 赌石的一种结果（与后端 view.ts 的 StoneOutcomeView 一一对应）。 */
+export interface StoneOutcomeView {
+  id: StoneOutcomeId;
+  name: string;
+  /** 概率（基点，10000 = 100%）。 */
+  chanceBp: number;
+  /** 开出的玄铁个数（展示单位，固定不是区间）。 */
+  xuantie: number;
+}
+
+/** 赌石的一个档位（与后端 view.ts 的 StoneTierView 一一对应）。 */
+export interface StoneTierView {
+  id: StoneTierId;
+  name: string;
+  /** 价格（灵石，展示单位）；材料价格 = 价格 × materialPerStone。 */
+  price: number;
+  minSectLevel: number;
+  /** 宗门等级够不够本档门槛（前端预检，服务端再判）。 */
+  unlocked: boolean;
+  /** 不够门槛时的服务端文案（如「天外陨石需要宗门 6 级」）；够则为 null。 */
+  blockedReason: string | null;
+  /** 单块平均能开出的玄铁（展示单位，两位小数）。 */
+  expectedXuantie: number;
+  /** 天价（展示单位）。 */
+  topPrize: number;
+  outcomes: StoneOutcomeView[];
+}
+
+/** 赌石面板（与后端 view.ts 的 StoneGambleView 一一对应）：赌坊未解锁时整体为 null。 */
+export interface StoneGambleView {
+  /** 1 灵石折几个材料（展示单位）。 */
+  materialPerStone: number;
+  tiers: StoneTierView[];
+}
+
+/** 切石回执（与后端 view.ts 的 StoneGambleResultView 一一对应）。 */
+export interface StoneGambleResult {
+  tier: StoneTierId;
+  tierName: string;
+  /** 切开的块数：1 或 10。 */
+  count: number;
+  payResource: StonePayResource;
+  /** 花费（最小单位）。 */
+  cost: number;
+  /** 共得玄铁（最小单位）。 */
+  xuantie: number;
+  /** 每块的结果（切开的顺序）。 */
+  outcomes: StoneOutcomeId[];
+  /** 四种结果各几块（之和等于 count）。 */
+  counts: Record<StoneOutcomeId, number>;
+  /** 服务端拼好的结果文案，原样展示。 */
+  message: string;
+}
+
+/** 赌石记录条目（与后端 view.ts 的 StoneGambleHistoryEntryView 一一对应）。 */
+export interface StoneGambleHistoryEntry {
+  id: string;
+  tier: string;
+  tierName: string;
+  count: number;
+  payResource: string;
+  /** 花费（最小单位）。 */
+  cost: number;
+  /** 共得玄铁（最小单位）。 */
+  xuantie: number;
+  counts: Record<StoneOutcomeId, number>;
+  createdAt: string;
+}
+
+/**
+ * 赌石切开（POST /game/stone-gamble）：扣料、抽结果、记保底与记录都在服务端，
+ * 返回写库后的完整状态与回执。count 只能是 1（切石）或 10（连切 10 块）。
+ */
+export async function stoneGamble(
+  tier: StoneTierId,
+  payResource: StonePayResource,
+  count: 1 | 10,
+): Promise<{ state: SectStateView; result: StoneGambleResult }> {
+  return apiRequest<{ state: SectStateView; result: StoneGambleResult }>('/api/v1/game/stone-gamble', {
+    method: 'POST',
+    body: { tier, payResource, count },
+  });
+}
+
+/** 赌石记录（GET /game/stone-gamble/history）：只读，本宗最近 20 条，时间倒序；不结算、不写库。 */
+export async function fetchStoneGambleHistory(): Promise<StoneGambleHistoryEntry[]> {
+  const data = await apiRequest<{ entries: StoneGambleHistoryEntry[] }>('/api/v1/game/stone-gamble/history');
+  return data.entries;
 }
 
 /* ---------- 坊市（材料买卖与丹药回收） ---------- */

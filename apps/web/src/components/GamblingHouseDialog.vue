@@ -14,6 +14,7 @@ import { fetchDebateHistory } from '../api/game';
 import ModalShell from './ModalShell.vue';
 import DisciplePicker from './DisciplePicker.vue';
 import SpiritBeastRaceDialog from './SpiritBeastRaceDialog.vue';
+import StoneGambleDialog from './StoneGambleDialog.vue';
 import WheelDialog from './WheelDialog.vue';
 
 /**
@@ -21,6 +22,7 @@ import WheelDialog from './WheelDialog.vue';
  * mode-select（玩法列表）/ 论道的 configure（赌注配置）· confrontation（对峙）· result（结果）
  * / wheel（天机轮，交给 WheelDialog 渲染）。
  * / beast-race（灵兽竞逐，交给 SpiritBeastRaceDialog 渲染）。
+ * / stone（赌石，交给 StoneGambleDialog 渲染；切石请求由它自己发出）。
  *
  * 三种赌注模式的字段、解锁、每日次数、弟子归属与胜负都由服务端裁决：
  * 这里只按 betMode 收集各自的必填项，绝不自己算数额或改服务端文案
@@ -51,17 +53,21 @@ const emit = defineEmits<{
   'race-notify': [tone: 'success' | 'warning', title: string, message: string];
   /** 灵兽竞逐本轮有待结算的下注（毫秒后开跑结算）。 */
   'race-bet-pending': [settleInMs: number];
+  /** 赌石切开后的 state 更新回执。 */
+  'stone-state-update': [state: SectStateView];
+  /** 赌石结果提示。 */
+  'stone-notify': [tone: 'success' | 'warning', title: string, message: string];
   game: [game: GamblingGame];
 }>();
 
-type GamblingGame = 'debate' | 'wheel' | 'beast-race';
+type GamblingGame = 'debate' | 'wheel' | 'beast-race' | 'stone';
 
 /** 所有资源数量都是最小单位整数，1 展示单位 = 1000 最小单位（与 utils/format.ts 同口径）。 */
 const UNITS_PER_DISPLAY = 1000;
 /** 自由输入的最小赌注：展示 10 = 后端 FREE_BET_MIN（10000 最小单位）。 */
 const FREE_BET_MIN_DISPLAY = 10;
 
-type Stage = 'mode-select' | 'configure' | 'confrontation' | 'result' | 'wheel' | 'beast-race';
+type Stage = 'mode-select' | 'configure' | 'confrontation' | 'result' | 'wheel' | 'beast-race' | 'stone';
 
 /** 挂载时停在玩法列表；只有「新结果到达」才切进 confrontation（不因父组件残留旧 result 跳阶段）。 */
 const stage = ref<Stage>('mode-select');
@@ -369,6 +375,22 @@ function onRaceNotify(tone: 'success' | 'warning', title: string, message: strin
   emit('race-notify', tone, title, message);
 }
 
+/* ---------- 0046 赌石（赌坊第四个玩法） ---------- */
+
+function enterStone(): void {
+  if (!unlocked.value) return;
+  reportGame('stone');
+  stage.value = 'stone';
+}
+
+function onStoneStateUpdate(newState: SectStateView): void {
+  emit('stone-state-update', newState);
+}
+
+function onStoneNotify(tone: 'success' | 'warning', title: string, message: string): void {
+  emit('stone-notify', tone, title, message);
+}
+
 /** 灵兽竞逐里的「返回赌坊」：回到玩法列表。 */
 function backToModeSelect(): void {
   stage.value = 'mode-select';
@@ -381,11 +403,11 @@ function continueDebate(): void {
 }
 
 // 结果到达先进 confrontation（看对手属性），玩家点揭晓后再到 result。
-// 天机轮 / 灵兽竞逐不参与这里：它们的结果由各自的子组件消费（stage 是 'wheel' | 'beast-race' 时不动）。
+// 天机轮 / 灵兽竞逐 / 赌石不参与这里：它们的结果由各自的子组件消费（stage 是 'wheel' | 'beast-race' | 'stone' 时不动）。
 watch(
   () => props.result,
   (result) => {
-    if (stage.value === 'wheel' || stage.value === 'beast-race') return;
+    if (stage.value === 'wheel' || stage.value === 'beast-race' || stage.value === 'stone') return;
     if (result !== null) {
       stage.value = 'confrontation';
     } else if (stage.value === 'result' || stage.value === 'confrontation') {
@@ -423,7 +445,7 @@ const RULES_TEXT = `论道赌局 · 玩法说明
   <section class="gambling-dialog" aria-labelledby="gambling-dialog-title">
     <header class="section-heading panel-heading compact-heading">
       <h2 id="gambling-dialog-title" class="gambling-title-gold">{{ stage === 'wheel' ? '天机轮' : '赌坊' }}</h2>
-      <span class="count-badge">今日 {{ remaining }}/{{ dailyLimit }}</span>
+      <span v-if="stage !== 'stone'" class="count-badge">今日 {{ remaining }}/{{ dailyLimit }}</span>
     </header>
 
     <!-- ---------- 玩法列表 ---------- -->
@@ -469,6 +491,17 @@ const RULES_TEXT = `论道赌局 · 玩法说明
           >
             <strong>灵兽竞逐</strong>
             <small>10 分钟一轮 · 互赌倍率 · 全服公共池</small>
+          </button>
+        </li>
+        <li>
+          <button
+            class="gambling-game-button"
+            type="button"
+            :disabled="busy || !unlocked"
+            @click="enterStone"
+          >
+            <strong>赌石</strong>
+            <small>花灵石或材料买原石，切开见玄铁。</small>
           </button>
         </li>
       </ul>
@@ -711,6 +744,17 @@ const RULES_TEXT = `论道赌局 · 玩法说明
         @state-update="onRaceStateUpdate"
         @notify="onRaceNotify"
         @bet-pending="(ms: number) => emit('race-bet-pending', ms)"
+        @back="backToModeSelect"
+      />
+    </template>
+
+    <!-- ---------- 赌石：开石、档位与支付的状态全在子组件里，这里只接线。 ---------- -->
+    <template v-else-if="stage === 'stone'">
+      <StoneGambleDialog
+        :state="state"
+        :busy="busy"
+        @state-update="onStoneStateUpdate"
+        @notify="onStoneNotify"
         @back="backToModeSelect"
       />
     </template>

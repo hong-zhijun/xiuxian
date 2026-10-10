@@ -3458,6 +3458,102 @@ export function sectTowerGuardStatement(guardId: string, sectId: string, version
   };
 }
 
+/* ---------- 0046 赌石（docs/赌石开发计划.md） ---------- */
+
+/** 赌石记录行（0046 stone_gamble_log）；cost / xuantie 是最小单位整数。 */
+export interface StoneGambleLogRow {
+  id: string;
+  sect_id: string;
+  tier: string;
+  count: number;
+  pay_resource: string;
+  cost: number;
+  xuantie: number;
+  bust_count: number;
+  small_count: number;
+  big_count: number;
+  jackpot_count: number;
+  created_at: number;
+}
+
+export class StoneGambleRepository extends ParamRepository {
+  /** 某宗门某档当前的连续垮了次数（隐藏保底）；没有记录为 0。 */
+  async findBusts(sectId: string, tier: string): Promise<number> {
+    const row = await this.one<{ busts: number }>({
+      sql: 'SELECT busts FROM stone_gamble_busts WHERE sect_id = ? AND tier = ?',
+      params: [sectId, tier],
+    });
+    return Number(row?.busts ?? 0);
+  }
+
+  /** 本宗最近的赌石记录（时间倒序）；只读，不结算、不写库。 */
+  async listRecent(sectId: string, limit: number): Promise<StoneGambleLogRow[]> {
+    return this.all<StoneGambleLogRow>({
+      sql: `SELECT id, sect_id, tier, count, pay_resource, cost, xuantie,
+                   bust_count, small_count, big_count, jackpot_count, created_at
+            FROM stone_gamble_log
+            WHERE sect_id = ?
+            ORDER BY created_at DESC
+            LIMIT ?`,
+      params: [sectId, limit],
+    });
+  }
+}
+
+/**
+ * 赌石保底写回（0046）：某宗门某档的连续垮了次数（绝对值 upsert）。
+ * 与扣料、记录同一次受保护 batch；次数没变时调用方不写。
+ */
+export function upsertStoneBustsStatement(
+  sectId: string,
+  tier: string,
+  busts: number,
+  now: number,
+): ParameterizedQuery {
+  return {
+    sql: `INSERT INTO stone_gamble_busts (sect_id, tier, busts, updated_at) VALUES (?, ?, ?, ?)
+          ON CONFLICT (sect_id, tier)
+          DO UPDATE SET busts = excluded.busts, updated_at = excluded.updated_at`,
+    params: [sectId, tier, busts, now],
+  };
+}
+
+/** 赌石记录写入（0046）：一次请求一行（连切 10 块也只写一行），金额为最小单位，四种结果各几块。 */
+export function insertStoneGambleLogStatement(row: {
+  id: string;
+  sectId: string;
+  tier: string;
+  count: number;
+  payResource: string;
+  cost: number;
+  xuantie: number;
+  bustCount: number;
+  smallCount: number;
+  bigCount: number;
+  jackpotCount: number;
+  now: number;
+}): ParameterizedQuery {
+  return {
+    sql: `INSERT INTO stone_gamble_log (id, sect_id, tier, count, pay_resource, cost, xuantie,
+                 bust_count, small_count, big_count, jackpot_count, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    params: [
+      row.id,
+      row.sectId,
+      row.tier,
+      row.count,
+      row.payResource,
+      row.cost,
+      row.xuantie,
+      row.bustCount,
+      row.smallCount,
+      row.bigCount,
+      row.jackpotCount,
+      row.now,
+    ],
+  };
+}
+
 /* ---------- 0040 拍卖行 ---------- */
 
 export interface AuctionLotRow {
