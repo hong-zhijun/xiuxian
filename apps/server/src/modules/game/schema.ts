@@ -4,6 +4,7 @@ import { MAX_CRAFT_QUANTITY, MAX_PILL_USE_COUNT } from './alchemy';
 import { AVATAR_IMAGE_MAX_BASE64_CHARS, AVATAR_IMAGE_MIMES } from './avatarImage';
 import { BETTABLE_ATTRIBUTES, RACE_BEAST_COUNT, RACE_BET_MAX, RACE_BET_MIN } from './gambling';
 import { BAG_CAPACITY } from './equipment';
+import { DAILY_TASK_IDS } from './dailyTasks';
 import { SHOP_EXCHANGE_DIRECTIONS, SHOP_MAX_EXCHANGE_AMOUNT, SHOP_MAX_PILL_QUANTITY, SHOP_MAX_TRADE_AMOUNT, SHOP_TRADABLE_RESOURCES } from './shop';
 import { STONE_PAY_RESOURCES, STONE_TIER_IDS } from './stoneGamble';
 
@@ -409,6 +410,14 @@ export const worldBossExchangeRequestSchema = z.strictObject({
 export const towerChallengeRequestSchema = z.strictObject({
   discipleIds: z.array(z.string().min(1).max(64)).length(5),
 });
+
+/** 0048 宗门日课：领取哪个任务（只认任务池里的 id；是否在今天的列表里、是否完成由 service 校验）。 */
+export const dailyTaskClaimRequestSchema = z.strictObject({
+  taskId: z.enum(DAILY_TASK_IDS),
+});
+
+/** 0048 宗门日课：开宝箱不带参数（严格：多传字段一律拒绝）。 */
+export const dailyChestRequestSchema = z.strictObject({});
 
 /** 0040 拍卖行：上架。物品 / 数量组合的合法性由 service 校验，这里只做类型与范围；价格是展示单位整数。 */
 export const auctionListRequestSchema = z.strictObject({

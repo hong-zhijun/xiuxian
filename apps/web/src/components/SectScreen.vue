@@ -52,6 +52,7 @@ import { resourceGlyph } from '../utils/glyph';
 import { CHANGELOG } from '../data/changelog';
 import AccountDialog from './AccountDialog.vue';
 import ChangelogDialog from './ChangelogDialog.vue';
+import DailyTasksCard from './DailyTasksCard.vue';
 import AlchemyPanel from './AlchemyPanel.vue';
 import ChallengeDialog from './ChallengeDialog.vue';
 import ChallengeHistoryPanel from './ChallengeHistoryPanel.vue';
@@ -993,6 +994,11 @@ function onWorldBossNotify(tone: 'success' | 'warning', title: string, message: 
   emit('notify', tone, title, message);
 }
 
+/** 0048 宗门日课提示（领取 / 开箱 / 加载失败）：由首页卡片直接 emit，SectScreen 只转发。 */
+function onDailyTasksNotify(tone: ToastTone, title: string, message: string): void {
+  emit('notify', tone, title, message);
+}
+
 /**
  * 关掉赌坊弹窗：结果由 App.vue 保留，下次打开仍是干净的玩法列表。
  * 但玩家可能在对峙阶段（或天机轮转动 / 灵兽竞逐中）直接按 Esc / 点右上角 X —— 那时账其实已经结算了，
@@ -1713,8 +1719,14 @@ async function loadHub(): Promise<void> {
   }
 }
 
+/** 宗门日课卡片的重读信号：关掉功能弹窗时 +1（弹窗里做的任务进度要在首页卡片上跟上）。 */
+const dailyTasksRefreshKey = ref(0);
+
 watch(openPanel, (panel) => {
-  if (panel === null) void loadHub();
+  if (panel === null) {
+    void loadHub();
+    dailyTasksRefreshKey.value += 1;
+  }
 });
 
 onMounted(() => {
@@ -2303,6 +2315,14 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
         </div>
       </div>
     </nav>
+
+    <!-- 0048 宗门日课：紧贴在首页功能卡片（含祭炼）下方；挂载时读一次，关掉弹窗后由 dailyTasksRefreshKey 重读进度。 -->
+    <DailyTasksCard
+      :busy="busy"
+      :refresh-key="dailyTasksRefreshKey"
+      @state-update="handOffShopState"
+      @notify="onDailyTasksNotify"
+    />
 
     <div class="management-grid">
       <section class="game-panel disciple-panel" aria-labelledby="disciple-title">

@@ -39,6 +39,7 @@ import {
   type DebateDayState,
 } from './gambling';
 import { SHOP_BUY_PRICE, SHOP_PILL_PRICES, SHOP_SELL_PRICE, SHOP_SHENMU_PER_XUANTIE } from './shop';
+import type { DailyTaskId } from './dailyTasks';
 import {
   STONE_MATERIAL_PER_STONE,
   STONE_TIERS,
@@ -3317,4 +3318,50 @@ export interface HubView {
     profit: number;
     profitPct: number;
   };
+}
+
+/* ---------- 0048 宗门日课（GET /game/daily-tasks；不进 /game/sync） ---------- */
+
+/** 日课里的一个任务：进度截到目标；奖励是领取时的灵石（最小单位）。 */
+export interface DailyTaskView {
+  id: DailyTaskId;
+  name: string;
+  target: number;
+  progress: number;
+  completed: boolean;
+  claimed: boolean;
+  /** 领取可得的灵石（最小单位）：宗门等级 × 50 灵石。 */
+  reward: number;
+}
+
+export interface DailyChestView {
+  /** 可开：当天任务全部领取且宝箱还没开。 */
+  available: boolean;
+  claimed: boolean;
+  /** 宝箱内容文案（「玄铁 3~5、神木 1~2、随机丹药 1 颗」）。 */
+  description: string;
+}
+
+/** 日课面板（GET /game/daily-tasks 的 dailyTasks；领取 / 开箱的回执里也带一份）。 */
+export interface DailyTasksView {
+  /** UTC+8 日期键：跨天后整份日课换新。 */
+  dateKey: string;
+  tasks: DailyTaskView[];
+  chest: DailyChestView;
+}
+
+/** 领取回执：实际入账的灵石（最小单位）。 */
+export interface DailyTaskClaimResultView {
+  taskId: DailyTaskId;
+  spiritStone: number;
+  message: string;
+}
+
+/** 开箱回执：实际入账的玄铁 / 神木（展示单位）与丹药。 */
+export interface DailyChestResultView {
+  xuantie: number;
+  shenmu: number;
+  pillId: string;
+  pillName: string;
+  message: string;
 }
