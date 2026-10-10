@@ -61,6 +61,8 @@ import {
   veinWithdrawRequestSchema,
   marketTradeRequestSchema,
   marketChartQuerySchema,
+  marketOrderPlaceRequestSchema,
+  marketOrderCancelRequestSchema,
   dailyTaskClaimRequestSchema,
   dailyChestRequestSchema,
 } from './schema';
@@ -118,6 +120,8 @@ import {
   getMarket,
   getMarketChart,
   tradeStock,
+  placeStockOrder,
+  cancelStockOrder,
   getHub,
   getMeritShop,
   getRaceHistory,
@@ -822,6 +826,22 @@ export function createGameRoutes(): Hono<AppEnv> {
     const body = await parseStrictJson(marketTradeRequestSchema, c);
     const result = await tradeStock(getDb(c.env), userId, body, Date.now());
     return respondOk(c, { state: result.state, market: result.market, result: result.result });
+  });
+
+  // 0049 灵股挂单：下限价买 / 限价卖 / 止损卖（先结算本宗挂单；卖单锁股数，限价买冻结灵石）。
+  routes.post('/game/market/orders', async (c) => {
+    const userId = requireUserId(c);
+    const body = await parseStrictJson(marketOrderPlaceRequestSchema, c);
+    const result = await placeStockOrder(getDb(c.env), userId, body, Date.now());
+    return respondOk(c, { state: result.state, market: result.market });
+  });
+
+  // 0049 灵股挂单：撤单（只能撤本宗未完成的单；冻结的灵石原路退回）。
+  routes.post('/game/market/orders/cancel', async (c) => {
+    const userId = requireUserId(c);
+    const body = await parseStrictJson(marketOrderCancelRequestSchema, c);
+    const result = await cancelStockOrder(getDb(c.env), userId, body.orderId, Date.now());
+    return respondOk(c, { state: result.state, market: result.market });
   });
 
   // 0042 灵脉争夺：面板（先顺手结算产出 / 枯竭）。

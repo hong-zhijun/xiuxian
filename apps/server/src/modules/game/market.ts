@@ -7,6 +7,8 @@
  * 价格单位：最小单位灵石（1 灵石 = 1000）；时间：UTC 毫秒，行情按分钟取（minute = floor(ms / 60000)）。
  */
 
+import { dateKeyUtc8 } from './constants';
+
 export const MARKET_UNLOCK_SECT_LEVEL = 3;
 /** 每笔手续费（基点，30 = 0.3%），向上取整。 */
 export const MARKET_FEE_BP = 30;
@@ -311,4 +313,64 @@ export function marketPositionCap(stoneCapacity: number): number {
 /** 什么时候能卖（最近一次买入 + 10 分钟）。 */
 export function marketSellableAt(lastBuyAt: number | null): number | null {
   return lastBuyAt === null ? null : lastBuyAt + MARKET_HOLD_MS;
+}
+
+/* ---------- 挂单（0049，docs/灵股挂单开发计划.md） ---------- */
+
+/** 挂单类型：限价买 / 限价卖 / 止损卖。 */
+export const MARKET_ORDER_KINDS = ['limit_buy', 'limit_sell', 'stop_sell'] as const;
+export type MarketOrderKind = (typeof MARKET_ORDER_KINDS)[number];
+/** 每个宗门同时最多几个未完成挂单。 */
+export const MARKET_ORDER_MAX_OPEN = 5;
+/** 挂单有效期：72 小时。 */
+export const MARKET_ORDER_TTL_MS = 72 * 3_600_000;
+/** 触发价上限（最小单位，即 100 万灵石 / 股）：只是防止金额溢出的兜底。 */
+export const MARKET_ORDER_MAX_TRIGGER = 1_000_000_000;
+
+/** 某分钟的价格是否满足挂单条件（等于触发价也算满足）。 */
+export function orderTriggered(kind: MarketOrderKind, price: number, triggerPrice: number): boolean {
+  switch (kind) {
+    case 'limit_buy':
+      return price <= triggerPrice;
+    case 'limit_sell':
+      return price >= triggerPrice;
+    case 'stop_sell':
+      return price <= triggerPrice;
+  }
+}
+
+/** 限价买单的冻结额：触发价 × 股数 + 手续费（按触发价算）。 */
+export function limitBuyReserve(triggerPrice: number, shares: number): number {
+  const amount = triggerPrice * shares;
+  return amount + marketFee(amount);
+}
+
+export interface OrderFillInput {
+  seed: number;
+  stock: StockDef;
+  kind: MarketOrderKind;
+  triggerPrice: number;
+  /** 从这一分钟起查（含）。 */
+  fromMinute: number;
+  /** 查到这一分钟为止（含）。 */
+  toMinute: number;
+  /** 卖单：分钟起点不早于这个时刻才能成交；null = 不限制（买单传 null）。 */
+  sellableAt: number | null;
+  /** 某一天（UTC+8 日期键）本宗已成交的笔数。 */
+  tradesUsedOnDay: (dateKey: string) => number;
+}
+
+/**
+ * 在 [fromMinute, toMinute] 里找第一个能成交的分钟：价格满足触发条件、卖单已过可卖时间、
+ * 那一分钟所在的那一天成交笔数还没满 MARKET_DAILY_TRADES。成交价就是那一分钟的价格。没有返回 null。
+ */
+export function findOrderFill(input: OrderFillInput): { minute: number; price: number } | null {
+  for (let minute = input.fromMinute; minute <= input.toMinute; minute += 1) {
+    if (input.kind !== 'limit_buy' && input.sellableAt !== null && minute * MARKET_TICK_MS < input.sellableAt) continue;
+    const price = stockPriceAt(input.seed, input.stock, minute);
+    if (!orderTriggered(input.kind, price, input.triggerPrice)) continue;
+    if (input.tradesUsedOnDay(dateKeyUtc8(minute * MARKET_TICK_MS)) >= MARKET_DAILY_TRADES) continue;
+    return { minute, price };
+  }
+  return null;
 }

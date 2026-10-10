@@ -5,6 +5,7 @@ import { AVATAR_IMAGE_MAX_BASE64_CHARS, AVATAR_IMAGE_MIMES } from './avatarImage
 import { BETTABLE_ATTRIBUTES, RACE_BEAST_COUNT, RACE_BET_MAX, RACE_BET_MIN } from './gambling';
 import { BAG_CAPACITY } from './equipment';
 import { DAILY_TASK_IDS } from './dailyTasks';
+import { MARKET_MAX_SHARES_PER_TRADE, MARKET_ORDER_KINDS, MARKET_ORDER_MAX_TRIGGER } from './market';
 import { SHOP_EXCHANGE_DIRECTIONS, SHOP_MAX_EXCHANGE_AMOUNT, SHOP_MAX_PILL_QUANTITY, SHOP_MAX_TRADE_AMOUNT, SHOP_TRADABLE_RESOURCES } from './shop';
 import { STONE_PAY_RESOURCES, STONE_TIER_IDS } from './stoneGamble';
 
@@ -463,4 +464,17 @@ export const marketTradeRequestSchema = z.strictObject({
 export const marketChartQuerySchema = z.strictObject({
   stockId: z.string().min(1).max(32),
   range: z.enum(['1h', '6h', '1d', '7d']),
+});
+
+/** 0049 灵股挂单：下单（类型 / 股数 / 触发价的范围；能否下单、持仓与冻结由 service 校验）。触发价是最小单位整数。 */
+export const marketOrderPlaceRequestSchema = z.strictObject({
+  stockId: z.string().min(1).max(32),
+  kind: z.enum(MARKET_ORDER_KINDS),
+  shares: z.number().int().min(1).max(MARKET_MAX_SHARES_PER_TRADE),
+  triggerPrice: z.number().int().min(1).max(MARKET_ORDER_MAX_TRIGGER),
+});
+
+/** 0049 灵股挂单：撤单，只带挂单 id（只能撤本宗未完成的单，由 service 校验）。 */
+export const marketOrderCancelRequestSchema = z.strictObject({
+  orderId: z.string().min(1).max(64),
 });

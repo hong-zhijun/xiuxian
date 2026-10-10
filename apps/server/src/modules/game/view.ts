@@ -158,6 +158,7 @@ import {
   JOURNEY_BONUS_ATTRIBUTE_NAMES,
 } from './journey';
 import { cultivationRatePerHour, resourceRates, type DiscipleState, type SettleResult } from './settle';
+import type { MarketOrderKind } from './market';
 import type { WorldBossPhase } from './worldBoss';
 /**
  * 接口返回的视图类型（前端只读这些字段，不需要再读配置）。
@@ -3194,6 +3195,10 @@ export interface StockHoldingView {
   profitPct: number;
   /** 什么时候能卖（毫秒）；null 或已过 = 现在就能卖。 */
   sellableAt: number | null;
+  /** 0049：挂着卖单锁定的股数（限价卖 + 止损卖）。 */
+  locked: number;
+  /** 0049：可用股数 = 持有 − 锁定（手动卖出与新卖单都只能用这些）。 */
+  available: number;
 }
 
 export interface StockView {
@@ -3258,6 +3263,37 @@ export interface MarketView {
   /** 我的累计已实现收益（最小单位）。 */
   myProfit: number;
   ranks: { rank: number; sectName: string; profit: number; isMe: boolean }[];
+  /** 0049 挂单：本宗未完成的、最近结束的。 */
+  orders: MarketOrdersView;
+}
+
+/** 0049 挂单的一行（金额是最小单位；时间是 ISO 字符串）。 */
+export interface MarketOrderView {
+  id: string;
+  stockId: string;
+  stockName: string;
+  kind: MarketOrderKind;
+  /** 限价买 / 限价卖 / 止损卖。 */
+  kindName: string;
+  shares: number;
+  triggerPrice: number;
+  /** 限价买冻结的灵石（含手续费）；卖单为 0。 */
+  reserved: number;
+  status: 'open' | 'filled' | 'cancelled' | 'expired';
+  statusName: string;
+  fillPrice: number | null;
+  filledAt: string | null;
+  /** 结束原因：filled / user / expired / position_cap / no_shares；未结束为 null。 */
+  closeReason: string | null;
+  createdAt: string;
+  expiresAt: string;
+}
+
+export interface MarketOrdersView {
+  open: MarketOrderView[];
+  recent: MarketOrderView[];
+  maxOpen: number;
+  ttlHours: number;
 }
 
 export interface MarketChartView {

@@ -3901,6 +3901,28 @@ export interface StockTradeRow {
   created_at: number;
 }
 
+/** 0049 挂单一行（kind / status / close_reason 是受控字符串，见迁移的 CHECK）。 */
+export interface StockOrderRow {
+  id: string;
+  sect_id: string;
+  stock_id: string;
+  kind: string;
+  shares: number;
+  trigger_price: number;
+  /** 限价买冻结的灵石（含手续费）；卖单为 0。 */
+  reserved: number;
+  status: string;
+  /** 已经检查到哪一分钟（含）。 */
+  checked_minute: number;
+  fill_price: number | null;
+  filled_at: number | null;
+  close_reason: string | null;
+  version: number;
+  created_at: number;
+  expires_at: number;
+  updated_at: number;
+}
+
 export class MarketRepository extends ParamRepository {
   async seed(): Promise<string | null> {
     const row = await this.one<{ seed: string }>({ sql: "SELECT seed FROM market_state WHERE id = 'main'", params: [] });
@@ -3953,6 +3975,53 @@ export class MarketRepository extends ParamRepository {
       params: [sectId],
     });
     return Number(row?.profit ?? 0);
+  }
+
+  /** 0049：本宗未完成的挂单（先下的在前）。 */
+  async openOrdersOf(sectId: string): Promise<StockOrderRow[]> {
+    return this.all<StockOrderRow>({
+      sql: "SELECT * FROM stock_orders WHERE sect_id = ? AND status = 'open' ORDER BY created_at ASC, id ASC",
+      params: [sectId],
+    });
+  }
+
+  /** 0049：本宗最近结束的挂单（按结束时间，新的在前）。 */
+  async recentClosedOrdersOf(sectId: string, limit: number): Promise<StockOrderRow[]> {
+    return this.all<StockOrderRow>({
+      sql: "SELECT * FROM stock_orders WHERE sect_id = ? AND status <> 'open' ORDER BY updated_at DESC, id DESC LIMIT ?",
+      params: [sectId, limit],
+    });
+  }
+
+  async findOrder(orderId: string): Promise<StockOrderRow | null> {
+    return this.one<StockOrderRow>({ sql: 'SELECT * FROM stock_orders WHERE id = ?', params: [orderId] });
+  }
+
+  /** 0049：全服未完成的挂单，按已检查到的分钟从旧到新（定时任务每次只取前 limit 单）。 */
+  async dueOpenOrders(limit: number): Promise<StockOrderRow[]> {
+    return this.all<StockOrderRow>({
+      sql: "SELECT * FROM stock_orders WHERE status = 'open' ORDER BY checked_minute ASC LIMIT ?",
+      params: [limit],
+    });
+  }
+
+  /** 0049：本宗某支股票未完成卖单（限价卖 + 止损卖）锁定的股数之和。 */
+  async lockedSharesOf(sectId: string, stockId: string): Promise<number> {
+    const row = await this.one<{ locked: number | null }>({
+      sql: `SELECT SUM(shares) AS locked FROM stock_orders
+            WHERE sect_id = ? AND stock_id = ? AND status = 'open' AND kind <> 'limit_buy'`,
+      params: [sectId, stockId],
+    });
+    return Number(row?.locked ?? 0);
+  }
+
+  /** 0049：[from, to) 之间本宗的成交时刻（挂单按天数笔数用；每天最多 30 笔，行数很少）。 */
+  async tradeTimesBetween(sectId: string, from: number, to: number): Promise<number[]> {
+    const rows = await this.all<{ created_at: number }>({
+      sql: 'SELECT created_at FROM stock_trades WHERE sect_id = ? AND created_at >= ? AND created_at < ?',
+      params: [sectId, from, to],
+    });
+    return rows.map((row) => Number(row.created_at));
   }
 }
 
@@ -4017,6 +4086,111 @@ export function stockHoldingGuardStatement(
           SELECT ?, CASE WHEN COALESCE((SELECT version FROM stock_holdings WHERE sect_id = ? AND stock_id = ?), 0) = ?
             THEN 1 ELSE 0 END`,
     params: [guardId, sectId, stockId, version],
+  };
+}
+
+/* ---------- 0049 灵股挂单（docs/灵股挂单开发计划.md） ---------- */
+
+/** 下单：checked_minute 由调用方给（= 下单那一分钟的前一分钟，表示还没检查过任何一分钟）。 */
+export function insertStockOrderStatement(input: {
+  id: string;
+  sectId: string;
+  stockId: string;
+  kind: string;
+  shares: number;
+  triggerPrice: number;
+  reserved: number;
+  checkedMinute: number;
+  expiresAt: number;
+  now: number;
+}): ParameterizedQuery {
+  return {
+    sql: `INSERT INTO stock_orders (id, sect_id, stock_id, kind, shares, trigger_price, reserved, status,
+            checked_minute, version, created_at, expires_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?, 0, ?, ?, ?)`,
+    params: [
+      input.id,
+      input.sectId,
+      input.stockId,
+      input.kind,
+      input.shares,
+      input.triggerPrice,
+      input.reserved,
+      input.checkedMinute,
+      input.now,
+      input.expiresAt,
+      input.now,
+    ],
+  };
+}
+
+/** 没成交也没到期：只把检查进度推到 checkedMinute（version + 1）。 */
+export function advanceStockOrderStatement(orderId: string, checkedMinute: number, now: number): ParameterizedQuery {
+  return {
+    sql: 'UPDATE stock_orders SET checked_minute = ?, version = version + 1, updated_at = ? WHERE id = ?',
+    params: [checkedMinute, now, orderId],
+  };
+}
+
+/** 结束一单（成交 / 撤单 / 因规则取消 / 过期）：状态、成交价、原因写回，version + 1。 */
+export function closeStockOrderStatement(input: {
+  orderId: string;
+  status: 'filled' | 'cancelled' | 'expired';
+  checkedMinute: number;
+  fillPrice: number | null;
+  filledAt: number | null;
+  closeReason: string;
+  now: number;
+}): ParameterizedQuery {
+  return {
+    sql: `UPDATE stock_orders SET status = ?, checked_minute = ?, fill_price = ?, filled_at = ?, close_reason = ?,
+            version = version + 1, updated_at = ?
+          WHERE id = ?`,
+    params: [
+      input.status,
+      input.checkedMinute,
+      input.fillPrice,
+      input.filledAt,
+      input.closeReason,
+      input.now,
+      input.orderId,
+    ],
+  };
+}
+
+/** 并发守卫：这一单的 version 必须仍是读到的值且还没结束，否则整批回滚（同一单只会成交一次）。 */
+export function stockOrderGuardStatement(guardId: string, orderId: string, version: number): ParameterizedQuery {
+  return {
+    sql: `INSERT INTO mutation_guards (command_id, valid)
+          SELECT ?, CASE WHEN EXISTS (SELECT 1 FROM stock_orders WHERE id = ? AND version = ? AND status = 'open')
+            THEN 1 ELSE 0 END`,
+    params: [guardId, orderId, version],
+  };
+}
+
+/** 并发守卫：本宗未完成的挂单数必须仍是读到的数量（5 单上限靠它挡住并发下单）。 */
+export function stockOrderCountGuardStatement(guardId: string, sectId: string, count: number): ParameterizedQuery {
+  return {
+    sql: `INSERT INTO mutation_guards (command_id, valid)
+          SELECT ?, CASE WHEN (SELECT COUNT(*) FROM stock_orders WHERE sect_id = ? AND status = 'open') = ?
+            THEN 1 ELSE 0 END`,
+    params: [guardId, sectId, count],
+  };
+}
+
+/** 并发守卫：[from, to) 之间本宗的成交笔数必须仍是读到的值（每日 30 笔不被并发突破）。 */
+export function stockTradesRangeGuardStatement(
+  guardId: string,
+  sectId: string,
+  from: number,
+  to: number,
+  count: number,
+): ParameterizedQuery {
+  return {
+    sql: `INSERT INTO mutation_guards (command_id, valid)
+          SELECT ?, CASE WHEN (SELECT COUNT(*) FROM stock_trades WHERE sect_id = ? AND created_at >= ? AND created_at < ?) = ?
+            THEN 1 ELSE 0 END`,
+    params: [guardId, sectId, from, to, count],
   };
 }
 

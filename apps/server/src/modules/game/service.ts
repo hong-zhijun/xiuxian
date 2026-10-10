@@ -452,14 +452,23 @@ import {
   type VeinRound,
 } from './veins';
 import {
+  advanceStockOrderStatement,
+  closeStockOrderStatement,
+  insertStockOrderStatement,
   insertStockTradeStatement,
   stockHoldingGuardStatement,
+  stockOrderCountGuardStatement,
+  stockOrderGuardStatement,
+  stockTradesRangeGuardStatement,
   upsertStockHoldingStatement,
   MarketRepository,
   type StockHoldingRow,
+  type StockOrderRow,
 } from './repository';
 import {
+  findOrderFill,
   findStock,
+  limitBuyReserve,
   marketFee,
   marketIndexAt,
   marketMinuteOf,
@@ -474,10 +483,15 @@ import {
   MARKET_FEE_BP,
   MARKET_HOLD_MS,
   MARKET_MAX_SHARES_PER_TRADE,
+  MARKET_ORDER_MAX_OPEN,
+  MARKET_ORDER_MAX_TRIGGER,
+  MARKET_ORDER_TTL_MS,
   MARKET_TICK_MS,
   MARKET_UNLOCK_SECT_LEVEL,
   STOCKS,
   type ChartRange,
+  type MarketOrderKind,
+  type StockDef,
 } from './market';
 import { settleEconomy, resourceRates, type SettleResult } from './settle';
 import {
@@ -659,6 +673,7 @@ import {
   type VeinPanelView,
   type VeinView,
   type MarketChartView,
+  type MarketOrderView,
   type MarketTradeResultView,
   type MarketView,
   type StockView,
@@ -11807,15 +11822,18 @@ function pctChange(from: number, to: number): number {
 async function buildMarketView(db: D1Database, draft: SectDraft, now: number): Promise<MarketView> {
   const seed = await marketSeedOf(db, now);
   const repo = new MarketRepository(db);
-  const [holdings, tradesUsed, trades, ranks, myProfit] = await Promise.all([
+  const [holdings, tradesUsed, trades, ranks, myProfit, openOrders, recentOrders] = await Promise.all([
     repo.holdingsOf(draft.sect.id),
     repo.countTradesSince(draft.sect.id, dayStartMs(now)),
     repo.recentTradesOf(draft.sect.id, MARKET_RECENT_TRADES),
     repo.topProfits(MARKET_RANKS),
     repo.realizedProfitOf(draft.sect.id),
+    repo.openOrdersOf(draft.sect.id),
+    repo.recentClosedOrdersOf(draft.sect.id, MARKET_ORDER_RECENT),
   ]);
   const minute = marketMinuteOf(now);
   const holdingOf = new Map(holdings.map((row) => [row.stock_id, row]));
+  const lockedOf = lockedSharesByStock(openOrders);
   const stocks: StockView[] = STOCKS.map((stock) => {
     const price = stockPriceAt(seed, stock, minute);
     let high = price;
@@ -11828,6 +11846,7 @@ async function buildMarketView(db: D1Database, draft: SectDraft, now: number): P
     const row = holdingOf.get(stock.id);
     const shares = row === undefined ? 0 : Number(row.shares);
     const cost = row === undefined ? 0 : Number(row.cost);
+    const locked = lockedOf.get(stock.id) ?? 0;
     const marketValue = price * shares;
     return {
       id: stock.id,
@@ -11851,6 +11870,8 @@ async function buildMarketView(db: D1Database, draft: SectDraft, now: number): P
               profit: marketValue - cost,
               profitPct: pctChange(cost, marketValue),
               sellableAt: marketSellableAt(row?.last_buy_at === null || row === undefined ? null : Number(row.last_buy_at)),
+              locked,
+              available: Math.max(0, shares - locked),
             },
     };
   });
@@ -11896,15 +11917,22 @@ async function buildMarketView(db: D1Database, draft: SectDraft, now: number): P
       profit: Number(row.profit),
       isMe: row.sect_id === draft.sect.id,
     })),
+    orders: {
+      open: openOrders.map(orderViewOf),
+      recent: recentOrders.map(orderViewOf),
+      maxOpen: MARKET_ORDER_MAX_OPEN,
+      ttlHours: MARKET_ORDER_TTL_MS / 3_600_000,
+    },
   };
 }
 
-/** GET /game/market：行情面板（不写本宗数据）。 */
+/** GET /game/market：行情面板（先顺手结算本宗挂单，所以可能写本宗的成交 / 退款）。 */
 export async function getMarket(
   db: D1Database,
   userId: string,
   now: number,
 ): Promise<{ state: SectStateView; market: MarketView }> {
+  await processOrdersOfUser(db, userId, now);
   const draft = await draftFor(db, userId, now);
   return { state: draft.view(), market: await buildMarketView(db, draft, now) };
 }
@@ -11938,6 +11966,7 @@ export async function tradeStock(
   input: { stockId: string; side: 'buy' | 'sell'; shares: number },
   now: number,
 ): Promise<{ state: SectStateView; market: MarketView; result: MarketTradeResultView }> {
+  await processOrdersOfUser(db, userId, now);
   const draft = await draftFor(db, userId, now);
   requireMarketUnlocked(draft);
   const stock = findStock(input.stockId);
@@ -11984,8 +12013,16 @@ export async function tradeStock(
     );
     message = `以 ${displayAmount(price)} 买入 ${stock.name} ${String(shares)} 股，花费 ${displayAmount(amount + fee)} 灵石（含手续费 ${displayAmount(fee)}）`;
   } else {
-    if (shares > heldShares) {
-      throw new AppError('INVALID_STATUS', `${stock.name}只持有 ${String(heldShares)} 股`);
+    // 0049：挂着卖单锁住的股数不能手动卖，只能卖可用股数。
+    const locked = await repo.lockedSharesOf(draft.sect.id, stock.id);
+    const available = Math.max(0, heldShares - locked);
+    if (shares > available) {
+      throw new AppError(
+        'INVALID_STATUS',
+        locked > 0
+          ? `${stock.name}有 ${String(locked)} 股挂着卖单，可卖 ${String(available)} 股`
+          : `${stock.name}只持有 ${String(heldShares)} 股`,
+      );
     }
     const sellableAt = marketSellableAt(holding?.last_buy_at === null || holding === undefined ? null : Number(holding.last_buy_at));
     if (sellableAt !== null && sellableAt > now) {
@@ -12023,12 +12060,19 @@ export async function tradeStock(
     }),
   );
   const guardId = `${crypto.randomUUID()}:stock`;
+  // 当天笔数也守着：与挂单成交同时进来时，不会一起突破每日 30 笔。
+  const tradesGuardId = `${crypto.randomUUID()}:stock-trades`;
+  const dayStart = dayStartMs(now);
   try {
     await draft.commit({
       extraGuards: [
         {
           id: guardId,
           statement: stockHoldingGuardStatement(guardId, draft.sect.id, stock.id, Number(holding?.version ?? 0)),
+        },
+        {
+          id: tradesGuardId,
+          statement: stockTradesRangeGuardStatement(tradesGuardId, draft.sect.id, dayStart, dayStart + ONE_DAY_MS, tradesUsed),
         },
       ],
     });
@@ -12043,6 +12087,544 @@ export async function tradeStock(
     market: await buildMarketView(db, draft, now),
     result: { side: input.side, stockId: stock.id, stockName: stock.name, shares, price, amount, fee, profit, message },
   };
+}
+
+/* ------------------------------------------------------------------ *
+ * 0049 灵股挂单（docs/灵股挂单开发计划.md）
+ *
+ * 规则在 market.ts（纯函数）。挂单不在下单时成交，而是按分钟「往后扫」：
+ * - 每单记着 checked_minute（已检查到哪一分钟），每次只扫新的分钟（从下单那一分钟起）；
+ * - 成交价 = 第一次满足条件那一分钟的价格，成交时间 = 那一分钟的起点；
+ * - 处理入口：定时任务（每次最多 200 单）；本宗的行情 / 下单 / 撤单 / 手动交易开头也会先处理本宗的挂单；
+ * - 每次写回都是一个受保护 batch：挂单 version 守卫（同一单只会成交一次）+ 持仓 / 当天笔数守卫；
+ *   守卫失败说明别的请求刚动过这一单，静默跳过，下次再来。
+ * ------------------------------------------------------------------ */
+
+const MARKET_ORDER_RECENT = 10;
+/** 定时任务每次最多处理的挂单数（已检查分钟最旧的先处理，轮流推进）。 */
+const MARKET_ORDER_BATCH = 200;
+const ONE_DAY_MS = 86_400_000;
+
+const ORDER_KIND_NAMES: Readonly<Record<MarketOrderKind, string>> = {
+  limit_buy: '限价买',
+  limit_sell: '限价卖',
+  stop_sell: '止损卖',
+};
+
+const ORDER_STATUS_NAMES: Readonly<Record<MarketOrderView['status'], string>> = {
+  open: '未成交',
+  filled: '已成交',
+  cancelled: '已取消',
+  expired: '已过期',
+};
+
+/** 价格文案（最小单位 → 三位小数，与挂单触发价的输入精度一致）。 */
+function priceTextOf(minUnits: number): string {
+  return (minUnits / 1000).toFixed(3);
+}
+
+function lastBuyOf(holding: StockHoldingRow | undefined): number | null {
+  return holding === undefined || holding.last_buy_at === null ? null : Number(holding.last_buy_at);
+}
+
+/** 灵石容量（最小单位）：配置容量 × 宗门等级倍率，与 SectDraft.resourceCapacityOf 同一口径。 */
+function spiritStoneCapacityOf(sectLevel: number): number {
+  const definition = gameConfig().resources.find((item) => item.id === 'spiritStone');
+  return definition === undefined ? 0 : effectiveCapacity(definition.capacity, findSectLevel(sectLevel).capacityMultiplier);
+}
+
+/** 各股票被卖单锁住的股数（限价卖 + 止损卖；买单不锁股）。 */
+function lockedSharesByStock(orders: readonly StockOrderRow[]): Map<string, number> {
+  const locked = new Map<string, number>();
+  for (const order of orders) {
+    if (order.kind === 'limit_buy') continue;
+    locked.set(order.stock_id, (locked.get(order.stock_id) ?? 0) + Number(order.shares));
+  }
+  return locked;
+}
+
+function orderViewOf(row: StockOrderRow): MarketOrderView {
+  const kind = row.kind as MarketOrderKind;
+  const status = row.status as MarketOrderView['status'];
+  return {
+    id: row.id,
+    stockId: row.stock_id,
+    stockName: findStock(row.stock_id)?.name ?? row.stock_id,
+    kind,
+    kindName: ORDER_KIND_NAMES[kind],
+    shares: Number(row.shares),
+    triggerPrice: Number(row.trigger_price),
+    reserved: Number(row.reserved),
+    status,
+    statusName: ORDER_STATUS_NAMES[status],
+    fillPrice: row.fill_price === null ? null : Number(row.fill_price),
+    filledAt: row.filled_at === null ? null : new Date(Number(row.filled_at)).toISOString(),
+    closeReason: row.close_reason,
+    createdAt: new Date(Number(row.created_at)).toISOString(),
+    expiresAt: new Date(Number(row.expires_at)).toISOString(),
+  };
+}
+
+/** [from, to] 分钟覆盖的每个 UTC+8 自然日里，本宗已成交的笔数（日期键 → 笔数）。 */
+async function tradeCountsByDayOf(
+  repo: MarketRepository,
+  sectId: string,
+  fromMinute: number,
+  toMinute: number,
+): Promise<Map<string, number>> {
+  const times = await repo.tradeTimesBetween(
+    sectId,
+    dayStartMs(fromMinute * MARKET_TICK_MS),
+    dayStartMs(toMinute * MARKET_TICK_MS) + ONE_DAY_MS,
+  );
+  const counts = new Map<string, number>();
+  for (const at of times) {
+    const key = dateKeyUtc8(at);
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return counts;
+}
+
+/** 持仓守卫：这支持仓的 version 必须仍是读到的值（没有行按 0）。 */
+function stockHoldingGuardOf(sectId: string, stockId: string, version: number): { id: string; statement: ParameterizedQuery } {
+  const id = `${crypto.randomUUID()}:stock`;
+  return { id, statement: stockHoldingGuardStatement(id, sectId, stockId, version) };
+}
+
+/**
+ * 一次受保护写回（一单一个 batch）：挂单 version 守卫与额外守卫在前，写入在中，守卫清理在后。
+ * 守卫失败（别的请求刚动过这一单 / 持仓 / 当天笔数）静默返回，下次处理再来。
+ */
+async function runStockOrderBatch(
+  db: D1Database,
+  order: StockOrderRow,
+  extraGuards: readonly { id: string; statement: ParameterizedQuery }[],
+  writes: readonly ParameterizedQuery[],
+): Promise<void> {
+  const orderGuardId = `${crypto.randomUUID()}:stock-order`;
+  const guards = [
+    { id: orderGuardId, statement: stockOrderGuardStatement(orderGuardId, order.id, Number(order.version)) },
+    ...extraGuards,
+  ];
+  try {
+    await db.batch(
+      prepareStatements(db, [
+        ...guards.map((guard) => guard.statement),
+        ...writes,
+        ...guards.map((guard) => deleteDiscipleSnapshotGuardStatement(guard.id)),
+      ]),
+    );
+  } catch (error) {
+    if (isGuardFailure(error)) return;
+    throw error;
+  }
+}
+
+/** 扫描一单的 [from, to] 分钟：第一个能成交的分钟（没有为 null），并带回持仓与各天笔数（成交时的守卫用）。 */
+async function scanStockOrder(
+  db: D1Database,
+  order: StockOrderRow,
+  stock: StockDef,
+  from: number,
+  to: number,
+  now: number,
+): Promise<{ fill: { minute: number; price: number } | null; holding: StockHoldingRow | undefined; counts: Map<string, number> }> {
+  const repo = new MarketRepository(db);
+  const kind = order.kind as MarketOrderKind;
+  const holding = (await repo.holdingsOf(order.sect_id)).find((row) => row.stock_id === order.stock_id);
+  const counts = await tradeCountsByDayOf(repo, order.sect_id, from, to);
+  const fill = findOrderFill({
+    seed: await marketSeedOf(db, now),
+    stock,
+    kind,
+    triggerPrice: Number(order.trigger_price),
+    fromMinute: from,
+    toMinute: to,
+    sellableAt: kind === 'limit_buy' ? null : marketSellableAt(lastBuyOf(holding)),
+    tradesUsedOnDay: (dateKey) => counts.get(dateKey) ?? 0,
+  });
+  return { fill, holding, counts };
+}
+
+/**
+ * 处理一单（定时任务与本宗入口共用）：
+ * 1. 要检查的分钟 = checked_minute + 1 ～ min(当前分钟, 到期分钟)；没有新分钟且没到期，什么都不写；
+ * 2. 找到第一个能成交的分钟：限价买按成交价结算、差额退回；卖单持股够就成交，不够就取消；
+ *    买单成交时持仓成本超过上限也取消（全额退回）；
+ * 3. 没找到且已到期：过期（买单退回全部冻结灵石）；
+ * 4. 否则只把 checked_minute 推进到检查的末尾。
+ */
+async function settleStockOrder(db: D1Database, order: StockOrderRow, now: number): Promise<void> {
+  const sectId = order.sect_id;
+  const stockId = order.stock_id;
+  const kind = order.kind as MarketOrderKind;
+  const shares = Number(order.shares);
+  const reserved = Number(order.reserved);
+  const expired = now >= Number(order.expires_at);
+  const from = Number(order.checked_minute) + 1;
+  const to = Math.min(marketMinuteOf(now), marketMinuteOf(Number(order.expires_at)));
+  if (from > to && !expired) return;
+
+  const stock = findStock(stockId);
+  const name = stock?.name ?? stockId;
+  const scan = from <= to && stock !== undefined ? await scanStockOrder(db, order, stock, from, to, now) : null;
+  if (scan === null || scan.fill === null) {
+    if (!expired) {
+      await runStockOrderBatch(db, order, [], [advanceStockOrderStatement(order.id, to, now)]);
+      return;
+    }
+    const writes: ParameterizedQuery[] = [
+      closeStockOrderStatement({
+        orderId: order.id,
+        status: 'expired',
+        checkedMinute: to,
+        fillPrice: null,
+        filledAt: null,
+        closeReason: 'expired',
+        now,
+      }),
+    ];
+    if (kind === 'limit_buy') writes.push(resourceDeltaStatement(sectId, 'spiritStone', reserved, now));
+    writes.push(
+      insertEventLogStatement({
+        id: crypto.randomUUID(),
+        sectId,
+        eventId: 'stockOrderExpired',
+        description:
+          kind === 'limit_buy'
+            ? `${name}限价买单已过期，退回 ${displayAmount(reserved)} 灵石`
+            : `${name}${ORDER_KIND_NAMES[kind]}单已过期，锁定的 ${String(shares)} 股已解除`,
+        effects: '{}',
+        now,
+      }),
+    );
+    await runStockOrderBatch(db, order, [], writes);
+    return;
+  }
+
+  const fill = scan.fill;
+  const holding = scan.holding;
+  const fillAt = fill.minute * MARKET_TICK_MS;
+  const price = fill.price;
+  const heldShares = holding === undefined ? 0 : Number(holding.shares);
+  const heldCost = holding === undefined ? 0 : Number(holding.cost);
+  const amount = price * shares;
+  const fee = marketFee(amount);
+  const holdingGuard = stockHoldingGuardOf(sectId, stockId, Number(holding?.version ?? 0));
+  // 成交那一天的笔数守卫：这一笔会占用当天的额度，并发时不能一起突破 30 笔。
+  const dayStart = dayStartMs(fillAt);
+  const dayGuardId = `${crypto.randomUUID()}:stock-trades`;
+  const dayGuard = {
+    id: dayGuardId,
+    statement: stockTradesRangeGuardStatement(
+      dayGuardId,
+      sectId,
+      dayStart,
+      dayStart + ONE_DAY_MS,
+      scan.counts.get(dateKeyUtc8(fillAt)) ?? 0,
+    ),
+  };
+
+  if (kind === 'limit_buy') {
+    const sect = await new SectRepository(db).findById(sectId);
+    if (sect === null) return;
+    const cap = marketPositionCap(spiritStoneCapacityOf(Number(sect.level)));
+    if (heldCost + amount > cap) {
+      await runStockOrderBatch(db, order, [holdingGuard], [
+        resourceDeltaStatement(sectId, 'spiritStone', reserved, now),
+        closeStockOrderStatement({
+          orderId: order.id,
+          status: 'cancelled',
+          checkedMinute: fill.minute,
+          fillPrice: null,
+          filledAt: null,
+          closeReason: 'position_cap',
+          now,
+        }),
+        insertEventLogStatement({
+          id: crypto.randomUUID(),
+          sectId,
+          eventId: 'stockOrderCancelled',
+          description: `${name}限价买单因持仓成本超过上限被取消，退回 ${displayAmount(reserved)} 灵石`,
+          effects: '{}',
+          now: fillAt,
+        }),
+      ]);
+      return;
+    }
+    // 实付 = 成交价 × 股数 + 手续费（不超过冻结额，差额退回）。
+    const refund = Math.max(0, reserved - (amount + fee));
+    const writes: ParameterizedQuery[] = [
+      upsertStockHoldingStatement({
+        sectId,
+        stockId,
+        shares: heldShares + shares,
+        cost: heldCost + amount,
+        lastBuyAt: Math.max(lastBuyOf(holding) ?? 0, fillAt),
+        now,
+      }),
+      insertStockTradeStatement({
+        id: crypto.randomUUID(),
+        sectId,
+        stockId,
+        side: 'buy',
+        shares,
+        price,
+        amount,
+        fee,
+        profit: 0,
+        now: fillAt,
+      }),
+    ];
+    if (refund > 0) writes.push(resourceDeltaStatement(sectId, 'spiritStone', refund, now));
+    writes.push(
+      closeStockOrderStatement({
+        orderId: order.id,
+        status: 'filled',
+        checkedMinute: fill.minute,
+        fillPrice: price,
+        filledAt: fillAt,
+        closeReason: 'filled',
+        now,
+      }),
+      insertEventLogStatement({
+        id: crypto.randomUUID(),
+        sectId,
+        eventId: 'stockOrderFilled',
+        description: `限价买入${name} ${String(shares)} 股成交，成交价 ${priceTextOf(price)}`,
+        effects: '{}',
+        now: fillAt,
+      }),
+    );
+    await runStockOrderBatch(db, order, [holdingGuard, dayGuard], writes);
+    return;
+  }
+
+  if (heldShares < shares) {
+    // 持股不够（理论上不会：下单时已锁过股数）：取消这一单，不退灵石。
+    await runStockOrderBatch(db, order, [holdingGuard], [
+      closeStockOrderStatement({
+        orderId: order.id,
+        status: 'cancelled',
+        checkedMinute: fill.minute,
+        fillPrice: null,
+        filledAt: null,
+        closeReason: 'no_shares',
+        now,
+      }),
+      insertEventLogStatement({
+        id: crypto.randomUUID(),
+        sectId,
+        eventId: 'stockOrderCancelled',
+        description: `${name}${ORDER_KIND_NAMES[kind]}单持股不足，已取消，锁定的 ${String(shares)} 股已解除`,
+        effects: '{}',
+        now: fillAt,
+      }),
+    ]);
+    return;
+  }
+  // 卖出：手续费与持仓成本的算法与手动卖出（tradeStock）完全一致。
+  const proceeds = Math.max(0, amount - fee);
+  const costPortion = shares === heldShares ? heldCost : Math.floor((heldCost * shares) / heldShares);
+  const profit = proceeds - costPortion;
+  await runStockOrderBatch(db, order, [holdingGuard, dayGuard], [
+    upsertStockHoldingStatement({
+      sectId,
+      stockId,
+      shares: heldShares - shares,
+      cost: heldCost - costPortion,
+      lastBuyAt: lastBuyOf(holding),
+      now,
+    }),
+    insertStockTradeStatement({
+      id: crypto.randomUUID(),
+      sectId,
+      stockId,
+      side: 'sell',
+      shares,
+      price,
+      amount,
+      fee,
+      profit,
+      now: fillAt,
+    }),
+    resourceDeltaStatement(sectId, 'spiritStone', proceeds, now),
+    closeStockOrderStatement({
+      orderId: order.id,
+      status: 'filled',
+      checkedMinute: fill.minute,
+      fillPrice: price,
+      filledAt: fillAt,
+      closeReason: 'filled',
+      now,
+    }),
+    insertEventLogStatement({
+      id: crypto.randomUUID(),
+      sectId,
+      eventId: 'stockOrderFilled',
+      description: `${kind === 'limit_sell' ? '限价卖出' : '止损卖出'}${name} ${String(shares)} 股成交，成交价 ${priceTextOf(price)}，到手 ${displayAmount(proceeds)} 灵石，${profit >= 0 ? '盈利' : '亏损'} ${displayAmount(Math.abs(profit))}`,
+      effects: '{}',
+      now: fillAt,
+    }),
+  ]);
+}
+
+async function settleStockOrderSafely(db: D1Database, order: StockOrderRow, now: number): Promise<void> {
+  try {
+    await settleStockOrder(db, order, now);
+  } catch (error) {
+    console.warn(`stock_order_settle_failed order=${order.id} error=${String(error)}`);
+  }
+}
+
+/** 本宗挂单的结算入口（行情 / 下单 / 撤单 / 手动交易开头调用）：没有宗门就什么也不做。 */
+async function processOrdersOfUser(db: D1Database, userId: string, now: number): Promise<void> {
+  const sect = await new SectRepository(db).findByUserId(userId);
+  if (sect !== null) await processSectStockOrders(db, sect.id, now);
+}
+
+/** 本宗未完成挂单的结算：逐单兜错；每单重新读持仓与笔数，同宗多单顺序处理时互不踩踏。 */
+export async function processSectStockOrders(db: D1Database, sectId: string, now: number): Promise<void> {
+  const orders = await new MarketRepository(db).openOrdersOf(sectId);
+  for (const order of orders) {
+    await settleStockOrderSafely(db, order, now);
+  }
+}
+
+/** 定时任务：全服未完成挂单，每次最多 200 单（每单各自兜错）。 */
+export async function processStockOrders(db: D1Database, now: number): Promise<void> {
+  const orders = await new MarketRepository(db).dueOpenOrders(MARKET_ORDER_BATCH);
+  for (const order of orders) {
+    await settleStockOrderSafely(db, order, now);
+  }
+}
+
+/**
+ * POST /game/market/orders：下挂单（先结算本宗已有挂单，再校验与写入）。
+ * - 未完成挂单最多 5 个（提交时还带数量守卫，并发下单挡得住）；
+ * - 限价买：按触发价查持仓上限，冻结 触发价 × 股数 + 手续费（从余额扣）；
+ * - 卖单（限价卖 / 止损卖）：股数不超过可用股数（持有 − 未完成卖单之和）；锁股数，不从持仓扣。
+ *   持仓行带 version 守卫并写回一次（值不变），两个同时下的卖单不会各自拿到同一份可用股数。
+ */
+export async function placeStockOrder(
+  db: D1Database,
+  userId: string,
+  input: { stockId: string; kind: MarketOrderKind; shares: number; triggerPrice: number },
+  now: number,
+): Promise<{ state: SectStateView; market: MarketView }> {
+  await processOrdersOfUser(db, userId, now);
+  const draft = await draftFor(db, userId, now);
+  requireMarketUnlocked(draft);
+  const stock = findStock(input.stockId);
+  if (stock === undefined) throw new AppError('NOT_FOUND', '股票不存在');
+  const { kind, shares, triggerPrice } = input;
+  if (!Number.isInteger(shares) || shares < 1 || shares > MARKET_MAX_SHARES_PER_TRADE) {
+    throw new AppError('VALIDATION_ERROR', `一单 1～${String(MARKET_MAX_SHARES_PER_TRADE)} 股`);
+  }
+  if (!Number.isInteger(triggerPrice) || triggerPrice < 1 || triggerPrice > MARKET_ORDER_MAX_TRIGGER) {
+    throw new AppError('VALIDATION_ERROR', '触发价不合法');
+  }
+  const sectId = draft.sect.id;
+  const repo = new MarketRepository(db);
+  // 先读持仓、后读挂单：持仓的 version 守卫之后，任何并发的卖单 / 成交都会让这里的守卫失败，
+  // 所以读到的可用股数不会被别的请求悄悄改掉。
+  const holding = (await repo.holdingsOf(sectId)).find((row) => row.stock_id === stock.id);
+  const open = await repo.openOrdersOf(sectId);
+  if (open.length >= MARKET_ORDER_MAX_OPEN) {
+    throw new AppError('INVALID_STATUS', `挂单最多 ${String(MARKET_ORDER_MAX_OPEN)} 个，先撤掉一些再下单`);
+  }
+  const heldShares = holding === undefined ? 0 : Number(holding.shares);
+  const heldCost = holding === undefined ? 0 : Number(holding.cost);
+  const countGuardId = `${crypto.randomUUID()}:stock-orders`;
+  const guards: { id: string; statement: ParameterizedQuery }[] = [
+    { id: countGuardId, statement: stockOrderCountGuardStatement(countGuardId, sectId, open.length) },
+  ];
+  let reserved = 0;
+  if (kind === 'limit_buy') {
+    const cap = marketPositionCap(draft.resourceCapacityOf('spiritStone'));
+    if (heldCost + triggerPrice * shares > cap) {
+      throw new AppError(
+        'INVALID_STATUS',
+        `这支股票的持仓成本最多 ${displayAmount(cap)} 灵石（宗门灵石容量的 20%），还能再买 ${displayAmount(Math.max(0, cap - heldCost))} 灵石`,
+      );
+    }
+    reserved = limitBuyReserve(triggerPrice, shares);
+    draft.requireResource('spiritStone', reserved);
+  } else {
+    const locked = lockedSharesByStock(open).get(stock.id) ?? 0;
+    const available = Math.max(0, heldShares - locked);
+    if (shares > available) {
+      throw new AppError(
+        'INVALID_STATUS',
+        locked > 0
+          ? `${stock.name}有 ${String(locked)} 股挂着卖单，可卖 ${String(available)} 股`
+          : `${stock.name}只持有 ${String(heldShares)} 股`,
+      );
+    }
+    if (holding !== undefined) {
+      guards.push(stockHoldingGuardOf(sectId, stock.id, Number(holding.version)));
+      draft.addStatement(
+        upsertStockHoldingStatement({
+          sectId,
+          stockId: stock.id,
+          shares: heldShares,
+          cost: heldCost,
+          lastBuyAt: lastBuyOf(holding),
+          now,
+        }),
+      );
+    }
+  }
+  draft.addStatement(
+    insertStockOrderStatement({
+      id: crypto.randomUUID(),
+      sectId,
+      stockId: stock.id,
+      kind,
+      shares,
+      triggerPrice,
+      reserved,
+      checkedMinute: marketMinuteOf(now) - 1,
+      expiresAt: now + MARKET_ORDER_TTL_MS,
+      now,
+    }),
+  );
+  await draft.commit({ extraGuards: guards });
+  return { state: draft.view(), market: await buildMarketView(db, draft, now) };
+}
+
+/**
+ * POST /game/market/orders/cancel：撤单（只能撤本宗未完成的单）。
+ * 限价买冻结的灵石原路退回；卖单锁的股数随之解除（持仓本身没动）。
+ */
+export async function cancelStockOrder(
+  db: D1Database,
+  userId: string,
+  orderId: string,
+  now: number,
+): Promise<{ state: SectStateView; market: MarketView }> {
+  await processOrdersOfUser(db, userId, now);
+  const draft = await draftFor(db, userId, now);
+  const order = await new MarketRepository(db).findOrder(orderId);
+  if (order === null || order.sect_id !== draft.sect.id) throw new AppError('NOT_FOUND', '挂单不存在');
+  if (order.status !== 'open') throw new AppError('INVALID_STATUS', '这张挂单已经结束，不能再撤');
+  draft.addStatement(
+    closeStockOrderStatement({
+      orderId: order.id,
+      status: 'cancelled',
+      checkedMinute: Number(order.checked_minute),
+      fillPrice: null,
+      filledAt: null,
+      closeReason: 'user',
+      now,
+    }),
+  );
+  draft.grantResource('spiritStone', Number(order.reserved));
+  const guardId = `${crypto.randomUUID()}:stock-order`;
+  await draft.commit({
+    extraGuards: [{ id: guardId, statement: stockOrderGuardStatement(guardId, order.id, Number(order.version)) }],
+  });
+  return { state: draft.view(), market: await buildMarketView(db, draft, now) };
 }
 
 /* ------------------------------------------------------------------ *

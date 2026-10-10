@@ -2819,6 +2819,10 @@ export interface StockHoldingView {
   profit: number;
   profitPct: number;
   sellableAt: number | null;
+  /** 挂着卖单锁住的股数。 */
+  locked: number;
+  /** 可用股数（持有 − 锁定）：手动卖出与新卖单只能用这些。 */
+  available: number;
 }
 
 /** 一支股票（价格 / 金额都是最小单位灵石）。 */
@@ -2876,6 +2880,39 @@ export interface MarketView {
   myTrades: StockTradeView[];
   myProfit: number;
   ranks: { rank: number; sectName: string; profit: number; isMe: boolean }[];
+  orders: MarketOrdersView;
+}
+
+/* ---------- 0049 灵股挂单 ---------- */
+
+export type MarketOrderKind = 'limit_buy' | 'limit_sell' | 'stop_sell';
+
+/** 一张挂单（金额是最小单位；时间是 ISO 字符串）。 */
+export interface MarketOrderView {
+  id: string;
+  stockId: string;
+  stockName: string;
+  kind: MarketOrderKind;
+  kindName: string;
+  shares: number;
+  triggerPrice: number;
+  /** 限价买冻结的灵石（含手续费）；卖单为 0。 */
+  reserved: number;
+  status: 'open' | 'filled' | 'cancelled' | 'expired';
+  statusName: string;
+  fillPrice: number | null;
+  filledAt: string | null;
+  /** filled / user / expired / position_cap / no_shares；未结束为 null。 */
+  closeReason: string | null;
+  createdAt: string;
+  expiresAt: string;
+}
+
+export interface MarketOrdersView {
+  open: MarketOrderView[];
+  recent: MarketOrderView[];
+  maxOpen: number;
+  ttlHours: number;
 }
 
 export type MarketChartRange = '1h' | '6h' | '1d' | '7d';
@@ -2918,6 +2955,27 @@ export async function tradeStock(
     '/api/v1/game/market/trade',
     { method: 'POST', body: { stockId, side, shares } },
   );
+}
+
+/** 下挂单：触发价是最小单位整数；限价买会冻结灵石，卖单锁股数。 */
+export async function placeStockOrder(
+  stockId: string,
+  kind: MarketOrderKind,
+  shares: number,
+  triggerPrice: number,
+): Promise<{ state: SectStateView; market: MarketView }> {
+  return apiRequest<{ state: SectStateView; market: MarketView }>('/api/v1/game/market/orders', {
+    method: 'POST',
+    body: { stockId, kind, shares, triggerPrice },
+  });
+}
+
+/** 撤单（只能撤本宗未完成的单；冻结的灵石原路退回）。 */
+export async function cancelStockOrder(orderId: string): Promise<{ state: SectStateView; market: MarketView }> {
+  return apiRequest<{ state: SectStateView; market: MarketView }>('/api/v1/game/market/orders/cancel', {
+    method: 'POST',
+    body: { orderId },
+  });
 }
 
 /* ---------- 首页功能区：各玩法状态摘要 ---------- */
