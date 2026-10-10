@@ -133,6 +133,14 @@ const openedCount = ref(0);
 
 let cutTimer: number | undefined;
 let flipTimer: number | undefined;
+/** 等动画演完再发的结果提示（提前发会抢先剧透结果）；弹窗中途关掉时在卸载前补发。 */
+let pendingNotice: { title: string; message: string } | null = null;
+
+function flushNotice(): void {
+  if (pendingNotice === null) return;
+  emit('notify', 'success', pendingNotice.title, pendingNotice.message);
+  pendingNotice = null;
+}
 
 const animating = computed(
   () => phase.value === 'waiting' || phase.value === 'cutting' || phase.value === 'opening',
@@ -170,6 +178,7 @@ function flipNext(): void {
   if (openedCount.value >= total) {
     flipTimer = undefined;
     phase.value = 'revealed';
+    flushNotice();
     return;
   }
   flipTimer = window.setTimeout(flipNext, FLIP_STEP_MS);
@@ -182,6 +191,7 @@ function playReveal(result: StoneGambleResult): void {
   if (prefersReducedMotion()) {
     openedCount.value = result.count;
     phase.value = 'revealed';
+    flushNotice();
     return;
   }
   openedCount.value = 0;
@@ -201,6 +211,7 @@ async function cut(count: 1 | 10): Promise<void> {
   const tier = activeTier.value;
   if (tier === null || !canCut(count)) return;
   clearTimers();
+  flushNotice();
   shownCount.value = count;
   reveal.value = null;
   openedCount.value = 0;
@@ -209,7 +220,7 @@ async function cut(count: 1 | 10): Promise<void> {
   try {
     const { state: next, result } = await stoneGamble(tier.id, payResource.value, count);
     emit('state-update', next);
-    emit('notify', 'success', `赌石 · ${result.tierName}`, result.message);
+    pendingNotice = { title: `赌石 · ${result.tierName}`, message: result.message };
     playReveal(result);
   } catch (caught) {
     phase.value = 'idle';
@@ -300,6 +311,7 @@ function countText(count: number): string {
 
 onUnmounted(() => {
   clearTimers();
+  flushNotice();
 });
 </script>
 

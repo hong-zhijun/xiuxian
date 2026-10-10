@@ -9756,9 +9756,8 @@ export async function stoneGamble(
   const busts = await new StoneGambleRepository(db).findBusts(draft.sect.id, tier.id);
   const cut = cutStones(tier, count, busts, Math.random);
   const xuantie = toMinUnits(cut.xuantie);
-  if (xuantie > 0) {
-    draft.addResource(XUANTIE_RESOURCE_ID, xuantie);
-  }
+  // grantResource：宗门没有玄铁余额行时会补一行（addResource 只 UPDATE，没有行时玄铁会悄悄丢掉）。
+  draft.grantResource(XUANTIE_RESOURCE_ID, xuantie);
   if (cut.nextBusts !== busts) {
     draft.addStatement(upsertStoneBustsStatement(draft.sect.id, tier.id, cut.nextBusts, now));
   }
