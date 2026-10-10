@@ -86,16 +86,14 @@ import {
 } from './gambling';
 import {
   UNITS_PER_DISPLAY,
-  SHOP_EXCHANGE_FROM,
-  SHOP_EXCHANGE_TO,
-  SHOP_SHENMU_PER_XUANTIE,
   asShopTradableResource,
   shopBuyCost,
-  shopExchangeShenmuCost,
+  shopExchangePlan,
   shopPillPrice,
   shopPillRevenue,
   shopSellRevenue,
   toMinUnits,
+  type ShopExchangeDirection,
   type ShopTradableResource,
 } from './shop';
 import {
@@ -9834,31 +9832,33 @@ export async function shopSellPill(
 }
 
 /**
- * 坊市神木兑换玄铁（POST /game/shop-exchange）：神木 → 玄铁，单向、不限次数。
+ * 坊市神木 ⇄ 玄铁（POST /game/shop-exchange）：双向、同一比价、不限次数。
  *
- * amount 是换得的玄铁数量（展示单位整数），扣 amount × SHOP_SHENMU_PER_XUANTIE 个神木。
- * 玄铁与买入材料同理要挡容量（超出的部分会被结算当成溢出丢掉），details 给出还能换多少。
+ * amount 两个方向都是玄铁数量（展示单位整数）；神木那一端 = amount × SHOP_SHENMU_PER_XUANTIE。
+ * 换得的一方与买入材料同理要挡容量（超出的部分会被结算当成溢出丢掉），details 给出还能换多少。
  */
 export async function shopExchange(
   db: D1Database,
   userId: string,
+  direction: ShopExchangeDirection,
   amount: number,
   now: number,
 ): Promise<{ state: SectStateView; result: ShopExchangeResultView }> {
   const draft = await draftFor(db, userId, now);
-  const cost = shopExchangeShenmuCost(amount);
-  const gained = toMinUnits(amount);
+  const plan = shopExchangePlan(direction, amount);
 
-  draft.requireResourceAvailable(SHOP_EXCHANGE_FROM, cost);
-  const capacity = draft.resourceCapacityOf(SHOP_EXCHANGE_TO);
-  const balance = draft.balanceOf(SHOP_EXCHANGE_TO);
-  if (balance + gained > capacity) {
-    const room = Math.max(0, Math.floor((capacity - balance) / UNITS_PER_DISPLAY));
+  draft.requireResourceAvailable(plan.fromId, plan.cost);
+  const capacity = draft.resourceCapacityOf(plan.toId);
+  const balance = draft.balanceOf(plan.toId);
+  if (balance + plan.gained > capacity) {
+    // room 按「还能换多少玄铁」给：反向时神木的空位要再除以比价。
+    const perUnit = plan.gained / amount;
+    const room = Math.max(0, Math.floor((capacity - balance) / perUnit));
     throw new AppError(
       'CAPACITY_FULL',
-      `${draft.resourceName(SHOP_EXCHANGE_TO)}将超过容量上限（最多还能兑换 ${String(room)}）`,
+      `${draft.resourceName(plan.toId)}将超过容量上限（最多还能兑换 ${String(room)}）`,
       {
-        resourceId: SHOP_EXCHANGE_TO,
+        resourceId: plan.toId,
         capacity: String(capacity),
         balance: String(balance),
         room: String(room),
@@ -9866,18 +9866,21 @@ export async function shopExchange(
     );
   }
 
-  draft.requireResource(SHOP_EXCHANGE_FROM, cost);
-  draft.grantResource(SHOP_EXCHANGE_TO, gained);
+  draft.requireResource(plan.fromId, plan.cost);
+  draft.grantResource(plan.toId, plan.gained);
   await draft.commit();
 
-  const shenmuSpent = amount * SHOP_SHENMU_PER_XUANTIE;
+  const spent = plan.cost / UNITS_PER_DISPLAY;
+  const got = plan.gained / UNITS_PER_DISPLAY;
   return {
     state: draft.view(),
     result: {
       action: 'exchange',
+      direction,
       amount,
-      cost,
-      message: `以 ${draft.resourceName(SHOP_EXCHANGE_FROM)} ×${String(shenmuSpent)} 换得 ${draft.resourceName(SHOP_EXCHANGE_TO)} ×${String(amount)}`,
+      cost: plan.cost,
+      gained: plan.gained,
+      message: `以 ${draft.resourceName(plan.fromId)} ×${String(spent)} 换得 ${draft.resourceName(plan.toId)} ×${String(got)}`,
     },
   };
 }

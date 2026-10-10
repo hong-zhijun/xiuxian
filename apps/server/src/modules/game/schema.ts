@@ -4,7 +4,7 @@ import { MAX_CRAFT_QUANTITY, MAX_PILL_USE_COUNT } from './alchemy';
 import { AVATAR_IMAGE_MAX_BASE64_CHARS, AVATAR_IMAGE_MIMES } from './avatarImage';
 import { BETTABLE_ATTRIBUTES, RACE_BEAST_COUNT, RACE_BET_MAX, RACE_BET_MIN } from './gambling';
 import { BAG_CAPACITY } from './equipment';
-import { SHOP_MAX_EXCHANGE_AMOUNT, SHOP_MAX_PILL_QUANTITY, SHOP_MAX_TRADE_AMOUNT, SHOP_TRADABLE_RESOURCES } from './shop';
+import { SHOP_EXCHANGE_DIRECTIONS, SHOP_MAX_EXCHANGE_AMOUNT, SHOP_MAX_PILL_QUANTITY, SHOP_MAX_TRADE_AMOUNT, SHOP_TRADABLE_RESOURCES } from './shop';
 
 /**
  * 游戏接口的请求 schema（严格：未声明字段一律拒绝）。
@@ -353,8 +353,12 @@ export const shopSellPillRequestSchema = z.strictObject({
   quantity: z.number().int().min(1).max(SHOP_MAX_PILL_QUANTITY),
 });
 
-/** 坊市神木兑换玄铁：amount 是要换得的玄铁数量（展示单位整数）；神木余额与玄铁容量在 service 里判定。 */
+/**
+ * 坊市神木 ⇄ 玄铁：direction 不传按 toXuantie（兼容只会神木换玄铁的旧前端）；
+ * amount 两个方向都是**玄铁**数量（展示单位整数）；余额与容量在 service 里判定。
+ */
 export const shopExchangeRequestSchema = z.strictObject({
+  direction: z.enum(SHOP_EXCHANGE_DIRECTIONS).default('toXuantie'),
   amount: z.number().int().min(1).max(SHOP_MAX_EXCHANGE_AMOUNT),
 });
 

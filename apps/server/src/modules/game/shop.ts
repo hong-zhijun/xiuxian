@@ -115,22 +115,41 @@ export function shopPillSellPrice(costValue: number): number {
   return Math.floor((costValue * SHOP_PILL_SELL_NUMERATOR) / SHOP_PILL_SELL_DENOMINATOR);
 }
 
-/* ---------- 神木兑换玄铁（单向） ---------- */
+/* ---------- 神木 ⇄ 玄铁（双向兑换） ---------- */
 
 /**
- * 兑换 1 个玄铁要花几个神木（都是展示单位）：沿用功勋兑换的比价（玄铁 4 功勋、神木 2 功勋），
- * 所以兑换不会让「功勋 → 神木 → 玄铁」比直接兑换玄铁更便宜。只能神木换玄铁，不能反向。
+ * 1 个玄铁折几个神木（都是展示单位）：沿用功勋兑换的比价（玄铁 4 功勋、神木 2 功勋）。
+ * 两个方向同一比价：2 神木换 1 玄铁，1 玄铁换 2 神木，来回换不赚不亏。
  */
 export const SHOP_SHENMU_PER_XUANTIE = 2;
 
-/** 兑换的两端资源 id（game-config 里的神木与玄铁）。 */
-export const SHOP_EXCHANGE_FROM = 'shenmu';
-export const SHOP_EXCHANGE_TO = 'xuantie';
+/** 兑换方向：toXuantie = 神木 → 玄铁；toShenmu = 玄铁 → 神木。 */
+export const SHOP_EXCHANGE_DIRECTIONS = ['toXuantie', 'toShenmu'] as const;
+export type ShopExchangeDirection = (typeof SHOP_EXCHANGE_DIRECTIONS)[number];
 
-/** 单次兑换的玄铁数量上限（展示单位整数）：与 schema 同口径。 */
+/** 兑换两端的资源 id（game-config 里的神木与玄铁）。 */
+export const SHOP_SHENMU_ID = 'shenmu';
+export const SHOP_XUANTIE_ID = 'xuantie';
+
+/** 单次兑换的玄铁数量上限（展示单位整数，两个方向都按玄铁计）：与 schema 同口径。 */
 export const SHOP_MAX_EXCHANGE_AMOUNT = 1_000;
 
-/** 兑换 amount 个玄铁要扣的神木（最小单位）。 */
+/** 兑换 amount 个玄铁要扣的神木（最小单位）；反向时也是换得的神木。 */
 export function shopExchangeShenmuCost(xuantieAmount: number): number {
   return toMinUnits(xuantieAmount * SHOP_SHENMU_PER_XUANTIE);
+}
+
+/**
+ * 一笔兑换的两端（最小单位）：amount 一律是**玄铁**数量（展示单位整数），
+ * 神木那一端 = amount × SHOP_SHENMU_PER_XUANTIE，所以两个方向都不会出现零头。
+ */
+export function shopExchangePlan(
+  direction: ShopExchangeDirection,
+  amount: number,
+): { fromId: string; toId: string; cost: number; gained: number } {
+  const xuantie = toMinUnits(amount);
+  const shenmu = shopExchangeShenmuCost(amount);
+  return direction === 'toXuantie'
+    ? { fromId: SHOP_SHENMU_ID, toId: SHOP_XUANTIE_ID, cost: shenmu, gained: xuantie }
+    : { fromId: SHOP_XUANTIE_ID, toId: SHOP_SHENMU_ID, cost: xuantie, gained: shenmu };
 }

@@ -906,11 +906,11 @@ export function createGameRoutes(): Hono<AppEnv> {
     return respondOk(c, { state: result.state, result: result.result });
   });
 
-  // 坊市：神木兑换玄铁（结算 → 神木余额 / 玄铁容量校验 → 扣神木、加玄铁，一次受保护 batch）。
+  // 坊市：神木 ⇄ 玄铁（结算 → 付出方余额 / 换得方容量校验 → 扣一边、加另一边，一次受保护 batch）。
   routes.post('/game/shop-exchange', async (c) => {
     const userId = requireUserId(c);
     const body = await parseStrictJson(shopExchangeRequestSchema, c);
-    const result = await shopExchange(getDb(c.env), userId, body.amount, Date.now());
+    const result = await shopExchange(getDb(c.env), userId, body.direction, body.amount, Date.now());
     return respondOk(c, { state: result.state, result: result.result });
   });
   // 全服聊天

@@ -19,6 +19,14 @@ export const MAX_ENTRIES = 5;
 
 export const CHANGELOG: readonly ChangelogEntry[] = [
   {
+    id: '2026-10-11-shop-exchange-both-ways',
+    time: '2026-10-11 12:00',
+    title: '坊市 · 玄铁也能换回神木',
+    items: [
+      '坊市「兑换」页改为双向：2 神木换 1 玄铁，1 玄铁也能换回 2 神木，来回换不赚不亏。',
+    ],
+  },
+  {
     id: '2026-10-11-shop-exchange',
     time: '2026-10-11 10:00',
     title: '坊市 · 神木兑换玄铁',

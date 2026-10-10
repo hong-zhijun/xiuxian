@@ -21,6 +21,7 @@ import type {
   RecruitPreview,
   SecretRealmView,
   SectStateView,
+  ShopExchangeDirection,
   ShopResourceId,
   WheelSpinResult,
   HubView,
@@ -1058,14 +1059,17 @@ async function onShopSellPill(pillId: string, quantity: number): Promise<void> {
   }
 }
 
-/** 神木兑换玄铁（POST /game/shop-exchange）：神木余额与玄铁容量由服务端校验，成功后留在兑换页。 */
-async function onShopExchange(amount: number): Promise<void> {
+/** 神木 ⇄ 玄铁（POST /game/shop-exchange）：付出方余额与换得方容量由服务端校验，成功后留在兑换页。 */
+async function onShopExchange(direction: ShopExchangeDirection, amount: number): Promise<void> {
   if (props.busy || shopSubmitting.value) return;
   shopSubmitting.value = true;
   try {
-    const { state: next, result } = await shopExchange(amount);
+    const { state: next, result } = await shopExchange(direction, amount);
     handOffShopState(next);
-    emit('notify', 'success', `换得玄铁 ×${String(result.amount)}`, result.message);
+    const title = result.direction === 'toXuantie'
+      ? `换得玄铁 ×${String(result.amount)}`
+      : `换得神木 ×${formatAmount(result.gained)}`;
+    emit('notify', 'success', title, result.message);
   } catch (caught) {
     emit('notify', 'error', '兑换未成', caught instanceof Error ? caught.message : '坊市暂时无法交割，请稍后重试。');
   } finally {
