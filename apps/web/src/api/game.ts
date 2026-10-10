@@ -278,6 +278,8 @@ export interface SectStateView {
     buyPrice: number;
     /** 卖 1 展示单位材料能得的灵石（最小单位，= 500）。 */
     sellPrice: number;
+    /** 兑换 1 个玄铁要花几个神木（展示单位）。 */
+    shenmuPerXuantie: number;
     /** 可回收的丹药：有回收价的丹方都会下发（库存为 0 的也在列表里，前端自行标灰）；owned 是库存颗数。 */
     pills: Array<{ id: string; name: string; owned: number; sellPrice: number }>;
   };
@@ -1796,6 +1798,24 @@ export async function shopSellPill(
     '/api/v1/game/shop-sell-pill',
     { method: 'POST', body: { pillId, quantity } },
   );
+}
+
+/** 神木兑换玄铁回执（与后端 view.ts 的 ShopExchangeResultView 一一对应）。 */
+export interface ShopExchangeResult {
+  action: 'exchange';
+  /** 换得的玄铁数量（展示单位）。 */
+  amount: number;
+  /** 花掉的神木（最小单位）。 */
+  cost: number;
+  message: string;
+}
+
+/** 坊市神木兑换玄铁（POST /game/shop-exchange）：amount 是要换得的玄铁数量（展示单位整数，≥ 1）。 */
+export async function shopExchange(amount: number): Promise<{ state: SectStateView; result: ShopExchangeResult }> {
+  return apiRequest<{ state: SectStateView; result: ShopExchangeResult }>('/api/v1/game/shop-exchange', {
+    method: 'POST',
+    body: { amount },
+  });
 }
 
 /* ---------- 0025/0027 世界 Boss（讨伐，二期） ---------- */

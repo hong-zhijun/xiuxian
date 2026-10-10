@@ -11,10 +11,13 @@ import {
   SHOP_MAX_PILL_QUANTITY,
   SHOP_MAX_TRADE_AMOUNT,
   SHOP_PILL_PRICES,
+  SHOP_MAX_EXCHANGE_AMOUNT,
   SHOP_SELL_PRICE,
+  SHOP_SHENMU_PER_XUANTIE,
   SHOP_TRADABLE_RESOURCES,
   UNITS_PER_DISPLAY,
   shopBuyCost,
+  shopExchangeShenmuCost,
   shopPillRevenue,
   shopSellRevenue,
   toMinUnits,
@@ -127,11 +130,15 @@ async function pillQuantityOf(sectId: string, pillId: string): Promise<number> {
   return row === null ? 0 : Number(row.quantity);
 }
 
-/** 1 级宗门下的药材容量：配置基础容量 × 等级倍率（与结算 / 买入校验同一口径）。 */
-function herbCapacity(): number {
-  const definition = GAME_CONFIG_CONTENT.resources.find((resource) => resource.id === 'herb');
-  expect(definition, '配置里必须有药材').toBeTruthy();
+/** 1 级宗门下某项资源的容量：配置基础容量 × 等级倍率（与结算 / 买入校验同一口径）。 */
+function capacityAtLevel1(resourceId: string): number {
+  const definition = GAME_CONFIG_CONTENT.resources.find((resource) => resource.id === resourceId);
+  expect(definition, `配置里必须有 ${resourceId}`).toBeTruthy();
   return effectiveCapacity(definition!.capacity, findSectLevel(1).capacityMultiplier);
+}
+
+function herbCapacity(): number {
+  return capacityAtLevel1('herb');
 }
 
 /** 失败请求后的「state 未变」口径：余额 + 坊市面板（时间 / 结算字段不稳定，不比较）。 */
@@ -158,6 +165,10 @@ function sell(sect: SectFixture, body: Record<string, unknown>): Promise<ApiResu
 
 function sellPill(sect: SectFixture, body: Record<string, unknown>): Promise<ApiResult> {
   return sect.api.post('/api/v1/game/shop-sell-pill', body);
+}
+
+function exchange(sect: SectFixture, body: Record<string, unknown>): Promise<ApiResult> {
+  return sect.api.post('/api/v1/game/shop-exchange', body);
 }
 
 /* ---------- 买入材料（计划 4.2 / 7.2-1、4、10） ---------- */
@@ -421,6 +432,77 @@ describe('坊市：非法参数与不可交易资源', () => {
 
 /* ---------- 面板（GET /game/sync，计划 4.1 / 7.2-11） ---------- */
 
+/* ---------- 神木兑换玄铁 ---------- */
+
+describe('坊市：神木兑换玄铁', () => {
+  it('兑换成功：神木按 2 / 个减少、玄铁 +1000 最小单位 / 个，cost 正确', async () => {
+    const sect = await makeSect('shp-ex-ok');
+    await freezeSettlement(sect.sectId);
+    await setBalance(sect.sectId, 'shenmu', 10_000);
+    await setBalance(sect.sectId, 'xuantie', 1_000);
+
+    const result = await exchange(sect, { amount: 3 });
+    expect(result.status).toBe(200);
+    const data = dataOf(result) as Record<string, any>;
+    expect(data.result.action).toBe('exchange');
+    expect(data.result.amount).toBe(3);
+    expect(data.result.cost).toBe(shopExchangeShenmuCost(3));
+    expect(data.result.cost).toBe(3 * SHOP_SHENMU_PER_XUANTIE * UNITS_PER_DISPLAY);
+
+    expect(await balanceOf(sect.sectId, 'shenmu')).toBe(10_000 - shopExchangeShenmuCost(3));
+    expect(await balanceOf(sect.sectId, 'xuantie')).toBe(1_000 + toMinUnits(3));
+  });
+
+  it('神木不足：INSUFFICIENT_RESOURCE，余额与面板原样不变', async () => {
+    const sect = await makeSect('shp-ex-short');
+    await freezeSettlement(sect.sectId);
+    await setBalance(sect.sectId, 'shenmu', shopExchangeShenmuCost(2) - 1);
+    await setBalance(sect.sectId, 'xuantie', 0);
+    const before = await shopSnapshot(sect);
+
+    const rejected = await exchange(sect, { amount: 2 });
+    expect(rejected.status).toBe(409);
+    expect(errorOf(rejected).code).toBe('INSUFFICIENT_RESOURCE');
+    await expectShopUnchanged(sect, before);
+  });
+
+  it('撞玄铁容量上限：CAPACITY_FULL，details 给出还能换多少，神木不扣', async () => {
+    const sect = await makeSect('shp-ex-full');
+    await freezeSettlement(sect.sectId);
+    const capacity = capacityAtLevel1('xuantie');
+    await setBalance(sect.sectId, 'shenmu', 100_000);
+    await setBalance(sect.sectId, 'xuantie', capacity - 500);
+    const before = await shopSnapshot(sect);
+
+    const rejected = await exchange(sect, { amount: 1 });
+    expect(rejected.status).toBe(409);
+    const error = errorOf(rejected);
+    expect(error.code).toBe('CAPACITY_FULL');
+    expect(error.details?.resourceId).toBe('xuantie');
+    expect(error.details?.room).toBe('0');
+    await expectShopUnchanged(sect, before);
+  });
+
+  it('amount = 0 / 负数 / 非整数 / 超上限 / 多余字段 → 400', async () => {
+    const sect = await makeSect('shp-ex-bad');
+    await freezeSettlement(sect.sectId);
+    await setBalance(sect.sectId, 'shenmu', 100_000);
+    const before = await shopSnapshot(sect);
+
+    for (const body of [
+      { amount: 0 },
+      { amount: -1 },
+      { amount: 1.5 },
+      { amount: SHOP_MAX_EXCHANGE_AMOUNT + 1 },
+      { amount: 1, resourceId: 'xuantie' },
+    ]) {
+      const rejected = await exchange(sect, body);
+      expect(rejected.status, JSON.stringify(body)).toBe(400);
+    }
+    await expectShopUnchanged(sect, before);
+  });
+});
+
 describe('坊市面板：1 级宗门即可交易', () => {
   it('state.shop 结构完整：买卖价 + 三种丹方（名称 / 回收价 / 库存）+ 材料页数据', async () => {
     const sect = await makeSect('shp-panel');
@@ -432,9 +514,10 @@ describe('坊市面板：1 级宗门即可交易', () => {
     const state = await sect.state();
     const shop = state.shop as Record<string, unknown>;
     // 结构就是三个键：没有 unlocked / blockedReason —— 坊市不设解锁条件。
-    expect(Object.keys(shop).sort()).toEqual(['buyPrice', 'pills', 'sellPrice']);
+    expect(Object.keys(shop).sort()).toEqual(['buyPrice', 'pills', 'sellPrice', 'shenmuPerXuantie']);
     expect(shop.buyPrice).toBe(SHOP_BUY_PRICE);
     expect(shop.sellPrice).toBe(SHOP_SELL_PRICE);
+    expect(shop.shenmuPerXuantie).toBe(SHOP_SHENMU_PER_XUANTIE);
 
     // 售丹页的数据：可回收的丹方齐全（库存 0 也要下发展示；要神木的洗髓 / 悟道 / 培元不回收），价格与库存都来自服务端。
     const pills = shop.pills as Record<string, any>[];
