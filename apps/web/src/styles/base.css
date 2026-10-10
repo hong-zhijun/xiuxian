@@ -4888,6 +4888,17 @@ ul {
   font-style: normal;
 }
 
+.hub-card-alert {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  margin-left: auto;
+  border-radius: 50%;
+  background: var(--red-bright);
+  box-shadow: 0 0 0 2px rgba(8, 20, 17, 0.9);
+}
+
 .hub-card-status {
   overflow: hidden;
   color: var(--muted, #92a79d);
