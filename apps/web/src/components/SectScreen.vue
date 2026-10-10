@@ -633,7 +633,7 @@ const LEVEL_MARK_SLOTS = 5;
 
 /**
  * 该建筑的等级菱形：最大等级决定显示几个（最多 5 个）。
- * 超过 5 级的建筑（聚灵阵上限 10）第 6～10 级在同一排菱形上「点亮第二层」：换成陆～拾、换高亮色。
+ * 超过 5 级的建筑（聚灵阵、灵矿上限 10）第 6～10 级在同一排菱形上「点亮第二层」：换成陆～拾、换高亮色。
  */
 function levelMarksFor(building: BuildingView): { glyph: string; state: 'dim' | 'on' | 'high' }[] {
   const slots = Math.min(building.maxLevel, LEVEL_MARK_SLOTS);
@@ -648,7 +648,7 @@ function levelMarksFor(building: BuildingView): { glyph: string; state: 'dim' | 
 function buildingDescription(defId: string): string {
   if (defId === 'spiritualArray') return '汇聚天地灵气，每级灵气基础产出 +40%';
   if (defId === 'herbGarden') return '培育灵植，为宗门积蓄药材';
-  if (defId === 'missionHall') return '开采地脉灵矿，提升灵石产出';
+  if (defId === 'missionHall') return '开采地脉灵矿，灵石基础产出 1～5 级每级 +20%、6～10 级每级 +40%';
   if (defId === 'scriptureLibrary') return '典藏万卷，加速弟子修炼';
   if (defId === 'arenaHall') return '锻炼武技，开启秘境探索';
   return '宗门基业，随等级提升效用';

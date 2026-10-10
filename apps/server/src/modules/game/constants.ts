@@ -487,20 +487,62 @@ export const SCRIPTURE_LIBRARY_CULTIVATION_BONUS_BP_PER_LEVEL = 1000;
 /** 灵矿（原任务堂）建筑 id：灵石基础产出的加成来源（V5.1 改动二）。 */
 export const MISSION_HALL_BUILDING_ID = 'missionHall';
 
-/** 灵矿每级给灵石基础产出的加成（基点，2000 = +20%）。 */
+/** 灵矿 1～5 级每级给灵石基础产出的加成（基点，2000 = +20%）。 */
 export const MISSION_HALL_SPIRIT_STONE_BONUS_BP_PER_LEVEL = 2000;
+
+/** 灵矿 6～10 级每级的加成（基点，4000 = +40%；灵石开源，只加基础产出、不加采灵岗位）。 */
+export const MISSION_HALL_HIGH_SPIRIT_STONE_BONUS_BP_PER_LEVEL = 4000;
+
+/** 灵矿按「前段每级 +20%」计的最后一级。 */
+const MISSION_HALL_LOW_MAX_LEVEL = 5;
+
+/** 灵矿 L 级给灵石基础产出的累计加成（基点）：前 5 级每级 +20%，6～10 级每级 +40%（10 级共 +300%，即 ×4）。 */
+export function missionHallSpiritStoneBonusBp(level: number): number {
+  const lv = Math.max(0, Math.floor(level));
+  const low = Math.min(lv, MISSION_HALL_LOW_MAX_LEVEL);
+  const high = Math.max(0, lv - MISSION_HALL_LOW_MAX_LEVEL);
+  return low * MISSION_HALL_SPIRIT_STONE_BONUS_BP_PER_LEVEL + high * MISSION_HALL_HIGH_SPIRIT_STONE_BONUS_BP_PER_LEVEL;
+}
+
+/**
+ * 灵矿 6～10 级（灵石开源，上限由 5 提到 10）：分档表 —— 宗门等级门槛 + 消耗（最小单位），与聚灵阵同一做法。
+ * 灵矿产的就是灵石，花费比聚灵阵低、矿石占比更高，每级大约两三周回本；1～5 级仍按配置的线性升级消耗。
+ */
+export const MISSION_HALL_HIGH_UPGRADES: readonly {
+  level: number;
+  sectLevel: number;
+  cost: Readonly<Record<string, string>>;
+}[] = [
+  { level: 6, sectLevel: 6, cost: { spiritStone: '1000000', ore: '1500000' } },
+  { level: 7, sectLevel: 7, cost: { spiritStone: '1600000', ore: '2500000' } },
+  { level: 8, sectLevel: 8, cost: { spiritStone: '2500000', ore: '4000000' } },
+  { level: 9, sectLevel: 9, cost: { spiritStone: '3800000', ore: '6000000', xuantie: '10000' } },
+  { level: 10, sectLevel: 10, cost: { spiritStone: '5500000', ore: '9000000', xuantie: '20000' } },
+];
+
+/** 灵矿从 currentLevel 升一级的分档条件；1～5 级（走线性消耗）或已满级返回 null。 */
+export function missionHallUpgradeFrom(currentLevel: number) {
+  return MISSION_HALL_HIGH_UPGRADES.find((item) => item.level === currentLevel + 1) ?? null;
+}
 
 /** 采灵（灵石采集）岗位 id：对应配置里的 positions.id（V5.1 改动三）。 */
 export const STONE_MINING_ASSIGNMENT = 'stoneMining';
 
-/** 采灵岗位人数上限：宗门 6 级前每人限 1 人。 */
-export const STONE_MINING_LIMIT_LOW = 1;
+/**
+ * 采灵岗位人数上限（按宗门等级分档，从高到低找第一档达标的）：
+ * 1～5 级 1 人、6～8 级 2 人、9～11 级 4 人、12 级起 6 人（灵石开源：原来 6 级起封顶 2 人）。
+ */
+export const STONE_MINING_LIMITS: readonly { sectLevel: number; limit: number }[] = [
+  { sectLevel: 12, limit: 6 },
+  { sectLevel: 9, limit: 4 },
+  { sectLevel: 6, limit: 2 },
+  { sectLevel: 1, limit: 1 },
+];
 
-/** 采灵岗位人数上限：宗门 6 级起限 2 人。 */
-export const STONE_MINING_LIMIT_HIGH = 2;
-
-/** 采灵岗位人数上限提到 high 的宗门等级门槛。 */
-export const STONE_MINING_UNLOCK_SECT_LEVEL = 6;
+/** 该宗门等级下的采灵人数上限。 */
+export function stoneMiningLimitOf(sectLevel: number): number {
+  return STONE_MINING_LIMITS.find((tier) => sectLevel >= tier.sectLevel)?.limit ?? 1;
+}
 
 /** 吐纳（产灵气）岗位 id：对应配置里的 positions.id（v8）。 */
 export const ENERGY_GATHERING_ASSIGNMENT = 'energyGathering';
@@ -514,7 +556,7 @@ export const ENERGY_GATHERING_LIMIT = 2;
  */
 export function assignmentLimitOf(assignment: string, sectLevel: number): number | null {
   if (assignment === STONE_MINING_ASSIGNMENT) {
-    return sectLevel >= STONE_MINING_UNLOCK_SECT_LEVEL ? STONE_MINING_LIMIT_HIGH : STONE_MINING_LIMIT_LOW;
+    return stoneMiningLimitOf(sectLevel);
   }
   if (assignment === ENERGY_GATHERING_ASSIGNMENT) {
     return ENERGY_GATHERING_LIMIT;

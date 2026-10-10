@@ -2,7 +2,7 @@ import type { GameConfigContent } from '@xiuxian/game-core';
 
 import {
   MISSION_HALL_BUILDING_ID,
-  MISSION_HALL_SPIRIT_STONE_BONUS_BP_PER_LEVEL,
+  missionHallSpiritStoneBonusBp,
   SCRIPTURE_LIBRARY_BUILDING_ID,
   SCRIPTURE_LIBRARY_CULTIVATION_BONUS_BP_PER_LEVEL,
   SPIRITUAL_ARRAY_BUILDING_ID,
@@ -269,7 +269,7 @@ export function resourceBaseRates(
   const missionHallLevel = buildingLevels?.[MISSION_HALL_BUILDING_ID] ?? 0;
   if (missionHallLevel > 0) {
     const currentRate = rates.get('spiritStone') ?? 0;
-    const bonusBp = missionHallLevel * MISSION_HALL_SPIRIT_STONE_BONUS_BP_PER_LEVEL;
+    const bonusBp = missionHallSpiritStoneBonusBp(missionHallLevel);
     rates.set('spiritStone', Math.floor((currentRate * (10_000 + bonusBp)) / 10_000));
   }
 
