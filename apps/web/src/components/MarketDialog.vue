@@ -1,8 +1,16 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 
-import type { MarketChartRange, MarketChartView, MarketView, SectStateView, StockView } from '../api/game';
-import { fetchMarket, fetchMarketChart, tradeStock } from '../api/game';
+import type {
+  MarketChartRange,
+  MarketChartView,
+  MarketOrderKind,
+  MarketOrderView,
+  MarketView,
+  SectStateView,
+  StockView,
+} from '../api/game';
+import { cancelStockOrder, fetchMarket, fetchMarketChart, placeStockOrder, tradeStock } from '../api/game';
 import { formatAmount } from '../utils/format';
 import ModalShell from './ModalShell.vue';
 
@@ -10,6 +18,8 @@ import ModalShell from './ModalShell.vue';
  * 0043 灵股行情面板（docs/灵股行情开发计划.md）。
  *
  * 系统坐庄：价格、K 线、消息、持仓全部由服务端算好；这里只渲染与下单。
+ * 0049 挂单（docs/灵股挂单开发计划.md）：下单区下面设触发价，挂单列表在「挂单」标签里可撤单；
+ * 挂单的成交 / 过期由服务端结算，这里只显示结果。
  * 面板打开期间按服务端给的下一跳时刻自动刷新（每分钟一次），关掉就停。
  * 颜色按 A 股习惯：红涨绿跌。
  */
@@ -31,7 +41,12 @@ const showRules = ref(false);
 const selectedId = ref<string>('');
 const range = ref<MarketChartRange>('1h');
 const shares = ref<number>(10);
-const tab = ref<'news' | 'trades' | 'ranks'>('news');
+type MarketTab = 'news' | 'trades' | 'orders' | 'ranks';
+const tab = ref<MarketTab>('news');
+/** 挂单表单：类型、触发价（展示单位，输入框里的字符串）、股数。 */
+const orderKind = ref<MarketOrderKind>('limit_buy');
+const orderTrigger = ref<string>('');
+const orderShares = ref<string>('10');
 
 const RANGES: readonly { id: MarketChartRange; label: string }[] = [
   { id: '1h', label: '分时 1 小时' },
@@ -39,6 +54,19 @@ const RANGES: readonly { id: MarketChartRange; label: string }[] = [
   { id: '1d', label: '1 天' },
   { id: '7d', label: '7 天' },
 ];
+
+const ORDER_KINDS: readonly { id: MarketOrderKind; label: string }[] = [
+  { id: 'limit_buy', label: '限价买' },
+  { id: 'limit_sell', label: '限价卖' },
+  { id: 'stop_sell', label: '止损卖' },
+];
+
+const tabs = computed<readonly { id: MarketTab; label: string }[]>(() => [
+  { id: 'news', label: '坊间消息' },
+  { id: 'trades', label: '我的成交' },
+  { id: 'orders', label: `挂单 ${String(market.value?.orders.open.length ?? 0)}` },
+  { id: 'ranks', label: '收益榜' },
+]);
 
 const UP = '#e0544a';
 const DOWN = '#3fae74';
@@ -162,12 +190,175 @@ function fillMax(side: 'buy' | 'sell'): void {
   const stock = selected.value;
   if (stock === null) return;
   if (side === 'sell') {
-    shares.value = stock.holding?.shares ?? 0;
+    shares.value = stock.holding?.available ?? 0;
     return;
   }
   const stone = Number(props.state.resources.find((resource) => resource.id === 'spiritStone')?.balance ?? 0);
   const feeRate = 1 + (market.value?.feeBp ?? 30) / 10_000;
   shares.value = Math.max(0, Math.min(Math.floor(capLeft.value / stock.price), Math.floor(stone / (stock.price * feeRate))));
+}
+
+/* ---------- 挂单（0049） ---------- */
+
+const stoneBalance = computed<number>(() =>
+  Number(props.state.resources.find((resource) => resource.id === 'spiritStone')?.balance ?? 0),
+);
+
+/** 触发价输入（展示单位）→ 最小单位整数；不是正数或超过 3 位小数返回 null。 */
+function triggerMinUnits(text: string): number | null {
+  if (text.trim() === '') return null;
+  const display = Number(text);
+  if (!Number.isFinite(display) || display <= 0) return null;
+  const minUnits = Math.round(display * 1000);
+  if (minUnits < 1 || Math.abs(minUnits - display * 1000) > 1e-6) return null;
+  return minUnits;
+}
+
+/** 限价买的冻结额：触发价 × 股数 + 手续费（与服务端 limitBuyReserve 同一口径）。 */
+function reserveOf(trigger: number, count: number): number {
+  const amount = trigger * count;
+  return amount + Math.max(1, Math.ceil((amount * (market.value?.feeBp ?? 30)) / 10_000));
+}
+
+const orderTriggerMin = computed<number | null>(() => triggerMinUnits(orderTrigger.value));
+const orderShareCount = computed<number>(() => {
+  const value = Number(orderShares.value);
+  return Number.isInteger(value) ? value : NaN;
+});
+const orderReserve = computed<number | null>(() => {
+  const trigger = orderTriggerMin.value;
+  const count = orderShareCount.value;
+  if (trigger === null || !Number.isInteger(count) || count < 1) return null;
+  return reserveOf(trigger, count);
+});
+
+/** 不能下这单的原因（空串 = 可以下）。 */
+const orderError = computed<string>(() => {
+  const view = market.value;
+  const stock = selected.value;
+  if (view === null || stock === null) return '';
+  if (!view.unlocked) return `宗门 ${String(view.unlockSectLevel)} 级开放灵股`;
+  const trigger = orderTriggerMin.value;
+  if (trigger === null) return '触发价要大于 0，最多 3 位小数';
+  const count = orderShareCount.value;
+  if (!Number.isInteger(count) || count < 1 || count > view.maxSharesPerTrade) {
+    return `股数为 1～${String(view.maxSharesPerTrade)} 的整数`;
+  }
+  if (view.orders.open.length >= view.orders.maxOpen) {
+    return `挂单已满（${String(view.orders.maxOpen)} 个），先撤掉一些再下单`;
+  }
+  if (orderKind.value === 'limit_buy') {
+    const cost = stock.holding?.cost ?? 0;
+    if (cost + trigger * count > view.positionCap) {
+      return `这支股票的持仓成本最多 ${formatAmount(view.positionCap)} 灵石，还能再买 ${formatAmount(Math.max(0, view.positionCap - cost))} 灵石`;
+    }
+    if (reserveOf(trigger, count) > stoneBalance.value) return '灵石不够冻结';
+    return '';
+  }
+  const available = stock.holding?.available ?? 0;
+  if (count > available) return `只能卖可用的 ${String(available)} 股（其余挂着卖单）`;
+  return '';
+});
+
+const orderHint = computed<string>(() => {
+  const stock = selected.value;
+  if (stock === null) return '';
+  if (orderKind.value === 'limit_buy') {
+    return orderReserve.value === null
+      ? '填好触发价和股数，这里会显示要冻结多少灵石'
+      : `冻结 ${formatAmount(orderReserve.value)} 灵石（触发价 × 股数 + 手续费），成交时按实际成交价结算，多出的退回`;
+  }
+  const holding = stock.holding;
+  return holding === null
+    ? '还没有持仓，不能下卖单'
+    : `可卖 ${String(holding.available)} 股（持有 ${String(holding.shares)}，挂单锁定 ${String(holding.locked)}）`;
+});
+
+/** 最小单位 → 输入框里的展示价（固定 3 位小数）。 */
+function priceInput(minUnits: number): string {
+  return (minUnits / 1000).toFixed(3);
+}
+
+/** 最小单位 → 展示价（最多 3 位小数，去掉末尾的 0）。 */
+function priceFine(minUnits: number): string {
+  return String(Number((minUnits / 1000).toFixed(3)));
+}
+
+function useCurrentPrice(): void {
+  const stock = selected.value;
+  if (stock !== null) orderTrigger.value = priceInput(stock.price);
+}
+
+/** 限价买：按当前能冻结的灵石、持仓上限算最大股数；卖单：可卖的全部股数。 */
+function fillOrderMax(): void {
+  const stock = selected.value;
+  const view = market.value;
+  if (stock === null || view === null) return;
+  if (orderKind.value !== 'limit_buy') {
+    orderShares.value = String(stock.holding?.available ?? 0);
+    return;
+  }
+  const trigger = orderTriggerMin.value;
+  if (trigger === null) return;
+  const byCap = Math.floor((view.positionCap - (stock.holding?.cost ?? 0)) / trigger);
+  let count = Math.max(0, Math.min(byCap, view.maxSharesPerTrade, Math.floor(stoneBalance.value / trigger)));
+  while (count > 0 && reserveOf(trigger, count) > stoneBalance.value) count -= 1;
+  orderShares.value = String(count);
+}
+
+async function placeOrder(): Promise<void> {
+  const stock = selected.value;
+  const trigger = orderTriggerMin.value;
+  if (stock === null || trigger === null || orderError.value !== '' || disabled.value) return;
+  const count = orderShareCount.value;
+  const kind = orderKind.value;
+  submitting.value = true;
+  try {
+    const data = await placeStockOrder(stock.id, kind, count, trigger);
+    emit('state-update', data.state);
+    market.value = data.market;
+    const label = ORDER_KINDS.find((item) => item.id === kind)?.label ?? '挂单';
+    emit('notify', 'success', '灵股', `已挂${label}：${stock.name} ${String(count)} 股，触发价 ${priceFine(trigger)}`);
+    // 下单即刷新：服务端会顺手结算（触发价已满足的，这一分钟就成交）。
+    void refresh(true);
+  } catch (error) {
+    emit('notify', 'warning', '灵股', error instanceof Error ? error.message : '挂单失败，请稍后再试');
+  } finally {
+    submitting.value = false;
+  }
+}
+
+async function cancelOrder(order: MarketOrderView): Promise<void> {
+  if (disabled.value) return;
+  submitting.value = true;
+  try {
+    const data = await cancelStockOrder(order.id);
+    emit('state-update', data.state);
+    market.value = data.market;
+    const back = order.kind === 'limit_buy' ? `，退回 ${formatAmount(order.reserved)} 灵石` : '';
+    emit('notify', 'success', '灵股', `已撤销${order.stockName}的${order.kindName}单${back}`);
+  } catch (error) {
+    emit('notify', 'warning', '灵股', error instanceof Error ? error.message : '撤单失败，请稍后再试');
+  } finally {
+    submitting.value = false;
+  }
+}
+
+/** 挂单结束的文案（成交价 / 过期 / 取消原因）。 */
+function orderResultText(order: MarketOrderView): string {
+  const back = order.kind === 'limit_buy' ? `，退回 ${formatAmount(order.reserved)} 灵石` : '';
+  if (order.status === 'filled') return `成交 @ ${priceFine(order.fillPrice ?? 0)}`;
+  if (order.status === 'expired') return `已过期${back}`;
+  if (order.closeReason === 'position_cap') return `超出持仓上限，已取消${back}`;
+  if (order.closeReason === 'no_shares') return '持股不足，已取消';
+  return `已撤单${back}`;
+}
+
+/** 日期时间（UTC+8，MM-DD HH:mm）。 */
+function dateTimeText(iso: string): string {
+  const ms = Date.parse(iso);
+  const shifted = new Date(ms + 8 * 3_600_000);
+  return `${String(shifted.getUTCMonth() + 1).padStart(2, '0')}-${String(shifted.getUTCDate()).padStart(2, '0')} ${timeText(ms)}`;
 }
 
 async function trade(side: 'buy' | 'sell'): Promise<void> {
@@ -245,6 +436,11 @@ async function refresh(silent = false): Promise<void> {
 
 watch([selectedId, range], () => {
   void loadChart();
+});
+
+// 切换股票时，触发价默认填当前价（用户再改）。
+watch(selectedId, () => {
+  useCurrentPrice();
 });
 
 const RULES_TEXT = `灵股 · 规则
@@ -389,6 +585,7 @@ onUnmounted(() => {
               盈亏 {{ signed(selected.holding.profit / 1000) }}（{{ signed(selected.holding.profitPct) }}%）
             </span>
             <span v-if="sellLockLeft > 0" class="market-lock">{{ sellLockLeft }} 分钟后可卖</span>
+            <span v-if="selected.holding.locked > 0" class="market-lock">挂单锁 {{ selected.holding.locked }} 股</span>
           </div>
           <div class="market-trade-row">
             <label class="market-shares">
@@ -396,7 +593,7 @@ onUnmounted(() => {
               <input v-model.number="shares" class="market-input" type="number" min="1" :max="market.maxSharesPerTrade" />
             </label>
             <button class="market-quiet-button" type="button" @click="fillMax('buy')">可买最大</button>
-            <button class="market-quiet-button" type="button" :disabled="!selected.holding" @click="fillMax('sell')">全部持仓</button>
+            <button class="market-quiet-button" type="button" :disabled="!selected.holding" @click="fillMax('sell')">可卖全部</button>
           </div>
           <p v-if="estimate" class="market-estimate">
             成交额 {{ formatAmount(estimate.amount) }} · 手续费 {{ formatAmount(estimate.fee) }} ·
@@ -415,23 +612,67 @@ onUnmounted(() => {
             <button
               class="market-sell"
               type="button"
-              :disabled="disabled || !market.unlocked || market.tradesLeft <= 0 || !selected.holding || sellLockLeft > 0"
+              :disabled="disabled || !market.unlocked || market.tradesLeft <= 0 || !selected.holding || selected.holding.available <= 0 || sellLockLeft > 0"
               @click="trade('sell')"
             >
               卖出
             </button>
           </div>
+
+          <!-- 挂单：设好触发价和股数，价格到了服务端自动成交（结果在「挂单」标签里） -->
+          <div class="market-order-form">
+            <p class="market-order-title">
+              <strong>挂单</strong>
+              <span>已挂 {{ market.orders.open.length }} / {{ market.orders.maxOpen }} · 有效 {{ market.orders.ttlHours }} 小时</span>
+            </p>
+            <div class="market-ranges" role="radiogroup" aria-label="挂单类型">
+              <button
+                v-for="item in ORDER_KINDS"
+                :key="item.id"
+                class="market-range"
+                :class="{ 'is-active': orderKind === item.id }"
+                type="button"
+                role="radio"
+                :aria-checked="orderKind === item.id"
+                @click="orderKind = item.id"
+              >
+                {{ item.label }}
+              </button>
+            </div>
+            <div class="market-trade-row">
+              <label class="market-shares">
+                <span>触发价</span>
+                <input v-model="orderTrigger" class="market-input" type="number" min="0.001" step="0.001" inputmode="decimal" />
+              </label>
+              <button class="market-quiet-button" type="button" @click="useCurrentPrice()">用现价</button>
+            </div>
+            <div class="market-trade-row">
+              <label class="market-shares">
+                <span>股数</span>
+                <input v-model="orderShares" class="market-input" type="number" min="1" :max="market.maxSharesPerTrade" />
+              </label>
+              <button class="market-quiet-button" type="button" @click="fillOrderMax()">
+                {{ orderKind === 'limit_buy' ? '可买最大' : '可卖全部' }}
+              </button>
+            </div>
+            <p class="market-estimate">{{ orderHint }}</p>
+            <p v-if="orderError" class="market-order-error">{{ orderError }}</p>
+            <button
+              class="market-order-submit"
+              type="button"
+              :disabled="disabled || !market.unlocked || orderError !== ''"
+              @click="placeOrder()"
+            >
+              挂单
+            </button>
+          </div>
         </div>
       </section>
 
-      <!-- 消息 / 成交 / 收益榜 -->
+      <!-- 消息 / 成交 / 挂单 / 收益榜 -->
       <div class="market-tabs" role="tablist">
         <button
-          v-for="item in [
-            { id: 'news', label: '坊间消息' },
-            { id: 'trades', label: '我的成交' },
-            { id: 'ranks', label: '收益榜' },
-          ] as const"
+          v-for="item in tabs"
           :key="item.id"
           class="market-range"
           :class="{ 'is-active': tab === item.id }"
@@ -459,6 +700,27 @@ onUnmounted(() => {
           <span :class="item.side === 'buy' ? 'is-up' : 'is-down'">{{ item.side === 'buy' ? '买入' : '卖出' }}</span>
           {{ item.stockName }} {{ item.shares }} 股 @ {{ price(item.price) }}
           <span v-if="item.side === 'sell'" :class="toneOf(item.profit)">（{{ signed(item.profit / 1000) }}）</span>
+        </li>
+      </ul>
+
+      <ul v-else-if="tab === 'orders'" class="market-lines">
+        <li v-if="market.orders.open.length === 0 && market.orders.recent.length === 0" class="market-empty">
+          还没有挂单。在上面的「挂单」里设好触发价，价格到了自动成交。
+        </li>
+        <li v-for="order in market.orders.open" :key="order.id" class="market-order">
+          <span class="market-time">{{ dateTimeText(order.expiresAt) }} 到期</span>
+          <span class="market-tag">{{ order.stockName }}</span>
+          <span :class="order.kind === 'limit_buy' ? 'is-up' : 'is-down'">{{ order.kindName }}</span>
+          {{ order.shares }} 股 @ {{ priceFine(order.triggerPrice) }}
+          <small class="market-order-note">
+            {{ order.kind === 'limit_buy' ? `冻结 ${formatAmount(order.reserved)} 灵石` : `锁定 ${order.shares} 股` }}
+          </small>
+          <button class="market-quiet-button" type="button" :disabled="disabled" @click="cancelOrder(order)">撤单</button>
+        </li>
+        <li v-for="order in market.orders.recent" :key="order.id" class="market-order is-closed">
+          <span class="market-time">{{ dateTimeText(order.filledAt ?? order.createdAt) }}</span>
+          <span class="market-tag">{{ order.stockName }}</span>
+          {{ order.kindName }} {{ order.shares }} 股：{{ orderResultText(order) }}
         </li>
       </ul>
 
@@ -887,6 +1149,69 @@ onUnmounted(() => {
   border-radius: 20px;
   background: rgba(202, 169, 106, 0.12);
   color: var(--gold, #caa96a);
+  font-size: 11px;
+}
+
+.market-order-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 8px;
+  border-top: 1px dashed rgba(202, 169, 106, 0.2);
+}
+
+.market-order-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  margin: 0;
+  color: #8fa79b;
+  font-size: 12px;
+}
+
+.market-order-title strong {
+  color: var(--gold-bright, #ead19a);
+  font-size: 13px;
+}
+
+.market-order-error {
+  margin: 0;
+  color: #d9b06a;
+  font-size: 12px;
+}
+
+.market-order-submit {
+  min-height: 34px;
+  border: 1px solid rgba(202, 169, 106, 0.6);
+  border-radius: 3px;
+  background: rgba(202, 169, 106, 0.14);
+  color: var(--gold-bright, #ead19a);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.market-order-submit:disabled {
+  border-color: rgba(167, 184, 173, 0.11);
+  background: rgba(255, 255, 255, 0.016);
+  color: #63756c;
+  cursor: not-allowed;
+}
+
+.market-order {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+}
+
+.market-order.is-closed {
+  color: #7d9186;
+}
+
+.market-order-note {
+  color: #8fa79b;
   font-size: 11px;
 }
 
