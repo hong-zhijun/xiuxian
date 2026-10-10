@@ -434,7 +434,7 @@ describe('坊市：非法参数与不可交易资源', () => {
 
 /* ---------- 神木兑换玄铁 ---------- */
 
-describe('坊市：神木兑换玄铁', () => {
+describe('坊市：神木 ⇄ 玄铁', () => {
   it('兑换成功：神木按 2 / 个减少、玄铁 +1000 最小单位 / 个，cost 正确', async () => {
     const sect = await makeSect('shp-ex-ok');
     await freezeSettlement(sect.sectId);
@@ -445,12 +445,76 @@ describe('坊市：神木兑换玄铁', () => {
     expect(result.status).toBe(200);
     const data = dataOf(result) as Record<string, any>;
     expect(data.result.action).toBe('exchange');
+    // 不传 direction 按神木 → 玄铁（兼容旧前端）。
+    expect(data.result.direction).toBe('toXuantie');
     expect(data.result.amount).toBe(3);
+    expect(data.result.gained).toBe(toMinUnits(3));
     expect(data.result.cost).toBe(shopExchangeShenmuCost(3));
     expect(data.result.cost).toBe(3 * SHOP_SHENMU_PER_XUANTIE * UNITS_PER_DISPLAY);
 
     expect(await balanceOf(sect.sectId, 'shenmu')).toBe(10_000 - shopExchangeShenmuCost(3));
     expect(await balanceOf(sect.sectId, 'xuantie')).toBe(1_000 + toMinUnits(3));
+  });
+
+  it('反向兑换成功：玄铁按 1 / 个减少、神木 +2000 最小单位 / 个', async () => {
+    const sect = await makeSect('shp-ex-back');
+    await freezeSettlement(sect.sectId);
+    await setBalance(sect.sectId, 'xuantie', 5_000);
+    await setBalance(sect.sectId, 'shenmu', 1_000);
+
+    const result = await exchange(sect, { direction: 'toShenmu', amount: 3 });
+    expect(result.status).toBe(200);
+    const data = dataOf(result) as Record<string, any>;
+    expect(data.result.direction).toBe('toShenmu');
+    expect(data.result.amount).toBe(3);
+    expect(data.result.cost).toBe(toMinUnits(3));
+    expect(data.result.gained).toBe(shopExchangeShenmuCost(3));
+
+    expect(await balanceOf(sect.sectId, 'xuantie')).toBe(5_000 - toMinUnits(3));
+    expect(await balanceOf(sect.sectId, 'shenmu')).toBe(1_000 + shopExchangeShenmuCost(3));
+  });
+
+  it('来回换不赚不亏：神木 → 玄铁 → 神木后余额回到原值', async () => {
+    const sect = await makeSect('shp-ex-round');
+    await freezeSettlement(sect.sectId);
+    await setBalance(sect.sectId, 'shenmu', 20_000);
+    await setBalance(sect.sectId, 'xuantie', 0);
+
+    expect((await exchange(sect, { direction: 'toXuantie', amount: 7 })).status).toBe(200);
+    expect((await exchange(sect, { direction: 'toShenmu', amount: 7 })).status).toBe(200);
+    expect(await balanceOf(sect.sectId, 'shenmu')).toBe(20_000);
+    expect(await balanceOf(sect.sectId, 'xuantie')).toBe(0);
+  });
+
+  it('反向玄铁不足：INSUFFICIENT_RESOURCE，余额与面板原样不变', async () => {
+    const sect = await makeSect('shp-ex-back-short');
+    await freezeSettlement(sect.sectId);
+    await setBalance(sect.sectId, 'xuantie', toMinUnits(2) - 1);
+    await setBalance(sect.sectId, 'shenmu', 0);
+    const before = await shopSnapshot(sect);
+
+    const rejected = await exchange(sect, { direction: 'toShenmu', amount: 2 });
+    expect(rejected.status).toBe(409);
+    expect(errorOf(rejected).code).toBe('INSUFFICIENT_RESOURCE');
+    await expectShopUnchanged(sect, before);
+  });
+
+  it('反向撞神木容量上限：CAPACITY_FULL，room 按还能换多少玄铁给', async () => {
+    const sect = await makeSect('shp-ex-back-full');
+    await freezeSettlement(sect.sectId);
+    const capacity = capacityAtLevel1('shenmu');
+    await setBalance(sect.sectId, 'xuantie', 100_000);
+    // 只剩 3000 最小单位空位：每个玄铁换 2000 神木，最多还能换 1 个。
+    await setBalance(sect.sectId, 'shenmu', capacity - 3_000);
+    const before = await shopSnapshot(sect);
+
+    const rejected = await exchange(sect, { direction: 'toShenmu', amount: 2 });
+    expect(rejected.status).toBe(409);
+    const error = errorOf(rejected);
+    expect(error.code).toBe('CAPACITY_FULL');
+    expect(error.details?.resourceId).toBe('shenmu');
+    expect(error.details?.room).toBe('1');
+    await expectShopUnchanged(sect, before);
   });
 
   it('神木不足：INSUFFICIENT_RESOURCE，余额与面板原样不变', async () => {
@@ -495,6 +559,7 @@ describe('坊市：神木兑换玄铁', () => {
       { amount: 1.5 },
       { amount: SHOP_MAX_EXCHANGE_AMOUNT + 1 },
       { amount: 1, resourceId: 'xuantie' },
+      { amount: 1, direction: 'toHerb' },
     ]) {
       const rejected = await exchange(sect, body);
       expect(rejected.status, JSON.stringify(body)).toBe(400);

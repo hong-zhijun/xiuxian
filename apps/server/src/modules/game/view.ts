@@ -923,7 +923,7 @@ export interface ShopView {
   buyPrice: number;
   /** 卖 1 展示单位材料得多少灵石（最小单位）。 */
   sellPrice: number;
-  /** 兑换 1 个玄铁要花几个神木（展示单位）。 */
+  /** 1 个玄铁折几个神木（展示单位）：神木 ⇄ 玄铁两个方向同一比价。 */
   shenmuPerXuantie: number;
   pills: ShopPillView[];
 }
@@ -967,13 +967,17 @@ export interface ShopSellPillResultView {
   message: string;
 }
 
-/** 坊市神木兑换玄铁结果（POST /game/shop-exchange 的 result）。 */
+/** 坊市神木 ⇄ 玄铁结果（POST /game/shop-exchange 的 result）。 */
 export interface ShopExchangeResultView {
   action: 'exchange';
-  /** 换得的玄铁数量（展示单位整数）。 */
+  /** toXuantie = 神木 → 玄铁；toShenmu = 玄铁 → 神木。 */
+  direction: 'toXuantie' | 'toShenmu';
+  /** 这一笔的玄铁数量（展示单位整数，两个方向都按玄铁计）。 */
   amount: number;
-  /** 花掉的神木（最小单位）。 */
+  /** 付出的资源（最小单位）。 */
   cost: number;
+  /** 换得的资源（最小单位）。 */
+  gained: number;
   /** 服务端拼好的结果文案。 */
   message: string;
 }

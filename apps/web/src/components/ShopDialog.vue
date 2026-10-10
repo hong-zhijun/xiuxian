@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue';
 
-import type { SectStateView, ShopResourceId } from '../api/game';
+import type { SectStateView, ShopExchangeDirection, ShopResourceId } from '../api/game';
 import { toDisplayUnits } from '../utils/format';
 
 /**
- * 坊市（弹窗内容，外壳由 SectScreen 的 ModalShell 提供）：灵石 ↔ 药材/矿石的双向买卖 + 丹药回收 + 神木兑换玄铁。
+ * 坊市（弹窗内容，外壳由 SectScreen 的 ModalShell 提供）：灵石 ↔ 药材/矿石的双向买卖 + 丹药回收 + 神木 ⇄ 玄铁双向兑换。
  *
  * 服务端是唯一的价格与规则来源：买入价、卖出价、单颗丹药回收价都取自 state.shop，前端不复算也不写死常量；
  * 本组件只做三件事 —— 把「展示单位」数量换算成最小单位整数预览、把无效操作挡在按钮外、
@@ -24,8 +24,8 @@ const emit = defineEmits<{
   sell: [resourceId: ShopResourceId, amount: number];
   /** 卖出丹药：quantity 是颗数（≥ 1）。 */
   sellPill: [pillId: string, quantity: number];
-  /** 神木兑换玄铁：amount 是要换得的玄铁数量（展示单位整数，≥ 1）。 */
-  exchange: [amount: number];
+  /** 神木 ⇄ 玄铁：amount 两个方向都是玄铁数量（展示单位整数，≥ 1）。 */
+  exchange: [direction: ShopExchangeDirection, amount: number];
 }>();
 
 /**
@@ -253,45 +253,65 @@ function submitSellPill(): void {
   emit('sellPill', pillId, pillAmount.value);
 }
 
-/* ---------- 神木兑换玄铁 ---------- */
+/* ---------- 神木 ⇄ 玄铁 ---------- */
 
-const shenmu = computed(() => resourceBalance('shenmu'));
-const xuantie = computed(() => resourceBalance('xuantie'));
 const shenmuPerXuantie = computed(() => shop.value.shenmuPerXuantie);
 
-/** 能换多少：神木够换的量与玄铁装得下的量取小（展示单位整数）。 */
+const EXCHANGE_OPTIONS: readonly { id: ShopExchangeDirection; fromId: string; toId: string }[] = [
+  { id: 'toXuantie', fromId: 'shenmu', toId: 'xuantie' },
+  { id: 'toShenmu', fromId: 'xuantie', toId: 'shenmu' },
+];
+
+const exchangeDirection = ref<ShopExchangeDirection>('toXuantie');
+const exchangeOption = computed(
+  () => EXCHANGE_OPTIONS.find((item) => item.id === exchangeDirection.value) ?? EXCHANGE_OPTIONS[0]!,
+);
+
+/** 每 1 个玄铁对应的付出 / 换得（最小单位）：神木那端乘比价，玄铁那端就是 1 个。 */
+function unitsPerXuantie(resourceId: string): number {
+  return resourceId === 'shenmu' ? shenmuPerXuantie.value * UNITS_PER_DISPLAY : UNITS_PER_DISPLAY;
+}
+
+/** 能换多少（按玄铁计）：付出方够付的量与换得方装得下的量取小。 */
 const exchangeMax = computed(() => {
-  const per = shenmuPerXuantie.value;
-  const affordable = per > 0 ? Math.floor(shenmu.value / (per * UNITS_PER_DISPLAY)) : 0;
-  const room = Math.floor(resourceRoom('xuantie') / UNITS_PER_DISPLAY);
+  const { fromId, toId } = exchangeOption.value;
+  const fromUnit = unitsPerXuantie(fromId);
+  const toUnit = unitsPerXuantie(toId);
+  const affordable = fromUnit > 0 ? Math.floor(resourceBalance(fromId) / fromUnit) : 0;
+  const room = toUnit > 0 ? Math.floor(resourceRoom(toId) / toUnit) : 0;
   return Math.max(0, Math.min(affordable, room));
 });
 
-/** 本次花掉的神木（最小单位）。 */
-const exchangeCost = computed(() => exchangeAmount.value * shenmuPerXuantie.value * UNITS_PER_DISPLAY);
+/** 本次付出 / 换得（最小单位）。 */
+const exchangeCost = computed(() => exchangeAmount.value * unitsPerXuantie(exchangeOption.value.fromId));
+const exchangeGained = computed(() => exchangeAmount.value * unitsPerXuantie(exchangeOption.value.toId));
 
 const exchangeBlockedReason = computed<string | null>(() => {
+  const { fromId, toId } = exchangeOption.value;
   if (exchangeAmount.value <= 0) return '请填写不小于 1 的整数数量。';
-  if (exchangeCost.value > shenmu.value) {
-    return `${resourceName('shenmu')}不足：本次需 ${formatStone(exchangeCost.value)}，现有 ${formatStone(shenmu.value)}。`;
+  if (exchangeCost.value > resourceBalance(fromId)) {
+    return `${resourceName(fromId)}不足：本次需 ${formatStone(exchangeCost.value)}，现有 ${formatStone(resourceBalance(fromId))}。`;
   }
   if (exchangeAmount.value > exchangeMax.value) {
-    return `${resourceName('xuantie')}库存上限 ${formatStone(resourceCapacity('xuantie'))}，最多还能兑换 ${String(exchangeMax.value)}。`;
+    return `${resourceName(toId)}库存上限 ${formatStone(resourceCapacity(toId))}，最多还能兑换 ${String(exchangeMax.value)}。`;
   }
   return null;
 });
 
 const exchangeCanSubmit = computed(() => !props.busy && exchangeBlockedReason.value === null);
 const exchangeHint = computed(() => (exchangeAmountInput.value.trim() === '' ? null : exchangeBlockedReason.value));
+const exchangeAmountLabel = computed(() =>
+  exchangeDirection.value === 'toXuantie' ? `换得${resourceName('xuantie')}数量` : `付出${resourceName('xuantie')}数量`,
+);
 const exchangeButtonLabel = computed(() =>
   exchangeAmount.value > 0
-    ? `确认兑换 · 花 ${formatStone(exchangeCost.value)} ${resourceName('shenmu')}`
+    ? `确认兑换 · 花 ${formatStone(exchangeCost.value)} ${resourceName(exchangeOption.value.fromId)}`
     : '确认兑换',
 );
 
 function submitExchange(): void {
   if (!exchangeCanSubmit.value) return;
-  emit('exchange', exchangeAmount.value);
+  emit('exchange', exchangeDirection.value, exchangeAmount.value);
 }
 </script>
 
@@ -303,7 +323,7 @@ function submitExchange(): void {
     </header>
 
     <p class="lineup-note shop-lead">
-      以灵石买入药材与矿石，把库中材料与丹药折价卖给行商，或以神木兑换玄铁。价格由坊市定，不限交易次数。
+      以灵石买入药材与矿石，把库中材料与丹药折价卖给行商，或在神木与玄铁之间互换。价格由坊市定，不限交易次数。
     </p>
 
     <div class="shop-tabs" role="tablist" aria-label="坊市交易分区">
@@ -609,7 +629,7 @@ function submitExchange(): void {
         </button>
       </div>
 
-      <!-- ---------- 兑换：神木 → 玄铁（单向） ---------- -->
+      <!-- ---------- 兑换：神木 ⇄ 玄铁（双向，同一比价） ---------- -->
       <div
         v-show="tab === 'exchange'"
         :id="tabPanelId('exchange')"
@@ -618,12 +638,26 @@ function submitExchange(): void {
         :aria-labelledby="tabButtonId('exchange')"
         tabindex="0"
       >
-        <p class="eyebrow">
-          {{ shenmuPerXuantie }} {{ resourceName('shenmu') }} 换 1 {{ resourceName('xuantie') }}
-        </p>
+        <p class="eyebrow">选择方向</p>
+        <div class="shop-choices" role="radiogroup" aria-label="兑换方向">
+          <button
+            v-for="option in EXCHANGE_OPTIONS"
+            :key="option.id"
+            class="shop-choice"
+            :class="{ 'is-selected': exchangeDirection === option.id }"
+            type="button"
+            role="radio"
+            :disabled="busy"
+            :aria-checked="exchangeDirection === option.id"
+            @click="exchangeDirection = option.id"
+          >
+            <strong>{{ resourceName(option.fromId) }} → {{ resourceName(option.toId) }}</strong>
+            <small>现有 {{ formatStone(resourceBalance(option.fromId)) }}</small>
+          </button>
+        </div>
 
         <div class="shop-field">
-          <label class="eyebrow shop-field-label" for="shop-exchange-amount">换得{{ resourceName('xuantie') }}数量</label>
+          <label class="eyebrow shop-field-label" for="shop-exchange-amount">{{ exchangeAmountLabel }}</label>
           <div class="shop-amount-row">
             <input
               id="shop-exchange-amount"
@@ -652,21 +686,23 @@ function submitExchange(): void {
         <dl class="shop-preview">
           <div>
             <dt>花费</dt>
-            <dd>{{ exchangeAmount > 0 ? `${formatStone(exchangeCost)} ${resourceName('shenmu')}` : '—' }}</dd>
+            <dd>{{ exchangeAmount > 0 ? `${formatStone(exchangeCost)} ${resourceName(exchangeOption.fromId)}` : '—' }}</dd>
           </div>
           <div>
-            <dt>{{ resourceName('shenmu') }}</dt>
+            <dt>{{ resourceName(exchangeOption.fromId) }}</dt>
             <dd>
-              {{ formatStone(shenmu) }}
-              <small v-if="exchangeCanSubmit" class="shop-after">→ {{ formatStone(shenmu - exchangeCost) }}</small>
+              {{ formatStone(resourceBalance(exchangeOption.fromId)) }}
+              <small v-if="exchangeCanSubmit" class="shop-after">
+                → {{ formatStone(resourceBalance(exchangeOption.fromId) - exchangeCost) }}
+              </small>
             </dd>
           </div>
           <div>
-            <dt>{{ resourceName('xuantie') }}</dt>
+            <dt>{{ resourceName(exchangeOption.toId) }}</dt>
             <dd>
-              {{ formatStone(xuantie) }}
+              {{ formatStone(resourceBalance(exchangeOption.toId)) }}
               <small v-if="exchangeCanSubmit" class="shop-after">
-                → {{ formatStone(xuantie + exchangeAmount * UNITS_PER_DISPLAY) }}
+                → {{ formatStone(resourceBalance(exchangeOption.toId) + exchangeGained) }}
               </small>
             </dd>
           </div>
@@ -699,7 +735,7 @@ function submitExchange(): void {
           {{ formatStone(shop.sellPrice) }} 灵石。
         </li>
         <li>丹药只收不卖：按丹方回收价折算，单颗价格见上方清单。</li>
-        <li>兑换：每 {{ shop.shenmuPerXuantie }} 神木换 1 玄铁，只能单向兑换。</li>
+        <li>兑换：{{ shop.shenmuPerXuantie }} 神木换 1 玄铁，1 玄铁也能换回 {{ shop.shenmuPerXuantie }} 神木，两个方向同一比价。</li>
       </ul>
     </footer>
   </section>

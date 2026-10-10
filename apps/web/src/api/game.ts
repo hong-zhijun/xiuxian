@@ -1800,21 +1800,30 @@ export async function shopSellPill(
   );
 }
 
-/** 神木兑换玄铁回执（与后端 view.ts 的 ShopExchangeResultView 一一对应）。 */
+/** 兑换方向（与后端 shop.ts 的 SHOP_EXCHANGE_DIRECTIONS 同口径）：toXuantie = 神木 → 玄铁，toShenmu = 玄铁 → 神木。 */
+export type ShopExchangeDirection = 'toXuantie' | 'toShenmu';
+
+/** 神木 ⇄ 玄铁回执（与后端 view.ts 的 ShopExchangeResultView 一一对应）。 */
 export interface ShopExchangeResult {
   action: 'exchange';
-  /** 换得的玄铁数量（展示单位）。 */
+  direction: ShopExchangeDirection;
+  /** 这一笔的玄铁数量（展示单位，两个方向都按玄铁计）。 */
   amount: number;
-  /** 花掉的神木（最小单位）。 */
+  /** 付出的资源（最小单位）。 */
   cost: number;
+  /** 换得的资源（最小单位）。 */
+  gained: number;
   message: string;
 }
 
-/** 坊市神木兑换玄铁（POST /game/shop-exchange）：amount 是要换得的玄铁数量（展示单位整数，≥ 1）。 */
-export async function shopExchange(amount: number): Promise<{ state: SectStateView; result: ShopExchangeResult }> {
+/** 坊市神木 ⇄ 玄铁（POST /game/shop-exchange）：amount 两个方向都是玄铁数量（展示单位整数，≥ 1）。 */
+export async function shopExchange(
+  direction: ShopExchangeDirection,
+  amount: number,
+): Promise<{ state: SectStateView; result: ShopExchangeResult }> {
   return apiRequest<{ state: SectStateView; result: ShopExchangeResult }>('/api/v1/game/shop-exchange', {
     method: 'POST',
-    body: { amount },
+    body: { direction, amount },
   });
 }
 
