@@ -19,6 +19,15 @@ export const MAX_ENTRIES = 5;
 
 export const CHANGELOG: readonly ChangelogEntry[] = [
   {
+    id: '2026-10-11-stone-income',
+    time: '2026-10-11 20:00',
+    title: '灵石开源 · 采灵扩编与灵矿十级',
+    items: [
+      '采灵岗位人数上限随宗门等级提高：1～5 级 1 人、6～8 级 2 人、9～11 级 4 人、12 级起 6 人。',
+      '灵矿上限 5 → 10 级：6～10 级需要宗门达到对应等级，每级灵石基础产出 +40%（10 级时基础灵石为原来的 4 倍）；9、10 级另需玄铁。',
+    ],
+  },
+  {
     id: '2026-10-11-world-boss-deep-rewards',
     time: '2026-10-11 18:00',
     title: '讨伐奖励上调 · 深关有奖',

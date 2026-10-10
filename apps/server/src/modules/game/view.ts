@@ -54,6 +54,8 @@ import {
   BREAKTHROUGH_ARRAY_BONUS_BP_PER_LEVEL,
   BREAKTHROUGH_ARRAY_BONUS_MAX_LEVEL,
   spiritualArrayUpgradeFrom,
+  missionHallUpgradeFrom,
+  MISSION_HALL_BUILDING_ID,
   IDLE_ASSIGNMENT,
   SPIRITUAL_ARRAY_BUILDING_ID,
   SCRIPTURE_LIBRARY_BUILDING_ID,
@@ -2201,13 +2203,15 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
       };
     }
 
-    // 装备二期：炼器坊走分档表（宗门等级门槛 + 玄铁）；聚灵阵 6～10 级同理。
+    // 装备二期：炼器坊走分档表（宗门等级门槛 + 玄铁）；聚灵阵、灵矿 6～10 级同理。
     const workshopStep =
       building.def_id === FORGE_WORKSHOP_ID
         ? forgeWorkshopUpgradeFrom(building.level)
         : building.def_id === SPIRITUAL_ARRAY_BUILDING_ID
           ? spiritualArrayUpgradeFrom(building.level)
-          : null;
+          : building.def_id === MISSION_HALL_BUILDING_ID
+            ? missionHallUpgradeFrom(building.level)
+            : null;
     const cost = workshopStep !== null ? { ...workshopStep.cost } : upgradeCost(definition.upgradeCostPerLevel, building.level);
     if (workshopStep !== null && Number(sect.level) < workshopStep.sectLevel) {
       return {
