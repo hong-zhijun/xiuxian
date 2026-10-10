@@ -94,21 +94,29 @@ export const WORLD_BOSS_SEVERE_RATE_AT_4 = 0.7;
 /** 体魄每高 10 点，30% / 70% 两档下调 3 个百分点。 */
 export const WORLD_BOSS_SEVERE_PHYSIQUE_STEP = 0.03;
 
-/** 保底 = 10 × 宗门等级 × 1000（最小单位）。 */
-export const WORLD_BOSS_REWARD_FLOOR_UNIT = 10 * 1000;
+/** 保底 = 12 × 宗门等级 × 1000（最小单位）；资源不足调整：10 → 12。 */
+export const WORLD_BOSS_REWARD_FLOOR_UNIT = 12 * 1000;
 /** 奖励涉及的资源（按资源分别算）。 */
 export const WORLD_BOSS_POOL_RESOURCES = ['spiritStone', 'herb', 'ore'] as const;
-/** 基础份的产量系数（每关给几小时产出；防通胀由 3.5 下调）。 */
-export const WORLD_BOSS_KILL_POOL_RATE_FACTOR = 2.5;
-/** 最后一击奖的产量系数。 */
-export const WORLD_BOSS_LAST_HIT_RATE_FACTOR = 1.0;
+/** 基础份的产量系数（每关给几小时产出；防通胀由 3.5 下调到 2.5，资源不足调整又回调到 3）。 */
+export const WORLD_BOSS_KILL_POOL_RATE_FACTOR = 3;
+/** 最后一击奖的产量系数（资源不足调整：1.0 → 1.2）。 */
+export const WORLD_BOSS_LAST_HIT_RATE_FACTOR = 1.2;
 /**
- * 资源奖励的关卡系数：第 n 关 ×(1 + 0.3 × (min(n, 5) − 1))，第 5 关起不再递增（最高 ×2.2）。
- * 防通胀：原来每关 +0.5 且不封顶，关数一多资源奖励按平方增长。
+ * 资源奖励的关卡系数：第 1～5 关每关 +0.3（第 5 关 ×2.2），第 6 关起放慢到每关 +0.1，第 10 关封顶（×2.7）。
+ * 防通胀：原来每关 +0.5 且不封顶，关数一多资源奖励按平方增长；第 5 关后曾完全不涨，深关血量 ×1.6 / 关却不加奖励。
  */
 export const WORLD_BOSS_STAGE_REWARD_STEP = 0.3;
-/** 资源奖励关卡系数封顶的关卡。 */
+/** 前段（每关 +0.3）的最后一关。 */
 export const WORLD_BOSS_STAGE_REWARD_MAX_STAGE = 5;
+/** 第 5 关以后每关的增量。 */
+export const WORLD_BOSS_STAGE_REWARD_DEEP_STEP = 0.1;
+/** 资源奖励关卡系数封顶的关卡。 */
+export const WORLD_BOSS_STAGE_REWARD_CAP_STAGE = 10;
+/** 神木从第几关起随玄铁一起发（数量 = 本关玄铁的一半，向上取整）。 */
+export const WORLD_BOSS_SHENMU_FROM_STAGE = 6;
+/** 神木资源 id。 */
+export const BOSS_SHENMU_RESOURCE_ID = 'shenmu';
 /** 功勋的关卡系数每关递增量（与资源分开：功勋兑换价按它定，不随资源下调）。 */
 export const WORLD_BOSS_MERIT_STAGE_STEP = 0.5;
 /** 击杀时必发的丹药（每参与宗门）。 */
@@ -459,10 +467,19 @@ export function rewardFloor(sectLevel: number): number {
   return WORLD_BOSS_REWARD_FLOOR_UNIT * Math.max(1, Math.floor(sectLevel));
 }
 
-/** 资源奖励的关卡系数 = 1 + 0.3 × (min(关卡, 5) − 1)。 */
+/** 资源奖励的关卡系数 = 1 + 0.3 × (min(关卡, 5) − 1) + 0.1 × (min(关卡, 10) − 5)⁺。 */
 export function stageRewardMultiplier(stage: number): number {
-  const capped = Math.min(WORLD_BOSS_STAGE_REWARD_MAX_STAGE, Math.max(1, Math.floor(stage)));
-  return 1 + WORLD_BOSS_STAGE_REWARD_STEP * (capped - 1);
+  const capped = Math.min(WORLD_BOSS_STAGE_REWARD_CAP_STAGE, Math.max(1, Math.floor(stage)));
+  const early = Math.min(capped, WORLD_BOSS_STAGE_REWARD_MAX_STAGE) - 1;
+  const deep = Math.max(0, capped - WORLD_BOSS_STAGE_REWARD_MAX_STAGE);
+  // 先在整数上算（×10）再除，避免 0.3 / 0.1 的浮点零头（2.2 + 0.1 算成 2.3000000000000003）。
+  return (10 + WORLD_BOSS_STAGE_REWARD_STEP * 10 * early + WORLD_BOSS_STAGE_REWARD_DEEP_STEP * 10 * deep) / 10;
+}
+
+/** 深关神木（展示单位整数）：第 6 关起 = 本关玄铁的一半（向上取整），之前为 0；击退已在玄铁里减半。 */
+export function bossShenmuFor(stage: number, xuantie: number): number {
+  if (Math.floor(stage) < WORLD_BOSS_SHENMU_FROM_STAGE || xuantie <= 0) return 0;
+  return Math.ceil(xuantie / 2);
 }
 
 /** 功勋的关卡系数 = 1 + 0.5 × (关卡 − 1)（三期原口径，不封顶）。 */

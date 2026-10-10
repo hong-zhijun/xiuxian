@@ -498,6 +498,8 @@ import {
 } from './talents';
 import {
   BOSS_MERIT_RESOURCE_ID,
+  BOSS_SHENMU_RESOURCE_ID,
+  bossShenmuFor,
   WORLD_BOSS_AFFIX_NONE,
   WORLD_BOSS_CLOSE_HOUR,
   WORLD_BOSS_COOLDOWN_MS,
@@ -8725,21 +8727,26 @@ async function buildWorldBossView(input: {
   };
 }
 
-/** 奖励预览补上本关的玄铁与功勋数量（与发奖同一套 bossXuantieFor / worldBossMeritFor）。 */
+/** 奖励预览补上本关的玄铁、神木与功勋数量（与发奖同一套 bossXuantieFor / bossShenmuFor / worldBossMeritFor）。 */
 function withXuantiePreview<T extends { stage: number }>(
   preview: T,
 ): T & {
   xuantie: { top: number; others: number; minSharePercent: number; below: number };
+  shenmu: { top: number; others: number; below: number };
   meritFullShare: number;
 } {
+  const top = bossXuantieFor({ stage: preview.stage, damageShare: 1, isTop: true, repelled: false });
+  const others = bossXuantieFor({ stage: preview.stage, damageShare: 1, isTop: false, repelled: false });
+  // 占比不足门槛时的数量（三期：第 1～5 关 1 个，之后随关卡递增）。
+  const below = bossXuantieFor({ stage: preview.stage, damageShare: BOSS_XUANTIE_MIN_SHARE / 2, isTop: false, repelled: false });
   return {
     ...preview,
-    xuantie: {
-      top: bossXuantieFor({ stage: preview.stage, damageShare: 1, isTop: true, repelled: false }),
-      others: bossXuantieFor({ stage: preview.stage, damageShare: 1, isTop: false, repelled: false }),
-      minSharePercent: Math.round(BOSS_XUANTIE_MIN_SHARE * 100),
-      // 三期：占比不足门槛时的数量（计划 2.2：每关 1 个）。
-      below: 1,
+    xuantie: { top, others, minSharePercent: Math.round(BOSS_XUANTIE_MIN_SHARE * 100), below },
+    // 深关神木（第 6 关起才有，之前全是 0）。
+    shenmu: {
+      top: bossShenmuFor(preview.stage, top),
+      others: bossShenmuFor(preview.stage, others),
+      below: bossShenmuFor(preview.stage, below),
     },
     // 三期：占比 100% 时的功勋（实际按 √占比 折算，保底 2）。
     meritFullShare: worldBossMeritFor({ stage: preview.stage, damageShare: 1, repelled: false }),
@@ -9366,6 +9373,9 @@ async function rewardWorldBoss(
         repelled,
       });
       credit(sectId, XUANTIE_RESOURCE_ID, xuantie * 1000);
+      // 深关（第 6 关起）：神木 = 本关玄铁的一半（向上取整），击退跟着玄铁一起减半。
+      const shenmu = bossShenmuFor(stage, xuantie);
+      if (shenmu > 0) credit(sectId, BOSS_SHENMU_RESOURCE_ID, shenmu * 1000);
       // 三期：功勋按本关伤害占比发（击杀给 base，击退减半），与玄铁一起进同一个 batch。
       const merit = worldBossMeritFor({
         stage,

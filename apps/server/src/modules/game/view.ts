@@ -1430,6 +1430,8 @@ export interface WorldBossRewardPreviewView {
   lastHitStone: number;
   /** 装备二期：本关击杀的玄铁（展示单位）；伤害占比 ≥ minSharePercent% 才有，第 1 名拿 top。三期：不足门槛时每关 below 个。 */
   xuantie: { top: number; others: number; minSharePercent: number; below: number };
+  /** 深关神木（展示单位）：第 6 关起 = 本关玄铁的一半（向上取整），之前全是 0。 */
+  shenmu: { top: number; others: number; below: number };
   /** 三期：本关伤害占比 100% 时的功勋（展示单位）；实际按 √占比 折算，保底 2。 */
   meritFullShare: number;
 }

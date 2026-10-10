@@ -1005,8 +1005,28 @@ describe('世界 Boss 二期：Cron 逃走与发奖', () => {
 
     // 小宗门：占比不足 15% → 三期新规则每关 1 个（展示单位 1 = 1000 最小单位）。
     expect((await balanceOf(small.sectId, 'xuantie')) - beforeSmall).toBe(1_000);
-    // 大宗门：占比 ≥15% 且伤害第 1 → 第 1 关按表取 top = 3 个 = 3000 最小单位。
-    expect((await balanceOf(big.sectId, 'xuantie')) - beforeBig).toBe(3_000);
+    // 大宗门：占比 ≥15% 且伤害第 1 → 第 1 关按表取 top = 4 个 = 4000 最小单位。
+    expect((await balanceOf(big.sectId, 'xuantie')) - beforeBig).toBe(4_000);
+  });
+
+  it('第 6 关击杀：玄铁按深关递增（第 1 名 16 个），另发神木 = 玄铁的一半（8 个）', async () => {
+    const fixture = await makeSect('deep-stage');
+    const now = dayAt(58, 9);
+    await freezeDay(fixture.sectId, 58);
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    const dayKey = dateKeyUtc8(now);
+
+    const bossId = await insertBoss({ dayKey, now, stage: 6, maxHp: 10_000_000_000, roundDamage: 20_000 });
+    await attackWorldBoss(env.DB, fixture.userId, { discipleIds: fixture.discipleIds }, now);
+    await env.DB.prepare('UPDATE world_bosses SET hp = 1 WHERE id = ?').bind(bossId).run();
+    await attackWorldBoss(env.DB, fixture.userId, { discipleIds: fixture.discipleIds }, dayAt(58, 11, 5));
+
+    const beforeXuantie = await balanceOf(fixture.sectId, 'xuantie');
+    const beforeShenmu = await balanceOf(fixture.sectId, 'shenmu');
+    await processWorldBoss(env.DB, dayAt(58, 12));
+
+    expect((await balanceOf(fixture.sectId, 'xuantie')) - beforeXuantie).toBe(16_000);
+    expect((await balanceOf(fixture.sectId, 'shenmu')) - beforeShenmu).toBe(8_000);
   });
 
   it('Cron 顺带清理 2 天前的疲劳记录', async () => {

@@ -2024,6 +2024,8 @@ export interface WorldBossView {
     meritFullShare: number;
     /** 本关击杀的玄铁：伤害占比 ≥ minSharePercent% 才有，第 1 名拿 top；below = 不足门槛时的数量。 */
     xuantie: { top: number; others: number; below: number; minSharePercent: number };
+    /** 深关神木（展示单位）：第 6 关起 = 本关玄铁的一半（向上取整），之前全是 0。 */
+    shenmu: { top: number; others: number; below: number };
   } | null;
   /**
    * 三期：本宗门在当前关的掉落概率（boss 为 null 时为 null）。
