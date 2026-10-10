@@ -25,6 +25,7 @@ import type {
   ShopResourceId,
   WheelSpinResult,
   HubView,
+  DailyTasksView,
 } from '../api/game';
 import type { ToastTone } from '../types/ui';
 import type { AvatarFrameId } from '../utils/avatarFrames';
@@ -34,6 +35,7 @@ import { formatAmount, formatBp, formatRate, formatTime } from '../utils/format'
 import {
   equipItem,
   fetchEquipment,
+  fetchDailyTasks,
   fetchHub,
   fetchJourneyPreview,
   fetchRecruitPreview,
@@ -200,6 +202,7 @@ const openPanel = ref<
   | 'veins'
   | 'market'
   | 'steward'
+  | 'daily'
   | null
 >(null);
 
@@ -1719,18 +1722,35 @@ async function loadHub(): Promise<void> {
   }
 }
 
-/** 宗门日课卡片的重读信号：关掉功能弹窗时 +1（弹窗里做的任务进度要在首页卡片上跟上）。 */
-const dailyTasksRefreshKey = ref(0);
+/**
+ * 宗门日课摘要（操作栏「日课」卡片的进度 / 小红点、待办提醒用）：挂载时与每次关掉弹窗后读一次，
+ * 日课弹窗里领取 / 开箱后由卡片回传最新一份。失败时保留上一次的，不打扰玩家。
+ */
+const dailyTasks = ref<DailyTasksView | null>(null);
+
+async function loadDailyTasks(): Promise<void> {
+  try {
+    dailyTasks.value = (await fetchDailyTasks()).dailyTasks;
+  } catch {
+    /* 摘要只是提示：失败时保留上一次的 */
+  }
+}
+
+/** 可领取的任务数（完成未领）。 */
+const dailyClaimable = computed(
+  () => dailyTasks.value?.tasks.filter((task) => task.completed && !task.claimed).length ?? 0,
+);
 
 watch(openPanel, (panel) => {
   if (panel === null) {
     void loadHub();
-    dailyTasksRefreshKey.value += 1;
+    void loadDailyTasks();
   }
 });
 
 onMounted(() => {
   void loadHub();
+  void loadDailyTasks();
   hubTimer = window.setInterval(() => {
     if (!document.hidden) void loadHub();
   }, 60_000);
@@ -1761,7 +1781,7 @@ function signedPct(value: number): string {
 }
 
 type HubCardId =
-  | 'alchemy' | 'forge' | 'refine' | 'recruit' | 'steward' | 'defense'
+  | 'daily' | 'alchemy' | 'forge' | 'refine' | 'recruit' | 'steward' | 'defense'
   | 'boss' | 'tower' | 'explore' | 'veins'
   | 'shop' | 'gambling' | 'auction' | 'market' | 'merit';
 
@@ -1770,6 +1790,8 @@ interface HubCard {
   name: string;
   glyph: string;
   status: string;
+  /** 有可领取的东西：卡片名旁亮小红点。 */
+  alert?: boolean;
 }
 
 /** 状态卡片：按分组固定顺序，第二行写这个功能此刻的状态。 */
@@ -1789,10 +1811,20 @@ const hubGroups = computed<{ label: string; cards: HubCard[] }[]>(() => {
   const auction = h?.auction;
   const market = h?.market;
   const merit = props.state.resources.find((resource) => resource.id === 'bossMerit');
+  const daily = dailyTasks.value;
+  const dailyStatus =
+    daily === null
+      ? '每日小任务'
+      : daily.chest.claimed
+        ? '今日已完成'
+        : daily.chest.available
+          ? '宝箱可开启'
+          : `已领 ${String(daily.tasks.filter((task) => task.claimed).length)}/${String(daily.tasks.length)}`;
   return [
     {
       label: '宗门',
       cards: [
+        { id: 'daily', name: '日课', glyph: '课', status: dailyStatus, alert: dailyClaimable.value > 0 || daily?.chest.available === true },
         { id: 'alchemy', name: '炼丹', glyph: '丹', status: healableIds.value.length > 0 ? `${String(healableIds.value.length)} 人受伤可疗伤` : '炼制丹药' },
         { id: 'forge', name: '炼器', glyph: '器', status: equipment.value ? `背包 ${String(equipment.value.bagCount)} / ${String(equipment.value.bagCapacity)}` : '打造装备' },
         { id: 'refine', name: '祭炼', glyph: '祭', status: refineCardStatus.value },
@@ -1902,6 +1934,7 @@ function openHubCard(id: HubCardId): void {
     return;
   }
   const panels: Record<Exclude<HubCardId, 'recruit' | 'forge' | 'refine'>, NonNullable<typeof openPanel.value>> = {
+    daily: 'daily',
     alchemy: 'alchemy',
     steward: 'steward',
     defense: 'defense-lineup',
@@ -1922,6 +1955,11 @@ function openHubCard(id: HubCardId): void {
 const todoItems = computed<TodoItem[]>(() => {
   const h = hub.value;
   const items: TodoItem[] = [];
+  if (dailyClaimable.value > 0) {
+    items.push({ id: 'daily', tone: 'claim', text: `日课有 ${String(dailyClaimable.value)} 个可领取`, action: '去领取' });
+  } else if (dailyTasks.value?.chest.available === true) {
+    items.push({ id: 'daily', tone: 'claim', text: '日课宝箱可开启', action: '去开启' });
+  }
   if (readyJourneys.value.length > 0) {
     items.push({ id: 'journey', tone: 'claim', text: `${String(readyJourneys.value.length)} 名弟子历练归队`, action: '去领取' });
   }
@@ -1982,6 +2020,8 @@ function onTodo(id: string): void {
   if (id === 'journey') {
     const first = readyJourneys.value[0];
     if (first !== undefined) openDetail(first.discipleId);
+  } else if (id === 'daily') {
+    openPanel.value = 'daily';
   } else if (id === 'tower' || id === 'auction' || id === 'veins' || id === 'steward') {
     openPanel.value = id;
   } else if (id === 'boss') {
@@ -2309,20 +2349,15 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
             :disabled="card.id === 'recruit' && (busy || recruitLoading)"
             @click="openHubCard(card.id)"
           >
-            <span class="hub-card-name"><i aria-hidden="true">{{ card.glyph }}</i>{{ card.name }}</span>
+            <span class="hub-card-name">
+              <i aria-hidden="true">{{ card.glyph }}</i>{{ card.name }}
+              <b v-if="card.alert" class="hub-card-alert" role="img" aria-label="有可领取的奖励" />
+            </span>
             <span class="hub-card-status">{{ card.status }}</span>
           </button>
         </div>
       </div>
     </nav>
-
-    <!-- 0048 宗门日课：紧贴在首页功能卡片（含祭炼）下方；挂载时读一次，关掉弹窗后由 dailyTasksRefreshKey 重读进度。 -->
-    <DailyTasksCard
-      :busy="busy"
-      :refresh-key="dailyTasksRefreshKey"
-      @state-update="handOffShopState"
-      @notify="onDailyTasksNotify"
-    />
 
     <div class="management-grid">
       <section class="game-panel disciple-panel" aria-labelledby="disciple-title">
@@ -2718,6 +2753,16 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
       坊市：四种交易都在 ShopDialog 里当场算预览，接口调用与 toast 在本组件；
       回执里的 state 交给 App 统一赋值（见 handOffShopState），交易成功留在当前标签页。
     -->
+    <!-- 0048 宗门日课：操作栏「日课」卡片打开；每次打开卡片都重读进度，领取 / 开箱后回传摘要给操作栏与待办。 -->
+    <ModalShell v-if="openPanel === 'daily'" narrow label="宗门日课" @close="openPanel = null">
+      <DailyTasksCard
+        :busy="busy"
+        @state-update="handOffShopState"
+        @notify="onDailyTasksNotify"
+        @view-update="(view: DailyTasksView) => (dailyTasks = view)"
+      />
+    </ModalShell>
+
     <ModalShell
       v-if="openPanel === 'shop'"
       :loading="shopSubmitting"

@@ -7,21 +7,21 @@ import type { ToastTone } from '../types/ui';
 import { formatAmount } from '../utils/format';
 
 /**
- * 宗门日课卡片（首页，docs/每日任务开发计划.md 2.7）。
+ * 宗门日课（弹窗内容，外壳由 SectScreen 的 ModalShell 提供；从操作栏「日课」卡片打开，docs/每日任务开发计划.md 2.7）。
  *
  * 进度、奖励、宝箱状态全部由服务端算好下发，这里只渲染并派发「领取」「开箱」。
- * 读取时机：挂载时一次；上层 refreshKey 变化时（关掉弹窗，进度可能变了）；跨过 UTC+8 零点时（整份日课换新）。
- * 写成功后服务端回执带回新的 state，经 state-update 交给上层（与镇妖塔面板同一做法）。
+ * 读取时机：每次打开（挂载）读一次；跨过 UTC+8 零点时（整份日课换新）；点「刷新」。
+ * 写成功后服务端回执带回新的 state，经 state-update 交给上层（与镇妖塔面板同一做法）；
+ * 每拿到一份新的日课就经 view-update 回传，操作栏卡片的进度、小红点与待办提醒跟着更新。
  */
 const props = defineProps<{
   busy: boolean;
-  /** 上层每次关掉弹窗就 +1，卡片据此重新读一次。 */
-  refreshKey?: number;
 }>();
 
 const emit = defineEmits<{
   'state-update': [state: SectStateView];
   notify: [tone: ToastTone, title: string, message: string];
+  'view-update': [view: DailyTasksView];
 }>();
 
 const view = ref<DailyTasksView | null>(null);
@@ -112,12 +112,9 @@ function chestButtonText(): string {
   return `领完 ${String(total.value)} 个任务后可开`;
 }
 
-watch(
-  () => props.refreshKey,
-  () => {
-    void load({ quiet: true });
-  },
-);
+watch(view, (next) => {
+  if (next !== null) emit('view-update', next);
+});
 
 let dayTimer: number | undefined;
 
@@ -135,7 +132,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <section class="game-panel daily-panel" aria-labelledby="daily-title">
+  <section class="daily-panel" aria-labelledby="daily-title">
     <header class="section-heading daily-heading">
       <div class="daily-title-wrap">
         <h2 id="daily-title" class="home-section-title daily-title">
@@ -206,8 +203,6 @@ onUnmounted(() => {
 <style scoped>
 .daily-panel {
   min-width: 0;
-  margin-top: 14px;
-  padding: 15px 18px 16px;
 }
 
 .daily-heading {
