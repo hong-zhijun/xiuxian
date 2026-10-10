@@ -1789,21 +1789,6 @@ export interface StoneGambleResult {
   message: string;
 }
 
-/** 赌石记录条目（与后端 view.ts 的 StoneGambleHistoryEntryView 一一对应）。 */
-export interface StoneGambleHistoryEntry {
-  id: string;
-  tier: string;
-  tierName: string;
-  count: number;
-  payResource: string;
-  /** 花费（最小单位）。 */
-  cost: number;
-  /** 共得玄铁（最小单位）。 */
-  xuantie: number;
-  counts: Record<StoneOutcomeId, number>;
-  createdAt: string;
-}
-
 /**
  * 赌石切开（POST /game/stone-gamble）：扣料、抽结果、记保底与记录都在服务端，
  * 返回写库后的完整状态与回执。count 只能是 1（切石）或 10（连切 10 块）。
@@ -1817,12 +1802,6 @@ export async function stoneGamble(
     method: 'POST',
     body: { tier, payResource, count },
   });
-}
-
-/** 赌石记录（GET /game/stone-gamble/history）：只读，本宗最近 20 条，时间倒序；不结算、不写库。 */
-export async function fetchStoneGambleHistory(): Promise<StoneGambleHistoryEntry[]> {
-  const data = await apiRequest<{ entries: StoneGambleHistoryEntry[] }>('/api/v1/game/stone-gamble/history');
-  return data.entries;
 }
 
 /* ---------- 坊市（材料买卖与丹药回收） ---------- */

@@ -97,7 +97,6 @@ import {
   type ShopTradableResource,
 } from './shop';
 import {
-  STONE_HISTORY_LIMIT,
   cutStones,
   findStoneTier,
   stoneCostUnits,
@@ -109,11 +108,7 @@ import {
   type StoneBatchCount,
   type StonePayResource,
 } from './stoneGamble';
-import {
-  StoneGambleRepository,
-  insertStoneGambleLogStatement,
-  upsertStoneBustsStatement,
-} from './repository';
+import { StoneGambleRepository, upsertStoneBustsStatement } from './repository';
 import {
   CHALLENGE_DAILY_LIMIT,
   availableDefenders,
@@ -620,7 +615,6 @@ import {
   type ShopSellResultView,
   type ShopSellPillResultView,
   type ShopExchangeResultView,
-  type StoneGambleHistoryEntryView,
   type StoneGambleResultView,
   type DiscipleLeaderboardEntryView,
   type DiscipleLeaderboardView,
@@ -744,7 +738,8 @@ async function loadDebateStats(db: D1Database, sectId: string): Promise<DebateSt
           -- 所以每一次转动都要按注额全额减，否则每次中奖都会把投入当成净赚。
           -- 灵兽竞逐（0024）同天机轮：每轮都减总投入，押中的赔付（含本金）在上面加回。
           WHEN (result = 'lose' AND bet_mode IN ('preset_spirit_stone', 'free_resource'))
-               OR bet_mode IN ('wheel', 'beast_race')
+               -- 赌石（0046）同天机轮：每次都先付原石钱（只有灵石付款计入），开出的是玄铁不是灵石。
+          OR bet_mode IN ('wheel', 'beast_race', 'stone')
           THEN CASE
             WHEN COALESCE(json_extract(stake_detail, '$.resourceId'), 'spiritStone') = 'spiritStone'
             THEN CAST(json_extract(stake_detail, '$.amount') AS INTEGER)
@@ -7886,6 +7881,8 @@ export async function allocateDaoInsight(
  * disciple_name 记「天机轮」，赌坊记录列表照旧直接渲染这一列，不必为转盘单开分支。
  */
 const WHEEL_LOG_NAME = '天机轮';
+/** 赌石在赌坊记录里的「出战者」名（与天机轮同理，不涉及弟子）。 */
+const STONE_LOG_NAME = '赌石';
 
 /**
  * 本宗当前的转盘格局（0020）：由 sect_id + wheel_seed 确定性生成。
@@ -9706,8 +9703,8 @@ export async function exchangeBossMerit(
  * 与其它写命令同一套路：结算 → 解锁 / 档位门槛 / 玄铁容量 / 余额校验（全部只读）→ 扣料、抽结果、
  * 写保底与记录 → **一次**受保护 batch（`commit()` 的守卫核对全部资源余额，并发的赌石只会让这一批回滚）。
  *
- * - 不占赌坊每日次数：论道 / 天机轮 / 灵兽竞逐的 20 次都不动；
- * - 玄铁容量在扣料之前判定：剩余容量 < count × 天价时整批拒绝（不切半批）；
+ * - 占赌坊每日次数：每切一块算 1 次（连切 10 块算 10 次），与论道 / 天机轮 / 灵兽竞逐共用；剩余次数不够整批拒绝；
+ * - 玄铁容量在扣料之前判定：剩余容量装不下一块该档天价时拒绝，放行后整批照常入账；
  * - 随机只在这里取（Math.random）；概率、保底与文案全在 stoneGamble.ts；
  * - 保底次数只参与抽取，不进任何返回、界面与日志。
  */
@@ -9729,6 +9726,17 @@ export async function stoneGamble(
   const blockedReason = stoneTierBlockedReason(tier, Number(draft.sect.level));
   if (blockedReason !== null) {
     throw new AppError('INVALID_STATUS', blockedReason);
+  }
+
+  // 每日次数：与论道 / 天机轮 / 灵兽竞逐共用同一个计数列，每块算 1 次；不够整批拒绝（不切半批）。
+  const day = draft.debateDay;
+  if (day.remaining < count) {
+    throw new AppError(
+      'DAILY_LIMIT',
+      day.remaining <= 0
+        ? `今日赌坊次数已用完（论道、天机轮、灵兽竞逐与赌石共 ${String(DEBATE_DAILY_LIMIT)} 次/天）`
+        : `今日赌坊次数只剩 ${String(day.remaining)} 次，不够连切 ${String(count)} 块`,
+    );
   }
 
   // 玄铁容量：剩余容量装得下一块该档的天价就放行，连切 10 块也只看这一块；
@@ -9762,25 +9770,33 @@ export async function stoneGamble(
   if (cut.nextBusts !== busts) {
     draft.addStatement(upsertStoneBustsStatement(draft.sect.id, tier.id, cut.nextBusts, now));
   }
+  // 计数写回：日期键归一到今天、计数 = 已用 + 块数（内存同步，返回的 state 就是新值；与灵兽竞逐同一写法）。
+  const usedAfter = day.usedToday + count;
+  draft.addStatement(updateSectDebateCounterStatement(draft.sect.id, day.dateKey, usedAfter));
+  draft.sect.debate_date_key = day.dateKey;
+  draft.sect.debate_count = usedAfter;
+  draft.debateDay = { ...day, usedToday: usedAfter, remaining: Math.max(0, DEBATE_DAILY_LIMIT - usedAfter) };
+  // 赌坊记录（与天机轮 / 灵兽竞逐同一张 dao_debate_log）：一次请求一行，bet_mode = 'stone'，
+  // multiplier 存块数；开出玄铁算 win、全垮算 lose。赌注 / 奖励明细是 JSON，赌坊记录面板照常解析。
   draft.addStatement(
-    insertStoneGambleLogStatement({
+    insertDaoDebateLogStatement({
       id: crypto.randomUUID(),
       sectId: draft.sect.id,
-      tier: tier.id,
-      count,
-      payResource,
-      cost,
-      xuantie,
-      bustCount: cut.counts.bust,
-      smallCount: cut.counts.small,
-      bigCount: cut.counts.big,
-      jackpotCount: cut.counts.jackpot,
+      discipleId: '',
+      discipleName: STONE_LOG_NAME,
+      betMode: 'stone',
+      multiplier: count,
+      stakeDetail: JSON.stringify({ resourceId: payResource, amount: String(cost), tier: tier.id, tierName: tier.name, count }),
+      result: xuantie > 0 ? 'win' : 'lose',
+      rewardDetail: JSON.stringify({ type: 'resource', resourceId: XUANTIE_RESOURCE_ID, amount: String(xuantie), counts: cut.counts }),
+      winProbability: null,
       now,
     }),
   );
 
-  // 唯一的一次受保护提交：扣料 / 玄铁 / 保底 / 记录同一个 batch。
-  await draft.commit();
+  // 唯一的一次受保护提交：扣料 / 玄铁 / 保底 / 次数 / 记录同一个 batch；
+  // 用赌坊的守卫（与天机轮同一个），并发的论道 / 天机轮 / 赌石不会把每日计数写乱。
+  await draft.commitGambling({ resourceId: payResource });
 
   // 天价全服播报：每块天价各播一条，必须在 commit 之后并且 await（失败不影响主流程）。
   const jackpotXuantie = stoneOutcomeOf(tier, 'jackpot').xuantie;
@@ -9802,37 +9818,6 @@ export async function stoneGamble(
       message: stoneResultMessage(tier.name, cut),
     },
   };
-}
-
-/**
- * 赌石记录（GET /game/stone-gamble/history）：只读，本宗最近 20 条，时间倒序；不结算、不写库。
- * 取宗门方式与 listDebateHistory 一致。
- */
-export async function listStoneGambleHistory(
-  db: D1Database,
-  userId: string,
-): Promise<StoneGambleHistoryEntryView[]> {
-  const sect = await new SectRepository(db).findByUserId(userId);
-  if (sect === null) {
-    return [];
-  }
-  const rows = await new StoneGambleRepository(db).listRecent(sect.id, STONE_HISTORY_LIMIT);
-  return rows.map((row) => ({
-    id: row.id,
-    tier: row.tier,
-    tierName: findStoneTier(row.tier)?.name ?? row.tier,
-    count: Number(row.count),
-    payResource: row.pay_resource,
-    cost: Number(row.cost),
-    xuantie: Number(row.xuantie),
-    counts: {
-      bust: Number(row.bust_count),
-      small: Number(row.small_count),
-      big: Number(row.big_count),
-      jackpot: Number(row.jackpot_count),
-    },
-    createdAt: new Date(Number(row.created_at)).toISOString(),
-  }));
 }
 
 /* ---------- 坊市（shop.ts 的纯规则 + 受保护 batch 提交） ---------- */

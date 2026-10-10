@@ -4,10 +4,10 @@ import { describe, expect, it, vi } from 'vitest';
 import { GAME_CONFIG_CONTENT } from '@xiuxian/game-config';
 
 import { createApp } from '../src/app';
-import { effectiveCapacity, findSectLevel } from '../src/modules/game/constants';
+import { dateKeyUtc8, effectiveCapacity, findSectLevel } from '../src/modules/game/constants';
+import { DEBATE_DAILY_LIMIT } from '../src/modules/game/gambling';
 import { toMinUnits } from '../src/modules/game/shop';
 import {
-  STONE_HISTORY_LIMIT,
   STONE_OUTCOME_IDS,
   STONE_PITY_BUSTS,
   STONE_TIERS,
@@ -18,7 +18,7 @@ import {
 import { dataOf, errorOf, TestClient, type ApiResult } from './support/authClient';
 
 /**
- * 赌石（0046 迁移 + stoneGamble.ts + POST /game/stone-gamble、GET /game/stone-gamble/history）：
+ * 赌石（0046 / 0047 迁移 + stoneGamble.ts + POST /game/stone-gamble；记录并入赌坊记录 dao_debate_log）：
  * 赌坊第四个玩法（docs/赌石开发计划.md 第 3.2 节）。
  *
  * 存储说明：本文件一份独立内存 D1，没有逐用例回滚 —— 每个用例用独立账号 / 宗门，
@@ -52,6 +52,7 @@ interface StoneLogRow {
   pay_resource: string;
   cost: number;
   xuantie: number;
+  result: string;
   bust_count: number;
   small_count: number;
   big_count: number;
@@ -139,13 +140,33 @@ async function bustsOf(sectId: string, tierId: string): Promise<number> {
   return row === null ? 0 : Number(row.busts);
 }
 
+/** 赌坊记录里本宗的赌石行（bet_mode = 'stone'），把 JSON 明细摊平成便于断言的形状。 */
 async function logRowsOf(sectId: string): Promise<StoneLogRow[]> {
   const result = await env.DB.prepare(
-    'SELECT * FROM stone_gamble_log WHERE sect_id = ? ORDER BY created_at ASC',
+    `SELECT id, sect_id, multiplier, result, stake_detail, reward_detail, created_at
+     FROM dao_debate_log WHERE sect_id = ? AND bet_mode = 'stone' ORDER BY created_at ASC`,
   )
     .bind(sectId)
-    .all<StoneLogRow>();
-  return result.results;
+    .all<{ id: string; sect_id: string; multiplier: number; result: string; stake_detail: string; reward_detail: string; created_at: number }>();
+  return result.results.map((row) => {
+    const stake = JSON.parse(row.stake_detail) as { resourceId: string; amount: string; tier: string };
+    const reward = JSON.parse(row.reward_detail) as { amount: string; counts: Record<StoneOutcomeId, number> };
+    return {
+      id: row.id,
+      sect_id: row.sect_id,
+      tier: stake.tier,
+      count: Number(row.multiplier),
+      pay_resource: stake.resourceId,
+      cost: Number(stake.amount),
+      xuantie: Number(reward.amount),
+      result: row.result,
+      bust_count: reward.counts.bust,
+      small_count: reward.counts.small,
+      big_count: reward.counts.big,
+      jackpot_count: reward.counts.jackpot,
+      created_at: Number(row.created_at),
+    };
+  });
 }
 
 async function logCountOf(sectId: string): Promise<number> {
@@ -453,6 +474,77 @@ describe('赌石：余额与玄铁容量', () => {
 
 /* ---------- 非法参数（计划 3.2） ---------- */
 
+/** 赌坊今日已用次数（直接写库，与 gambling.test.ts 同款）。 */
+async function setDebateUsed(sectId: string, used: number): Promise<void> {
+  await env.DB.prepare('UPDATE sects SET debate_date_key = ?, debate_count = ? WHERE id = ?')
+    .bind(dateKeyUtc8(Date.now()), used, sectId)
+    .run();
+}
+
+async function debateUsedOf(sectId: string): Promise<number> {
+  const row = await env.DB.prepare('SELECT debate_count FROM sects WHERE id = ?')
+    .bind(sectId)
+    .first<{ debate_count: number }>();
+  return Number(row!.debate_count);
+}
+
+/* ---------- 赌坊每日次数 ---------- */
+
+describe('赌石：赌坊每日次数', () => {
+  it('每切一块占 1 次：切石 +1、连切 10 块 +10，返回的 state 同步', async () => {
+    const sect = await makeSect('stn-day');
+    await setSectLevel(sect.sectId, 2);
+    await freezeSettlement(sect.sectId);
+    await setBalance(sect.sectId, 'spiritStone', 10_000_000);
+    await setDebateUsed(sect.sectId, 3);
+
+    const single = await stone(sect, { tier: 'gravel', payResource: 'spiritStone', count: 1 });
+    expect(single.status).toBe(200);
+    expect(await debateUsedOf(sect.sectId)).toBe(4);
+
+    const batch = await stone(sect, { tier: 'gravel', payResource: 'spiritStone', count: 10 });
+    expect(batch.status).toBe(200);
+    expect(await debateUsedOf(sect.sectId)).toBe(14);
+    const data = dataOf(batch) as Record<string, any>;
+    expect(data.state.gambling.usedToday).toBe(14);
+    expect(data.state.gambling.remaining).toBe(DEBATE_DAILY_LIMIT - 14);
+  });
+
+  it('次数用完：DAILY_LIMIT，不扣钱、不写记录、不加计数', async () => {
+    const sect = await makeSect('stn-day-out');
+    await setSectLevel(sect.sectId, 2);
+    await freezeSettlement(sect.sectId);
+    await setBalance(sect.sectId, 'spiritStone', 10_000_000);
+    await setDebateUsed(sect.sectId, DEBATE_DAILY_LIMIT);
+
+    const rejected = await stone(sect, { tier: 'gravel', payResource: 'spiritStone', count: 1 });
+    expect(rejected.status).toBe(409);
+    expect(errorOf(rejected).code).toBe('DAILY_LIMIT');
+    expect(await balanceOf(sect.sectId, 'spiritStone')).toBe(10_000_000);
+    expect(await logCountOf(sect.sectId)).toBe(0);
+    expect(await debateUsedOf(sect.sectId)).toBe(DEBATE_DAILY_LIMIT);
+  });
+
+  it('只剩 5 次：连切 10 块整批拒绝，切 1 块照常', async () => {
+    const sect = await makeSect('stn-day-few');
+    await setSectLevel(sect.sectId, 2);
+    await freezeSettlement(sect.sectId);
+    await setBalance(sect.sectId, 'spiritStone', 10_000_000);
+    await setDebateUsed(sect.sectId, DEBATE_DAILY_LIMIT - 5);
+
+    const rejected = await stone(sect, { tier: 'gravel', payResource: 'spiritStone', count: 10 });
+    expect(rejected.status).toBe(409);
+    const error = errorOf(rejected);
+    expect(error.code).toBe('DAILY_LIMIT');
+    expect(error.message).toContain('只剩 5 次');
+    expect(await logCountOf(sect.sectId)).toBe(0);
+
+    const single = await stone(sect, { tier: 'gravel', payResource: 'spiritStone', count: 1 });
+    expect(single.status).toBe(200);
+    expect(await debateUsedOf(sect.sectId)).toBe(DEBATE_DAILY_LIMIT - 4);
+  });
+});
+
 describe('赌石：非法参数', () => {
   it('count = 2、未知档位、payResource = xuantie、多余字段都返回 400，且不动任何数据', async () => {
     const sect = await makeSect('stn-invalid');
@@ -537,8 +629,8 @@ describe('赌石：隐藏保底', () => {
 
 /* ---------- 记录与历史（计划 1.7 / 3.2） ---------- */
 
-describe('赌石：赌石记录与历史', () => {
-  it('每次请求写一行；历史接口时间倒序、字段齐全，且只读（不写库、不改余额）', async () => {
+describe('赌石：并入赌坊记录', () => {
+  it('每次请求写一行赌坊记录（bet_mode = stone）；赌坊记录接口能看到，灵石花费计入战绩净值', async () => {
     const sect = await makeSect('stn-history');
     await setSectLevel(sect.sectId, 2);
     await freezeSettlement(sect.sectId);
@@ -551,59 +643,31 @@ describe('赌石：赌石记录与历史', () => {
     await new Promise((resolve) => setTimeout(resolve, 5));
     expect((await stone(sect, { tier: 'mountain', payResource: 'herb', count: 10 })).status).toBe(200);
 
-    const logsBefore = await logCountOf(sect.sectId);
-    const spiritBefore = await balanceOf(sect.sectId, 'spiritStone');
-    const herbBefore = await balanceOf(sect.sectId, 'herb');
-    expect(logsBefore).toBe(2);
+    const rows = await logRowsOf(sect.sectId);
+    expect(rows).toHaveLength(2);
+    for (const row of rows) {
+      expect(row.result).toBe(row.xuantie > 0 ? 'win' : 'lose');
+    }
 
-    const history = await sect.api.get('/api/v1/game/stone-gamble/history');
+    const history = await sect.api.get('/api/v1/game/debate-history?page=1');
     expect(history.status).toBe(200);
-    const entries = (dataOf(history) as Record<string, any>).entries as Record<string, any>[];
+    const page = dataOf(history) as Record<string, any>;
+    const entries = page.entries as Record<string, any>[];
     expect(entries).toHaveLength(2);
-    expect(entries[0]).toMatchObject({
+    expect(entries[0]).toMatchObject({ betMode: 'stone', discipleName: '赌石', multiplier: 10 });
+    expect(JSON.parse(entries[0]!.stakeDetail as string)).toMatchObject({
+      resourceId: 'herb',
+      amount: '10000000',
       tier: 'mountain',
       tierName: '山料',
       count: 10,
-      payResource: 'herb',
-      cost: 10_000_000,
     });
-    expect(entries[1]).toMatchObject({ tier: 'gravel', tierName: '碎石', count: 1, payResource: 'spiritStone', cost: 150_000 });
-    for (const entry of entries) {
-      expect(typeof entry.id).toBe('string');
-      expect(Object.keys(entry.counts).sort()).toEqual(['big', 'bust', 'jackpot', 'small']);
-      expect(new Date(entry.createdAt as string).toISOString()).toBe(entry.createdAt);
-      expect(typeof entry.xuantie).toBe('number');
-    }
-    expect(
-      Object.values(entries[0].counts as Record<string, number>).reduce((sum, value) => sum + value, 0),
-    ).toBe(10);
+    expect(JSON.parse(entries[1]!.stakeDetail as string)).toMatchObject({ resourceId: 'spiritStone', amount: '150000', tierName: '碎石' });
+    expect(JSON.parse(entries[1]!.rewardDetail as string)).toMatchObject({ type: 'resource', resourceId: 'xuantie' });
 
-    // 只读：历史接口没有写库、没有改余额。
-    expect(await logCountOf(sect.sectId)).toBe(logsBefore);
-    expect(await balanceOf(sect.sectId, 'spiritStone')).toBe(spiritBefore);
-    expect(await balanceOf(sect.sectId, 'herb')).toBe(herbBefore);
-  });
-
-  it('最多返回最近 20 条（时间倒序）', async () => {
-    const sect = await makeSect('stn-history-cap');
-    const base = 1_700_000_000_000;
-    for (let index = 0; index < 25; index += 1) {
-      await env.DB.prepare(
-        `INSERT INTO stone_gamble_log (id, sect_id, tier, count, pay_resource, cost, xuantie,
-                    bust_count, small_count, big_count, jackpot_count, created_at)
-         VALUES (?, ?, 'gravel', 1, 'spiritStone', 150000, 0, 1, 0, 0, 0, ?)`,
-      )
-        .bind(crypto.randomUUID(), sect.sectId, base + index * 1000)
-        .run();
-    }
-
-    const history = await sect.api.get('/api/v1/game/stone-gamble/history');
-    expect(history.status).toBe(200);
-    const entries = (dataOf(history) as Record<string, any>).entries as Record<string, any>[];
-    expect(STONE_HISTORY_LIMIT).toBe(20);
-    expect(entries).toHaveLength(STONE_HISTORY_LIMIT);
-    expect(entries[0]!.createdAt).toBe(new Date(base + 24 * 1000).toISOString());
-    expect(entries[STONE_HISTORY_LIMIT - 1]!.createdAt).toBe(new Date(base + 5 * 1000).toISOString());
+    // 战绩净灵石：只有灵石付的那一块计入（-150 灵石），药材付款与玄铁奖励都不算灵石。
+    expect(page.stats.total).toBe(2);
+    expect(page.stats.netSpiritStone).toBe(-150_000);
   });
 });
 

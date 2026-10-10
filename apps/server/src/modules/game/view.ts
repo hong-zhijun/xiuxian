@@ -1084,21 +1084,6 @@ export interface StoneGambleResultView {
   message: string;
 }
 
-/** 赌石记录条目（GET /game/stone-gamble/history 的 entries 元素）。 */
-export interface StoneGambleHistoryEntryView {
-  id: string;
-  tier: string;
-  tierName: string;
-  count: number;
-  payResource: string;
-  /** 花费（最小单位）。 */
-  cost: number;
-  /** 共得玄铁（最小单位）。 */
-  xuantie: number;
-  counts: Record<StoneOutcomeId, number>;
-  createdAt: string;
-}
-
 /** 单条历练对弟子的归约状态（none = 没有未领取记录）。 */
 export type JourneyStatusView = JourneyStatus;
 

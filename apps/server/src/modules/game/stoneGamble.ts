@@ -110,9 +110,6 @@ export type StoneBatchCount = (typeof STONE_BATCH_COUNTS)[number];
 export const STONE_PAY_RESOURCES = ['spiritStone', 'herb', 'ore'] as const;
 export type StonePayResource = (typeof STONE_PAY_RESOURCES)[number];
 
-/** 赌石记录页：本宗最近多少条（时间倒序，只读）。 */
-export const STONE_HISTORY_LIMIT = 20;
-
 /** 1 灵石折几个材料（展示单位）= 1000 / SHOP_SELL_PRICE（= 2）：界面用它预览材料价格。 */
 export const STONE_MATERIAL_PER_STONE = UNITS_PER_DISPLAY / SHOP_SELL_PRICE;
 

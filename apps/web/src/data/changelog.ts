@@ -19,6 +19,15 @@ export const MAX_ENTRIES = 5;
 
 export const CHANGELOG: readonly ChangelogEntry[] = [
   {
+    id: '2026-10-11-stone-gamble-daily-limit',
+    time: '2026-10-11 16:00',
+    title: '赌石 · 计入赌坊次数与记录',
+    items: [
+      '赌石改为占用赌坊每日次数：每切一块算 1 次，连切 10 块算 10 次，与论道、天机轮、灵兽竞逐共用每天 50 次。',
+      '赌石记录并入「赌坊记录」，和论道、天机轮、灵兽竞逐的记录放在一起，战绩统计也一并计入。',
+    ],
+  },
+  {
     id: '2026-10-11-stone-gamble',
     time: '2026-10-11 14:00',
     title: '赌坊新增「赌石」',
