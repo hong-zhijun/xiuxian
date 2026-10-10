@@ -37,6 +37,7 @@ import {
   clearDiscipleAvatarImageRequestSchema,
   setDiscipleNoteRequestSchema,
   shopBuyRequestSchema,
+  shopExchangeRequestSchema,
   sendChatMessageRequestSchema,
   shopSellPillRequestSchema,
   shopSellRequestSchema,
@@ -134,6 +135,7 @@ import {
   setDiscipleAvatarFrame,
   setDiscipleNote,
   shopBuy,
+  shopExchange,
   shopSell,
   shopSellPill,
   startJourney,
@@ -901,6 +903,14 @@ export function createGameRoutes(): Hono<AppEnv> {
     const userId = requireUserId(c);
     const body = await parseStrictJson(shopSellPillRequestSchema, c);
     const result = await shopSellPill(getDb(c.env), userId, body.pillId, body.quantity, Date.now());
+    return respondOk(c, { state: result.state, result: result.result });
+  });
+
+  // 坊市：神木兑换玄铁（结算 → 神木余额 / 玄铁容量校验 → 扣神木、加玄铁，一次受保护 batch）。
+  routes.post('/game/shop-exchange', async (c) => {
+    const userId = requireUserId(c);
+    const body = await parseStrictJson(shopExchangeRequestSchema, c);
+    const result = await shopExchange(getDb(c.env), userId, body.amount, Date.now());
     return respondOk(c, { state: result.state, result: result.result });
   });
   // 全服聊天

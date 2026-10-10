@@ -114,3 +114,23 @@ export function shopPillRevenue(pillId: string, quantity: number): number {
 export function shopPillSellPrice(costValue: number): number {
   return Math.floor((costValue * SHOP_PILL_SELL_NUMERATOR) / SHOP_PILL_SELL_DENOMINATOR);
 }
+
+/* ---------- 神木兑换玄铁（单向） ---------- */
+
+/**
+ * 兑换 1 个玄铁要花几个神木（都是展示单位）：沿用功勋兑换的比价（玄铁 4 功勋、神木 2 功勋），
+ * 所以兑换不会让「功勋 → 神木 → 玄铁」比直接兑换玄铁更便宜。只能神木换玄铁，不能反向。
+ */
+export const SHOP_SHENMU_PER_XUANTIE = 2;
+
+/** 兑换的两端资源 id（game-config 里的神木与玄铁）。 */
+export const SHOP_EXCHANGE_FROM = 'shenmu';
+export const SHOP_EXCHANGE_TO = 'xuantie';
+
+/** 单次兑换的玄铁数量上限（展示单位整数）：与 schema 同口径。 */
+export const SHOP_MAX_EXCHANGE_AMOUNT = 1_000;
+
+/** 兑换 amount 个玄铁要扣的神木（最小单位）。 */
+export function shopExchangeShenmuCost(xuantieAmount: number): number {
+  return toMinUnits(xuantieAmount * SHOP_SHENMU_PER_XUANTIE);
+}

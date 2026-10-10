@@ -5,7 +5,7 @@ import type { SectStateView, ShopResourceId } from '../api/game';
 import { toDisplayUnits } from '../utils/format';
 
 /**
- * 坊市（弹窗内容，外壳由 SectScreen 的 ModalShell 提供）：灵石 ↔ 药材/矿石的双向买卖 + 丹药回收。
+ * 坊市（弹窗内容，外壳由 SectScreen 的 ModalShell 提供）：灵石 ↔ 药材/矿石的双向买卖 + 丹药回收 + 神木兑换玄铁。
  *
  * 服务端是唯一的价格与规则来源：买入价、卖出价、单颗丹药回收价都取自 state.shop，前端不复算也不写死常量；
  * 本组件只做三件事 —— 把「展示单位」数量换算成最小单位整数预览、把无效操作挡在按钮外、
@@ -24,6 +24,8 @@ const emit = defineEmits<{
   sell: [resourceId: ShopResourceId, amount: number];
   /** 卖出丹药：quantity 是颗数（≥ 1）。 */
   sellPill: [pillId: string, quantity: number];
+  /** 神木兑换玄铁：amount 是要换得的玄铁数量（展示单位整数，≥ 1）。 */
+  exchange: [amount: number];
 }>();
 
 /**
@@ -50,6 +52,7 @@ const TABS = [
   { id: 'buy', label: '买入' },
   { id: 'sell', label: '卖出' },
   { id: 'pill', label: '售丹' },
+  { id: 'exchange', label: '兑换' },
 ] as const;
 
 type ShopTab = (typeof TABS)[number]['id'];
@@ -71,7 +74,7 @@ function setTabButton(id: ShopTab, element: Element | null): void {
   else delete tabButtons.value[id];
 }
 
-/** 方向键 / Home / End 在三个标签页之间移动（自动激活，焦点跟着走）。 */
+/** 方向键 / Home / End 在各标签页之间移动（自动激活，焦点跟着走）。 */
 function onTabKeydown(event: KeyboardEvent, current: ShopTab): void {
   const index = TABS.findIndex((item) => item.id === current);
   if (index < 0) return;
@@ -120,13 +123,14 @@ function resourceRoom(resourceId: string): number {
 
 const spiritStone = computed(() => resourceBalance('spiritStone'));
 
-/* ---------- 数量草稿（展示单位文本）：三个页面各一份，互不覆盖 ---------- */
+/* ---------- 数量草稿（展示单位文本）：每个页面各一份，互不覆盖 ---------- */
 
 const buyResourceId = ref<ShopResourceId>('herb');
 const buyAmountInput = ref('');
 const sellResourceId = ref<ShopResourceId>('herb');
 const sellAmountInput = ref('');
 const pillAmountInput = ref('');
+const exchangeAmountInput = ref('');
 
 /** 文本 → 数量：只认「正整数（展示单位）」；空串、0、负数、小数一律判无效（回 0）。 */
 function parseAmount(input: string): number {
@@ -139,6 +143,7 @@ function parseAmount(input: string): number {
 const buyAmount = computed(() => parseAmount(buyAmountInput.value));
 const sellAmount = computed(() => parseAmount(sellAmountInput.value));
 const pillAmount = computed(() => parseAmount(pillAmountInput.value));
+const exchangeAmount = computed(() => parseAmount(exchangeAmountInput.value));
 
 /* ---------- 买入 ---------- */
 
@@ -247,6 +252,47 @@ function submitSellPill(): void {
   if (!pillCanSubmit.value || pillId === null) return;
   emit('sellPill', pillId, pillAmount.value);
 }
+
+/* ---------- 神木兑换玄铁 ---------- */
+
+const shenmu = computed(() => resourceBalance('shenmu'));
+const xuantie = computed(() => resourceBalance('xuantie'));
+const shenmuPerXuantie = computed(() => shop.value.shenmuPerXuantie);
+
+/** 能换多少：神木够换的量与玄铁装得下的量取小（展示单位整数）。 */
+const exchangeMax = computed(() => {
+  const per = shenmuPerXuantie.value;
+  const affordable = per > 0 ? Math.floor(shenmu.value / (per * UNITS_PER_DISPLAY)) : 0;
+  const room = Math.floor(resourceRoom('xuantie') / UNITS_PER_DISPLAY);
+  return Math.max(0, Math.min(affordable, room));
+});
+
+/** 本次花掉的神木（最小单位）。 */
+const exchangeCost = computed(() => exchangeAmount.value * shenmuPerXuantie.value * UNITS_PER_DISPLAY);
+
+const exchangeBlockedReason = computed<string | null>(() => {
+  if (exchangeAmount.value <= 0) return '请填写不小于 1 的整数数量。';
+  if (exchangeCost.value > shenmu.value) {
+    return `${resourceName('shenmu')}不足：本次需 ${formatStone(exchangeCost.value)}，现有 ${formatStone(shenmu.value)}。`;
+  }
+  if (exchangeAmount.value > exchangeMax.value) {
+    return `${resourceName('xuantie')}库存上限 ${formatStone(resourceCapacity('xuantie'))}，最多还能兑换 ${String(exchangeMax.value)}。`;
+  }
+  return null;
+});
+
+const exchangeCanSubmit = computed(() => !props.busy && exchangeBlockedReason.value === null);
+const exchangeHint = computed(() => (exchangeAmountInput.value.trim() === '' ? null : exchangeBlockedReason.value));
+const exchangeButtonLabel = computed(() =>
+  exchangeAmount.value > 0
+    ? `确认兑换 · 花 ${formatStone(exchangeCost.value)} ${resourceName('shenmu')}`
+    : '确认兑换',
+);
+
+function submitExchange(): void {
+  if (!exchangeCanSubmit.value) return;
+  emit('exchange', exchangeAmount.value);
+}
 </script>
 
 <template>
@@ -257,7 +303,7 @@ function submitSellPill(): void {
     </header>
 
     <p class="lineup-note shop-lead">
-      以灵石买入药材与矿石，或把库中材料与丹药折价卖给行商。价格由坊市定，不限交易次数。
+      以灵石买入药材与矿石，把库中材料与丹药折价卖给行商，或以神木兑换玄铁。价格由坊市定，不限交易次数。
     </p>
 
     <div class="shop-tabs" role="tablist" aria-label="坊市交易分区">
@@ -562,6 +608,83 @@ function submitSellPill(): void {
           <span>{{ pillButtonLabel }}</span>
         </button>
       </div>
+
+      <!-- ---------- 兑换：神木 → 玄铁（单向） ---------- -->
+      <div
+        v-show="tab === 'exchange'"
+        :id="tabPanelId('exchange')"
+        class="shop-panel"
+        role="tabpanel"
+        :aria-labelledby="tabButtonId('exchange')"
+        tabindex="0"
+      >
+        <p class="eyebrow">
+          {{ shenmuPerXuantie }} {{ resourceName('shenmu') }} 换 1 {{ resourceName('xuantie') }}
+        </p>
+
+        <div class="shop-field">
+          <label class="eyebrow shop-field-label" for="shop-exchange-amount">换得{{ resourceName('xuantie') }}数量</label>
+          <div class="shop-amount-row">
+            <input
+              id="shop-exchange-amount"
+              class="disciple-input shop-amount-input"
+              type="number"
+              inputmode="numeric"
+              min="1"
+              step="1"
+              placeholder="至少 1"
+              :value="exchangeAmountInput"
+              :disabled="busy"
+              :aria-invalid="exchangeHint !== null"
+              @input="exchangeAmountInput = ($event.target as HTMLInputElement).value"
+            />
+            <button
+              class="quiet-button shop-all-button"
+              type="button"
+              :disabled="busy || exchangeMax <= 0"
+              @click="exchangeAmountInput = String(exchangeMax)"
+            >
+              全部
+            </button>
+          </div>
+        </div>
+
+        <dl class="shop-preview">
+          <div>
+            <dt>花费</dt>
+            <dd>{{ exchangeAmount > 0 ? `${formatStone(exchangeCost)} ${resourceName('shenmu')}` : '—' }}</dd>
+          </div>
+          <div>
+            <dt>{{ resourceName('shenmu') }}</dt>
+            <dd>
+              {{ formatStone(shenmu) }}
+              <small v-if="exchangeCanSubmit" class="shop-after">→ {{ formatStone(shenmu - exchangeCost) }}</small>
+            </dd>
+          </div>
+          <div>
+            <dt>{{ resourceName('xuantie') }}</dt>
+            <dd>
+              {{ formatStone(xuantie) }}
+              <small v-if="exchangeCanSubmit" class="shop-after">
+                → {{ formatStone(xuantie + exchangeAmount * UNITS_PER_DISPLAY) }}
+              </small>
+            </dd>
+          </div>
+        </dl>
+
+        <p v-if="exchangeHint" class="blocked-hint shop-hint">{{ exchangeHint }}</p>
+
+        <button
+          class="action-button primary-action realm-button shop-confirm"
+          :class="{ 'is-disabled': !exchangeCanSubmit }"
+          type="button"
+          :disabled="busy || exchangeBlockedReason !== null"
+          :aria-disabled="!exchangeCanSubmit"
+          @click="submitExchange"
+        >
+          <span>{{ exchangeButtonLabel }}</span>
+        </button>
+      </div>
     </div>
 
     <footer class="shop-rates">
@@ -576,6 +699,7 @@ function submitSellPill(): void {
           {{ formatStone(shop.sellPrice) }} 灵石。
         </li>
         <li>丹药只收不卖：按丹方回收价折算，单颗价格见上方清单。</li>
+        <li>兑换：每 {{ shop.shenmuPerXuantie }} 神木换 1 玄铁，只能单向兑换。</li>
       </ul>
     </footer>
   </section>
@@ -603,7 +727,7 @@ function submitSellPill(): void {
 
 .shop-tabs {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;
   margin-top: 14px;
   padding-bottom: 10px;

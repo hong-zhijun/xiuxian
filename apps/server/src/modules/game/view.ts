@@ -38,7 +38,7 @@ import {
   wheelSpinCost,
   type DebateDayState,
 } from './gambling';
-import { SHOP_BUY_PRICE, SHOP_PILL_PRICES, SHOP_SELL_PRICE } from './shop';
+import { SHOP_BUY_PRICE, SHOP_PILL_PRICES, SHOP_SELL_PRICE, SHOP_SHENMU_PER_XUANTIE } from './shop';
 import {
   DEFENSE_LINEUP_SIZE,
   BREAKTHROUGH_ARRAY_BONUS_BP_PER_LEVEL,
@@ -923,6 +923,8 @@ export interface ShopView {
   buyPrice: number;
   /** 卖 1 展示单位材料得多少灵石（最小单位）。 */
   sellPrice: number;
+  /** 兑换 1 个玄铁要花几个神木（展示单位）。 */
+  shenmuPerXuantie: number;
   pills: ShopPillView[];
 }
 
@@ -961,6 +963,17 @@ export interface ShopSellPillResultView {
   quantity: number;
   /** 获得的灵石（最小单位）。 */
   revenue: number;
+  /** 服务端拼好的结果文案。 */
+  message: string;
+}
+
+/** 坊市神木兑换玄铁结果（POST /game/shop-exchange 的 result）。 */
+export interface ShopExchangeResultView {
+  action: 'exchange';
+  /** 换得的玄铁数量（展示单位整数）。 */
+  amount: number;
+  /** 花掉的神木（最小单位）。 */
+  cost: number;
   /** 服务端拼好的结果文案。 */
   message: string;
 }
@@ -2224,6 +2237,7 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
   const shopView: ShopView = {
     buyPrice: SHOP_BUY_PRICE,
     sellPrice: SHOP_SELL_PRICE,
+    shenmuPerXuantie: SHOP_SHENMU_PER_XUANTIE,
     pills: PILL_RECIPES.flatMap((recipe) => {
       const sellPrice = SHOP_PILL_PRICES[recipe.id];
       if (sellPrice === undefined || sellPrice <= 0) {

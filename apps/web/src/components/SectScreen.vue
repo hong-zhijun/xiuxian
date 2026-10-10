@@ -41,6 +41,7 @@ import {
   refineEquipment,
   salvageEquipment,
   shopBuy,
+  shopExchange,
   shopSell,
   shopSellPill,
   unequipItem,
@@ -1057,6 +1058,21 @@ async function onShopSellPill(pillId: string, quantity: number): Promise<void> {
   }
 }
 
+/** 神木兑换玄铁（POST /game/shop-exchange）：神木余额与玄铁容量由服务端校验，成功后留在兑换页。 */
+async function onShopExchange(amount: number): Promise<void> {
+  if (props.busy || shopSubmitting.value) return;
+  shopSubmitting.value = true;
+  try {
+    const { state: next, result } = await shopExchange(amount);
+    handOffShopState(next);
+    emit('notify', 'success', `换得玄铁 ×${String(result.amount)}`, result.message);
+  } catch (caught) {
+    emit('notify', 'error', '兑换未成', caught instanceof Error ? caught.message : '坊市暂时无法交割，请稍后重试。');
+  } finally {
+    shopSubmitting.value = false;
+  }
+}
+
 /* ---------- 0028 装备（炼器 / 背包 / 穿戴 / 卸下 / 分解） ---------- */
 
 /**
@@ -1814,7 +1830,7 @@ const hubGroups = computed<{ label: string; cards: HubCard[] }[]>(() => {
     {
       label: '市集',
       cards: [
-        { id: 'shop', name: '坊市', glyph: '坊', status: '买卖药材矿石' },
+        { id: 'shop', name: '坊市', glyph: '坊', status: '买卖材料 · 兑换玄铁' },
         { id: 'gambling', name: '赌坊', glyph: '赌', status: props.state.gambling.unlocked ? `今日还剩 ${String(props.state.gambling.remaining)} 次` : '宗门 2 级开放' },
         {
           id: 'auction',
@@ -2667,7 +2683,7 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
   </ModalShell>
 
     <!--
-      坊市：三笔交易都在 ShopDialog 里当场算预览，接口调用与 toast 在本组件；
+      坊市：四种交易都在 ShopDialog 里当场算预览，接口调用与 toast 在本组件；
       回执里的 state 交给 App 统一赋值（见 handOffShopState），交易成功留在当前标签页。
     -->
     <ModalShell
@@ -2683,6 +2699,7 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
         @buy="onShopBuy"
         @sell="onShopSell"
         @sell-pill="onShopSellPill"
+        @exchange="onShopExchange"
       />
     </ModalShell>
 

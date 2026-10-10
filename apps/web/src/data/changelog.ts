@@ -19,6 +19,14 @@ export const MAX_ENTRIES = 5;
 
 export const CHANGELOG: readonly ChangelogEntry[] = [
   {
+    id: '2026-10-11-shop-exchange',
+    time: '2026-10-11 10:00',
+    title: '坊市 · 神木兑换玄铁',
+    items: [
+      '坊市新增「兑换」页：每 2 神木换 1 玄铁，不限次数，只能单向兑换。',
+    ],
+  },
+  {
     id: '2026-10-10-refine-hall',
     time: '2026-10-10 21:00',
     title: '祭炼堂 · 祭炼动画',
