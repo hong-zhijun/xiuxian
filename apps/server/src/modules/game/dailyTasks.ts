@@ -12,7 +12,7 @@ import { VEIN_UNLOCK_SECT_LEVEL } from './veins';
  * 本文件不读库、不取时间，随机源 / 种子通过参数注入（测试用固定种子或固定随机序列）。
  *
  * 规则要点：
- * - 任务池 10 个。进度全部从现有记录统计（service.ts 的 dailyProgressOf），这里只管定义与抽取。
+ * - 任务池 10 个（含「镇妖塔闯塔」，替换了没有入口的「切磋」）。进度全部从现有记录统计（service.ts 的 dailyProgressOf），这里只管定义与抽取。
  * - 每宗门每天第一次读取时抽 5 个并落库（之后一整天不变）：只从「出现条件」满足的任务里抽，
  *   至少 2 个「轻松」（可选不够时有几个算几个），最多 1 个「PvP」，不重复。
  * - 单个任务奖励：领取时的宗门等级 × 50 灵石；当天抽到的任务全部领取后可开一个日课宝箱。
@@ -27,7 +27,7 @@ export const DAILY_TASK_IDS = [
   'bossHit',
   'explore',
   'challenge',
-  'spar',
+  'towerClimb',
   'gamble',
   'journey',
   'towerSweep',
@@ -53,7 +53,8 @@ export const DAILY_TASKS: readonly DailyTaskDef[] = [
   { id: 'bossHit', name: '讨伐出手', target: 3, category: 'normal' },
   { id: 'explore', name: '秘境探索', target: 2, category: 'normal' },
   { id: 'challenge', name: '登门挑战', target: 1, category: 'pvp' },
-  { id: 'spar', name: '切磋', target: 2, category: 'normal' },
+  // 原「切磋」：切磋没有开放入口，做不了，换成闯塔（赢输都算）。旧日课行里的 'spar' 读出来时会被丢掉。
+  { id: 'towerClimb', name: '镇妖塔闯塔', target: 1, category: 'normal' },
   { id: 'gamble', name: '赌坊玩法', target: 3, category: 'normal' },
   { id: 'journey', name: '派弟子历练', target: 1, category: 'easy' },
   { id: 'towerSweep', name: '镇妖塔扫荡', target: 1, category: 'easy' },
@@ -125,6 +126,8 @@ function isAvailable(taskId: DailyTaskId, situation: DailyTaskSituation): boolea
       return situation.arenaLevel > 0;
     case 'gamble':
       return situation.sectLevel >= GAMBLING_UNLOCK_SECT_LEVEL;
+    case 'towerClimb':
+      return situation.sectLevel >= TOWER_UNLOCK_SECT_LEVEL;
     case 'towerSweep':
       return situation.sectLevel >= TOWER_UNLOCK_SECT_LEVEL && situation.towerMaxFloor > 0;
     case 'recruit':
@@ -133,7 +136,7 @@ function isAvailable(taskId: DailyTaskId, situation: DailyTaskSituation): boolea
       return situation.sectLevel >= MARKET_UNLOCK_SECT_LEVEL;
     case 'veinAttack':
       return situation.sectLevel >= VEIN_UNLOCK_SECT_LEVEL;
-    // 讨伐出手 / 登门挑战 / 切磋 / 派弟子历练：没有出现条件。
+    // 讨伐出手 / 登门挑战 / 派弟子历练：没有出现条件。
     default:
       return true;
   }

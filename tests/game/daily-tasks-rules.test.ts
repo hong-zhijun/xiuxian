@@ -75,7 +75,7 @@ describe('日课任务池（计划 1.1）', () => {
       ['bossHit', 3, 'normal'],
       ['explore', 2, 'normal'],
       ['challenge', 1, 'pvp'],
-      ['spar', 2, 'normal'],
+      ['towerClimb', 1, 'normal'],
       ['gamble', 3, 'normal'],
       ['journey', 1, 'easy'],
       ['towerSweep', 1, 'easy'],
@@ -91,7 +91,9 @@ describe('日课任务池（计划 1.1）', () => {
       expect(findDailyTask(id)?.id).toBe(id);
     }
     expect(findDailyTask('nope')).toBeNull();
-    expect(isDailyTaskId('spar')).toBe(true);
+    expect(isDailyTaskId('towerClimb')).toBe(true);
+    // 切磋没有入口，已从任务池移除：旧日课行里的 'spar' 不再被认作任务。
+    expect(isDailyTaskId('spar')).toBe(false);
     expect(isDailyTaskId('nope')).toBe(false);
   });
 
@@ -112,19 +114,22 @@ describe('日课任务池（计划 1.1）', () => {
     // 镇妖塔：解锁等级且闯过至少一层才有扫荡。
     expect(dailyTaskAvailableIds({ ...LEVEL_THREE_FULL, towerMaxFloor: 0 })).not.toContain('towerSweep');
     expect(dailyTaskAvailableIds({ ...LEVEL_THREE_FULL, sectLevel: TOWER_UNLOCK_SECT_LEVEL - 1 })).not.toContain('towerSweep');
+    // 闯塔：只看镇妖塔是否解锁，一层没过也能抽到（赢输都算）。
+    expect(dailyTaskAvailableIds({ ...LEVEL_THREE_FULL, towerMaxFloor: 0 })).toContain('towerClimb');
+    expect(dailyTaskAvailableIds({ ...LEVEL_THREE_FULL, sectLevel: TOWER_UNLOCK_SECT_LEVEL - 1 })).not.toContain('towerClimb');
   });
 });
 
 describe('出现条件（dailyTaskAvailableIds）', () => {
-  it('1 级无演武场、弟子满编：只剩 4 个无条件任务', () => {
-    expect(dailyTaskAvailableIds(LEVEL_ONE_BARE)).toEqual(['bossHit', 'challenge', 'spar', 'journey']);
+  it('1 级无演武场、弟子满编：只剩 3 个无条件任务', () => {
+    expect(dailyTaskAvailableIds(LEVEL_ONE_BARE)).toEqual(['bossHit', 'challenge', 'journey']);
   });
 
   it('演武场决定秘境探索；弟子没满才有招募弟子', () => {
     const available = dailyTaskAvailableIds({ ...LEVEL_ONE_BARE, arenaLevel: 1, discipleCount: 4 });
     expect(available).toContain('explore');
     expect(available).toContain('recruit');
-    expect(available).toEqual(['bossHit', 'explore', 'challenge', 'spar', 'journey', 'recruit']);
+    expect(available).toEqual(['bossHit', 'explore', 'challenge', 'journey', 'recruit']);
   });
 
   it('宗门 3 级、全部前置满足：10 个任务全部可选，并保持任务池顺序', () => {
@@ -202,12 +207,12 @@ describe('抽取 5 个（pickDailyTasks，计划 1.2）', () => {
   });
 
   it('只有一个轻松可选时有几个算几个：这一个必定入选', () => {
-    const picked = pickDailyTasks(['bossHit', 'spar', 'journey', 'challenge'], 'only-one-easy');
+    const picked = pickDailyTasks(['bossHit', 'explore', 'journey', 'challenge'], 'only-one-easy');
     expect(picked).toContain('journey');
     expect(picked).toHaveLength(4);
   });
 
-  it('等级 1、无演武场、弟子满编：4 个可选全部入选', () => {
+  it('等级 1、无演武场、弟子满编：3 个可选全部入选', () => {
     const available = dailyTaskAvailableIds(LEVEL_ONE_BARE);
     expect([...pickDailyTasks(available, 'bare')].sort()).toEqual([...available].sort());
   });
