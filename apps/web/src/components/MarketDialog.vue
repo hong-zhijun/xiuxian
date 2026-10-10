@@ -45,8 +45,8 @@ type MarketTab = 'news' | 'trades' | 'orders' | 'ranks';
 const tab = ref<MarketTab>('news');
 /** 挂单表单：类型、触发价（展示单位，输入框里的字符串）、股数。 */
 const orderKind = ref<MarketOrderKind>('limit_buy');
-const orderTrigger = ref<string>('');
-const orderShares = ref<string>('10');
+const orderTrigger = ref<string | number>('');
+const orderShares = ref<string | number>('10');
 
 const RANGES: readonly { id: MarketChartRange; label: string }[] = [
   { id: '1h', label: '分时 1 小时' },
@@ -204,8 +204,12 @@ const stoneBalance = computed<number>(() =>
   Number(props.state.resources.find((resource) => resource.id === 'spiritStone')?.balance ?? 0),
 );
 
-/** 触发价输入（展示单位）→ 最小单位整数；不是正数或超过 3 位小数返回 null。 */
-function triggerMinUnits(text: string): number | null {
+/**
+ * 触发价输入（展示单位）→ 最小单位整数；不是正数或超过 3 位小数返回 null。
+ * type="number" 的输入框经 v-model 拿到的可能是数字（Vue 会自动转），统一按字符串处理。
+ */
+function triggerMinUnits(input: string | number): number | null {
+  const text = String(input);
   if (text.trim() === '') return null;
   const display = Number(text);
   if (!Number.isFinite(display) || display <= 0) return null;
