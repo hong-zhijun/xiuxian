@@ -7784,6 +7784,57 @@ p.steward-bonus-note {
   cursor: pointer;
 }
 
+/* 招贤台（弟子修行标题栏）：样式同门人调度，排在它前面，由它占住 margin-left: auto 把两个按钮一起推到右侧。 */
+.recruit-launch {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  padding: 4px 11px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  color: var(--jade-bright);
+  background: transparent;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.recruit-launch.has-room {
+  border-color: rgba(234, 209, 154, 0.6);
+  color: var(--gold-bright);
+  background: rgba(202, 169, 106, 0.1);
+}
+
+.recruit-launch:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.recruit-launch + .dispatch-launch {
+  margin-left: 0;
+}
+
+/* 弟子修行标题栏：按钮文字不折行；窄屏放不下时整组按钮换到第二行，而不是把字挤成竖排。 */
+.disciple-panel .panel-heading {
+  flex-wrap: wrap;
+  row-gap: 8px;
+}
+
+.disciple-panel .panel-heading .home-section-title,
+.recruit-launch,
+.dispatch-launch,
+.disciple-panel .panel-heading .count-badge {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+/* 手机：门人数在名册上方「匹配 / 共 N 位门人」里已有，标题栏省掉它，招贤台与门人调度留在同一行。 */
+@media (max-width: 480px) {
+  .disciple-panel .panel-heading .count-badge {
+    display: none;
+  }
+}
+
 .dispatch-launch.has-suggestions {
   border-color: rgba(234, 209, 154, 0.6);
   color: var(--gold-bright);

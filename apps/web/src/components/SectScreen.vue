@@ -1781,7 +1781,7 @@ function signedPct(value: number): string {
 }
 
 type HubCardId =
-  | 'daily' | 'alchemy' | 'forge' | 'refine' | 'recruit' | 'steward' | 'defense'
+  | 'daily' | 'alchemy' | 'forge' | 'refine' | 'steward' | 'defense'
   | 'boss' | 'tower' | 'explore' | 'veins'
   | 'shop' | 'gambling' | 'auction' | 'market' | 'merit';
 
@@ -1828,7 +1828,6 @@ const hubGroups = computed<{ label: string; cards: HubCard[] }[]>(() => {
         { id: 'alchemy', name: '炼丹', glyph: '丹', status: healableIds.value.length > 0 ? `${String(healableIds.value.length)} 人受伤可疗伤` : '炼制丹药' },
         { id: 'forge', name: '炼器', glyph: '器', status: equipment.value ? `背包 ${String(equipment.value.bagCount)} / ${String(equipment.value.bagCapacity)}` : '打造装备' },
         { id: 'refine', name: '祭炼', glyph: '祭', status: refineCardStatus.value },
-        { id: 'recruit', name: '招贤台', glyph: '招', status: recruitBadge.value > 0 ? `还可招 ${String(recruitBadge.value)} 人` : '张榜招贤' },
         { id: 'steward', name: '执事堂', glyph: '执', status: vacantStewards.value > 0 ? `${String(vacantStewards.value)} 个执事空缺` : '执事齐全' },
         { id: 'defense', name: '守擂阵容', glyph: '擂', status: props.state.sect.defenseLineup ? '已布阵' : '尚未布阵' },
       ],
@@ -1921,10 +1920,6 @@ const hubGroups = computed<{ label: string; cards: HubCard[] }[]>(() => {
 });
 
 function openHubCard(id: HubCardId): void {
-  if (id === 'recruit') {
-    void requestRecruit();
-    return;
-  }
   if (id === 'forge') {
     openEquipment();
     return;
@@ -1933,7 +1928,7 @@ function openHubCard(id: HubCardId): void {
     openRefineHall();
     return;
   }
-  const panels: Record<Exclude<HubCardId, 'recruit' | 'forge' | 'refine'>, NonNullable<typeof openPanel.value>> = {
+  const panels: Record<Exclude<HubCardId, 'forge' | 'refine'>, NonNullable<typeof openPanel.value>> = {
     daily: 'daily',
     alchemy: 'alchemy',
     steward: 'steward',
@@ -2346,7 +2341,6 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
             :key="card.id"
             class="hub-card"
             type="button"
-            :disabled="card.id === 'recruit' && (busy || recruitLoading)"
             @click="openHubCard(card.id)"
           >
             <span class="hub-card-name">
@@ -2363,6 +2357,17 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
       <section class="game-panel disciple-panel" aria-labelledby="disciple-title">
         <header class="section-heading panel-heading">
           <h2 id="disciple-title" class="home-section-title">弟子修行</h2>
+          <!-- 招贤台：从操作栏挪到这里（招人属于弟子管理），角标 = 还能招几个人。 -->
+          <button
+            class="recruit-launch"
+            :class="{ 'has-room': recruitBadge > 0 }"
+            type="button"
+            :disabled="busy || recruitLoading"
+            :title="recruitBadge > 0 ? `还可招 ${recruitBadge} 人` : '张榜招贤'"
+            @click="requestRecruit"
+          >
+            招贤台<span v-if="recruitBadge > 0" class="dispatch-launch-count">{{ recruitBadge }}</span>
+          </button>
           <button
             class="dispatch-launch"
             :class="{ 'has-suggestions': dispatchCount > 0 }"
