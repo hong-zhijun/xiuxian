@@ -387,11 +387,12 @@ const RULES_TEXT = `讨伐 · 玩法说明
       蛮力：攻击越高，伤害越高（派攻击高的弟子）
       邪祟：暴击率翻倍（派幸运高的弟子）
       狂暴：受伤、重伤概率翻倍（派体魄高的弟子，别贪刀）
-奖励：每关单独结算 —— 参与宗门各得自己 2.5 小时产出的 灵石/药材/矿石（伤害第 1/2/3 名额外 ×1.5/1.25/1.1），
-      每往后一关奖励 +30%，第 5 关起不再增加；入账不超过资源容量，仓库满了多出的部分作废；具体数字点「奖励」查看；
+奖励：每关单独结算 —— 参与宗门各得自己 3 小时产出的 灵石/药材/矿石（伤害第 1/2/3 名额外 ×1.5/1.25/1.1），
+      第 1～5 关每往后一关奖励 +30%，第 6 关起每关 +10%，第 10 关封顶；入账不超过资源容量，仓库满了多出的部分作废；具体数字点「奖励」查看；
       击杀时每个参与宗门再得聚气丹 ×1、伤害第 1 名得淬体丹 ×1、最后一击另有灵石；
       击退时资源减半、没有丹药与最后一击；不足 70% 逃走则什么也不发。
-玄铁：本关伤害占比 ≥15% 按表发放（击退减半），不足则每关 1 个；
+玄铁：本关伤害占比 ≥15% 按表发放（击退减半），不足则第 1～5 关每关 1 个；第 6 关起每关再多 2 个（第 1 名多 3 个、不足 15% 的多 1 个），第 10 关封顶；
+神木：第 6 关起随玄铁一起发，数量为本关玄铁的一半（向上取整）；
 掉落：每关击杀时，每个参与宗门按伤害占比各自判定 —— 高档装备概率 = 75% × √占比（第 5 关起高档为仙品，改为 25% × √占比），未得时 40% 概率得低档装备；第 1～2 关 灵/凡、第 3～4 关 宝/灵、第 5 关起 仙/宝。
 功勋：每关按伤害占比发放 = max(2, 10 × 关卡系数 × √占比)，击退减半；在首页「功勋」里兑换玄铁与装备（装备自选部位）。`;
 </script>
@@ -428,7 +429,7 @@ const RULES_TEXT = `讨伐 · 玩法说明
         <p class="boss-reward-title">第 {{ panel.rewardPreview.stage }} 关击杀奖励（按你宗门当前产出计算）</p>
         <table class="boss-reward-table">
           <thead>
-            <tr><th>伤害名次</th><th>灵石</th><th>药材</th><th>矿石</th><th>玄铁</th><th>丹药</th></tr>
+            <tr><th>伤害名次</th><th>灵石</th><th>药材</th><th>矿石</th><th>玄铁</th><th v-if="panel.rewardPreview.shenmu.top > 0">神木</th><th>丹药</th></tr>
           </thead>
           <tbody>
             <tr v-for="tier in panel.rewardPreview.tiers" :key="tier.rank">
@@ -437,6 +438,9 @@ const RULES_TEXT = `讨伐 · 玩法说明
               <td>{{ formatAmount(String(tier.resources.herb ?? 0)) }}</td>
               <td>{{ formatAmount(String(tier.resources.ore ?? 0)) }}</td>
               <td>{{ tier.rank === 1 ? panel.rewardPreview.xuantie.top : panel.rewardPreview.xuantie.others }}</td>
+              <td v-if="panel.rewardPreview.shenmu.top > 0">
+                {{ tier.rank === 1 ? panel.rewardPreview.shenmu.top : panel.rewardPreview.shenmu.others }}
+              </td>
               <td>{{ tier.topDamagePill ? '聚气丹、淬体丹' : '聚气丹' }}</td>
             </tr>
           </tbody>
@@ -446,7 +450,8 @@ const RULES_TEXT = `讨伐 · 玩法说明
           <li>玄铁：本关伤害占比 ≥{{ panel.rewardPreview.xuantie.minSharePercent }}% 按表发放（击退减半），不足则每关 {{ panel.rewardPreview.xuantie.below }} 个</li>
           <!-- 三期功勋：满占比能拿多少来自服务端 meritFullShare，实际按 √占比 折算、保底 2。 -->
           <li>功勋：max(2, {{ panel.rewardPreview.meritFullShare }} × √伤害占比)，击退减半；可在首页「功勋」里兑换玄铁与装备</li>
-          <li>每往后一关，资源奖励 +30%（第 5 关起不再增加）；入账不超过资源容量，溢出作废</li>
+          <li v-if="panel.rewardPreview.shenmu.top > 0">神木：本关玄铁的一半（向上取整）；伤害占比不足 {{ panel.rewardPreview.xuantie.minSharePercent }}% 时 {{ panel.rewardPreview.shenmu.below }} 个</li>
+          <li>资源奖励：第 1～5 关每往后一关 +30%，第 6 关起每关 +10%，第 10 关封顶；入账不超过资源容量，溢出作废</li>
           <li>击退（打掉 70% 以上没打死）：资源减半，无丹药；不足 70% 逃走：无奖励</li>
           <!-- 0028 装备掉落说明：文案由服务端按当前关卡的品质表拼好，前端直接渲染。 -->
           <li v-if="panel.rewardPreview.dropDescription" class="boss-reward-drop">

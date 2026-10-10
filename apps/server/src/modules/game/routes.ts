@@ -76,7 +76,6 @@ import {
   createSect,
   daoDebate,
   listDebateHistory,
-  listStoneGambleHistory,
   listDiscipleLeaderboard,
   getDiscipleProfile,
   expelDisciple,
@@ -684,19 +683,12 @@ export function createGameRoutes(): Hono<AppEnv> {
     return respondOk(c, result);
   });
 
-  // 0046 赌石：切石（结算 → 解锁 / 档位门槛 / 玄铁容量 / 余额校验 → 扣料、抽结果、记保底与记录，一次受保护 batch）。
+  // 0046 赌石：切石（结算 → 解锁 / 档位门槛 / 每日次数 / 玄铁容量 / 余额校验 → 扣料、抽结果、记保底、次数与赌坊记录，一次受保护 batch）。
   routes.post('/game/stone-gamble', async (c) => {
     const userId = requireUserId(c);
     const body = await parseStrictJson(stoneGambleRequestSchema, c);
     const result = await stoneGamble(getDb(c.env), userId, body.tier, body.payResource, body.count, Date.now());
     return respondOk(c, { state: result.state, result: result.result });
-  });
-
-  // 0046 赌石：本宗最近 20 条记录（只读：不结算、不写库）。
-  routes.get('/game/stone-gamble/history', async (c) => {
-    const userId = requireUserId(c);
-    const entries = await listStoneGambleHistory(getDb(c.env), userId);
-    return respondOk(c, { entries });
   });
 
   // 0025 世界 Boss（讨伐）：面板数据（今天的 Boss、今日伤害榜、出手记录、史上最强一击）。

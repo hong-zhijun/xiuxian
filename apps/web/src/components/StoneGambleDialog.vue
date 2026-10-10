@@ -4,15 +4,14 @@ import { computed, onUnmounted, ref } from 'vue';
 import type {
   ResourceView,
   SectStateView,
-  StoneGambleHistoryEntry,
   StoneGambleResult,
   StoneOutcomeId,
   StonePayResource,
   StoneTierId,
   StoneTierView,
 } from '../api/game';
-import { fetchStoneGambleHistory, stoneGamble } from '../api/game';
-import { formatAmount, formatTime } from '../utils/format';
+import { stoneGamble } from '../api/game';
+import { formatAmount } from '../utils/format';
 import ModalShell from './ModalShell.vue';
 
 /**
@@ -113,6 +112,10 @@ function blockReasonOf(tier: StoneTierView | null, count: 1 | 10): string | null
   if (!props.state.gambling.unlocked) return props.state.gambling.blockedReason ?? '赌坊尚未开启';
   if (tier === null) return '暂无可切的原石';
   if (!tier.unlocked) return tier.blockedReason ?? `${tier.name}尚未解锁`;
+  const remaining = props.state.gambling.remaining;
+  if (remaining < count) {
+    return remaining <= 0 ? '今日赌坊次数已用完' : `今日赌坊次数只剩 ${String(remaining)} 次`;
+  }
   const need = perStoneDisplay(tier, payResource.value) * UNITS_PER_DISPLAY * count;
   if (balanceMinOf(payResource.value) < need) return `${resourceName(payResource.value)}不足`;
   if (xuantieRoomOf(tier) < 1) return `玄铁库存快满了（装不下一块${tier.name}的天价 ${String(tier.topPrize)} 个）`;
@@ -277,26 +280,9 @@ const summaryRows = computed(() => {
   }));
 });
 
-/* ---------- 说明与赌石记录 ---------- */
+/* ---------- 说明（赌石记录并入赌坊记录，在玩法列表的「赌坊记录」里查看） ---------- */
 
 const showRules = ref(false);
-const showRecord = ref(false);
-const historyEntries = ref<StoneGambleHistoryEntry[]>([]);
-const historyLoading = ref(false);
-const historyError = ref('');
-
-async function openRecord(): Promise<void> {
-  showRecord.value = true;
-  historyLoading.value = true;
-  historyError.value = '';
-  try {
-    historyEntries.value = await fetchStoneGambleHistory();
-  } catch (caught) {
-    historyError.value = caught instanceof Error ? caught.message : '赌石记录加载失败';
-  } finally {
-    historyLoading.value = false;
-  }
-}
 
 /** 概率的展示：基点 → 百分比（服务端的概率都是 100 的整数倍）。 */
 function percentText(chanceBp: number): string {
@@ -321,10 +307,9 @@ onUnmounted(() => {
       <h3 id="stone-title" class="stone-title">赌石</h3>
       <div class="stone-head-actions">
         <button class="stone-chip" type="button" @click="showRules = true">说明</button>
-        <button class="stone-chip" type="button" @click="openRecord">赌石记录</button>
       </div>
     </header>
-    <p class="stone-note">花灵石或材料买一块原石，当场切开见玄铁。不限次数，不占论道 / 天机轮的每日次数。</p>
+    <p class="stone-note">花灵石或材料买一块原石，当场切开见玄铁。每切一块占 1 次赌坊次数（连切 10 块占 10 次）。</p>
 
     <p v-if="stones === null" class="blocked-hint">{{ state.gambling.blockedReason ?? '赌坊尚未开启' }}</p>
 
@@ -448,35 +433,6 @@ onUnmounted(() => {
       </section>
     </ModalShell>
 
-    <!-- 赌石记录：本宗最近 20 次，只读。 -->
-    <ModalShell v-if="showRecord" narrow label="赌石记录" @close="showRecord = false">
-      <section class="stone-record-card" aria-labelledby="stone-record-title">
-        <h2 id="stone-record-title" class="disciple-detail-title">赌石记录</h2>
-        <p class="stone-note">本宗最近 20 次切石，时间倒序。</p>
-        <p v-if="historyLoading" class="blocked-hint">加载中…</p>
-        <p v-else-if="historyError" class="blocked-hint">{{ historyError }}</p>
-        <ul v-else-if="historyEntries.length > 0" class="stone-record-list">
-          <li v-for="entry in historyEntries" :key="entry.id" class="stone-record-item">
-            <div class="stone-record-top">
-              <strong>{{ entry.tierName }}</strong>
-              <span>{{ countText(entry.count) }}</span>
-              <span class="stone-record-time">{{ formatTime(entry.createdAt) }}</span>
-            </div>
-            <div class="stone-record-bottom">
-              <span>花费 {{ formatAmount(entry.cost) }} {{ resourceName(entry.payResource) }}</span>
-              <span>{{ resourceName(XUANTIE_ID) }} +{{ formatAmount(entry.xuantie) }}</span>
-            </div>
-            <div class="stone-record-bottom">
-              <span>天价 {{ entry.counts.jackpot }} · 大涨 {{ entry.counts.big }} · 小涨 {{ entry.counts.small }} · 垮了 {{ entry.counts.bust }}</span>
-            </div>
-          </li>
-        </ul>
-        <p v-else class="blocked-hint">暂无赌石记录。</p>
-        <button class="action-button primary-action realm-button" type="button" @click="showRecord = false">
-          <span>知道了</span>
-        </button>
-      </section>
-    </ModalShell>
   </section>
 </template>
 
@@ -847,10 +803,9 @@ onUnmounted(() => {
   width: 100%;
 }
 
-/* ---------- 说明与记录弹窗 ---------- */
+/* ---------- 说明弹窗 ---------- */
 
-.stone-rules-card,
-.stone-record-card {
+.stone-rules-card {
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -863,8 +818,7 @@ onUnmounted(() => {
   line-height: 1.7;
 }
 
-.stone-odds-list,
-.stone-record-list {
+.stone-odds-list {
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -873,8 +827,7 @@ onUnmounted(() => {
   list-style: none;
 }
 
-.stone-odds-item,
-.stone-record-item {
+.stone-odds-item {
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -897,25 +850,6 @@ onUnmounted(() => {
 .stone-odds-line span {
   display: inline-block;
   margin-right: 12px;
-}
-
-.stone-record-top,
-.stone-record-bottom {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px 14px;
-  color: #93a99e;
-}
-
-.stone-record-top strong {
-  color: #dce6e0;
-  font-weight: 500;
-}
-
-.stone-record-time {
-  margin-left: auto;
-  color: var(--faint, #7d9186);
 }
 
 /* 系统要求减少动效：去掉晃动、切开与光效的动画，只保留最终摆出的状态。 */

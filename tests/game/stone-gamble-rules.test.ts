@@ -3,7 +3,6 @@ import { describe, expect, it } from 'vitest';
 import {
   STONE_BATCH_COUNTS,
   STONE_CHANCE_TOTAL_BP,
-  STONE_HISTORY_LIMIT,
   STONE_MATERIAL_PER_STONE,
   STONE_OUTCOME_IDS,
   STONE_OUTCOME_NAMES,
@@ -144,7 +143,6 @@ describe('赌石档位与概率表（计划 1.2）', () => {
     expect([...STONE_BATCH_COUNTS]).toEqual([1, 10]);
     expect([...STONE_PAY_RESOURCES]).toEqual(['spiritStone', 'herb', 'ore']);
     expect(STONE_PITY_BUSTS).toBe(10);
-    expect(STONE_HISTORY_LIMIT).toBe(20);
   });
 });
 

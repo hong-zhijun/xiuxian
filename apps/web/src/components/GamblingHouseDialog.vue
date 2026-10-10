@@ -117,6 +117,8 @@ const BET_MODE_LABELS: Record<string, string> = {
   // 0024 灵兽竞逐
   beast_race: '灵兽竞逐',
   horse_race: '赛马',
+  // 0046 赌石：倍率列对它是「块数」，赌注列写档位与花费。
+  stone: '赌石',
 };
 
 function formatStake(entry: DebateHistoryEntry): string {
@@ -136,6 +138,11 @@ function formatStake(entry: DebateHistoryEntry): string {
       }
       return `押 ${String(detail.beastName ?? '')} · ${(entry.multiplier / 10).toFixed(1)}x`;
     }
+    if (entry.betMode === 'stone') {
+      const amount = Number(detail.amount) / UNITS_PER_DISPLAY;
+      const resName = resourceLabel(String(detail.resourceId ?? 'spiritStone'));
+      return `${String(detail.tierName ?? '')} · ${resName} ${String(amount)}`;
+    }
     if (entry.betMode === 'horse_race') {
       const amount = Number(detail.amount) / UNITS_PER_DISPLAY;
       const odds = Number.isFinite(Number(detail.odds)) ? Number(detail.odds) : entry.multiplier / 10;
@@ -154,6 +161,7 @@ function formatStake(entry: DebateHistoryEntry): string {
  * 直接渲染会变成 32x，所以这里还原成赔率；其余玩法（含天机轮的投入档位）就是原值。
  */
 function formatMultiplier(entry: DebateHistoryEntry): string {
+  if (entry.betMode === 'stone') return `${String(entry.multiplier)} 块`;
   return entry.betMode === 'horse_race' || entry.betMode === 'beast_race'
     ? `${(entry.multiplier / 10).toFixed(1)}x`
     : `${String(entry.multiplier)}x`;
@@ -445,7 +453,7 @@ const RULES_TEXT = `论道赌局 · 玩法说明
   <section class="gambling-dialog" aria-labelledby="gambling-dialog-title">
     <header class="section-heading panel-heading compact-heading">
       <h2 id="gambling-dialog-title" class="gambling-title-gold">{{ stage === 'wheel' ? '天机轮' : '赌坊' }}</h2>
-      <span v-if="stage !== 'stone'" class="count-badge">今日 {{ remaining }}/{{ dailyLimit }}</span>
+      <span class="count-badge">今日 {{ remaining }}/{{ dailyLimit }}</span>
     </header>
 
     <!-- ---------- 玩法列表 ---------- -->

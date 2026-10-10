@@ -292,15 +292,27 @@ describe('装备规则 · 分解与加成', () => {
 });
 
 describe('装备二期：玄铁 · 炼器坊', () => {
-  it('世界 Boss 玄铁：占比 <15% 每关 1 个（击退减半向下取整 = 0）；按关卡给量，第 1 名更多', () => {
+  it('世界 Boss 玄铁：占比 <15% 第 1～5 关每关 1 个（击退减半向下取整 = 0）；按关卡给量，第 1 名更多', () => {
     expect(bossXuantieFor({ stage: 1, damageShare: 0.14, isTop: false, repelled: false })).toBe(1);
     expect(bossXuantieFor({ stage: 1, damageShare: 0.14, isTop: false, repelled: true })).toBe(0);
     expect(bossXuantieFor({ stage: 1, damageShare: 0, isTop: false, repelled: false })).toBe(0);
-    expect(bossXuantieFor({ stage: 1, damageShare: 0.15, isTop: false, repelled: false })).toBe(2);
-    expect(bossXuantieFor({ stage: 1, damageShare: 0.5, isTop: true, repelled: false })).toBe(3);
-    expect(bossXuantieFor({ stage: 4, damageShare: 0.3, isTop: false, repelled: false })).toBe(6);
-    expect(bossXuantieFor({ stage: 9, damageShare: 0.3, isTop: true, repelled: false })).toBe(12);
-    expect(bossXuantieFor({ stage: 2, damageShare: 0.3, isTop: true, repelled: true })).toBe(2);
+    expect(bossXuantieFor({ stage: 1, damageShare: 0.15, isTop: false, repelled: false })).toBe(3);
+    expect(bossXuantieFor({ stage: 1, damageShare: 0.5, isTop: true, repelled: false })).toBe(4);
+    expect(bossXuantieFor({ stage: 4, damageShare: 0.3, isTop: false, repelled: false })).toBe(7);
+    expect(bossXuantieFor({ stage: 5, damageShare: 0.3, isTop: true, repelled: false })).toBe(13);
+    expect(bossXuantieFor({ stage: 2, damageShare: 0.3, isTop: true, repelled: true })).toBe(3);
+  });
+
+  it('世界 Boss 玄铁：第 6 关起每关 +2 / 第 1 名 +3 / 不足门槛 +1，第 10 关封顶', () => {
+    expect(bossXuantieFor({ stage: 6, damageShare: 0.3, isTop: false, repelled: false })).toBe(11);
+    expect(bossXuantieFor({ stage: 6, damageShare: 0.3, isTop: true, repelled: false })).toBe(16);
+    expect(bossXuantieFor({ stage: 6, damageShare: 0.1, isTop: false, repelled: false })).toBe(2);
+    expect(bossXuantieFor({ stage: 6, damageShare: 0.1, isTop: false, repelled: true })).toBe(1);
+    expect(bossXuantieFor({ stage: 7, damageShare: 0.3, isTop: true, repelled: false })).toBe(19);
+    expect(bossXuantieFor({ stage: 10, damageShare: 0.3, isTop: false, repelled: false })).toBe(19);
+    expect(bossXuantieFor({ stage: 10, damageShare: 0.3, isTop: true, repelled: false })).toBe(28);
+    expect(bossXuantieFor({ stage: 10, damageShare: 0.1, isTop: false, repelled: false })).toBe(6);
+    expect(bossXuantieFor({ stage: 14, damageShare: 0.3, isTop: true, repelled: false })).toBe(28);
   });
 
   it('秘境玄铁：只有三个高级秘境会掉，概率与数量按表', () => {

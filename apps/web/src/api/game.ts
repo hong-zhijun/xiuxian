@@ -1789,21 +1789,6 @@ export interface StoneGambleResult {
   message: string;
 }
 
-/** 赌石记录条目（与后端 view.ts 的 StoneGambleHistoryEntryView 一一对应）。 */
-export interface StoneGambleHistoryEntry {
-  id: string;
-  tier: string;
-  tierName: string;
-  count: number;
-  payResource: string;
-  /** 花费（最小单位）。 */
-  cost: number;
-  /** 共得玄铁（最小单位）。 */
-  xuantie: number;
-  counts: Record<StoneOutcomeId, number>;
-  createdAt: string;
-}
-
 /**
  * 赌石切开（POST /game/stone-gamble）：扣料、抽结果、记保底与记录都在服务端，
  * 返回写库后的完整状态与回执。count 只能是 1（切石）或 10（连切 10 块）。
@@ -1817,12 +1802,6 @@ export async function stoneGamble(
     method: 'POST',
     body: { tier, payResource, count },
   });
-}
-
-/** 赌石记录（GET /game/stone-gamble/history）：只读，本宗最近 20 条，时间倒序；不结算、不写库。 */
-export async function fetchStoneGambleHistory(): Promise<StoneGambleHistoryEntry[]> {
-  const data = await apiRequest<{ entries: StoneGambleHistoryEntry[] }>('/api/v1/game/stone-gamble/history');
-  return data.entries;
 }
 
 /* ---------- 坊市（材料买卖与丹药回收） ---------- */
@@ -2045,6 +2024,8 @@ export interface WorldBossView {
     meritFullShare: number;
     /** 本关击杀的玄铁：伤害占比 ≥ minSharePercent% 才有，第 1 名拿 top；below = 不足门槛时的数量。 */
     xuantie: { top: number; others: number; below: number; minSharePercent: number };
+    /** 深关神木（展示单位）：第 6 关起 = 本关玄铁的一半（向上取整），之前全是 0。 */
+    shenmu: { top: number; others: number; below: number };
   } | null;
   /**
    * 三期：本宗门在当前关的掉落概率（boss 为 null 时为 null）。
