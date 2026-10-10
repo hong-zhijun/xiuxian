@@ -206,13 +206,14 @@ const openPanel = ref<
  * 赌坊里当前在玩哪个玩法：只为赌坊弹窗那一层的加载层文案（论道 / 天机轮 / 灵兽竞逐），
  * 由 GamblingHouseDialog 在切换玩法时上报。
  */
-const gamblingGame = ref<'debate' | 'wheel' | 'beast-race'>('debate');
+const gamblingGame = ref<'debate' | 'wheel' | 'beast-race' | 'stone'>('debate');
 const gamblingLoadingText = computed(() => {
   if (gamblingGame.value === 'wheel') return '正在推演天机';
+  if (gamblingGame.value === 'stone') return '切石中';
   return gamblingGame.value === 'beast-race' ? '灵兽竞逐中' : '正在论道';
 });
 
-function onGamblingGame(game: 'debate' | 'wheel' | 'beast-race'): void {
+function onGamblingGame(game: 'debate' | 'wheel' | 'beast-race' | 'stone'): void {
   gamblingGame.value = game;
 }
 
@@ -979,6 +980,11 @@ function onWheelRevealed(): void {
 
 /** 0024 灵兽竞逐结果提示：由子组件直接 emit，SectScreen 只转发。 */
 function onRaceNotify(tone: 'success' | 'warning', title: string, message: string): void {
+  emit('notify', tone, title, message);
+}
+
+/** 0046 赌石结果提示：由子组件经赌坊弹窗转发上来，SectScreen 只转发（与 onRaceNotify 同一处理）。 */
+function onStoneNotify(tone: 'success' | 'warning', title: string, message: string): void {
   emit('notify', tone, title, message);
 }
 
@@ -2590,6 +2596,8 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
         @race-state-update="(s: SectStateView) => emit('recruited', s)"
         @race-notify="onRaceNotify"
         @race-bet-pending="onRaceBetPending"
+        @stone-state-update="(s: SectStateView) => emit('recruited', s)"
+        @stone-notify="onStoneNotify"
         @game="onGamblingGame"
         @close="onCloseGambling"
         @reveal="onGamblingRevealed"

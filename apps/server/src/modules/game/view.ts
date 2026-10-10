@@ -40,6 +40,16 @@ import {
 } from './gambling';
 import { SHOP_BUY_PRICE, SHOP_PILL_PRICES, SHOP_SELL_PRICE, SHOP_SHENMU_PER_XUANTIE } from './shop';
 import {
+  STONE_MATERIAL_PER_STONE,
+  STONE_TIERS,
+  stoneExpectedXuantie,
+  stoneTierBlockedReason,
+  stoneTopPrize,
+  type StoneOutcomeId,
+  type StonePayResource,
+  type StoneTierId,
+} from './stoneGamble';
+import {
   DEFENSE_LINEUP_SIZE,
   BREAKTHROUGH_ARRAY_BONUS_BP_PER_LEVEL,
   BREAKTHROUGH_ARRAY_BONUS_MAX_LEVEL,
@@ -1015,6 +1025,80 @@ export interface DebateHistoryView {
   stats: DebateStatsView;
 }
 
+/* ---------- 0046 赌石（赌坊第四个玩法） ---------- */
+
+/** 赌石的一种结果（SectStateView.gambling.stones 的 tiers[].outcomes 元素）。 */
+export interface StoneOutcomeView {
+  id: StoneOutcomeId;
+  name: string;
+  /** 概率（基点，10000 = 100%）。 */
+  chanceBp: number;
+  /** 开出的玄铁个数（展示单位，固定不是区间）。 */
+  xuantie: number;
+}
+
+/** 赌石的一个档位（SectStateView.gambling.stones.tiers 的元素）。 */
+export interface StoneTierView {
+  id: StoneTierId;
+  name: string;
+  /** 价格（灵石，展示单位）；材料价格 = 价格 × materialPerStone。 */
+  price: number;
+  minSectLevel: number;
+  /** 宗门等级够不够本档门槛。 */
+  unlocked: boolean;
+  /** 不够门槛时的文案（如「天外陨石需要宗门 6 级」）；够则为 null。 */
+  blockedReason: string | null;
+  /** 单块平均能开出的玄铁（展示单位，保留两位小数）。 */
+  expectedXuantie: number;
+  /** 天价（展示单位）：该档最大的一项玄铁个数。 */
+  topPrize: number;
+  outcomes: StoneOutcomeView[];
+}
+
+/**
+ * 赌石面板（SectStateView.gambling.stones）：赌坊未解锁时为 null；解锁后四档全部下发。
+ * 档位、概率、价格都是服务端口径，前端只渲染与预检，不复制规则。保底次数不在这里。
+ */
+export interface StoneGambleView {
+  /** 1 灵石折几个材料（展示单位）：= 1000 / SHOP_SELL_PRICE（= 2）。 */
+  materialPerStone: number;
+  tiers: StoneTierView[];
+}
+
+/** 赌石切开结果（POST /game/stone-gamble 的 result）。 */
+export interface StoneGambleResultView {
+  tier: StoneTierId;
+  tierName: string;
+  /** 切开的块数：1 或 10。 */
+  count: number;
+  payResource: StonePayResource;
+  /** 花费（最小单位）。 */
+  cost: number;
+  /** 共得玄铁（最小单位）。 */
+  xuantie: number;
+  /** 每块的结果（切开的顺序）。 */
+  outcomes: StoneOutcomeId[];
+  /** 四种结果各几块（之和等于 count）。 */
+  counts: Record<StoneOutcomeId, number>;
+  /** 服务端拼好的结果文案。 */
+  message: string;
+}
+
+/** 赌石记录条目（GET /game/stone-gamble/history 的 entries 元素）。 */
+export interface StoneGambleHistoryEntryView {
+  id: string;
+  tier: string;
+  tierName: string;
+  count: number;
+  payResource: string;
+  /** 花费（最小单位）。 */
+  cost: number;
+  /** 共得玄铁（最小单位）。 */
+  xuantie: number;
+  counts: Record<StoneOutcomeId, number>;
+  createdAt: string;
+}
+
 /** 单条历练对弟子的归约状态（none = 没有未领取记录）。 */
 export type JourneyStatusView = JourneyStatus;
 
@@ -1446,6 +1530,8 @@ export interface SectStateView {
     wheel: WheelView | null;
     /** 0024 灵兽竞逐：当前轮次状态。 */
     race: RaceStateView | null;
+    /** 0046 赌石：赌坊未解锁时为 null；解锁后四档（含门槛、概率与玄铁个数，全部服务端口径）。 */
+    stones: StoneGambleView | null;
   };
   /**
    * 坊市面板：材料买卖价格与可售丹药（没有解锁条件，1 级宗门即可使用）。
@@ -2286,6 +2372,8 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
     // 0024 灵兽竞逐：轮次状态由前端单独 GET 拉取（不在 sync 里包含，因为要定时轮询），
     // buildSectStateView 只填 null 占位，前端通过 /game/race-state 独立获取。
     race: null,
+    // 0046 赌石：解锁只看宗门等级（与赌坊同一门槛）；四档的门槛文案与概率在这里一次算好。
+    stones: gamblingLockedReason === null ? buildStoneView(Number(sect.level)) : null,
   };
 
   return {
@@ -2432,6 +2520,32 @@ function buildWheelView(sect: SectRow, config: GameConfigContent, dateKey: strin
     })),
     costs: WHEEL_TIERS.map((tier) => ({ tier, cost: wheelSpinCost(tier) })),
     resetCost: WHEEL_RESET_COST,
+  };
+}
+
+/**
+ * 0046 赌石面板：档位 / 概率 / 玄铁个数全部取自 stoneGamble.ts；门槛文案与期望在这里算好下发。
+ * 期望保留两位小数（展示用），真正的花费与结算都按最小单位在 service 里算。
+ */
+function buildStoneView(sectLevel: number): StoneGambleView {
+  return {
+    materialPerStone: STONE_MATERIAL_PER_STONE,
+    tiers: STONE_TIERS.map((tier) => ({
+      id: tier.id,
+      name: tier.name,
+      price: tier.price,
+      minSectLevel: tier.minSectLevel,
+      unlocked: sectLevel >= tier.minSectLevel,
+      blockedReason: stoneTierBlockedReason(tier, sectLevel),
+      expectedXuantie: Math.round(stoneExpectedXuantie(tier) * 100) / 100,
+      topPrize: stoneTopPrize(tier),
+      outcomes: tier.outcomes.map((item) => ({
+        id: item.id,
+        name: item.name,
+        chanceBp: item.chanceBp,
+        xuantie: item.xuantie,
+      })),
+    })),
   };
 }
 
