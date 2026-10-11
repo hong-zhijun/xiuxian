@@ -552,6 +552,13 @@ export interface RefineGuideView {
     id: string;
     name: string;
     color: string;
+    /** 品质的主属性固定值（未祭炼时）；升境界模拟用它算自定义装备的主属性。 */
+    mainValue: number;
+    /** 副属性数值区间（整数，含两端）。 */
+    subMin: number;
+    subMax: number;
+    /** 品质的战力加成（基点，未祭炼时）；与祭炼累计的 powerBonusGainBp 相加即当前加成。 */
+    powerBonusBp: number;
     rows: {
       /** 冲到第几重。 */
       level: number;
@@ -711,6 +718,10 @@ export function refineGuideView(): RefineGuideView {
       id: quality.id,
       name: quality.name,
       color: quality.color,
+      mainValue: quality.mainValue,
+      subMin: quality.subMin,
+      subMax: quality.subMax,
+      powerBonusBp: quality.powerBonusBp,
       rows: Array.from({ length: REFINE_MAX_LEVEL }, (_, index) => {
         const level = index + 1;
         return {

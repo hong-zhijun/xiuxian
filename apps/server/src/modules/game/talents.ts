@@ -197,7 +197,17 @@ export interface TalentCatalogEntry {
   condition: string;
   /** 不带数值的效果描述，如「矿石产出」。 */
   effect: string;
-  values: { realmId: string; realmName: string; text: string }[];
+  values: {
+    realmId: string;
+    realmName: string;
+    /** 带符号的百分比文案，如「+25%」。 */
+    text: string;
+    /**
+     * 加成原值（基点，10000 = 100%），= talentBonusBp(id, realmId)，恒为非负（方向看 text 的符号）。
+     * 前端的升境界模拟据此算战意加成（战力公式只认战意），不再抄境界系数。
+     */
+    bp: number;
+  }[];
 }
 
 export function talentCatalog(): TalentCatalogEntry[] {
@@ -208,11 +218,15 @@ export function talentCatalog(): TalentCatalogEntry[] {
     categoryName: TALENT_CATEGORY_NAMES[def.category],
     condition: def.condition,
     effect: def.effect.replace(' {value}', '').replace('{value}', ''),
-    values: REALMS.map((realm) => ({
-      realmId: realm.id,
-      realmName: realm.name,
-      text: percentText(talentBonusBp(def.id, realm.id), def.sign),
-    })),
+    values: REALMS.map((realm) => {
+      const bp = talentBonusBp(def.id, realm.id);
+      return {
+        realmId: realm.id,
+        realmName: realm.name,
+        text: percentText(bp, def.sign),
+        bp,
+      };
+    }),
   }));
 }
 

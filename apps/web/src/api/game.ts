@@ -328,7 +328,14 @@ export interface TalentCatalogEntry {
   categoryName: string;
   condition: string;
   effect: string;
-  values: { realmId: string; realmName: string; text: string }[];
+  values: {
+    realmId: string;
+    realmName: string;
+    /** 带符号的百分比文案，如「+25%」。 */
+    text: string;
+    /** 加成原值（基点，10000 = 100%）；升境界模拟据此算战意加成。 */
+    bp: number;
+  }[];
 }
 
 /** 境界一览的一行（服务端 view.ts 的 RealmCatalogEntry）。 */
@@ -2255,6 +2262,13 @@ export interface RefineGuideView {
     id: string;
     name: string;
     color: string;
+    /** 主属性固定值（未祭炼）；升境界模拟用它算自定义装备。 */
+    mainValue: number;
+    /** 副属性数值区间（整数，含两端）。 */
+    subMin: number;
+    subMax: number;
+    /** 品质战力加成（基点，未祭炼）；加上祭炼累计的 powerBonusGainBp 即当前加成。 */
+    powerBonusBp: number;
     rows: {
       level: number;
       successBp: number;
