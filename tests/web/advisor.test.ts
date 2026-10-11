@@ -299,6 +299,15 @@ describe('每名主力的下一步（按顺序取第一条满足的）', () => {
     const slotView = run({ disciples: [slot] }, { equipment: gear([wornItem(slot.id, 'weapon')]) });
     expect(slotView.mainDisciples[0]?.nextStep?.action).toEqual({ kind: 'panel', panel: 'forge' });
   });
+
+  it('重伤卧床：丹药无效，只做说明，不计入角标、不进下一步', () => {
+    const severe = disciple({ severeInjuredUntil: FUTURE, canBreakthrough: true });
+    const view = run({ disciples: [severe] });
+    const step = view.mainDisciples[0]?.nextStep;
+    expect(step?.text).toBe('重伤卧床，静养痊愈前无法培养（丹药无效）');
+    expect(step?.countsTowardBadge).toBe(false);
+    expect(view.nextSteps.some((item) => item.id === step?.id)).toBe(false);
+  });
 });
 
 describe('建筑', () => {
@@ -356,6 +365,13 @@ describe('资源获取', () => {
     const view = run({ disciples: [disciple({ assignment: 'idle' }), disciple({ assignment: 'idle' })] });
     expect(view.income.map((item) => item.text)).toEqual(['2 名弟子闲置，派去修炼或岗位']);
     expect(view.income[0]?.action).toEqual({ kind: 'dispatch' });
+  });
+
+  it('在外历练的弟子不算闲置', () => {
+    const away = disciple({ assignment: 'idle', journey: { status: 'active' } });
+    const home = disciple({ assignment: 'idle', journey: { status: 'none' } });
+    const view = run({ disciples: [away, home] });
+    expect(view.income.map((item) => item.text)).toContain('1 名弟子闲置，派去修炼或岗位');
   });
 
   it('采灵 / 吐纳还有空位：说明每人每小时多产多少，并给出空位数', () => {

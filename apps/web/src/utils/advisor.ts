@@ -176,6 +176,8 @@ export interface AdvisorDisciple {
   bodyTemperingRemaining: number;
   bodyTemperingTarget: 'attack' | 'defense' | 'speed' | null;
   aptitudePillRemaining: number;
+  /** 历练状态：在外（active）的弟子不算闲置；可选，旧测试数据没有时按不在外处理。 */
+  journey?: { status: string };
 }
 
 export interface AdvisorResource {
@@ -301,9 +303,12 @@ function nextStepOf(
 ): Suggestion | null {
   const id = disciple.id;
   const target: AdvisorAction = { kind: 'disciple', discipleId: id };
-  const severe = isAfter(disciple.severeInjuredUntil, nowMs);
-  if (severe || isAfter(disciple.injuredUntil, nowMs)) {
-    return suggest(`main:${id}:heal`, severe ? '重伤卧床，去疗伤' : '受伤未愈，去疗伤', target, PRIORITY.mainInjured);
+  // 重伤丹药无效，只能静养到期：只做说明，不计入角标、不进「下一步」。
+  if (isAfter(disciple.severeInjuredUntil, nowMs)) {
+    return suggest(`main:${id}:severe`, '重伤卧床，静养痊愈前无法培养（丹药无效）', target, PRIORITY.mainInjured, false);
+  }
+  if (isAfter(disciple.injuredUntil, nowMs)) {
+    return suggest(`main:${id}:heal`, '受伤未愈，去疗伤', target, PRIORITY.mainInjured);
   }
   if (disciple.canBreakthrough) {
     return suggest(`main:${id}:breakthrough`, '可以突破了', target, PRIORITY.mainBreakthrough);
@@ -388,7 +393,10 @@ function incomeSuggestions(input: AdvisorInput): Suggestion[] {
     return Math.max(0, post.maxCount - (post.currentCount ?? 0));
   };
 
-  const idle = state.disciples.filter((disciple) => disciple.assignment === 'idle').length;
+  // 在外历练的弟子岗位也是闲置，但人不在宗门，不算「闲置」。
+  const idle = state.disciples.filter(
+    (disciple) => disciple.assignment === 'idle' && disciple.journey?.status !== 'active',
+  ).length;
   if (idle > 0) {
     list.push(
       suggest('income:idle', `${String(idle)} 名弟子闲置，派去修炼或岗位`, { kind: 'dispatch' }, PRIORITY.postSeat),
