@@ -1259,27 +1259,6 @@ ul {
   box-shadow: 0 0 0 2px rgba(8, 20, 17, 0.9);
 }
 
-/* 「参谋」有可处理的建议时的数字角标：样式同「更新」的红点，只是带上条数（同样用 <i>，窄屏隐藏按钮里的 span 时它仍然显示）。 */
-.icon-action-count {
-  position: absolute;
-  top: 3px;
-  right: 3px;
-  min-width: 17px;
-  height: 17px;
-  padding: 0 4px;
-  border-radius: 999px;
-  color: #0b1713;
-  background: var(--red-bright);
-  box-shadow: 0 0 0 2px rgba(8, 20, 17, 0.9);
-  font-size: 10px;
-  font-style: normal;
-  font-weight: 700;
-  line-height: 17px;
-  letter-spacing: 0;
-  text-align: center;
-  white-space: nowrap;
-}
-
 /* 更新说明弹窗：按版本分组的条目，最新在上。 */
 .changelog-list {
   display: flex;
@@ -6429,17 +6408,6 @@ h2.public-sect-name {
     min-width: 42px;
     min-height: 43px;
     padding: 4px 5px;
-  }
-
-  /* 参谋的数字角标在手机上缩小，别盖住图标。 */
-  .icon-action-count {
-    top: 2px;
-    right: 2px;
-    min-width: 15px;
-    height: 15px;
-    padding: 0 3px;
-    font-size: 9px;
-    line-height: 15px;
   }
 
   .icon-action span {
