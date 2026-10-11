@@ -47,6 +47,7 @@ import TalentCatalogDialog from './TalentCatalogDialog.vue';
 import TalentRerollDialog from './TalentRerollDialog.vue';
 import RealmCatalogDialog from './RealmCatalogDialog.vue';
 import RefineTag from './RefineTag.vue';
+import UpgradeSimulatorDialog from './UpgradeSimulatorDialog.vue';
 /**
  * 弟子详情（弹窗内容）：固定紧凑头部 + 五个 Tab（概览 / 修行 / 装备 / 历练 / 档案）。
  *
@@ -993,6 +994,8 @@ const showTalentCatalog = ref(false);
 const showTalentReroll = ref(false);
 /** 头部境界旁的「?」：境界一览。 */
 const showRealmCatalog = ref(false);
+/** 战力旁的「提升模拟」：只在前端算一算（境界 / 装备 / 悟道值），不调用任何写接口。 */
+const showUpgradeSimulator = ref(false);
 /** 执事 / 交接期的状态标（不能出战的原因，服务端算好）。 */
 const stewardTag = computed(() => props.disciple.combatBlockedReason);
 const talentPillRecipe = computed(() =>
@@ -1184,6 +1187,7 @@ function refineGear(item: EquipmentItemView | null): void {
             <span v-if="stewardTag" class="stat-tag stat-steward">{{ stewardTag }}</span>
             <span class="stat-tag stat-power">战力 {{ disciple.combatPower }}</span>
             <HelpTip label="战力说明" :text="POWER_HELP" />
+            <button class="upgrade-sim-button" type="button" @click="showUpgradeSimulator = true">提升模拟</button>
           </div>
 
           <TalentRerollDialog
@@ -1212,6 +1216,15 @@ function refineGear(item: EquipmentItemView | null): void {
             :current-talent="disciple.talent"
             :current-realm-id="disciple.realmId"
             @close="showTalentCatalog = false"
+          />
+
+          <UpgradeSimulatorDialog
+            v-if="showUpgradeSimulator"
+            :state="state"
+            :disciple="disciple"
+            :equipment="equipment"
+            :live-cultivation="liveCultivation"
+            @close="showUpgradeSimulator = false"
           />
 
           <p class="disciple-detail-hint">
@@ -2037,6 +2050,25 @@ function refineGear(item: EquipmentItemView | null): void {
 </template>
 
 <style scoped>
+/* 战力标签旁的「提升模拟」：与天赋「更换」同一套小按钮样式。 */
+.upgrade-sim-button {
+  align-self: center;
+  min-height: 22px;
+  padding: 0 8px;
+  border: 1px solid rgba(202, 169, 106, 0.32);
+  border-radius: 2px;
+  color: var(--gold);
+  background: transparent;
+  font-size: 11px;
+  line-height: 20px;
+  cursor: pointer;
+}
+
+.upgrade-sim-button:hover:not(:disabled) {
+  border-color: var(--gold);
+  background: rgba(202, 169, 106, 0.1);
+}
+
 /* 装备格里「卸下」「祭炼」并排放；按钮自身的大小沿用 base.css 里 .gear-unequip 的写法。 */
 .gear-slot-actions {
   display: flex;

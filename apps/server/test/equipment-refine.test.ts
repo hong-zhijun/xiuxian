@@ -603,4 +603,28 @@ describe('0044 祭炼：说明表（装备面板 refineGuide）', () => {
     expect(common[0]).toMatchObject({ level: 1, successBp: 10000, cost: { spiritStone: '12000', ore: '9000' } });
     expect(common[0]!.cost).not.toHaveProperty('xuantie');
   });
+
+  it('每个品质带 mainValue / subMin / subMax / powerBonusBp（升境界模拟用）；十二行的战力增量累加 = 600 基点', async () => {
+    const { fixture } = await frozenSect('refine-guide-qualities');
+    const panel = dataOf(await fixture.api.get('/api/v1/game/equipment')) as Record<string, any>;
+    const guide = panel.equipment.refineGuide as {
+      qualities: {
+        id: string;
+        mainValue: number;
+        subMin: number;
+        subMax: number;
+        powerBonusBp: number;
+        rows: { powerBonusGainBp: number }[];
+      }[];
+    };
+    expect(guide.qualities.map((quality) => [quality.id, quality.mainValue, quality.subMin, quality.subMax, quality.powerBonusBp])).toEqual([
+      ['common', 8, 2, 4, 200],
+      ['spirit', 16, 4, 8, 400],
+      ['treasure', 20, 6, 10, 700],
+      ['immortal', 24, 8, 16, 1000],
+    ]);
+    for (const quality of guide.qualities) {
+      expect(quality.rows.reduce((sum, row) => sum + row.powerBonusGainBp, 0)).toBe(600);
+    }
+  });
 });

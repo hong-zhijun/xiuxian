@@ -89,6 +89,16 @@ describe('天赋表（计划 1.2）', () => {
     ]);
   });
 
+  it('天赋总表每项带 bp，与 talentBonusBp 逐格一致（升境界模拟的战意加成只读它）', () => {
+    for (const entry of talentCatalog()) {
+      for (const value of entry.values) {
+        expect(value.bp).toBe(talentBonusBp(entry.id, value.realmId));
+      }
+    }
+    const combat = talentCatalog().find((entry) => entry.id === 'combat')!;
+    expect(combat.values.map((value) => value.bp)).toEqual([1000, 1250, 1500, 2000, 2500, 2750, 3000, 3250, 3500]);
+  });
+
   it('新弟子天赋等概率覆盖 11 个；洗髓候选不会与当前相同', () => {
     const seen = new Set<string>();
     for (let index = 0; index < TALENT_IDS.length; index += 1) {
