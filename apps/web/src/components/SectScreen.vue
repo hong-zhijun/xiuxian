@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 
 import type {
   ActiveExplorationView,
@@ -79,7 +79,9 @@ import { REFINE_LEVEL_NAMES } from './RefineTag.vue';
 import ShopDialog from './ShopDialog.vue';
 import StewardDialog from './StewardDialog.vue';
 import DispatchDialog from './DispatchDialog.vue';
+import AdvisorDialog from './AdvisorDialog.vue';
 import { moveBatches, planDispatch, type DispatchPlan } from '../utils/discipleDispatch';
+import { buildAdvisor, type AdvisorAction } from '../utils/advisor';
 import { postInsights } from '../utils/postInsights';
 import { talentNeeds } from '../utils/talentNeeds';
 import SectLevelCatalogDialog from './SectLevelCatalogDialog.vue';
@@ -203,6 +205,7 @@ const openPanel = ref<
   | 'market'
   | 'steward'
   | 'daily'
+  | 'advisor'
   | null
 >(null);
 
@@ -2007,8 +2010,37 @@ const todoItems = computed<TodoItem[]>(() => {
   return items;
 });
 
+/**
+ * 宗门参谋（规则见 utils/advisor.ts）：算法只用这里已有的数据，结果给「同步」左边的按钮与角标用。
+ * 参谋弹窗关掉后，「去处理」的动作在 onAdvisorAction 里复用首页原本的打开方式。
+ */
+const advisor = computed(() =>
+  buildAdvisor({
+    state: props.state,
+    hub: hub.value,
+    equipment: equipment.value,
+    dailyTasks: dailyTasks.value,
+    dispatchSuggestionCount: dispatchCount.value,
+  }),
+);
+const advisorBadgeText = computed(() => (advisor.value.badgeCount > 99 ? '99+' : String(advisor.value.badgeCount)));
+
 function scrollToSection(elementId: string): void {
   document.getElementById(elementId)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+/**
+ * 参谋弹窗里点「去处理」：先收起参谋，等下一拍再按动作打开目标（弹窗拆掉后目标才能正常滚动与获得焦点，
+ * 也不会两层遮罩叠在一起）。目标的打开方式与 openHubCard / openDetail / onTodo 里的写法一致。
+ */
+function onAdvisorAction(action: AdvisorAction): void {
+  openPanel.value = null;
+  void nextTick(() => {
+    if (action.kind === 'panel') openHubCard(action.panel);
+    else if (action.kind === 'disciple') openDetail(action.discipleId);
+    else if (action.kind === 'scroll') scrollToSection(action.target);
+    else showDispatch.value = true;
+  });
 }
 
 function onTodo(id: string): void {
@@ -2184,6 +2216,18 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
       </dl>
 
       <div class="header-actions">
+        <button
+          class="icon-action advisor-launch"
+          type="button"
+          :aria-label="advisor.badgeCount > 0 ? `宗门参谋（${advisorBadgeText} 项可处理）` : '宗门参谋'"
+          @click="openPanel = 'advisor'"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 3.5a8.5 8.5 0 1 0 0 17 8.5 8.5 0 0 0 0-17Zm3.2 5.3-1.9 4.8-4.8 1.9 1.9-4.8 4.8-1.9Z" />
+          </svg>
+          <span>参谋</span>
+          <i v-if="advisor.badgeCount > 0" class="icon-action-count" aria-hidden="true">{{ advisorBadgeText }}</i>
+        </button>
         <button
           class="icon-action"
           type="button"
@@ -2675,6 +2719,14 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
     @apply="onApplyDispatch"
     @open-detail="onDispatchOpenDetail"
     @close="showDispatch = false"
+  />
+
+  <!-- 宗门参谋：「参谋」按钮打开；弹窗自带 ModalShell，「去处理」经 onAdvisorAction 收起本弹窗再打开目标。 -->
+  <AdvisorDialog
+    v-if="openPanel === 'advisor'"
+    :view="advisor"
+    @action="onAdvisorAction"
+    @close="openPanel = null"
   />
 
   <!-- 天赋重构 · 执事堂：任命 / 卸任都走上层 runAction，返回的 state 一到职位视图即更新。 -->
