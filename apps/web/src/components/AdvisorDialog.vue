@@ -1,14 +1,12 @@
 <script setup lang="ts">
-import { computed } from 'vue';
-
 import type { AdvisorAction, AdvisorView } from '../utils/advisor';
 import ModalShell from './ModalShell.vue';
 
 /**
- * 宗门参谋：只渲染 utils/advisor.ts 算好的结果（这里不做任何规则判断，也不带分数）。
- * 每条建议的「去处理」emit action；关弹窗、打开对应的弹窗 / 滚动都在 SectScreen（见 onAdvisorAction）。
+ * 宗门参谋：只渲染 utils/advisor.ts 算好的结果（这里不做任何规则判断）。
+ * 「去处理」emit action；关弹窗、打开对应的弹窗 / 滚动都在 SectScreen（见 onAdvisorAction）。
  */
-const props = defineProps<{
+defineProps<{
   view: AdvisorView;
 }>();
 const emit = defineEmits<{
@@ -16,11 +14,7 @@ const emit = defineEmits<{
   close: [];
 }>();
 
-const headline = computed(() => {
-  const count = props.view.badgeCount;
-  if (count === 0) return '暂无待办';
-  return `${count > 99 ? '99+' : String(count)} 项可处理`;
-});
+const STATUS_MARK = { done: '✓', short: '差', blocked: '缺' } as const;
 </script>
 
 <template>
@@ -29,23 +23,55 @@ const headline = computed(() => {
       <header class="section-heading panel-heading compact-heading advisor-head">
         <div>
           <p class="eyebrow">宗门参谋</p>
-          <h2 id="advisor-title">下一步该做什么</h2>
+          <h2 id="advisor-title">{{ view.goal ? view.goal.title : '宗门已满级' }}</h2>
         </div>
-        <span class="count-badge">{{ headline }}</span>
       </header>
 
-      <h3 class="advisor-subtitle">下一步</h3>
-      <ul v-if="view.nextSteps.length > 0" class="advisor-list">
-        <li v-for="item in view.nextSteps" :key="item.id" class="advisor-row">
-          <span class="advisor-row-text">{{ item.text }}</span>
-          <button class="advisor-go" type="button" @click="emit('action', item.action)">{{ item.actionLabel }}</button>
-        </li>
-      </ul>
-      <p v-else class="advisor-empty">暂无需要处理的</p>
+      <template v-if="view.goal">
+        <p class="advisor-summary" :class="{ 'is-ready': view.goal.ready }">{{ view.goal.summary }}</p>
+        <ul class="advisor-list">
+          <li
+            v-for="line in view.goal.lines"
+            :key="line.id"
+            class="advisor-line"
+            :class="[`is-${line.status}`, { 'is-bottleneck': line.bottleneck }]"
+          >
+            <span class="advisor-mark" aria-hidden="true">{{ STATUS_MARK[line.status] }}</span>
+            <div class="advisor-body">
+              <p class="advisor-text">
+                {{ line.label }}
+                <span v-if="line.bottleneck" class="advisor-flag">瓶颈</span>
+              </p>
+              <p class="advisor-detail">{{ line.detail }}</p>
+            </div>
+            <button v-if="line.action" class="advisor-go" type="button" @click="emit('action', line.action)">去看看</button>
+          </li>
+        </ul>
 
-      <h3 class="advisor-subtitle">弟子培养</h3>
-      <ul v-if="view.mainDisciples.length > 0" class="advisor-mains">
-        <li v-for="main in view.mainDisciples" :key="main.discipleId" class="advisor-main">
+        <template v-if="view.goal.tips.length > 0">
+          <h3 class="advisor-subtitle">怎么补</h3>
+          <ul class="advisor-list">
+            <li v-for="item in view.goal.tips" :key="item.id" class="advisor-tip" :class="{ 'is-key': item.key }">
+              <div class="advisor-body">
+                <p class="advisor-text">{{ item.text }}</p>
+                <p v-if="item.detail" class="advisor-detail">{{ item.detail }}</p>
+              </div>
+              <button class="advisor-go" type="button" @click="emit('action', item.action)">去处理</button>
+            </li>
+          </ul>
+        </template>
+      </template>
+
+      <h3 class="advisor-subtitle">战力提升</h3>
+      <div v-if="view.arena" class="advisor-tip" :class="{ 'is-key': view.arena.key }">
+        <div class="advisor-body">
+          <p class="advisor-text">{{ view.arena.text }}</p>
+          <p v-if="view.arena.detail" class="advisor-detail">{{ view.arena.detail }}</p>
+        </div>
+        <button class="advisor-go" type="button" @click="emit('action', view.arena.action)">去处理</button>
+      </div>
+      <ul v-if="view.mains.length > 0" class="advisor-mains">
+        <li v-for="main in view.mains" :key="main.discipleId" class="advisor-main">
           <div class="advisor-main-head">
             <button
               class="advisor-name"
@@ -55,54 +81,23 @@ const headline = computed(() => {
             >
               {{ main.name }}
             </button>
-            <span class="advisor-tag">推荐培养</span>
-            <span class="advisor-stage">{{ main.stageName }}</span>
+            <span class="advisor-stage">{{ main.stageName }} · {{ main.talentName }} · 战力 {{ main.combatPower }}</span>
           </div>
-          <p class="advisor-meta">天赋 {{ main.talentName }} · 战力 {{ main.combatPower }}</p>
           <ul class="advisor-reasons">
             <li v-for="reason in main.reasons" :key="reason" class="advisor-reason">{{ reason }}</li>
           </ul>
-          <p v-if="main.misplaced" class="advisor-misplaced">{{ main.misplaced }}</p>
-          <div class="advisor-main-next">
-            <template v-if="main.nextStep">
-              <span class="advisor-row-text">{{ main.nextStep.text }}</span>
-              <button class="advisor-go" type="button" @click="emit('action', main.nextStep.action)">
-                {{ main.nextStep.actionLabel }}
-              </button>
-            </template>
-            <span v-else class="advisor-row-text is-muted">状态良好，继续修炼</span>
-          </div>
+          <p v-if="main.note" class="advisor-note">{{ main.note }}</p>
+          <ul v-if="main.tips.length > 0" class="advisor-list">
+            <li v-for="item in main.tips" :key="item.id" class="advisor-step" :class="{ 'is-key': item.key }">
+              <span class="advisor-text">{{ item.text }}</span>
+              <span v-if="item.detail" class="advisor-gain">{{ item.detail }}</span>
+              <button class="advisor-go" type="button" @click="emit('action', item.action)">去处理</button>
+            </li>
+          </ul>
+          <p v-else class="advisor-detail">眼下没有能立刻提升战力的事，继续修炼</p>
         </li>
       </ul>
-      <p v-else class="advisor-empty">暂无需要处理的</p>
-
-      <h3 class="advisor-subtitle">建筑</h3>
-      <ul v-if="view.buildings.length > 0" class="advisor-list">
-        <li v-for="item in view.buildings" :key="item.id" class="advisor-row" :class="{ 'is-note': !item.countsTowardBadge }">
-          <span class="advisor-row-text">{{ item.text }}</span>
-          <button class="advisor-go" type="button" @click="emit('action', item.action)">{{ item.actionLabel }}</button>
-        </li>
-      </ul>
-      <p v-else class="advisor-empty">暂无需要处理的</p>
-
-      <h3 class="advisor-subtitle">资源获取</h3>
-      <ul v-if="view.income.length > 0" class="advisor-list">
-        <li v-for="item in view.income" :key="item.id" class="advisor-row">
-          <span class="advisor-row-text">{{ item.text }}</span>
-          <button class="advisor-go" type="button" @click="emit('action', item.action)">{{ item.actionLabel }}</button>
-        </li>
-      </ul>
-      <p v-else class="advisor-empty">暂无需要处理的</p>
-
-      <h3 class="advisor-subtitle">资源使用</h3>
-      <ul v-if="view.spending.items.length > 0" class="advisor-list">
-        <li v-for="item in view.spending.items" :key="item.id" class="advisor-row">
-          <span class="advisor-row-text">{{ item.text }}</span>
-          <button class="advisor-go" type="button" @click="emit('action', item.action)">{{ item.actionLabel }}</button>
-        </li>
-      </ul>
-      <p v-else class="advisor-empty">暂无需要处理的</p>
-      <p class="advisor-note">{{ view.spending.note }}</p>
+      <p v-else class="advisor-detail">暂无可出战的弟子</p>
     </section>
   </ModalShell>
 </template>
@@ -119,6 +114,17 @@ const headline = computed(() => {
   overflow-wrap: anywhere;
 }
 
+.advisor-summary {
+  margin: 0;
+  color: var(--ink-text);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.advisor-summary.is-ready {
+  color: var(--jade-bright);
+}
+
 .advisor-subtitle {
   margin: 8px 0 0;
   color: var(--gold);
@@ -133,7 +139,7 @@ const headline = computed(() => {
   display: flex;
   min-width: 0;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
   margin: 0;
   padding: 0;
   list-style: none;
@@ -145,7 +151,8 @@ const headline = computed(() => {
   gap: 5px;
 }
 
-.advisor-row,
+.advisor-line,
+.advisor-tip,
 .advisor-main {
   min-width: 0;
   padding: 8px 10px;
@@ -153,26 +160,81 @@ const headline = computed(() => {
   border-radius: 5px;
 }
 
-.advisor-row {
+.advisor-line,
+.advisor-tip {
   display: flex;
   align-items: center;
   gap: 10px;
 }
 
-.advisor-row.is-note {
-  border-style: dashed;
+.advisor-line.is-bottleneck,
+.advisor-tip.is-key,
+.advisor-step.is-key {
+  border-color: rgba(234, 209, 154, 0.6);
 }
 
-.advisor-row-text {
+.advisor-mark {
+  display: inline-flex;
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  font-size: 11px;
+}
+
+.advisor-line.is-done .advisor-mark {
+  color: var(--jade-bright);
+  background: rgba(119, 184, 154, 0.14);
+}
+
+.advisor-line.is-short .advisor-mark {
+  color: var(--gold-bright);
+  background: rgba(202, 169, 106, 0.14);
+}
+
+.advisor-line.is-blocked .advisor-mark {
+  color: #e58b7a;
+  background: rgba(229, 139, 122, 0.14);
+}
+
+.advisor-line.is-done .advisor-text {
+  color: var(--muted);
+}
+
+.advisor-body {
+  display: flex;
   min-width: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.advisor-text {
+  min-width: 0;
+  margin: 0;
   flex: 1 1 auto;
   overflow-wrap: anywhere;
   color: var(--ink-text);
   font-size: 13px;
 }
 
-.advisor-row-text.is-muted {
+.advisor-detail {
+  margin: 0;
   color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.advisor-flag {
+  margin-left: 4px;
+  padding: 0 6px;
+  border-radius: 999px;
+  color: #1a1410;
+  background: var(--gold-bright);
+  font-size: 10px;
+  vertical-align: 1px;
 }
 
 .advisor-go {
@@ -201,7 +263,7 @@ const headline = computed(() => {
   display: flex;
   min-width: 0;
   flex-wrap: wrap;
-  align-items: center;
+  align-items: baseline;
   gap: 4px 8px;
 }
 
@@ -221,18 +283,7 @@ const headline = computed(() => {
   color: var(--gold-bright);
 }
 
-.advisor-tag {
-  padding: 1px 8px;
-  border: 1px solid rgba(234, 209, 154, 0.6);
-  border-radius: 999px;
-  color: var(--gold-bright);
-  font-size: 11px;
-  white-space: nowrap;
-}
-
-.advisor-stage,
-.advisor-meta {
-  margin: 0;
+.advisor-stage {
   color: var(--muted);
   font-size: 12px;
   overflow-wrap: anywhere;
@@ -246,31 +297,30 @@ const headline = computed(() => {
   font-size: 11px;
 }
 
-.advisor-misplaced {
+.advisor-note {
   margin: 0;
-  color: var(--gold-bright);
+  color: #e58b7a;
   font-size: 12px;
 }
 
-.advisor-main-next {
+.advisor-step {
   display: flex;
   min-width: 0;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
-  padding-top: 6px;
-  border-top: 1px dashed var(--line);
+  gap: 4px 10px;
+  padding: 6px 8px;
+  border: 1px dashed var(--line);
+  border-radius: 5px;
 }
 
-.advisor-empty {
-  margin: 0;
-  color: var(--muted);
-  font-size: 13px;
+.advisor-step .advisor-text {
+  flex: 1 1 140px;
 }
 
-.advisor-note {
-  margin: 2px 0 0;
-  color: var(--faint);
-  font-size: 11px;
-  overflow-wrap: anywhere;
+.advisor-gain {
+  color: var(--jade-bright);
+  font-size: 12px;
+  white-space: nowrap;
 }
 </style>

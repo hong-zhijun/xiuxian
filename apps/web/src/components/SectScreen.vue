@@ -2011,19 +2011,20 @@ const todoItems = computed<TodoItem[]>(() => {
 });
 
 /**
- * 宗门参谋（规则见 utils/advisor.ts）：算法只用这里已有的数据，结果给「同步」左边的按钮与角标用。
+ * 宗门参谋（规则见 utils/advisor.ts）：算法只用 state 与装备视图，结果给「同步」左边的按钮与小红点用。
  * 参谋弹窗关掉后，「去处理」的动作在 onAdvisorAction 里复用首页原本的打开方式。
  */
-const advisor = computed(() =>
-  buildAdvisor({
-    state: props.state,
-    hub: hub.value,
-    equipment: equipment.value,
-    dailyTasks: dailyTasks.value,
-    dispatchSuggestionCount: dispatchCount.value,
-  }),
-);
-const advisorBadgeText = computed(() => (advisor.value.badgeCount > 99 ? '99+' : String(advisor.value.badgeCount)));
+const advisor = computed(() => buildAdvisor({ state: props.state, equipment: equipment.value }));
+
+/** 打开参谋：装备视图平时只在打开炼器时才拉，这里静默补拉一次（拉不到就不给装备建议，不弹错误）。 */
+function openAdvisor(): void {
+  openPanel.value = 'advisor';
+  void fetchEquipment()
+    .then((data) => {
+      equipment.value = data.equipment;
+    })
+    .catch(() => undefined);
+}
 
 function scrollToSection(elementId: string): void {
   document.getElementById(elementId)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -2038,8 +2039,7 @@ function onAdvisorAction(action: AdvisorAction): void {
   void nextTick(() => {
     if (action.kind === 'panel') openHubCard(action.panel);
     else if (action.kind === 'disciple') openDetail(action.discipleId);
-    else if (action.kind === 'scroll') scrollToSection(action.target);
-    else showDispatch.value = true;
+    else scrollToSection(action.target);
   });
 }
 
@@ -2219,14 +2219,14 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
         <button
           class="icon-action advisor-launch"
           type="button"
-          :aria-label="advisor.badgeCount > 0 ? `宗门参谋（${advisorBadgeText} 项可处理）` : '宗门参谋'"
-          @click="openPanel = 'advisor'"
+          :aria-label="advisor.alert ? '宗门参谋（有值得处理的建议）' : '宗门参谋'"
+          @click="openAdvisor"
         >
           <svg viewBox="0 0 24 24" aria-hidden="true">
             <path d="M12 3.5a8.5 8.5 0 1 0 0 17 8.5 8.5 0 0 0 0-17Zm3.2 5.3-1.9 4.8-4.8 1.9 1.9-4.8 4.8-1.9Z" />
           </svg>
           <span>参谋</span>
-          <i v-if="advisor.badgeCount > 0" class="icon-action-count" aria-hidden="true">{{ advisorBadgeText }}</i>
+          <i v-if="advisor.alert" class="icon-action-dot" aria-hidden="true" />
         </button>
         <button
           class="icon-action"

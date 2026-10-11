@@ -1,158 +1,142 @@
-import { CULTIVATING, talentPostsOf } from './discipleDispatch';
+import { formatAmount } from './format';
 
 /**
- * 宗门参谋：根据宗门现状算出「下一步该做什么」（纯函数，不碰 DOM / Vue）。
+ * 宗门参谋：围绕「下一个目标」算清楚还差什么、要多久、怎么补最快（纯函数，不碰 DOM / Vue）。
  *
- * 只用前端已有的数据：state（弟子、建筑、岗位、资源、宗门晋升、执事、历练名额）、hub（首页状态摘要）、
- * equipment（装备视图）、dailyTasks（日课摘要）与门人调度的建议条数；不改服务端、不加接口。
- * 输出只有标签、理由与「去哪里」（AdvisorAction），不带任何分数；跳转由 SectScreen 完成。
+ * 1. 晋升目标：下一级宗门的资源消耗与条件；每种资源按当前每小时产出估算凑齐要多久，最慢的一项是瓶颈。
+ * 2. 怎么补：只针对还差的资源给办法，每条都带具体的收益 / 花费（坊市卖富余材料、补岗位、升灵矿 / 聚灵阵……）。
+ * 3. 战力提升：演武场 + 最值得培养的 5 名主力；每名主力列出收益最高的几步，并按战力公式算出「战力 +X%」。
  *
- * 规则见 docs/宗门参谋开发计划.md：
- *   - 主力：排除执事，按内部潜力分取前 5（潜力分只用来排序，不输出）；
- *   - 每名主力只给一条「下一步」：按 2.3 的顺序取第一条满足的；
- *   - 建筑、资源获取、资源使用各出若干条，计入角标的才是「可执行」建议；
- *   - 「下一步」置顶 3 条按优先级取（数字越小越靠前）；角标 = 可执行建议的条数。
- *
- * 装备视图没加载（或炼器尚未开放）时，装备相关的几条直接跳过：没有装备可比，也没有可去的炼器。
+ * 每日可领的（日课、扫荡、拍卖待领……）已经在待办里，这里不重复。
+ * 只用前端已有的数据（state 与装备视图）；收益数字照抄服务端规则（见各常量注释），只用于文案，不回传服务端。
  */
 
-/** 所有建议的「去处理」按钮文字。 */
-const ACTION_LABEL = '去处理';
-
-/** 战斗天赋 id：照抄 apps/server/src/modules/game/talents.ts 里 category = 'combat' 的三项（战意 / 会心 / 铁骨），不 import 服务端代码。 */
+/** 战斗天赋 id：照抄 apps/server/src/modules/game/talents.ts 里 category = 'combat' 的三项（战意 / 会心 / 铁骨）。 */
 const COMBAT_TALENT_IDS: readonly string[] = ['combat', 'critical', 'ironBody'];
 
 /** 主力人数。 */
 const MAIN_COUNT = 5;
-/** 装备格数：兵器 / 护甲 / 法器。 */
-const EQUIPMENT_SLOT_COUNT = 3;
-/** 祭炼「到八重」：八重以上不主动建议。 */
-const REFINE_TARGET_LEVEL = 8;
-/** 「快满仓」：余额达到容量的这个比例（未满仓）。 */
-const NEAR_CAPACITY_RATIO = 0.9;
-/** 采灵 / 吐纳每人每小时的产出（展示单位，与服务端 game-config 的 positions 一致；只用于文案）。 */
-const STONE_MINING_PER_HOUR = 15;
-const ENERGY_GATHERING_PER_HOUR = 10;
+/** 每名主力最多列几步。 */
+const MAIN_TIP_COUNT = 3;
+/** 战力增幅不到这个比例的（非红点）办法不列，免得刷屏。 */
+const MIN_TIP_GAIN = 0.01;
+/** 属性上限（服务端 ATTRIBUTE_MAX）。 */
+const ATTRIBUTE_MAX = 100;
+/** 「悟道值未分配」理由标签的门槛。 */
+const INSIGHT_REASON_MIN = 10;
+/** 坊市卖富余材料补上缺口的这个比例以上，算高收益（亮红点）。 */
+const KEY_COVER_RATIO = 0.5;
 
-/** 「下一步」优先级（2.7）：数字越小越靠前。 */
-const PRIORITY = {
-  /** 满仓浪费（快满仓归在这一档）。 */
-  capped: 10,
-  nearCapacity: 11,
-  /** 演武场可升级。 */
-  arenaUpgrade: 20,
-  /** 主力受伤。 */
-  mainInjured: 30,
-  /** 主力可突破。 */
-  mainBreakthrough: 40,
-  /** 每日收益可领。 */
-  dailyClaim: 50,
-  /** 采灵 / 吐纳空位与闲置。 */
-  postSeat: 60,
-  /** 主力装备空格。 */
-  mainEquipSlot: 70,
-  /** 其他建筑可升级。 */
-  otherBuilding: 80,
-  /** 其余。 */
-  rest: 90,
-} as const;
+/** 1 展示单位 = 1000 最小单位。 */
+const UNIT = 1000;
 
-/** 建筑排序（2.4）：演武场 → 灵矿 → 聚灵阵 → 藏经阁 → 炼器坊 → 灵药园 → 其他。 */
-const BUILDING_ORDER: readonly string[] = [
-  'arenaHall',
-  'missionHall',
-  'spiritualArray',
-  'scriptureLibrary',
-  'forgeWorkshop',
-  'herbGarden',
+/** 资源基础产出（最小单位 / 小时，game-config resources.baseRatePerHour）。 */
+const BASE_STONE_RATE = 30_000;
+const BASE_ENERGY_RATE = 20_000;
+/** 灵矿：1～5 级每级 +20%，6～10 级每级 +40%（constants.ts missionHallSpiritStoneBonusBp）。 */
+function missionHallLevelGainBp(nextLevel: number): number {
+  return nextLevel <= 5 ? 2000 : 4000;
+}
+/** 聚灵阵每级 +40%（SPIRITUAL_ARRAY_ENERGY_BONUS_BP_PER_LEVEL）。 */
+const SPIRITUAL_ARRAY_GAIN_BP = 4000;
+
+/** 岗位每人每小时产出（最小单位，game-config positions）。 */
+const POST_OUTPUT: Readonly<Record<string, { post: string; postName: string; perHour: number }>> = {
+  spiritStone: { post: 'stoneMining', postName: '采灵', perHour: 15_000 },
+  spiritualEnergy: { post: 'energyGathering', postName: '吐纳', perHour: 10_000 },
+  herb: { post: 'herbGathering', postName: '药园', perHour: 20_000 },
+  ore: { post: 'oreGathering', postName: '采矿', perHour: 15_000 },
+};
+
+/** 坊市（shop.ts）：卖 1 材料得 0.5 灵石，买 1 材料花 0.667 灵石；2 神木换 1 玄铁。 */
+const SHOP_SELL_PRICE = 500;
+const SHOP_BUY_PRICE = 667;
+const SHOP_SHENMU_PER_XUANTIE = 2;
+const SHOP_MATERIALS: readonly string[] = ['herb', 'ore'];
+
+/** 装备品质（equipment.ts EQUIPMENT_QUALITIES）：主属性与战力加成（基点），从低到高。 */
+const QUALITIES: readonly { id: string; mainValue: number; powerBonusBp: number }[] = [
+  { id: 'common', mainValue: 8, powerBonusBp: 200 },
+  { id: 'spirit', mainValue: 16, powerBonusBp: 400 },
+  { id: 'treasure', mainValue: 20, powerBonusBp: 700 },
+  { id: 'immortal', mainValue: 24, powerBonusBp: 1000 },
 ];
-/** 建筑收益文案（2.4）。 */
-const BUILDING_BENEFIT: Readonly<Partial<Record<string, string>>> = {
-  arenaHall: '战斗力每级 +10%',
-  missionHall: '灵石产出',
-  spiritualArray: '灵气产出',
-  scriptureLibrary: '修炼速度',
-  forgeWorkshop: '更高品质装备',
-  herbGarden: '药材产出',
-};
+/** 部位主属性：法器可选身法 / 幸运，估算按身法（幸运不进战力）。 */
+const SLOT_MAIN: Readonly<Record<string, CombatStat>> = { weapon: 'attack', armor: 'defense', artifact: 'speed' };
+const SLOT_ORDER: readonly string[] = ['weapon', 'armor', 'artifact'];
+const SLOT_NAMES: Readonly<Record<string, string>> = { weapon: '兵器', armor: '护甲', artifact: '法器' };
 
-/** 属性中文名（战力里的三项：攻击 / 防御 / 身法）。 */
-const STAT_LABELS: Readonly<Record<'attack' | 'defense' | 'speed', string>> = {
-  attack: '攻击',
-  defense: '防御',
-  speed: '身法',
-};
+type CombatStat = 'attack' | 'defense' | 'speed';
+const COMBAT_STATS: readonly CombatStat[] = ['attack', 'defense', 'speed'];
+const STAT_LABELS: Readonly<Record<CombatStat, string>> = { attack: '攻击', defense: '防御', speed: '身法' };
 
-/** 首页功能弹窗（与首页功能卡片同一套打开方式，SectScreen 里走 openHubCard）。 */
-export type AdvisorPanel =
-  | 'daily'
-  | 'alchemy'
-  | 'forge'
-  | 'steward'
-  | 'boss'
-  | 'tower'
-  | 'explore'
-  | 'veins'
-  | 'auction';
+/* ---------- 输出 ---------- */
+
+/** 首页功能弹窗（SectScreen 里走 openHubCard）。 */
+export type AdvisorPanel = 'forge' | 'shop' | 'gambling' | 'boss';
 
 /** 可滚动到的区域（元素 id）。 */
 export type AdvisorScrollTarget = 'building-title' | 'sect-upgrade-title' | 'disciple-title';
 
-/**
- * 「去处理」去哪里（只描述目标，不做跳转）：
- * - panel：打开首页功能弹窗；
- * - disciple：打开这名弟子的详情；
- * - scroll：滚动到页面上的区域；
- * - dispatch：打开门人调度。
- */
+/** 「去处理」去哪里（只描述目标，跳转由 SectScreen 完成）。 */
 export type AdvisorAction =
   | { kind: 'panel'; panel: AdvisorPanel }
   | { kind: 'disciple'; discipleId: string }
-  | { kind: 'scroll'; target: AdvisorScrollTarget }
-  | { kind: 'dispatch' };
+  | { kind: 'scroll'; target: AdvisorScrollTarget };
 
-/**
- * 一条建议。countsTowardBadge = false 的只是说明（如「建筑被什么挡住了」），不计入角标，也不进「下一步」。
- * priority 数字越小越重要，只用于排序「下一步」。
- */
-export interface Suggestion {
+/** 一条办法：text 是动作，detail 是收益 / 花费；key = 明确的高收益动作（亮红点）。 */
+export interface AdvisorTip {
   id: string;
   text: string;
-  actionLabel: string;
+  detail: string | null;
   action: AdvisorAction;
-  countsTowardBadge: boolean;
-  priority: number;
+  key: boolean;
 }
 
-/** 主力卡片：名字、境界、天赋、战力、理由标签、错配提醒与这名弟子的下一步（null = 状态良好）。 */
-export interface MainDiscipleAdvice {
+/** 晋升目标里的一行：一种资源或一个条件。 */
+export interface AdvisorGoalLine {
+  id: string;
+  label: string;
+  /** done = 已够 / 已达成；short = 资源还差（等得到）；blocked = 条件未达成或靠等凑不齐。 */
+  status: 'done' | 'short' | 'blocked';
+  detail: string;
+  bottleneck: boolean;
+  action: AdvisorAction | null;
+}
+
+export interface AdvisorGoal {
+  title: string;
+  ready: boolean;
+  summary: string;
+  lines: AdvisorGoalLine[];
+  /** 怎么补：针对还差的资源（瓶颈在前）。 */
+  tips: AdvisorTip[];
+}
+
+export interface AdvisorMain {
   discipleId: string;
   name: string;
-  realmName: string;
   stageName: string;
   talentName: string;
   combatPower: number;
   reasons: string[];
-  nextStep: Suggestion | null;
-  misplaced: string | null;
+  /** 受伤等说明；null = 没有。 */
+  note: string | null;
+  /** 收益最高的几步（按战力增幅从高到低）。 */
+  tips: AdvisorTip[];
 }
 
 export interface AdvisorView {
-  /** 下一步：从所有可执行建议里按优先级取的前 3 条。 */
-  nextSteps: Suggestion[];
-  mainDisciples: MainDiscipleAdvice[];
-  buildings: Suggestion[];
-  income: Suggestion[];
-  spending: {
-    items: Suggestion[];
-    /** 固定说明（不计入角标）。 */
-    note: string;
-  };
-  /** 角标：可执行建议的条数（下一步不重复计数）。 */
-  badgeCount: number;
+  /** null = 宗门已满级。 */
+  goal: AdvisorGoal | null;
+  /** 演武场还能升时的一条；满级或没有演武场为 null。 */
+  arena: AdvisorTip | null;
+  mains: AdvisorMain[];
+  /** 有明确瓶颈办法或高收益动作：按钮亮小红点。 */
+  alert: boolean;
 }
 
-/* ---------- 输入结构（只声明用到的字段；完整的 SectStateView / HubView 等传入时结构兼容） ---------- */
+/* ---------- 输入（只声明用到的字段；SectStateView / EquipmentView 传入时结构兼容） ---------- */
 
 export interface AdvisorDisciple {
   id: string;
@@ -161,12 +145,14 @@ export interface AdvisorDisciple {
   talentName: string;
   assignment: string;
   realmOrder: number;
-  realmName: string;
+  stage: number;
   stageName: string;
   aptitude: number;
   attack: number;
   defense: number;
   speed: number;
+  gear: { attack: number; defense: number; speed: number };
+  gearPowerBonusBp: number;
   combatPower: number;
   stewardOffice: string | null;
   injuredUntil: string | null;
@@ -174,9 +160,10 @@ export interface AdvisorDisciple {
   canBreakthrough: boolean;
   breakthroughReadyExceptEnergy: boolean;
   bodyTemperingRemaining: number;
-  bodyTemperingTarget: 'attack' | 'defense' | 'speed' | null;
-  aptitudePillRemaining: number;
-  /** 历练状态：在外（active）的弟子不算闲置；可选，旧测试数据没有时按不在外处理。 */
+  bodyTemperingTarget: CombatStat | null;
+  bodyTemperingGain: number;
+  daoInsight: number;
+  daoInsightRemaining: number;
   journey?: { status: string };
 }
 
@@ -185,7 +172,7 @@ export interface AdvisorResource {
   name: string;
   balance: string;
   capacity: string;
-  capped: boolean;
+  ratePerHour: string;
 }
 
 export interface AdvisorBuilding {
@@ -193,15 +180,23 @@ export interface AdvisorBuilding {
   name: string;
   level: number;
   maxLevel: number;
+  upgradeCost: Record<string, string> | null;
   canUpgrade: boolean;
   blockedReason: string | null;
 }
 
 export interface AdvisorAssignment {
   id: string;
-  name: string;
   currentCount: number | null;
   maxCount: number | null;
+}
+
+export interface AdvisorSectUpgrade {
+  nextLevel: number;
+  nextLevelName: string;
+  cost: Record<string, string>;
+  requirements: readonly { label: string; met: boolean }[];
+  canUpgrade: boolean;
 }
 
 export interface AdvisorState {
@@ -210,399 +205,620 @@ export interface AdvisorState {
   disciples: readonly AdvisorDisciple[];
   buildings: readonly AdvisorBuilding[];
   assignments: readonly AdvisorAssignment[];
-  sectUpgrade: { canUpgrade: boolean } | null;
-  stewards: { offices: readonly { discipleId: string | null }[] };
-  journey: { activeCount: number; maxConcurrent: number; minAtHome: number };
+  sectUpgrade: AdvisorSectUpgrade | null;
 }
 
-export interface AdvisorHub {
-  worldBoss: { attackable: boolean };
-  tower: { sweepable: boolean };
-  explore: { remaining: number };
-  veins: { unlocked: boolean; holding: { ratePerHour: number } | null; freeCount: number };
-  auction: { claimable: number };
+export interface AdvisorEquipmentItem {
+  id: string;
+  name: string;
+  slot: string;
+  quality: string;
+  mainAttr: string;
+  mainValue: number;
+  subAttr: string;
+  subValue: number;
+  powerBonusBp: number;
+  discipleId: string | null;
 }
 
 export interface AdvisorEquipment {
   unlocked: boolean;
-  items: readonly { discipleId: string | null; slot: string; quality: string; refineLevel: number }[];
-}
-
-export interface AdvisorDaily {
-  tasks: readonly { completed: boolean; claimed: boolean }[];
-  chest: { available: boolean };
+  items: readonly AdvisorEquipmentItem[];
+  forgeOptions: readonly { quality: string; name: string; unlocked: boolean }[];
 }
 
 export interface AdvisorInput {
   state: AdvisorState;
-  /** 首页状态摘要；没取到为 null（相关建议跳过）。 */
-  hub: AdvisorHub | null;
-  /** 装备视图；没加载为 null（装备相关的几条跳过）。 */
+  /** 装备视图；没加载为 null（装备相关的办法跳过）。 */
   equipment: AdvisorEquipment | null;
-  /** 日课摘要；没取到为 null（日课相关的建议跳过）。 */
-  dailyTasks: AdvisorDaily | null;
-  /** 门人调度的建议条数（SectScreen 的 dispatchCount）。 */
-  dispatchSuggestionCount: number;
 }
 
-/* ---------- 内部小工具 ---------- */
+/* ---------- 小工具 ---------- */
 
-function suggest(
-  id: string,
-  text: string,
-  action: AdvisorAction,
-  priority: number,
-  countsTowardBadge = true,
-): Suggestion {
-  return { id, text, actionLabel: ACTION_LABEL, action, countsTowardBadge, priority };
+function tip(id: string, text: string, detail: string | null, action: AdvisorAction, key = false): AdvisorTip {
+  return { id, text, detail, action, key };
 }
 
-/** 服务端时间戳还没过期（> now）。缺字段 / 非法时间戳不算。 */
 function isAfter(iso: string | null, nowMs: number): boolean {
   if (iso === null) return false;
   const until = Date.parse(iso);
   return Number.isFinite(until) && until > nowMs;
 }
 
-/** 内部潜力分（只用来排序，不输出）：资质 × 0.45 + 战斗属性 × 0.35 + 境界分 × 0.20 + 战斗天赋 +8。 */
+/** 时长：不到 1 小时 / 约 N 小时 / 约 N 天（48 小时起按天）。 */
+export function formatHours(hours: number): string {
+  if (!Number.isFinite(hours)) return '遥遥无期';
+  if (hours < 1) return '不到 1 小时';
+  if (hours < 48) return `约 ${String(Math.ceil(hours))} 小时`;
+  return `约 ${String(Math.ceil(hours / 24))} 天`;
+}
+
+/** 战力增幅：+12% / +3.5%（不足 10% 保留 1 位小数）。 */
+function formatGain(ratio: number): string {
+  const pct = ratio * 100;
+  const text = pct >= 10 ? String(Math.round(pct)) : String(Math.round(pct * 10) / 10);
+  return `+${text}%`;
+}
+
+/** 资源名兜底（state.resources 里没有这项时用）。 */
+const RESOURCE_NAMES: Readonly<Record<string, string>> = {
+  spiritStone: '灵石',
+  spiritualEnergy: '灵气',
+  herb: '药材',
+  ore: '矿石',
+  xuantie: '玄铁',
+  shenmu: '神木',
+};
+
+function resourceName(state: AdvisorState, id: string): string {
+  return state.resources.find((item) => item.id === id)?.name ?? RESOURCE_NAMES[id] ?? id;
+}
+
+function costText(state: AdvisorState, cost: Record<string, string>): string {
+  return Object.entries(cost)
+    .filter(([, amount]) => Number(amount) > 0)
+    .map(([id, amount]) => `${formatAmount(amount)} ${resourceName(state, id)}`)
+    .join(' + ');
+}
+
+function balanceOf(state: AdvisorState, id: string): number {
+  return Number(state.resources.find((item) => item.id === id)?.balance ?? 0);
+}
+
+/** 缺口展示：向上取整到整数展示单位（「还差 799.9」读起来别扭）。 */
+function formatDeficit(deficit: number): string {
+  return formatAmount(Math.ceil(deficit / UNIT) * UNIT);
+}
+
+/* ---------- 战力（realms.ts discipleCombatPower 的比例部分；天赋倍率前后相同，算增幅时约掉） ---------- */
+
+interface PowerProfile {
+  base: number;
+  attack: number;
+  defense: number;
+  speed: number;
+  bp: number;
+}
+
+function powerOf(p: PowerProfile): number {
+  return p.base * (1 + (p.attack * 0.4 + p.defense * 0.35 + p.speed * 0.25) / 100) * (1 + p.bp / 10_000);
+}
+
+function gainOf(from: PowerProfile, to: PowerProfile): number {
+  const now = powerOf(from);
+  return now > 0 ? powerOf(to) / now - 1 : 0;
+}
+
+function profileOf(disciple: AdvisorDisciple): PowerProfile {
+  return {
+    base: (disciple.realmOrder * 3 + disciple.stage) * 10,
+    attack: disciple.attack + disciple.gear.attack,
+    defense: disciple.defense + disciple.gear.defense,
+    speed: disciple.speed + disciple.gear.speed,
+    bp: disciple.gearPowerBonusBp,
+  };
+}
+
+/** 手上能分配的悟道值，按攻击 → 防御 → 身法依次加到 100 为止（只算手上有的点数）。 */
+function insightPlanOf(disciple: AdvisorDisciple): Record<CombatStat, number> {
+  let points = Math.max(0, Math.min(disciple.daoInsight, disciple.daoInsightRemaining));
+  const plan: Record<CombatStat, number> = { attack: 0, defense: 0, speed: 0 };
+  for (const stat of COMBAT_STATS) {
+    const add = Math.min(points, Math.max(0, ATTRIBUTE_MAX - disciple[stat]));
+    plan[stat] = add;
+    points -= add;
+  }
+  return plan;
+}
+
+/* ---------- 主力推荐 ---------- */
+
+/** 内部潜力分（只排序）：资质 × 0.45 + 战斗属性 × 0.35 + 境界分 × 0.20 + 战斗天赋 +8；战斗属性含手上未分配的悟道值。 */
 function potentialOf(disciple: AdvisorDisciple): number {
-  const combat = disciple.attack * 0.4 + disciple.defense * 0.35 + disciple.speed * 0.25;
+  const plan = insightPlanOf(disciple);
+  const combat =
+    (disciple.attack + plan.attack) * 0.4 + (disciple.defense + plan.defense) * 0.35 + (disciple.speed + plan.speed) * 0.25;
   const realm = (disciple.realmOrder / 8) * 100;
   const combatTalent = COMBAT_TALENT_IDS.includes(disciple.talent) ? 8 : 0;
   return disciple.aptitude * 0.45 + combat * 0.35 + realm * 0.2 + combatTalent;
 }
 
-/** 产出类天赋：TALENT_POSTS 里有非修炼岗位的（灵植 / 矿脉 / 聚灵）；悟道只对应修炼岗，不算产出类。 */
-function isProductionTalent(talent: string): boolean {
-  return (talentPostsOf(talent) ?? []).some((post) => post !== CULTIVATING);
-}
-
-/** 理由标签（最多 3 条）：资质高 / 战斗属性高 / 战斗天赋 / 全宗境界前 2；都不满足时「综合最均衡」。 */
 function reasonsOf(disciple: AdvisorDisciple, higherRealmCount: number): string[] {
   const reasons: string[] = [];
-  if (disciple.aptitude >= 75) reasons.push(`资质 ${String(disciple.aptitude)} · 修炼快`);
-  const stats = [
-    { label: STAT_LABELS.attack, value: disciple.attack },
-    { label: STAT_LABELS.defense, value: disciple.defense },
-    { label: STAT_LABELS.speed, value: disciple.speed },
-  ];
-  const best = stats.reduce((top, item) => (item.value > top.value ? item : top));
-  if (best.value >= 75) reasons.push(`${best.label} ${String(best.value)}`);
+  const insight = Math.min(disciple.daoInsight, disciple.daoInsightRemaining);
+  if (insight >= INSIGHT_REASON_MIN) reasons.push(`悟道值 ${String(insight)} 点未分配`);
+  if (disciple.aptitude >= 75) reasons.push(`资质 ${String(disciple.aptitude)}`);
+  const best = COMBAT_STATS.reduce((top, stat) => (disciple[stat] > disciple[top] ? stat : top));
+  if (disciple[best] >= 75) reasons.push(`${STAT_LABELS[best]} ${String(disciple[best])}`);
   if (COMBAT_TALENT_IDS.includes(disciple.talent)) reasons.push(`${disciple.talentName}天赋`);
-  // 「全宗前 2」按名次算：比他境界高的人不足 2 个（同境界并列）。
   if (higherRealmCount < 2) reasons.push('境界领先');
   if (reasons.length === 0) return ['综合最均衡'];
   return reasons.slice(0, 3);
 }
 
-/** 2.3 每名主力的下一步：按顺序取第一条满足的；都没有返回 null（状态良好）。 */
-function nextStepOf(
+interface RankedTip {
+  tip: AdvisorTip;
+  gain: number;
+}
+
+/** 装备：背包里有更好的就换上；空格 / 低品质按炼器坊能炼的最高品质估算。usedBag 防止同一件分给两个人。 */
+function equipmentTips(
   disciple: AdvisorDisciple,
-  nowMs: number,
-  gear: AdvisorEquipment | null,
-): Suggestion | null {
-  const id = disciple.id;
-  const target: AdvisorAction = { kind: 'disciple', discipleId: id };
-  // 重伤丹药无效，只能静养到期：只做说明，不计入角标、不进「下一步」。
-  if (isAfter(disciple.severeInjuredUntil, nowMs)) {
-    return suggest(`main:${id}:severe`, '重伤卧床，静养痊愈前无法培养（丹药无效）', target, PRIORITY.mainInjured, false);
-  }
-  if (isAfter(disciple.injuredUntil, nowMs)) {
-    return suggest(`main:${id}:heal`, '受伤未愈，去疗伤', target, PRIORITY.mainInjured);
-  }
-  if (disciple.canBreakthrough) {
-    return suggest(`main:${id}:breakthrough`, '可以突破了', target, PRIORITY.mainBreakthrough);
-  }
-  if (disciple.breakthroughReadyExceptEnergy) {
-    return suggest(`main:${id}:energy`, '只差灵气就能突破', target, PRIORITY.rest);
-  }
-  if (gear !== null) {
-    const worn = gear.items.filter((item) => item.discipleId === id);
-    if (new Set(worn.map((item) => item.slot)).size < EQUIPMENT_SLOT_COUNT) {
-      return suggest(
-        `main:${id}:slot`,
-        '装备有空格，去炼器或功勋兑换',
-        { kind: 'panel', panel: 'forge' },
-        PRIORITY.mainEquipSlot,
-      );
-    }
-    if (worn.some((item) => item.quality === 'common' || item.quality === 'spirit')) {
-      return suggest(`main:${id}:quality`, '穿着凡品 / 灵品，换成宝品以上', target, PRIORITY.rest);
-    }
-    if (worn.some((item) => item.refineLevel < REFINE_TARGET_LEVEL)) {
-      return suggest(`main:${id}:refine`, '装备还没祭炼到八重，去祭炼', target, PRIORITY.rest);
-    }
-  }
-  if (disciple.bodyTemperingRemaining > 0 && disciple.bodyTemperingTarget !== null) {
-    const label = STAT_LABELS[disciple.bodyTemperingTarget];
-    return suggest(`main:${id}:tempering`, `用淬体丹补「${label}」等弱项`, target, PRIORITY.rest);
-  }
-  if (disciple.aptitudePillRemaining > 0 && disciple.aptitude < 80) {
-    return suggest(`main:${id}:aptitude`, '用培元丹提资质', target, PRIORITY.rest);
-  }
-  return null;
-}
-
-/** 2.2 错配提醒：资质高、不在修炼岗，而且天赋不是产出类。 */
-function misplacedOf(disciple: AdvisorDisciple): string | null {
-  if (disciple.aptitude < 75 || disciple.assignment === CULTIVATING) return null;
-  if (isProductionTalent(disciple.talent)) return null;
-  return '资质高，建议改去修炼';
-}
-
-/** 2.4 建筑：未满级的每座一条（演武场 → … → 其他），再加宗门可晋升。 */
-function buildingSuggestions(state: AdvisorState): Suggestion[] {
-  const rank = (defId: string): number => {
-    const index = BUILDING_ORDER.indexOf(defId);
-    return index < 0 ? BUILDING_ORDER.length : index;
+  profile: PowerProfile,
+  gear: AdvisorEquipment,
+  usedBag: Set<string>,
+): RankedTip[] {
+  const list: RankedTip[] = [];
+  const bestForge = [...gear.forgeOptions].reverse().find((option) => option.unlocked) ?? null;
+  const bestForgeQuality = bestForge === null ? null : (QUALITIES.find((q) => q.id === bestForge.quality) ?? null);
+  const contribution = (item: AdvisorEquipmentItem | undefined): PowerProfile => {
+    const delta: PowerProfile = { base: 0, attack: 0, defense: 0, speed: 0, bp: 0 };
+    if (item === undefined) return delta;
+    if (COMBAT_STATS.includes(item.mainAttr as CombatStat)) delta[item.mainAttr as CombatStat] += item.mainValue;
+    if (COMBAT_STATS.includes(item.subAttr as CombatStat)) delta[item.subAttr as CombatStat] += item.subValue;
+    delta.bp = item.powerBonusBp;
+    return delta;
   };
-  const list = state.buildings
-    .filter((building) => building.level < building.maxLevel)
-    .sort((a, b) => rank(a.defId) - rank(b.defId))
-    .map((building): Suggestion => {
-      const benefit = BUILDING_BENEFIT[building.defId];
-      const head = benefit === undefined ? building.name : `${building.name}（${benefit}）`;
-      const target: AdvisorAction = { kind: 'scroll', target: 'building-title' };
-      if (building.canUpgrade) {
-        const priority = building.defId === 'arenaHall' ? PRIORITY.arenaUpgrade : PRIORITY.otherBuilding;
-        return suggest(`building:${building.defId}`, `${head}可以升级`, target, priority);
-      }
-      const reason = building.blockedReason ?? '条件尚未满足';
-      return suggest(`building:${building.defId}`, `${head}暂不能升级：${reason}`, target, PRIORITY.rest, false);
-    });
-  if (state.sectUpgrade?.canUpgrade === true) {
-    list.push(
-      suggest(
-        'sect-upgrade',
-        '宗门可晋升，容量与上限都会提高',
-        { kind: 'scroll', target: 'sect-upgrade-title' },
-        PRIORITY.rest,
-      ),
-    );
-  }
-  return list;
-}
+  const swap = (out: PowerProfile, add: PowerProfile): PowerProfile => ({
+    base: profile.base,
+    attack: profile.attack - out.attack + add.attack,
+    defense: profile.defense - out.defense + add.defense,
+    speed: profile.speed - out.speed + add.speed,
+    bp: profile.bp - out.bp + add.bp,
+  });
 
-/** 2.5 资源获取：产出、岗位、每日收益哪里还能补。 */
-function incomeSuggestions(input: AdvisorInput): Suggestion[] {
-  const { state, hub, dailyTasks, dispatchSuggestionCount } = input;
-  const list: Suggestion[] = [];
-  const seatRoom = (postId: string): number | null => {
-    const post = state.assignments.find((item) => item.id === postId);
-    if (post === undefined || post.maxCount === null) return null;
-    return Math.max(0, post.maxCount - (post.currentCount ?? 0));
-  };
-
-  // 在外历练的弟子岗位也是闲置，但人不在宗门，不算「闲置」。
-  const idle = state.disciples.filter(
-    (disciple) => disciple.assignment === 'idle' && disciple.journey?.status !== 'active',
-  ).length;
-  if (idle > 0) {
-    list.push(
-      suggest('income:idle', `${String(idle)} 名弟子闲置，派去修炼或岗位`, { kind: 'dispatch' }, PRIORITY.postSeat),
-    );
-  }
-  const stoneRoom = seatRoom('stoneMining');
-  if (stoneRoom !== null && stoneRoom > 0) {
-    list.push(
-      suggest(
-        'income:seat:stoneMining',
-        `采灵还空 ${String(stoneRoom)} 个位置，多一人每小时多约 ${String(STONE_MINING_PER_HOUR)} 灵石`,
-        { kind: 'scroll', target: 'disciple-title' },
-        PRIORITY.postSeat,
-      ),
-    );
-  }
-  const energyRoom = seatRoom('energyGathering');
-  if (energyRoom !== null && energyRoom > 0) {
-    list.push(
-      suggest(
-        'income:seat:energyGathering',
-        `吐纳还空 ${String(energyRoom)} 个位置，多一人每小时多约 ${String(ENERGY_GATHERING_PER_HOUR)} 灵气`,
-        { kind: 'scroll', target: 'disciple-title' },
-        PRIORITY.postSeat,
-      ),
-    );
-  }
-  if (dispatchSuggestionCount > 0) {
-    list.push(
-      suggest(
-        'income:dispatch',
-        `门人调度有 ${String(dispatchSuggestionCount)} 项建议（天赋没在对口岗位）`,
-        { kind: 'dispatch' },
-        PRIORITY.rest,
-      ),
-    );
-  }
-  const vacant = state.stewards.offices.filter((office) => office.discipleId === null).length;
-  if (vacant > 0) {
-    list.push(
-      suggest(
-        'income:steward',
-        `${String(vacant)} 个执事空缺，执事有产出 / 修炼加成`,
-        { kind: 'panel', panel: 'steward' },
-        PRIORITY.rest,
-      ),
-    );
-  }
-  // 同时在外不超过 maxConcurrent，出发后门内至少留 minAtHome 人（与服务端历练校验同一口径）。
-  const { journey } = state;
-  const journeySlots = Math.min(
-    journey.maxConcurrent - journey.activeCount,
-    state.disciples.length - journey.activeCount - journey.minAtHome,
-  );
-  if (journeySlots > 0) {
-    list.push(
-      suggest(
-        'income:journey',
-        `还能派 ${String(journeySlots)} 名弟子历练`,
-        { kind: 'scroll', target: 'disciple-title' },
-        PRIORITY.rest,
-      ),
-    );
-  }
-
-  // 每日收益没拿（与待办同一口径）。
-  if (dailyTasks !== null) {
-    const claimable = dailyTasks.tasks.filter((task) => task.completed && !task.claimed).length;
-    if (claimable > 0) {
-      list.push(
-        suggest(
-          'income:daily',
-          `日课有 ${String(claimable)} 个任务可领取灵石`,
-          { kind: 'panel', panel: 'daily' },
-          PRIORITY.dailyClaim,
+  const emptySlots: string[] = [];
+  const weakSlots: string[] = [];
+  const forgeOut: PowerProfile = { base: 0, attack: 0, defense: 0, speed: 0, bp: 0 };
+  const forgeIn: PowerProfile = { base: 0, attack: 0, defense: 0, speed: 0, bp: 0 };
+  for (const slot of SLOT_ORDER) {
+    const slotName = SLOT_NAMES[slot] ?? slot;
+    const worn = gear.items.find((item) => item.discipleId === disciple.id && item.slot === slot);
+    const out = contribution(worn);
+    let bestBag: { item: AdvisorEquipmentItem; gain: number } | null = null;
+    for (const item of gear.items) {
+      if (item.discipleId !== null || item.slot !== slot || usedBag.has(item.id)) continue;
+      const gain = gainOf(profile, swap(out, contribution(item)));
+      if (gain > 0 && (bestBag === null || gain > bestBag.gain)) bestBag = { item, gain };
+    }
+    if (bestBag !== null) {
+      usedBag.add(bestBag.item.id);
+      list.push({
+        tip: tip(
+          `main:${disciple.id}:bag:${slot}`,
+          `换上背包里的${bestBag.item.name}`,
+          `战力 ${formatGain(bestBag.gain)}`,
+          { kind: 'panel', panel: 'forge' },
+          true,
         ),
-      );
-    } else if (dailyTasks.chest.available) {
-      list.push(suggest('income:daily-chest', '日课宝箱可开启', { kind: 'panel', panel: 'daily' }, PRIORITY.dailyClaim));
-    }
-  }
-  if (hub !== null) {
-    if (hub.tower.sweepable) {
-      list.push(suggest('income:tower', '镇妖塔今日可扫荡', { kind: 'panel', panel: 'tower' }, PRIORITY.dailyClaim));
-    }
-    if (hub.explore.remaining > 0) {
-      list.push(
-        suggest('income:explore', `秘境今日还可探 ${String(hub.explore.remaining)} 次`, { kind: 'panel', panel: 'explore' }, PRIORITY.dailyClaim),
-      );
-    }
-    if (hub.worldBoss.attackable) {
-      list.push(suggest('income:boss', '讨伐开放中，可以出手', { kind: 'panel', panel: 'boss' }, PRIORITY.dailyClaim));
-    }
-    if (hub.veins.unlocked && hub.veins.holding === null && hub.veins.freeCount > 0) {
-      list.push(
-        suggest('income:veins', `${String(hub.veins.freeCount)} 条灵脉无主，可以进驻`, { kind: 'panel', panel: 'veins' }, PRIORITY.dailyClaim),
-      );
-    }
-    if (hub.auction.claimable > 0) {
-      list.push(
-        suggest('income:auction', `拍卖行 ${String(hub.auction.claimable)} 件待领取`, { kind: 'panel', panel: 'auction' }, PRIORITY.dailyClaim),
-      );
-    }
-  }
-
-  // 产出偏慢：灵矿没满级且采灵没坐满 → 先升灵矿、把采灵坐满；灵气同理（聚灵阵 / 吐纳）。
-  const missionHall = state.buildings.find((building) => building.defId === 'missionHall');
-  if (missionHall !== undefined && missionHall.level < missionHall.maxLevel && stoneRoom !== null && stoneRoom > 0) {
-    list.push(
-      suggest('income:stone-slow', '灵石来源偏慢：先升灵矿、把采灵坐满', { kind: 'scroll', target: 'building-title' }, PRIORITY.rest),
-    );
-  }
-  const spiritualArray = state.buildings.find((building) => building.defId === 'spiritualArray');
-  if (spiritualArray !== undefined && spiritualArray.level < spiritualArray.maxLevel && energyRoom !== null && energyRoom > 0) {
-    list.push(
-      suggest('income:energy-slow', '灵气来源偏慢：先升聚灵阵、把吐纳坐满', { kind: 'scroll', target: 'building-title' }, PRIORITY.rest),
-    );
-  }
-
-  return list;
-}
-
-/** 2.6 资源使用：满仓浪费与快满仓（资源 → 去哪里花）；每种资源一条。 */
-const SPENDING_TARGETS: readonly { resourceId: string; hint: string; action: AdvisorAction }[] = [
-  { resourceId: 'spiritStone', hint: '升级建筑 / 祭炼', action: { kind: 'scroll', target: 'building-title' } },
-  { resourceId: 'herb', hint: '炼丹 / 坊市卖出', action: { kind: 'panel', panel: 'alchemy' } },
-  { resourceId: 'ore', hint: '炼器 / 坊市卖出 / 赌石', action: { kind: 'panel', panel: 'forge' } },
-  { resourceId: 'spiritualEnergy', hint: '突破', action: { kind: 'scroll', target: 'disciple-title' } },
-  { resourceId: 'xuantie', hint: '炼器 / 祭炼', action: { kind: 'panel', panel: 'forge' } },
-];
-
-function spendingSuggestions(state: AdvisorState): Suggestion[] {
-  const list: Suggestion[] = [];
-  for (const target of SPENDING_TARGETS) {
-    const resource = state.resources.find((item) => item.id === target.resourceId);
-    if (resource === undefined) continue;
-    if (resource.capped) {
-      list.push(
-        suggest(`spend:full:${target.resourceId}`, `${resource.name}已满仓，产出在浪费：${target.hint}`, target.action, PRIORITY.capped),
-      );
+        gain: bestBag.gain,
+      });
       continue;
     }
-    const capacity = Number(resource.capacity);
-    if (capacity > 0 && Number(resource.balance) >= capacity * NEAR_CAPACITY_RATIO) {
-      list.push(
-        suggest(`spend:near:${target.resourceId}`, `${resource.name}快满仓了：${target.hint}`, target.action, PRIORITY.nearCapacity),
-      );
+    if (bestForge === null || bestForgeQuality === null) continue;
+    const wornRank = worn === undefined ? -1 : QUALITIES.findIndex((q) => q.id === worn.quality);
+    if (wornRank >= QUALITIES.indexOf(bestForgeQuality)) continue;
+    // 新装备的副属性未知：换装时假定与旧装备相同（两边都不计副属性），只比主属性与品质加成。
+    const outMain = { ...out };
+    if (worn !== undefined && COMBAT_STATS.includes(worn.subAttr as CombatStat)) {
+      outMain[worn.subAttr as CombatStat] -= worn.subValue;
+    }
+    forgeOut.attack += outMain.attack;
+    forgeOut.defense += outMain.defense;
+    forgeOut.speed += outMain.speed;
+    forgeOut.bp += outMain.bp;
+    forgeIn.bp += bestForgeQuality.powerBonusBp;
+    forgeIn[SLOT_MAIN[slot] ?? 'attack'] += bestForgeQuality.mainValue;
+    (worn === undefined ? emptySlots : weakSlots).push(slotName);
+  }
+
+  // 要炼的格子合成一条：「炼灵品：补上兵器、法器，换掉护甲」。
+  if (bestForge !== null && emptySlots.length + weakSlots.length > 0) {
+    const gain = gainOf(profile, swap(forgeOut, forgeIn));
+    if (gain > 0) {
+      const parts: string[] = [];
+      if (emptySlots.length > 0) parts.push(`补上${emptySlots.join('、')}`);
+      if (weakSlots.length > 0) parts.push(`换掉${weakSlots.join('、')}`);
+      list.push({
+        tip: tip(
+          `main:${disciple.id}:forge`,
+          `炼${bestForge.name}：${parts.join('，')}`,
+          `战力约 ${formatGain(gain)}`,
+          { kind: 'panel', panel: 'forge' },
+        ),
+        gain,
+      });
     }
   }
-  return list.sort((a, b) => a.priority - b.priority);
+  return list;
 }
 
-/**
- * 算出宗门参谋的全部内容（纯函数）。
- * 装备相关的几条只在装备视图已加载且炼器已开放时出（没有装备可比，也没有可去的炼器）。
- */
-export function buildAdvisor(input: AdvisorInput): AdvisorView {
-  const { state, equipment } = input;
-  const nowMs = Date.parse(state.serverNow);
-  const gear = equipment !== null && equipment.unlocked ? equipment : null;
+function mainTips(
+  disciple: AdvisorDisciple,
+  gear: AdvisorEquipment | null,
+  usedBag: Set<string>,
+): RankedTip[] {
+  const profile = profileOf(disciple);
+  const target: AdvisorAction = { kind: 'disciple', discipleId: disciple.id };
+  const list: RankedTip[] = [];
 
-  // 主力：排除执事，按潜力分从高到低（同分按战力高的在前）取前 5。
+  const plan = insightPlanOf(disciple);
+  const insightTotal = plan.attack + plan.defense + plan.speed;
+  if (insightTotal > 0) {
+    const gain = gainOf(profile, {
+      ...profile,
+      attack: profile.attack + plan.attack,
+      defense: profile.defense + plan.defense,
+      speed: profile.speed + plan.speed,
+    });
+    const parts = COMBAT_STATS.filter((stat) => plan[stat] > 0).map((stat) => `${STAT_LABELS[stat]} +${String(plan[stat])}`);
+    list.push({
+      tip: tip(
+        `main:${disciple.id}:insight`,
+        `分配 ${String(insightTotal)} 点悟道值（${parts.join('、')}）`,
+        `战力 ${formatGain(gain)}`,
+        target,
+        true,
+      ),
+      gain,
+    });
+  }
+
+  if (disciple.canBreakthrough || disciple.breakthroughReadyExceptEnergy) {
+    const gain = gainOf(profile, { ...profile, base: profile.base + 10 });
+    list.push({
+      tip: disciple.canBreakthrough
+        ? tip(`main:${disciple.id}:breakthrough`, '可以突破了', `战力 ${formatGain(gain)}`, target, true)
+        : tip(`main:${disciple.id}:energy`, '只差灵气就能突破', `突破后战力 ${formatGain(gain)}`, target),
+      gain,
+    });
+  }
+
+  if (gear !== null) list.push(...equipmentTips(disciple, profile, gear, usedBag));
+
+  if (disciple.bodyTemperingRemaining > 0 && disciple.bodyTemperingTarget !== null && disciple.bodyTemperingGain > 0) {
+    const stat = disciple.bodyTemperingTarget;
+    const gain = gainOf(profile, { ...profile, [stat]: profile[stat] + disciple.bodyTemperingGain });
+    list.push({
+      tip: tip(
+        `main:${disciple.id}:tempering`,
+        `服淬体丹（${STAT_LABELS[stat]} +${String(disciple.bodyTemperingGain)}）`,
+        `战力 ${formatGain(gain)}`,
+        target,
+      ),
+      gain,
+    });
+  }
+
+  return list.sort((a, b) => b.gain - a.gain);
+}
+
+function buildMains(state: AdvisorState, gear: AdvisorEquipment | null, nowMs: number): AdvisorMain[] {
   const ranked = state.disciples
     .filter((disciple) => disciple.stewardOffice === null)
     .map((disciple) => ({ disciple, potential: potentialOf(disciple) }))
     .sort((a, b) => b.potential - a.potential || b.disciple.combatPower - a.disciple.combatPower)
     .slice(0, MAIN_COUNT);
-  const mainDisciples: MainDiscipleAdvice[] = ranked.map(({ disciple }) => {
-    // 全宗境界排名：比他高的人数（所有弟子，含执事）。
+  const usedBag = new Set<string>();
+  return ranked.map(({ disciple }) => {
     const higherRealmCount = state.disciples.filter((other) => other.realmOrder > disciple.realmOrder).length;
+    let note: string | null = null;
+    if (isAfter(disciple.severeInjuredUntil, nowMs)) note = '重伤卧床，静养痊愈前无法出战';
+    else if (isAfter(disciple.injuredUntil, nowMs)) note = '受伤未愈，先疗伤再出战';
     return {
       discipleId: disciple.id,
       name: disciple.name,
-      realmName: disciple.realmName,
       stageName: disciple.stageName,
       talentName: disciple.talentName,
       combatPower: disciple.combatPower,
       reasons: reasonsOf(disciple, higherRealmCount),
-      nextStep: nextStepOf(disciple, nowMs, gear),
-      misplaced: misplacedOf(disciple),
+      note,
+      tips: mainTips(disciple, gear, usedBag)
+        .filter((item) => item.tip.key || item.gain >= MIN_TIP_GAIN)
+        .slice(0, MAIN_TIP_COUNT)
+        .map((item) => item.tip),
     };
   });
+}
 
-  const buildings = buildingSuggestions(state);
-  const income = incomeSuggestions(input);
-  const spendingItems = spendingSuggestions(state);
-  const mainSteps = mainDisciples.flatMap((main) => (main.nextStep === null ? [] : [main.nextStep]));
+/* ---------- 晋升目标与补缺口 ---------- */
 
-  // 角标：所有可执行建议的条数（主力下一步 + 建筑 + 资源获取 + 资源使用），下一步不重复计数。
-  const all = [...mainSteps, ...buildings, ...income, ...spendingItems];
-  const badgeCount = all.filter((item) => item.countsTowardBadge).length;
-  // 下一步：可执行建议里按优先级取前 3（同优先级按产生顺序：主力 → 建筑 → 资源获取 → 资源使用）。
-  const nextSteps = all
-    .filter((item) => item.countsTowardBadge)
-    .sort((a, b) => a.priority - b.priority)
-    .slice(0, 3);
+interface Shortage {
+  id: string;
+  name: string;
+  /** 还差（最小单位）。 */
+  deficit: number;
+  /** 当前每小时产出（最小单位）。 */
+  rate: number;
+  hours: number;
+}
 
-  return {
-    nextSteps,
-    mainDisciples,
-    buildings,
-    income,
-    spending: {
-      items: spendingItems,
-      note: '灵石优先顺序：演武场 → 主力突破 → 装备配齐 → 祭炼到八重 → 其他',
-    },
-    badgeCount,
-  };
+function idleCount(state: AdvisorState): number {
+  return state.disciples.filter((disciple) => disciple.assignment === 'idle' && disciple.journey?.status !== 'active')
+    .length;
+}
+
+/** 岗位：有空位（或不限人数且有闲置弟子）时，补满后每小时多多少、缺口要多久。 */
+function postTip(state: AdvisorState, short: Shortage): AdvisorTip | null {
+  const output = POST_OUTPUT[short.id];
+  if (output === undefined) return null;
+  const post = state.assignments.find((item) => item.id === output.post);
+  if (post === undefined) return null;
+  const idle = idleCount(state);
+  // 不限人数的岗位：有闲置弟子就按闲置人数，否则建议从别处调 1 人。
+  const room = post.maxCount === null ? Math.max(1, idle) : Math.max(0, post.maxCount - (post.currentCount ?? 0));
+  if (room <= 0) return null;
+  const added = room * output.perHour;
+  const hours = short.deficit / (short.rate + added);
+  const head =
+    post.maxCount !== null
+      ? `${output.postName}还空 ${String(room)} 个位置`
+      : idle > 0
+        ? `派 ${String(room)} 名闲置弟子去${output.postName}`
+        : `再调 1 名弟子去${output.postName}`;
+  return tip(
+    `goal:${short.id}:post`,
+    head,
+    `每小时 +${formatAmount(added)} ${short.name}，缺口${formatHours(short.hours)} → ${formatHours(hours)}`,
+    { kind: 'scroll', target: 'disciple-title' },
+  );
+}
+
+/** 灵矿 / 聚灵阵升一级：每小时多多少、花多少、几天回本（灵矿）。 */
+function productionBuildingTip(state: AdvisorState, short: Shortage): AdvisorTip | null {
+  const defId = short.id === 'spiritStone' ? 'missionHall' : short.id === 'spiritualEnergy' ? 'spiritualArray' : null;
+  if (defId === null) return null;
+  const building = state.buildings.find((item) => item.defId === defId);
+  if (building === undefined || building.level >= building.maxLevel) return null;
+  const next = building.level + 1;
+  const gain =
+    defId === 'missionHall'
+      ? (BASE_STONE_RATE * missionHallLevelGainBp(next)) / 10_000
+      : (BASE_ENERGY_RATE * SPIRITUAL_ARRAY_GAIN_BP) / 10_000;
+  const parts = [`每小时 +${formatAmount(gain)} ${short.name}`];
+  if (building.upgradeCost !== null) {
+    parts.push(`花 ${costText(state, building.upgradeCost)}`);
+    const stoneCost = Number(building.upgradeCost.spiritStone ?? 0);
+    if (defId === 'missionHall' && stoneCost > 0) parts.push(`约 ${String(Math.ceil(stoneCost / gain / 24))} 天回本`);
+  }
+  if (!building.canUpgrade && building.blockedReason !== null) parts.push(`暂不能升：${building.blockedReason}`);
+  return tip(`goal:${short.id}:building`, `${building.name}升到 ${String(next)} 级`, parts.join('，'), {
+    kind: 'scroll',
+    target: 'building-title',
+  });
+}
+
+/** 灵石缺口：坊市卖掉这次晋升用不到的药材 / 矿石。 */
+function sellMaterialsTip(state: AdvisorState, short: Shortage, need: (id: string) => number): AdvisorTip | null {
+  // 补满缺口需要卖多少材料（展示单位，向上取整）。
+  let wanted = Math.ceil(short.deficit / SHOP_SELL_PRICE);
+  const sold: string[] = [];
+  let total = 0;
+  for (const id of SHOP_MATERIALS) {
+    const spare = Math.floor(Math.max(0, balanceOf(state, id) - need(id)) / UNIT);
+    const amount = Math.min(spare, wanted);
+    if (amount <= 0) continue;
+    sold.push(`${String(amount)} ${resourceName(state, id)}`);
+    total += amount;
+    wanted -= amount;
+  }
+  if (total <= 0) return null;
+  const gained = total * SHOP_SELL_PRICE;
+  const cover = Math.min(1, gained / short.deficit);
+  return tip(
+    'goal:spiritStone:sell',
+    `坊市卖掉用不到的 ${sold.join('、')}`,
+    `立得 ${formatAmount(gained)} 灵石，补上缺口的 ${String(Math.round(cover * 100))}%`,
+    { kind: 'panel', panel: 'shop' },
+    cover >= KEY_COVER_RATIO,
+  );
+}
+
+/** 药材 / 矿石缺口：灵石有富余时坊市直接买齐。 */
+function buyMaterialTip(state: AdvisorState, short: Shortage, need: (id: string) => number): AdvisorTip | null {
+  if (!SHOP_MATERIALS.includes(short.id)) return null;
+  const cost = Math.ceil(short.deficit / UNIT) * SHOP_BUY_PRICE;
+  const spareStone = balanceOf(state, 'spiritStone') - need('spiritStone');
+  if (spareStone < cost) return null;
+  return tip(
+    `goal:${short.id}:buy`,
+    `坊市直接买齐 ${formatDeficit(short.deficit)} ${short.name}`,
+    `花约 ${formatAmount(cost)} 灵石（灵石富余 ${formatAmount(spareStone)}）`,
+    { kind: 'panel', panel: 'shop' },
+    true,
+  );
+}
+
+/** 玄铁 / 神木：坊市互换（2 神木 = 1 玄铁），外加讨伐、赌石的来源。 */
+function rareTips(state: AdvisorState, short: Shortage, need: (id: string) => number): AdvisorTip[] {
+  const list: AdvisorTip[] = [];
+  if (short.id === 'xuantie') {
+    const spareShenmu = Math.floor(Math.max(0, balanceOf(state, 'shenmu') - need('shenmu')) / UNIT);
+    const amount = Math.min(Math.floor(spareShenmu / SHOP_SHENMU_PER_XUANTIE), Math.ceil(short.deficit / UNIT));
+    if (amount > 0) {
+      const cover = Math.min(1, (amount * UNIT) / short.deficit);
+      list.push(
+        tip(
+          'goal:xuantie:exchange',
+          `坊市用 ${String(amount * SHOP_SHENMU_PER_XUANTIE)} 神木换 ${String(amount)} 玄铁`,
+          `补上缺口的 ${String(Math.round(cover * 100))}%`,
+          { kind: 'panel', panel: 'shop' },
+          cover >= KEY_COVER_RATIO,
+        ),
+      );
+    }
+    list.push(tip('goal:xuantie:gamble', '赌坊赌石开玄铁', '用灵石 / 药材 / 矿石买石头', { kind: 'panel', panel: 'gambling' }));
+    list.push(tip('goal:xuantie:boss', '讨伐世界 Boss', '击杀奖励含玄铁', { kind: 'panel', panel: 'boss' }));
+  }
+  if (short.id === 'shenmu') {
+    const spareXuantie = Math.floor(Math.max(0, balanceOf(state, 'xuantie') - need('xuantie')) / UNIT);
+    const amount = Math.min(spareXuantie, Math.ceil(short.deficit / UNIT / SHOP_SHENMU_PER_XUANTIE));
+    if (amount > 0) {
+      list.push(
+        tip(
+          'goal:shenmu:exchange',
+          `坊市用 ${String(amount)} 玄铁换 ${String(amount * SHOP_SHENMU_PER_XUANTIE)} 神木`,
+          null,
+          { kind: 'panel', panel: 'shop' },
+        ),
+      );
+    }
+    list.push(tip('goal:shenmu:boss', '讨伐世界 Boss', '第 6 关起击杀奖励含神木', { kind: 'panel', panel: 'boss' }));
+  }
+  return list;
+}
+
+function buildGoal(state: AdvisorState): AdvisorGoal | null {
+  const upgrade = state.sectUpgrade;
+  if (upgrade === null) return null;
+  const title = `晋升${upgrade.nextLevelName}（${String(upgrade.nextLevel)} 级）`;
+  const need = (id: string): number => Number(upgrade.cost[id] ?? 0);
+
+  const lines: AdvisorGoalLine[] = [];
+  const shortages: Shortage[] = [];
+  for (const [id, amount] of Object.entries(upgrade.cost)) {
+    const required = Number(amount);
+    if (required <= 0) continue;
+    const resource = state.resources.find((item) => item.id === id);
+    const name = resourceName(state, id);
+    const have = Number(resource?.balance ?? 0);
+    const label = `${name} ${formatAmount(required)}`;
+    if (have >= required) {
+      lines.push({ id: `res:${id}`, label, status: 'done', detail: '已够', bottleneck: false, action: null });
+      continue;
+    }
+    const deficit = required - have;
+    const capacity = Number(resource?.capacity ?? 0);
+    if (capacity > 0 && capacity < required) {
+      lines.push({
+        id: `res:${id}`,
+        label,
+        status: 'blocked',
+        detail: `仓库上限只有 ${formatAmount(capacity)}，存不下`,
+        bottleneck: false,
+        action: { kind: 'scroll', target: 'building-title' },
+      });
+      continue;
+    }
+    const rate = Math.max(0, Number(resource?.ratePerHour ?? 0));
+    const hours = rate > 0 ? deficit / rate : Number.POSITIVE_INFINITY;
+    shortages.push({ id, name, deficit, rate, hours });
+    lines.push({
+      id: `res:${id}`,
+      label,
+      status: rate > 0 ? 'short' : 'blocked',
+      detail:
+        rate > 0
+          ? `还差 ${formatDeficit(deficit)}，每小时 +${formatAmount(rate)}，${formatHours(hours)}`
+          : `还差 ${formatDeficit(deficit)}，目前没有产出`,
+      bottleneck: false,
+      action: null,
+    });
+  }
+
+  shortages.sort((a, b) => b.hours - a.hours);
+  const slowest = shortages[0];
+  if (slowest !== undefined) {
+    const line = lines.find((item) => item.id === `res:${slowest.id}`);
+    if (line !== undefined) line.bottleneck = true;
+  }
+
+  const unmet = upgrade.requirements.filter((req) => !req.met);
+  for (const [index, req] of upgrade.requirements.entries()) {
+    lines.push({
+      id: `req:${String(index)}`,
+      label: req.label,
+      status: req.met ? 'done' : 'blocked',
+      detail: req.met ? '已达成' : '未达成',
+      bottleneck: false,
+      action: req.met
+        ? null
+        : { kind: 'scroll', target: req.label.includes('弟子') ? 'disciple-title' : 'building-title' },
+    });
+  }
+
+  const tips: AdvisorTip[] = [];
+  if (upgrade.canUpgrade) {
+    tips.push(tip('goal:ready', '条件已齐，现在就能晋升', null, { kind: 'scroll', target: 'sect-upgrade-title' }, true));
+  }
+  // 只给最慢的两种资源出办法（瓶颈在前）。
+  for (const short of shortages.slice(0, 2)) {
+    const candidates = [
+      short.id === 'spiritStone' ? sellMaterialsTip(state, short, need) : null,
+      buyMaterialTip(state, short, need),
+      postTip(state, short),
+      productionBuildingTip(state, short),
+      ...rareTips(state, short, need),
+    ];
+    for (const item of candidates) if (item !== null) tips.push(item);
+  }
+
+  const summaryParts: string[] = [];
+  if (upgrade.canUpgrade) {
+    summaryParts.push('条件已齐，可以晋升');
+  } else {
+    if (slowest !== undefined) {
+      summaryParts.push(
+        Number.isFinite(slowest.hours)
+          ? `照现在的产出，资源${formatHours(slowest.hours)}凑齐，瓶颈是${slowest.name}`
+          : `${slowest.name}目前没有产出，光靠等凑不齐`,
+      );
+    }
+    if (unmet.length > 0) summaryParts.push(`还有 ${String(unmet.length)} 个条件未达成`);
+    if (summaryParts.length === 0) summaryParts.push('资源已够，还差条件');
+  }
+
+  return { title, ready: upgrade.canUpgrade, summary: summaryParts.join('；'), lines, tips };
+}
+
+/** 演武场：讨伐 / 镇妖塔 / 秘境战斗力每级 +10%。 */
+function buildArena(state: AdvisorState): AdvisorTip | null {
+  const arena = state.buildings.find((item) => item.defId === 'arenaHall');
+  if (arena === undefined || arena.level >= arena.maxLevel) return null;
+  const parts = ['讨伐 / 镇妖塔 / 秘境战斗力 +10%'];
+  if (arena.upgradeCost !== null) parts.push(`花 ${costText(state, arena.upgradeCost)}`);
+  if (!arena.canUpgrade && arena.blockedReason !== null) parts.push(`暂不能升：${arena.blockedReason}`);
+  return tip(
+    'arena',
+    `${arena.name}升到 ${String(arena.level + 1)} 级`,
+    parts.join('，'),
+    { kind: 'scroll', target: 'building-title' },
+    arena.canUpgrade,
+  );
+}
+
+/** 算出宗门参谋的全部内容（纯函数）。 */
+export function buildAdvisor(input: AdvisorInput): AdvisorView {
+  const { state, equipment } = input;
+  const nowMs = Date.parse(state.serverNow);
+  const gear = equipment !== null && equipment.unlocked ? equipment : null;
+
+  const goal = buildGoal(state);
+  const arena = buildArena(state);
+  const mains = buildMains(state, gear, nowMs);
+  const alert =
+    (goal?.tips.some((item) => item.key) ?? false) ||
+    (arena?.key ?? false) ||
+    mains.some((main) => main.tips.some((item) => item.key));
+  return { goal, arena, mains, alert };
 }
