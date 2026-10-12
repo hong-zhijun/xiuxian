@@ -152,9 +152,11 @@ describe('各系统接入', () => {
   });
 
   it('丹心：每颗聚气丹修为随境界提高，服到满所需颗数随之减少', () => {
-    expect(cultivationPillGainOf('combat', 'spiritTransformation')).toBe(CULTIVATION_PILL_GAIN);
+    // 元婴及以下修炼倍率 ×1，只看丹心加成；化神起再乘修炼倍率（化神 ×2）。
+    expect(cultivationPillGainOf('combat', 'nascentSoul')).toBe(CULTIVATION_PILL_GAIN);
     expect(cultivationPillGainOf('pillAffinity', 'qiRefining')).toBe(144);
-    expect(cultivationPillGainOf('pillAffinity', 'spiritTransformation')).toBe(180);
+    expect(cultivationPillGainOf('pillAffinity', 'nascentSoul')).toBe(168);
+    expect(cultivationPillGainOf('pillAffinity', 'spiritTransformation')).toBe(360);
     expect(cultivationPillsToFull(0, 360)).toBe(3);
     expect(cultivationPillsToFull(0, 360, 180)).toBe(2);
   });

@@ -116,9 +116,11 @@ export const REALMS: readonly RealmDef[] = [
 
 /**
  * 修炼倍率（按 REALMS 下标）：挂机修炼速度、历练修为、聚气丹 / 凝元丹每颗修为都乘它。
- * 前五个境界 ×1（与扩充前完全一致），炼虚起 ×2 / ×3 / ×4 / ×5。
+ * 炼气～元婴 ×1；化神 ×2、炼虚 ×5、合体 ×8、大乘 ×12、渡劫 ×16。
+ * 化神后期加速：原来化神仍是 ×1，中 / 后期一层要一个多月，之后每层 1～3 个月；
+ * 调整后同一名弟子化神约 1～3 周一层，炼虚到渡劫平滑递增到约 5 周一层（门槛不变）。
  */
-export const REALM_CULTIVATION_MULTIPLIER: readonly number[] = [1, 1, 1, 1, 1, 2, 3, 4, 5];
+export const REALM_CULTIVATION_MULTIPLIER: readonly number[] = [1, 1, 1, 1, 2, 5, 8, 12, 16];
 
 /** 境界的修炼倍率；未知境界按 1。 */
 export function realmCultivationMultiplier(realmId: string): number {

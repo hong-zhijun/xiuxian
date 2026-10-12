@@ -350,7 +350,7 @@ export function journeyBaseReward(input: JourneyRewardInput): JourneyBaseReward 
   if (cultivationBp > 0) {
     cultivation = Math.floor((cultivation * (BP + cultivationBp)) / BP);
   }
-  // 境界扩充：历练修为同样乘修炼倍率（前五个境界 ×1）。
+  // 境界扩充：历练修为同样乘修炼倍率（炼气～元婴 ×1）。
   cultivation *= realmCultivationMultiplier(input.realmId);
 
   const talentResource = JOURNEY_GATHERING_TALENT_RESOURCES[input.talent];

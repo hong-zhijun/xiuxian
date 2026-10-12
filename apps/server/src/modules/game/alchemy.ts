@@ -277,7 +277,7 @@ export function cultivationPillGainOf(
   base: number = CULTIVATION_PILL_GAIN,
 ): number {
   const bp = talentBonusBp(talent, realmId, 'pillAffinity');
-  // 境界扩充：每颗修为再乘修炼倍率（前五个境界 ×1），否则后期修为丹形同作废。
+  // 境界扩充：每颗修为再乘修炼倍率（炼气～元婴 ×1），否则后期修为丹形同作废。
   return Math.floor((base * (10_000 + bp)) / 10_000) * realmCultivationMultiplier(realmId);
 }
 
