@@ -164,6 +164,53 @@ const chartGeometry = computed(() => {
   };
 });
 
+/* ---------- K 线悬停：时间与开高低收 ---------- */
+
+/** 鼠标 / 手指所在的那根 K 线下标；null = 不显示。 */
+const hoverIndex = ref<number | null>(null);
+
+/** 按横坐标找最近的一根（SVG 拉伸铺满宽度，横向是线性的）。 */
+function onChartPointer(event: PointerEvent): void {
+  const count = chart.value?.candles.length ?? 0;
+  const target = event.currentTarget as SVGSVGElement | null;
+  if (count === 0 || target === null) return;
+  const rect = target.getBoundingClientRect();
+  if (rect.width <= 0) return;
+  const ratio = (event.clientX - rect.left) / rect.width;
+  hoverIndex.value = Math.min(count - 1, Math.max(0, Math.floor(ratio * count)));
+}
+
+/** 鼠标移出就收起；手指抬起时保留（手机上点一下要能看清），换股票 / 换区间时清掉。 */
+function clearChartHover(event: PointerEvent): void {
+  if (event.pointerType === 'touch') return;
+  hoverIndex.value = null;
+}
+
+const hoverInfo = computed(() => {
+  const geometry = chartGeometry.value;
+  const candles = chart.value?.candles ?? [];
+  const index = hoverIndex.value;
+  if (geometry === null || index === null) return null;
+  const candle = candles[index];
+  const bar = geometry.bars[index];
+  if (candle === undefined || bar === undefined) return null;
+  const change = candle.o > 0 ? ((candle.c - candle.o) / candle.o) * 100 : 0;
+  const leftPct = (bar.x / CHART_W) * 100;
+  return {
+    x: bar.x,
+    // 跨天的区间（1 天 / 7 天）带上日期才分得清。
+    time: range.value === '1h' || range.value === '6h' ? timeText(candle.t) : dateTimeText(new Date(candle.t).toISOString()),
+    open: candle.o,
+    high: candle.h,
+    low: candle.l,
+    close: candle.c,
+    change,
+    leftPct,
+    /** 靠右半边时提示框放到线的左边，免得出框。 */
+    flip: leftPct > 55,
+  };
+});
+
 /* ---------- 下单 ---------- */
 
 const disabled = computed(() => submitting.value || props.busy === true);
@@ -439,6 +486,7 @@ async function refresh(silent = false): Promise<void> {
 }
 
 watch([selectedId, range], () => {
+  hoverIndex.value = null;
   void loadChart();
 });
 
@@ -557,7 +605,16 @@ onUnmounted(() => {
         </div>
 
         <div class="market-chart">
-          <svg v-if="chartGeometry" :viewBox="`0 0 ${CHART_W} ${CHART_H}`" preserveAspectRatio="none" role="img" :aria-label="`${selected.name} K 线`">
+          <svg
+            v-if="chartGeometry"
+            :viewBox="`0 0 ${CHART_W} ${CHART_H}`"
+            preserveAspectRatio="none"
+            role="img"
+            :aria-label="`${selected.name} K 线`"
+            @pointermove="onChartPointer"
+            @pointerdown="onChartPointer"
+            @pointerleave="clearChartHover"
+          >
             <line
               :x1="0"
               :x2="CHART_W"
@@ -570,7 +627,28 @@ onUnmounted(() => {
               <rect :x="bar.bodyX" :y="bar.bodyY" :width="bar.bodyW" :height="bar.bodyH" :fill="bar.color" />
             </g>
             <polyline v-if="chartGeometry.ma" :points="chartGeometry.ma" class="market-chart-ma" />
+            <line
+              v-if="hoverInfo"
+              :x1="hoverInfo.x"
+              :x2="hoverInfo.x"
+              :y1="0"
+              :y2="CHART_H"
+              class="market-chart-cursor"
+            />
           </svg>
+          <div
+            v-if="hoverInfo"
+            class="market-chart-tip"
+            :class="{ 'is-flip': hoverInfo.flip }"
+            :style="{ left: `${hoverInfo.leftPct}%` }"
+          >
+            <strong>{{ hoverInfo.time }}</strong>
+            <span>收 {{ price(hoverInfo.close) }}
+              <em :class="toneOf(hoverInfo.change)">{{ signed(hoverInfo.change) }}%</em>
+            </span>
+            <span>开 {{ price(hoverInfo.open) }}</span>
+            <span>高 {{ price(hoverInfo.high) }} · 低 {{ price(hoverInfo.low) }}</span>
+          </div>
           <p v-else class="market-empty">K 线加载中…</p>
           <div v-if="chartGeometry" class="market-chart-axis">
             <span>高 {{ price(chartGeometry.hi) }}</span>
@@ -1005,8 +1083,14 @@ onUnmounted(() => {
   color: var(--gold-bright, #ead19a);
 }
 
+.market-chart {
+  position: relative;
+}
+
 .market-chart svg {
   display: block;
+  touch-action: pan-y;
+  cursor: crosshair;
   width: 100%;
   height: 200px;
   border: 1px solid rgba(202, 169, 106, 0.12);
@@ -1024,6 +1108,47 @@ onUnmounted(() => {
   fill: none;
   stroke: #e0b95a;
   stroke-width: 1.4;
+}
+
+.market-chart-cursor {
+  stroke: rgba(234, 209, 154, 0.55);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+
+/* 悬停提示：贴着竖线，靠右半边时翻到线的左侧。 */
+.market-chart-tip {
+  position: absolute;
+  top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px;
+  margin-left: 8px;
+  border: 1px solid rgba(202, 169, 106, 0.35);
+  border-radius: 3px;
+  background: rgba(6, 16, 13, 0.94);
+  color: #c9d6cf;
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.market-chart-tip.is-flip {
+  margin-left: -8px;
+  transform: translateX(-100%);
+}
+
+.market-chart-tip strong {
+  color: var(--gold-bright, #ead19a);
+  font-weight: 500;
+}
+
+.market-chart-tip em {
+  margin-left: 4px;
+  font-style: normal;
 }
 
 .market-chart-axis {
