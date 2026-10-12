@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue';
+import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue';
 import type { CSSProperties } from 'vue';
 
 import type {
@@ -314,8 +314,8 @@ function confirmAttack(): void {
   void submit();
 }
 
-async function submit(): Promise<void> {
-  if (!canAttack.value) return;
+async function submit(): Promise<boolean> {
+  if (!canAttack.value) return false;
   submitting.value = true;
   try {
     const data = await attackWorldBoss(selected.value);
@@ -348,10 +348,47 @@ async function submit(): Promise<void> {
     }
     if (data.result.nextStage !== null) parts.push(`第 ${String(data.result.nextStage)} 关已降临`);
     emit('notify', data.result.members.every((member) => member.outcome === 'severe') ? 'warning' : 'success', '讨伐', parts.join(' · '));
+    return true;
   } catch (error) {
     emit('notify', 'warning', '讨伐', error instanceof Error ? error.message : '出手失败，请稍后再试');
+    return false;
   } finally {
     submitting.value = false;
+  }
+}
+
+/* ---------- 自动讨伐：一键选人 → 等冷却 → 出手，循环到没人可出战（受伤 / 已出战 3 次）为止 ---------- */
+
+const autoRunning = ref(false);
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+async function autoAttack(): Promise<void> {
+  if (autoRunning.value) {
+    autoRunning.value = false;
+    return;
+  }
+  autoRunning.value = true;
+  let rounds = 0;
+  try {
+    while (autoRunning.value) {
+      await nextTick();
+      autoPick();
+      if (selected.value.length === 0) break;
+      while (autoRunning.value && cooldown.value > 0 && remaining.value > 0) await sleep(500);
+      if (!autoRunning.value || !canAttack.value) break;
+      if (!(await submit())) break;
+      rounds += 1;
+    }
+  } finally {
+    const stoppedByUser = !autoRunning.value;
+    autoRunning.value = false;
+    selected.value = [];
+    if (!stoppedByUser) {
+      emit('notify', 'success', '自动讨伐', `已结束，共出手 ${String(rounds)} 次（没有可出战的弟子或已不能出手）`);
+    }
   }
 }
 
@@ -366,6 +403,7 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
+  autoRunning.value = false;
   stopCountdown();
   document.removeEventListener('click', onDocumentClick);
   if (hitTimer !== null) window.clearTimeout(hitTimer);
@@ -590,6 +628,14 @@ const RULES_TEXT = `讨伐 · 玩法说明
       <button class="boss-attack-button" type="button" :disabled="!canAttack" @click="onAttackClick">
         <span v-if="submitting">讨伐中…</span>
         <span v-else>{{ attackButtonText }}</span>
+      </button>
+      <button
+        class="boss-attack-button"
+        type="button"
+        :disabled="!autoRunning && (!(panel?.attackable ?? false) || remaining <= 0 || attackLimitReached || busy === true)"
+        @click="autoAttack"
+      >
+        {{ autoRunning ? '停止自动讨伐' : '自动讨伐（受伤或出战 3 次的弟子不上）' }}
       </button>
       <p v-if="panel && panel.dailyAttackLimit > 0" class="boss-attack-count">
         今日出手 {{ panel.attacksToday }} / {{ panel.dailyAttackLimit }}
