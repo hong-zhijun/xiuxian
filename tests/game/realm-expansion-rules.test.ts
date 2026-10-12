@@ -41,7 +41,7 @@ describe('境界扩充（计划第 1 节）', () => {
     expect(nextStageOf('tribulation', 3)).toBeNull();
   });
 
-  it('门槛逐层递增；等效挂机时长（门槛 ÷ 修炼倍率）从化神后期起不回落', () => {
+  it('门槛逐层递增；等效挂机时长（门槛 ÷ 修炼倍率）境界内不回落，化神起各境界平均逐境界变长', () => {
     const thresholds = REALMS.flatMap((realm, index) =>
       realm.stages
         .filter((stage) => stage.requiredCultivation !== null)
@@ -50,14 +50,24 @@ describe('境界扩充（计划第 1 节）', () => {
     for (let index = 1; index < thresholds.length; index += 1) {
       expect(thresholds[index]!.value).toBeGreaterThanOrEqual(thresholds[index - 1]!.value);
     }
-    const fromSpirit = thresholds.slice(14);
-    for (let index = 1; index < fromSpirit.length; index += 1) {
-      expect(fromSpirit[index]!.effective).toBeGreaterThanOrEqual(fromSpirit[index - 1]!.effective);
+    // 跨境界时倍率一步抬高，下一境界初期可以比上一境界后期略快（如化神后期 → 炼虚初期），
+    // 所以只要求：同一境界内不回落；化神起每个境界的平均等效时长比上一个境界长。
+    const averages = REALMS.map((realm, index) => {
+      const effective = realm.stages
+        .filter((stage) => stage.requiredCultivation !== null)
+        .map((stage) => stage.requiredCultivation! / REALM_CULTIVATION_MULTIPLIER[index]!);
+      for (let stage = 1; stage < effective.length; stage += 1) {
+        expect(effective[stage]!).toBeGreaterThanOrEqual(effective[stage - 1]!);
+      }
+      return effective.reduce((sum, value) => sum + value, 0) / effective.length;
+    });
+    for (let index = 5; index < averages.length; index += 1) {
+      expect(averages[index]!).toBeGreaterThan(averages[index - 1]!);
     }
   });
 
-  it('修炼倍率、天赋系数、破境灵气：前五个境界与扩充前完全一致', () => {
-    expect(REALM_CULTIVATION_MULTIPLIER).toEqual([1, 1, 1, 1, 1, 2, 3, 4, 5]);
+  it('修炼倍率（化神起加速）、天赋系数、破境灵气', () => {
+    expect(REALM_CULTIVATION_MULTIPLIER).toEqual([1, 1, 1, 1, 2, 5, 8, 12, 16]);
     expect(TALENT_REALM_MULTIPLIER_BP).toHaveLength(9);
     expect(talentBonusBp('combat', 'tribulation')).toBe(3_500);
     expect(breakthroughEnergyCost('qiRefining', 1)).toBe(20_000);
@@ -77,16 +87,20 @@ describe('境界扩充（计划第 1 节）', () => {
       talent: 'combat',
     };
     const spirit = cultivationRatePerHour(GAME_CONFIG_CONTENT, { ...disciple, realmId: 'spiritTransformation' });
-    expect(cultivationRatePerHour(GAME_CONFIG_CONTENT, { ...disciple, realmId: 'voidRefinement' })).toBe(spirit * 2);
-    expect(cultivationRatePerHour(GAME_CONFIG_CONTENT, { ...disciple, realmId: 'tribulation' })).toBe(spirit * 5);
+    const nascent = cultivationRatePerHour(GAME_CONFIG_CONTENT, { ...disciple, realmId: 'nascentSoul' });
+    expect(spirit).toBe(nascent * 2);
+    expect(cultivationRatePerHour(GAME_CONFIG_CONTENT, { ...disciple, realmId: 'voidRefinement' })).toBe(nascent * 5);
+    expect(cultivationRatePerHour(GAME_CONFIG_CONTENT, { ...disciple, realmId: 'tribulation' })).toBe(nascent * 16);
     expect(realmCultivationMultiplier('unknown')).toBe(1);
 
-    expect(cultivationPillGainOf('combat', 'spiritTransformation')).toBe(CULTIVATION_PILL_GAIN);
-    expect(cultivationPillGainOf('combat', 'mahayana')).toBe(CULTIVATION_PILL_GAIN * 4);
+    expect(cultivationPillGainOf('combat', 'nascentSoul')).toBe(CULTIVATION_PILL_GAIN);
+    expect(cultivationPillGainOf('combat', 'spiritTransformation')).toBe(CULTIVATION_PILL_GAIN * 2);
+    expect(cultivationPillGainOf('combat', 'mahayana')).toBe(CULTIVATION_PILL_GAIN * 12);
 
     const journeyInput = { direction: 'daoSeeking' as const, durationSeconds: 7_200, aptitude: 50, talent: 'combat', combatPower: 0, luck: 50, physique: 50 };
-    const base = journeyBaseReward({ ...journeyInput, realmId: 'spiritTransformation' })!.cultivation;
-    expect(journeyBaseReward({ ...journeyInput, realmId: 'bodyIntegration' })!.cultivation).toBe(base * 3);
+    const base = journeyBaseReward({ ...journeyInput, realmId: 'nascentSoul' })!.cultivation;
+    expect(journeyBaseReward({ ...journeyInput, realmId: 'spiritTransformation' })!.cultivation).toBe(base * 2);
+    expect(journeyBaseReward({ ...journeyInput, realmId: 'bodyIntegration' })!.cultivation).toBe(base * 8);
   });
 });
 

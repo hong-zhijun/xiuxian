@@ -349,7 +349,7 @@ export function cultivationRatePerHour(
   // 天赋重构：悟道在藏经阁加成之后再 ×(1 + 加成)，加成随境界提高。
   const talentBp = talentBonusBp(disciple.talent, disciple.realmId, 'cultivation');
   const withTalent = talentBp > 0 ? Math.floor((result * (10_000 + talentBp)) / 10_000) : result;
-  // 境界扩充：最后乘修炼倍率（炼虚起 ×2～×5；前五个境界 ×1，结果与扩充前一致）。
+  // 境界扩充：最后乘修炼倍率（化神起 ×2～×16，炼气～元婴 ×1；见 REALM_CULTIVATION_MULTIPLIER）。
   return withTalent * realmCultivationMultiplier(disciple.realmId);
 }
 
