@@ -510,18 +510,18 @@ import {
   ARENA_RECORD_KEEP_DAYS,
   ARENA_SETTLE_HOUR,
   ARENA_UNLOCK_SECT_LEVEL,
+  ARENA_SWISS_ROUNDS,
   ARENA_WIN_POINTS,
   adjustTeamLineup,
   applyHandicap,
-  arenaCrossPairs,
   arenaDateKeyBefore,
   arenaFightBlockReason,
   arenaHandicap,
   arenaHourOf,
-  arenaIndividualOutcome,
-  arenaRoundLayers,
   arenaSeasonId,
   arenaSeasonRange,
+  arenaSwissPair,
+  arenaWeightedOutcome,
   autoSelectLineup,
   calculateTeamPowerCap,
   dailyIndividualReward,
@@ -13536,43 +13536,57 @@ async function settleArenaDay(db: D1Database, now: number, dateKey: string): Pro
     individualStats.set(entrant.disciple.id, { points: 0, wins: 0, losses: 0, damage: 0 });
   }
   const individualMatches: NewArenaIndividualMatch[] = [];
-  for (const [i, j] of arenaCrossPairs(individualEntrants.map((entrant) => entrant.sect.id))) {
-    const x = individualEntrants[i]!;
-    const y = individualEntrants[j]!;
-    const duel = simulateArenaDuel({
-      fighterA: applyHandicap(x.fighter, arenaHandicap(x.power, y.power)),
-      fighterB: applyHandicap(y.fighter, arenaHandicap(y.power, x.power)),
-      random: Math.random,
-    });
-    const winner = duel.winnerId === null ? null : duel.winnerId === x.fighter.id ? 'a' : 'b';
-    const outcome = arenaIndividualOutcome(winner);
-    const statsX = individualStats.get(x.disciple.id)!;
-    const statsY = individualStats.get(y.disciple.id)!;
-    statsX.points += outcome.a.points;
-    statsX.wins += outcome.a.wins;
-    statsX.losses += outcome.a.losses;
-    statsX.damage += duel.fighterADamage;
-    statsY.points += outcome.b.points;
-    statsY.wins += outcome.b.wins;
-    statsY.losses += outcome.b.losses;
-    statsY.damage += duel.fighterBDamage;
-    individualMatches.push({
-      id: crypto.randomUUID(),
-      dateKey,
-      fighterAId: x.fighter.id,
-      fighterAName: x.fighter.name,
-      fighterASectId: x.sect.id,
-      fighterAPower: Math.floor(x.power),
-      fighterBId: y.fighter.id,
-      fighterBName: y.fighter.name,
-      fighterBSectId: y.sect.id,
-      fighterBPower: Math.floor(y.power),
-      winnerId: duel.winnerId,
-      rounds: JSON.stringify(duel.rounds),
-      fighterAHpPct: duel.fighterAHpPct,
-      fighterBHpPct: duel.fighterBHpPct,
-      now,
-    });
+  const indPlayed = new Set<string>();
+  for (let round = 1; round <= ARENA_SWISS_ROUNDS; round += 1) {
+    const standings = individualEntrants.map((entrant, index) => ({
+      index,
+      groupId: entrant.sect.id,
+      ...individualStats.get(entrant.disciple.id)!,
+    }));
+    const pairs = arenaSwissPair(standings, indPlayed);
+    if (pairs.length === 0) break;
+    for (const [i, j] of pairs) {
+      const lo = Math.min(i, j);
+      const hi = Math.max(i, j);
+      indPlayed.add(`${String(lo)}:${String(hi)}`);
+      const x = individualEntrants[i]!;
+      const y = individualEntrants[j]!;
+      const duel = simulateArenaDuel({
+        fighterA: applyHandicap(x.fighter, arenaHandicap(x.power, y.power)),
+        fighterB: applyHandicap(y.fighter, arenaHandicap(y.power, x.power)),
+        random: Math.random,
+      });
+      const winner = duel.winnerId === null ? null : duel.winnerId === x.fighter.id ? 'a' : 'b';
+      const outcome = arenaWeightedOutcome(winner, x.power, y.power);
+      const statsX = individualStats.get(x.disciple.id)!;
+      const statsY = individualStats.get(y.disciple.id)!;
+      statsX.points += outcome.a.points;
+      statsX.wins += outcome.a.wins;
+      statsX.losses += outcome.a.losses;
+      statsX.damage += duel.fighterADamage;
+      statsY.points += outcome.b.points;
+      statsY.wins += outcome.b.wins;
+      statsY.losses += outcome.b.losses;
+      statsY.damage += duel.fighterBDamage;
+      individualMatches.push({
+        id: crypto.randomUUID(),
+        dateKey,
+        round,
+        fighterAId: x.fighter.id,
+        fighterAName: x.fighter.name,
+        fighterASectId: x.sect.id,
+        fighterAPower: Math.floor(x.power),
+        fighterBId: y.fighter.id,
+        fighterBName: y.fighter.name,
+        fighterBSectId: y.sect.id,
+        fighterBPower: Math.floor(y.power),
+        winnerId: duel.winnerId,
+        rounds: JSON.stringify(duel.rounds),
+        fighterAHpPct: duel.fighterAHpPct,
+        fighterBHpPct: duel.fighterBHpPct,
+        now,
+      });
+    }
   }
   statements.push(...insertArenaIndividualMatchStatements(individualMatches));
 
@@ -13629,7 +13643,7 @@ async function settleArenaDay(db: D1Database, now: number, dateKey: string): Pro
     );
   }
 
-  // 团队赛：宗门两两车轮战（没有平局）。赢方弟子带着剩余血量留场，输方出局，下一人满血上场。
+  // 团队赛：瑞士轮车轮战（没有平局）。赢方弟子带着剩余血量留场，输方出局，下一人满血上场。
   const teamEntries = teamPlans.map((plan) => {
     const members = plan.ids.map((id) => {
       const disciple = disciplesById.get(id)!;
@@ -13641,7 +13655,20 @@ async function settleArenaDay(db: D1Database, now: number, dateKey: string): Pro
   for (const team of teamEntries) {
     teamStats.set(team.sect.id, { points: 0, wins: 0, losses: 0, kills: 0 });
   }
-  for (const [i, j] of arenaCrossPairs(teamEntries.map((team) => team.sect.id))) {
+  const teamPlayed = new Set<string>();
+  for (let teamRound = 1; teamRound <= ARENA_SWISS_ROUNDS; teamRound += 1) {
+    const teamStandings = teamEntries.map((team, index) => ({
+      index,
+      groupId: team.sect.id,
+      ...teamStats.get(team.sect.id)!,
+      damage: 0,
+    }));
+    const teamPairs = arenaSwissPair(teamStandings, teamPlayed);
+    if (teamPairs.length === 0) break;
+    for (const [i, j] of teamPairs) {
+      const lo = Math.min(i, j);
+      const hi = Math.max(i, j);
+      teamPlayed.add(`${String(lo)}:${String(hi)}`);
     const a = teamEntries[i]!;
     const b = teamEntries[j]!;
     const teamHandicapA = arenaHandicap(a.power, b.power);
@@ -13663,7 +13690,6 @@ async function settleArenaDay(db: D1Database, now: number, dateKey: string): Pro
         startHpB: carriedB,
         random: Math.random,
       });
-      // 没有平局：剩余血量百分比相同就比绝对剩余血量，还相同则掷点。
       const xWins =
         duel.winnerId !== null
           ? duel.winnerId === x.fighter.id
@@ -13708,6 +13734,7 @@ async function settleArenaDay(db: D1Database, now: number, dateKey: string): Pro
       insertArenaTeamMatchStatement({
         id: crypto.randomUUID(),
         dateKey,
+        round: teamRound,
         sectAId: a.sect.id,
         sectAName: a.sect.name,
         sectBId: b.sect.id,
@@ -13719,6 +13746,7 @@ async function settleArenaDay(db: D1Database, now: number, dateKey: string): Pro
         now,
       }),
     );
+    }
   }
 
   const teamRanking = sortArenaTeams(teamEntries.map((team) => ({ team, id: team.sect.id, ...teamStats.get(team.sect.id)! })));
@@ -13971,10 +13999,9 @@ export async function getArena(db: D1Database, userId: string, now: number): Pro
       repo.individualScoresOf(latest),
       repo.teamScoresOf(latest),
     ]);
-    const layers = arenaRoundLayers(matchRows.map((row) => [row.fighter_a_id, row.fighter_b_id] as const));
-    individualMatches = matchRows.map((row, index) => ({
+    individualMatches = matchRows.map((row) => ({
       id: row.id,
-      round: layers[index] ?? 1,
+      round: row.round,
       fighterA: {
         id: row.fighter_a_id,
         name: row.fighter_a_name,
@@ -13993,6 +14020,7 @@ export async function getArena(db: D1Database, userId: string, now: number): Pro
     }));
     teamMatches = teamMatchRows.map((row) => ({
       id: row.id,
+      round: row.round,
       sectA: { id: row.sect_a_id, name: row.sect_a_name, kills: Number(row.sect_a_kills) },
       sectB: { id: row.sect_b_id, name: row.sect_b_name, kills: Number(row.sect_b_kills) },
       winnerSectId: row.winner_sect_id,

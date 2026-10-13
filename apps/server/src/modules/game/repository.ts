@@ -4418,6 +4418,7 @@ export interface ArenaTeamScoreRow {
 export interface ArenaIndividualMatchRow {
   id: string;
   date_key: string;
+  round: number;
   fighter_a_id: string;
   fighter_a_name: string;
   fighter_a_sect_id: string;
@@ -4437,6 +4438,7 @@ export interface ArenaIndividualMatchRow {
 export interface ArenaTeamMatchRow {
   id: string;
   date_key: string;
+  round: number;
   sect_a_id: string;
   sect_a_name: string;
   sect_b_id: string;
@@ -4578,10 +4580,10 @@ export class ArenaRepository extends ParamRepository {
     });
   }
 
-  /** 某日个人赛战报（rowid 即对阵顺序；不含回合详情，个人赛只出对阵卡片）。 */
+  /** 某日个人赛战报（按瑞士轮轮次、rowid 排序）。 */
   async individualMatchesOf(dateKey: string): Promise<ArenaIndividualMatchRow[]> {
     return this.all<ArenaIndividualMatchRow>({
-      sql: `SELECT m.id, m.date_key,
+      sql: `SELECT m.id, m.date_key, m.round,
                    m.fighter_a_id, m.fighter_a_name, m.fighter_a_sect_id, COALESCE(sa.name, '') AS fighter_a_sect_name, m.fighter_a_power,
                    m.fighter_b_id, m.fighter_b_name, m.fighter_b_sect_id, COALESCE(sb.name, '') AS fighter_b_sect_name, m.fighter_b_power,
                    m.winner_id, m.fighter_a_hp_pct, m.fighter_b_hp_pct, m.created_at
@@ -4589,16 +4591,16 @@ export class ArenaRepository extends ParamRepository {
             LEFT JOIN sects sa ON sa.id = m.fighter_a_sect_id
             LEFT JOIN sects sb ON sb.id = m.fighter_b_sect_id
             WHERE m.date_key = ?
-            ORDER BY m.rowid ASC`,
+            ORDER BY m.round ASC, m.rowid ASC`,
       params: [dateKey],
     });
   }
 
   async teamMatchesOf(dateKey: string): Promise<ArenaTeamMatchRow[]> {
     return this.all<ArenaTeamMatchRow>({
-      sql: `SELECT id, date_key, sect_a_id, sect_a_name, sect_b_id, sect_b_name, winner_sect_id, duels,
+      sql: `SELECT id, date_key, round, sect_a_id, sect_a_name, sect_b_id, sect_b_name, winner_sect_id, duels,
                    sect_a_kills, sect_b_kills, created_at
-            FROM arena_team_matches WHERE date_key = ? ORDER BY rowid ASC`,
+            FROM arena_team_matches WHERE date_key = ? ORDER BY round ASC, rowid ASC`,
       params: [dateKey],
     });
   }
@@ -4685,6 +4687,7 @@ export function insertArenaSeasonStatement(input: {
 export interface NewArenaIndividualMatch {
   id: string;
   dateKey: string;
+  round: number;
   fighterAId: string;
   fighterAName: string;
   fighterASectId: string;
@@ -4702,20 +4705,20 @@ export interface NewArenaIndividualMatch {
 }
 
 /**
- * 个人赛战报写入：按顺序每 6 场合成一条多行 INSERT（15 列 × 6 = 90 个绑定参数，低于 D1 单语句 100 上限）。
- * 语句顺序即对阵顺序（rowid 递增），战报按它分层。
+ * 个人赛战报写入：按顺序每 6 场合成一条多行 INSERT（16 列 × 6 = 96 个绑定参数，低于 D1 单语句 100 上限）。
  */
 export function insertArenaIndividualMatchStatements(rows: readonly NewArenaIndividualMatch[]): ParameterizedQuery[] {
   const statements: ParameterizedQuery[] = [];
   const perStatement = 6;
   for (let start = 0; start < rows.length; start += perStatement) {
     const chunk = rows.slice(start, start + perStatement);
-    const placeholders = chunk.map(() => '(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').join(', ');
+    const placeholders = chunk.map(() => '(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').join(', ');
     const params: (string | number | null)[] = [];
     for (const row of chunk) {
       params.push(
         row.id,
         row.dateKey,
+        row.round,
         row.fighterAId,
         row.fighterAName,
         row.fighterASectId,
@@ -4733,7 +4736,7 @@ export function insertArenaIndividualMatchStatements(rows: readonly NewArenaIndi
     }
     statements.push({
       sql: `INSERT INTO arena_individual_matches
-              (id, date_key, fighter_a_id, fighter_a_name, fighter_a_sect_id, fighter_a_power,
+              (id, date_key, round, fighter_a_id, fighter_a_name, fighter_a_sect_id, fighter_a_power,
                fighter_b_id, fighter_b_name, fighter_b_sect_id, fighter_b_power,
                winner_id, rounds, fighter_a_hp_pct, fighter_b_hp_pct, created_at)
             VALUES ${placeholders}`,
@@ -4747,6 +4750,7 @@ export function insertArenaIndividualMatchStatements(rows: readonly NewArenaIndi
 export function insertArenaTeamMatchStatement(input: {
   id: string;
   dateKey: string;
+  round: number;
   sectAId: string;
   sectAName: string;
   sectBId: string;
@@ -4759,12 +4763,13 @@ export function insertArenaTeamMatchStatement(input: {
 }): ParameterizedQuery {
   return {
     sql: `INSERT INTO arena_team_matches
-            (id, date_key, sect_a_id, sect_a_name, sect_b_id, sect_b_name, winner_sect_id, duels,
+            (id, date_key, round, sect_a_id, sect_a_name, sect_b_id, sect_b_name, winner_sect_id, duels,
              sect_a_kills, sect_b_kills, created_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     params: [
       input.id,
       input.dateKey,
+      input.round,
       input.sectAId,
       input.sectAName,
       input.sectBId,

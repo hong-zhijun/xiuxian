@@ -2572,6 +2572,7 @@ export interface ArenaIndividualMatchView {
 
 export interface ArenaTeamMatchView {
   id: string;
+  round: number;
   sectA: { id: string; name: string; kills: number };
   sectB: { id: string; name: string; kills: number };
   winnerSectId: string;

@@ -49,11 +49,34 @@ export const ARENA_ATTACK_RATIO_CAP = 2;
 export const ARENA_HANDICAP_MAX = 0.5;
 export const ARENA_HANDICAP_FACTOR = 0.5;
 
-/* ---------- 积分 ---------- */
+/* ---------- 瑞士轮 ---------- */
 
-export const ARENA_WIN_POINTS = 3;
+/** 瑞士轮轮数（个人赛与团队赛统一）。 */
+export const ARENA_SWISS_ROUNDS = 5;
+
+/* ---------- 加权积分 ---------- */
+
+/** 对手战力 / 我方战力的阈值：> 1.2 = 强者，< 0.8 = 弱者。 */
+export const ARENA_WEIGHT_STRONG_RATIO = 1.2;
+export const ARENA_WEIGHT_WEAK_RATIO = 0.8;
+
+export const ARENA_WIN_STRONG_POINTS = 5;
+export const ARENA_WIN_EVEN_POINTS = 3;
+export const ARENA_WIN_WEAK_POINTS = 1;
 export const ARENA_DRAW_POINTS = 1;
 export const ARENA_LOSS_POINTS = 0;
+
+/** 根据双方战力比返回胜方得分（赢强者 5、赢相近 3、赢弱者 1）。 */
+export function arenaWeightedWinPoints(winnerPower: number, loserPower: number): number {
+  if (winnerPower <= 0) return ARENA_WIN_STRONG_POINTS;
+  const ratio = loserPower / winnerPower;
+  if (ratio > ARENA_WEIGHT_STRONG_RATIO) return ARENA_WIN_STRONG_POINTS;
+  if (ratio >= ARENA_WEIGHT_WEAK_RATIO) return ARENA_WIN_EVEN_POINTS;
+  return ARENA_WIN_WEAK_POINTS;
+}
+
+/** 旧常量别名（团队赛胜方固定 3 分，保持与个人赛区分）。 */
+export const ARENA_WIN_POINTS = 3;
 
 /* ---------- 奖励（展示单位；入库时 × 1000，修为丹为颗数） ---------- */
 
@@ -492,20 +515,53 @@ export function sortArenaTeams<T extends { id: string; points: number; kills: nu
   return rows.slice().sort((a, b) => b.points - a.points || b.kills - a.kills || a.id.localeCompare(b.id));
 }
 
-/** 一场个人赛的积分 / 胜场 / 负场（平局各 1 分，胜场与负场各记 0.5 / 0）。 */
-export function arenaIndividualOutcome(winner: 'a' | 'b' | null): {
-  a: { points: number; wins: number; losses: number };
-  b: { points: number; wins: number; losses: number };
-} {
+/** 加权积分：胜方得分由双方战力比决定，平局固定 1 分，负方 0 分。 */
+export function arenaWeightedOutcome(
+  winner: 'a' | 'b' | null,
+  powerA: number,
+  powerB: number,
+): { a: { points: number; wins: number; losses: number }; b: { points: number; wins: number; losses: number } } {
   if (winner === null) {
     return {
       a: { points: ARENA_DRAW_POINTS, wins: 0.5, losses: 0 },
       b: { points: ARENA_DRAW_POINTS, wins: 0.5, losses: 0 },
     };
   }
-  const won = { points: ARENA_WIN_POINTS, wins: 1, losses: 0 };
+  const winPts =
+    winner === 'a' ? arenaWeightedWinPoints(powerA, powerB) : arenaWeightedWinPoints(powerB, powerA);
+  const won = { points: winPts, wins: 1, losses: 0 };
   const lost = { points: ARENA_LOSS_POINTS, wins: 0, losses: 1 };
   return winner === 'a' ? { a: won, b: lost } : { a: lost, b: won };
+}
+
+/**
+ * 瑞士轮配对：按当前积分排名从高到低，依次为每人找积分最接近的未配对对手。
+ * 同组（同宗门）不配对，已交手过的不再配对。无可配对对手的轮空。
+ */
+export function arenaSwissPair<T extends { index: number; groupId: string; points: number; wins: number; damage: number }>(
+  entrants: readonly T[],
+  played: ReadonlySet<string>,
+): [number, number][] {
+  const sorted = entrants.slice().sort((a, b) => b.points - a.points || b.wins - a.wins || b.damage - a.damage);
+  const paired = new Set<number>();
+  const pairs: [number, number][] = [];
+  for (let i = 0; i < sorted.length; i += 1) {
+    const a = sorted[i]!;
+    if (paired.has(a.index)) continue;
+    for (let j = i + 1; j < sorted.length; j += 1) {
+      const b = sorted[j]!;
+      if (paired.has(b.index)) continue;
+      if (a.groupId === b.groupId) continue;
+      const lo = Math.min(a.index, b.index);
+      const hi = Math.max(a.index, b.index);
+      if (played.has(`${String(lo)}:${String(hi)}`)) continue;
+      pairs.push([a.index, b.index]);
+      paired.add(a.index);
+      paired.add(b.index);
+      break;
+    }
+  }
+  return pairs;
 }
 
 /* ---------- 报名拦截 ---------- */

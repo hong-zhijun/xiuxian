@@ -125,13 +125,16 @@ describe('宗门大比（0053）', () => {
       code: 'INVALID_STATUS',
     });
 
-    // 结算：个人赛 12 人（5 + 2 + 5，低等级宗门不参赛），团队赛 3 宗，两两各一场。
+    // 结算：个人赛 12 人（5 + 2 + 5，低等级宗门不参赛），团队赛 3 宗。
+    // 瑞士轮 5 轮：个人赛每轮最多 6 场（12/2），但受跨宗 + 不重复配对限制实际更少；
+    // 团队赛 3 宗只有 C(3,2)=3 种配对，所以最多 3 场。
     const spiritBefore = await spiritOf(strong.sectId);
     await processArenaTournament(env.DB, MON_1230);
     expect(await count("SELECT COUNT(*) AS n FROM arena_individual_scores WHERE date_key = '2026-06-01'")).toBe(12);
     expect(await count("SELECT COUNT(*) AS n FROM arena_team_scores WHERE date_key = '2026-06-01'")).toBe(3);
-    // 跨宗门配对：(12² − (5² + 2² + 5²)) / 2 = 45；同宗门不互打。
-    expect(await count("SELECT COUNT(*) AS n FROM arena_individual_matches WHERE date_key = '2026-06-01'")).toBe(45);
+    const indMatchCount = await count("SELECT COUNT(*) AS n FROM arena_individual_matches WHERE date_key = '2026-06-01'");
+    expect(indMatchCount).toBeGreaterThan(0);
+    expect(indMatchCount).toBeLessThanOrEqual(30);
     expect(await count("SELECT COUNT(*) AS n FROM arena_team_matches WHERE date_key = '2026-06-01'")).toBe(3);
     // 每名参赛弟子一份日赛奖励，每个参赛宗门一份宗门奖励。
     expect(await count("SELECT COUNT(*) AS n FROM arena_rewards WHERE date_key = '2026-06-01'")).toBe(12 + 3);
@@ -143,15 +146,15 @@ describe('宗门大比（0053）', () => {
     await processArenaTournament(env.DB, MON_1240);
     expect(await spiritOf(strong.sectId)).toBe(spiritAfter);
     expect(await count("SELECT COUNT(*) AS n FROM arena_rewards WHERE date_key = '2026-06-01'")).toBe(15);
-    expect(await count("SELECT COUNT(*) AS n FROM arena_individual_matches WHERE date_key = '2026-06-01'")).toBe(45);
+    expect(await count("SELECT COUNT(*) AS n FROM arena_individual_matches WHERE date_key = '2026-06-01'")).toBe(indMatchCount);
 
-    // 结算后的面板：战报分层、榜单排序、未报名的宗门按实际出场名单显示（auto）。
+    // 结算后的面板：战报按轮、榜单排序、未报名的宗门按实际出场名单显示（auto）。
     const after = await getArena(env.DB, strong.userId, MON_1240);
     expect(after.settled).toBe(true);
     expect(after.canRegister).toBe(false);
     expect(after.settleInMs).toBeNull();
     expect(after.dateKey).toBe('2026-06-01');
-    expect(after.individualMatches).toHaveLength(45);
+    expect(after.individualMatches).toHaveLength(indMatchCount);
     expect(Math.max(...after.individualMatches.map((match) => match.round))).toBeGreaterThan(1);
     expect(after.teamMatches).toHaveLength(3);
     expect(after.teamMatches[0]!.duels.length).toBeGreaterThan(0);

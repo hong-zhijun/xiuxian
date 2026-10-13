@@ -2,13 +2,16 @@ import { describe, expect, it } from 'vitest';
 
 import {
   ARENA_MAX_ROUNDS,
+  ARENA_WIN_EVEN_POINTS,
+  ARENA_WIN_STRONG_POINTS,
+  ARENA_WIN_WEAK_POINTS,
   adjustTeamLineup,
   applyHandicap,
-  arenaCrossPairs,
   arenaFighterHp,
   arenaHandicap,
-  arenaRoundLayers,
   arenaSeasonRange,
+  arenaSwissPair,
+  arenaWeightedWinPoints,
   autoSelectLineup,
   calculateTeamPowerCap,
   dailyIndividualReward,
@@ -144,20 +147,38 @@ describe('宗门大比纯规则（arena.ts）', () => {
     expect(adjustTeamLineup(candidates, ['p1', 'p2', 'p3'], Number.POSITIVE_INFINITY)).toEqual(['p4', 'p2', 'p3']);
   });
 
-  it('赛程：同宗门不互打；分层时每一层里每名弟子最多一场', () => {
-    const groups = ['s1', 's1', 's2', 's2', 's3'];
-    const pairs = arenaCrossPairs(groups);
-    expect(pairs).toHaveLength(8);
-    expect(pairs.every(([i, j]) => groups[i] !== groups[j])).toBe(true);
-    const layers = arenaRoundLayers(pairs.map(([i, j]) => [String(i), String(j)] as const));
-    const seen = new Map<number, Set<number>>();
-    pairs.forEach(([i, j], k) => {
-      const layer = seen.get(layers[k]!) ?? new Set<number>();
-      expect(layer.has(i) || layer.has(j)).toBe(false);
-      layer.add(i);
-      layer.add(j);
-      seen.set(layers[k]!, layer);
-    });
+  it('瑞士轮配对：同宗门不互打、不重赛、每轮每人最多一场', () => {
+    const entrants = [
+      { index: 0, groupId: 's1', points: 0, wins: 0, damage: 0 },
+      { index: 1, groupId: 's1', points: 0, wins: 0, damage: 0 },
+      { index: 2, groupId: 's2', points: 0, wins: 0, damage: 0 },
+      { index: 3, groupId: 's2', points: 0, wins: 0, damage: 0 },
+      { index: 4, groupId: 's3', points: 0, wins: 0, damage: 0 },
+    ];
+    const played = new Set<string>();
+    let totalPairs = 0;
+    for (let round = 0; round < 5; round += 1) {
+      const pairs = arenaSwissPair(entrants, played);
+      const usedThisRound = new Set<number>();
+      for (const [i, j] of pairs) {
+        expect(entrants[i]!.groupId).not.toBe(entrants[j]!.groupId);
+        const key = `${String(Math.min(i, j))}:${String(Math.max(i, j))}`;
+        expect(played.has(key)).toBe(false);
+        expect(usedThisRound.has(i) || usedThisRound.has(j)).toBe(false);
+        usedThisRound.add(i);
+        usedThisRound.add(j);
+        played.add(key);
+      }
+      totalPairs += pairs.length;
+    }
+    expect(totalPairs).toBeGreaterThan(0);
+  });
+
+  it('加权得分：以弱胜强 5 分、势均力敌 3 分、以强胜弱 1 分', () => {
+    expect(arenaWeightedWinPoints(100, 200)).toBe(ARENA_WIN_STRONG_POINTS);
+    expect(arenaWeightedWinPoints(100, 100)).toBe(ARENA_WIN_EVEN_POINTS);
+    expect(arenaWeightedWinPoints(200, 100)).toBe(ARENA_WIN_WEAK_POINTS);
+    expect(arenaWeightedWinPoints(0, 100)).toBe(ARENA_WIN_STRONG_POINTS);
   });
 
   it('排名：个人赛积分 → 胜场 → 伤害；奖励按名次（第 1 名另得修为丹）', () => {
