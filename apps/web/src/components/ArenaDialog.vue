@@ -14,6 +14,7 @@ import type {
 import { fetchArena, setArenaLineup } from '../api/game';
 import { selectionBlockReason } from '../utils/discipleFilter';
 import DisciplePicker from './DisciplePicker.vue';
+import ModalShell from './ModalShell.vue';
 
 const props = defineProps<{
   state: SectStateView;
@@ -46,9 +47,11 @@ const tab = ref<Tab>('individual');
 const rankScope = ref<'daily' | 'season'>('daily');
 const editing = ref<Kind | null>(null);
 const draft = ref<string[]>([]);
-/** 弹窗查看弟子详情的宗门 */
 const popupEntry = ref<ArenaEntryView | null>(null);
-/** 团队赛展开的场次 / 单场展开的回合 */
+/** 个人赛展开的轮次 */
+const expandedIndRounds = ref<number[]>([]);
+/** 团队赛展开的轮次 */
+const expandedTeamRounds = ref<number[]>([]);
 const expandedTeams = ref<string[]>([]);
 const expandedDuels = ref<string[]>([]);
 const loadedAt = ref(Date.now());
@@ -71,6 +74,8 @@ function applyPanel(next: ArenaView): void {
   panel.value = next;
   loadedAt.value = Date.now();
   clock.value = loadedAt.value;
+  expandedIndRounds.value = [1];
+  expandedTeamRounds.value = [1];
 }
 
 onMounted(() => {
@@ -223,6 +228,18 @@ const teamRounds = computed<ArenaRound<ArenaTeamMatchView>[]>(() => {
   return [...rounds.entries()].sort((a, b) => a[0] - b[0]).map(([round, matches]) => ({ round, matches }));
 });
 
+function toggleIndRound(round: number): void {
+  expandedIndRounds.value = expandedIndRounds.value.includes(round)
+    ? expandedIndRounds.value.filter((r) => r !== round)
+    : [...expandedIndRounds.value, round];
+}
+
+function toggleTeamRound(round: number): void {
+  expandedTeamRounds.value = expandedTeamRounds.value.includes(round)
+    ? expandedTeamRounds.value.filter((r) => r !== round)
+    : [...expandedTeamRounds.value, round];
+}
+
 function sideState(match: ArenaIndividualMatchView, side: 'fighterA' | 'fighterB'): 'win' | 'lose' | 'draw' {
   if (match.winnerId === null) return 'draw';
   return match.winnerId === match[side].id ? 'win' : 'lose';
@@ -284,9 +301,7 @@ const mySectId = computed(() => props.state.sect.id);
     <header class="arena-head">
       <div class="arena-title-row">
         <h2 id="arena-title" class="arena-title">宗门大比</h2>
-        <span v-if="panel" class="arena-season" title="一纪 = 一周，周日 12:00 收官">
-          本纪 {{ panel.seasonId }}
-        </span>
+        <span v-if="panel" class="arena-season" title="一纪 = 一周，周日 12:00 收官">本纪 {{ panel.seasonId }}</span>
       </div>
       <p v-if="panel" class="arena-status" :class="{ 'is-open': panel.canRegister }">{{ statusLine }}</p>
       <p v-else class="arena-empty">{{ loading ? '大比加载中…' : '面板加载失败，请稍后再试。' }}</p>
@@ -345,9 +360,7 @@ const mySectId = computed(() => props.state.sect.id);
           :title="editing === 'individual' ? '选择斗法台弟子（最多 5 人）' : '选择宗门战弟子（最多 5 人，按顺序出战）'"
         >
           <template #actions>
-            <button class="quiet-button" type="button" :disabled="submitting || busy === true" @click="autoDraft">
-              择优选人
-            </button>
+            <button class="quiet-button" type="button" :disabled="submitting || busy === true" @click="autoDraft">择优选人</button>
           </template>
         </DisciplePicker>
         <div class="arena-editor-actions">
@@ -365,7 +378,7 @@ const mySectId = computed(() => props.state.sect.id);
         <button type="button" role="tab" :aria-selected="tab === 'ranks'" :class="{ 'is-active': tab === 'ranks' }" @click="tab = 'ranks'">榜单</button>
       </nav>
 
-      <!-- 报名状态：紧凑标签，点击弹窗看弟子 -->
+      <!-- 报名状态：紧凑标签，点击弹 ModalShell 查看弟子 -->
       <section v-if="tab !== 'ranks'" class="arena-entries" aria-label="报名状态">
         <p class="arena-section-title">
           报名状态 · {{ tab === 'individual' ? '斗法台' : '宗门战' }}
@@ -389,62 +402,83 @@ const mySectId = computed(() => props.state.sect.id);
         </p>
       </section>
 
-      <!-- 弟子详情弹窗 -->
-      <Teleport to="body">
-        <div v-if="popupEntry" class="arena-popup-mask" @click.self="popupEntry = null">
-          <div class="arena-popup">
-            <div class="arena-popup-head">
-              <strong>{{ popupEntry.sectName }}</strong>
-              <span class="arena-tag" :class="popupEntry.auto ? 'is-auto' : 'is-set'">
-                {{ popupEntry.auto ? '自动参赛' : '已报名' }}
-              </span>
-              <span class="arena-popup-power">总战力 {{ formatNumber(teamPowerOf(popupEntry)) }}</span>
-              <button class="arena-popup-close" type="button" @click="popupEntry = null">&#10005;</button>
-            </div>
-            <p v-if="popupEntry.auto" class="arena-popup-note">掌门未点将 · 择优出战</p>
-            <ul class="arena-popup-list">
-              <li v-for="disciple in popupEntry.disciples" :key="disciple.id">
-                <span>{{ disciple.name }}</span>
-                <small>{{ disciple.realmName }}</small>
-                <span class="arena-popup-dp">{{ formatNumber(disciple.combatPower) }}</span>
-              </li>
-            </ul>
+      <!-- 弟子详情弹窗：用通用 ModalShell -->
+      <ModalShell v-if="popupEntry" narrow label="参赛名单" @close="popupEntry = null">
+        <section class="arena-popup-body" aria-labelledby="arena-popup-title">
+          <header class="section-heading panel-heading compact-heading">
+            <h2 id="arena-popup-title" class="disciple-detail-title">{{ popupEntry.sectName }}</h2>
+          </header>
+          <div class="arena-popup-meta">
+            <span class="arena-tag" :class="popupEntry.auto ? 'is-auto' : 'is-set'">
+              {{ popupEntry.auto ? '自动参赛' : '已报名' }}
+            </span>
+            <span class="arena-popup-power">总战力 {{ formatNumber(teamPowerOf(popupEntry)) }}</span>
           </div>
-        </div>
-      </Teleport>
+          <p v-if="popupEntry.auto" class="arena-popup-note">掌门未点将 · 择优出战</p>
+          <ul class="arena-popup-list">
+            <li v-for="disciple in popupEntry.disciples" :key="disciple.id">
+              <span class="arena-popup-name">{{ disciple.name }}</span>
+              <small class="arena-popup-realm">{{ disciple.realmName }}</small>
+              <span class="arena-popup-dp">{{ formatNumber(disciple.combatPower) }}</span>
+            </li>
+          </ul>
+        </section>
+      </ModalShell>
 
-      <!-- 斗法台：紧凑单行，按轮分段 -->
+      <!-- 斗法台：风琴折叠，每轮一个手风琴面板 -->
       <section v-if="tab === 'individual'" class="arena-matches" aria-label="斗法台赛程">
         <p v-if="panel.dateKey !== null" class="arena-day">{{ panel.dateKey }} 战报</p>
         <p v-if="individualRounds.length === 0" class="arena-empty">
           {{ panel.dateKey === null ? '还没有结算过大比，12 点后出战报。' : '这一天没有对阵。' }}
         </p>
-        <div v-for="rd in individualRounds" :key="rd.round" class="arena-round-group">
-          <p class="arena-round-hd">第 {{ rd.round }} 轮 <small>{{ rd.matches.length }} 场</small></p>
-          <div class="arena-ind-list">
-            <div v-for="match in rd.matches" :key="match.id" class="arena-ind-row">
-              <span class="arena-ind-v" :class="`is-${sideState(match, 'fighterA')}`">{{ sideLabel(sideState(match, 'fighterA')) }}</span>
-              <span class="arena-ind-name" :class="{ 'is-win': sideState(match, 'fighterA') === 'win' }">{{ match.fighterA.name }}</span>
-              <small class="arena-ind-sect">{{ match.fighterA.sectName }}</small>
+        <div v-for="rd in individualRounds" :key="rd.round" class="arena-accordion">
+          <button
+            class="arena-acc-head"
+            type="button"
+            :aria-expanded="expandedIndRounds.includes(rd.round)"
+            @click="toggleIndRound(rd.round)"
+          >
+            <span class="arena-acc-arrow">{{ expandedIndRounds.includes(rd.round) ? '▾' : '▸' }}</span>
+            <span class="arena-acc-label">第 {{ rd.round }} 轮</span>
+            <small class="arena-acc-count">{{ rd.matches.length }} 场</small>
+          </button>
+          <div v-if="expandedIndRounds.includes(rd.round)" class="arena-acc-body">
+            <div v-for="match in rd.matches" :key="match.id" class="arena-ind-card">
+              <span class="arena-ind-side" :class="`is-${sideState(match, 'fighterA')}`">
+                <strong>{{ match.fighterA.name }}</strong>
+                <small>{{ match.fighterA.sectName }}</small>
+              </span>
+              <span class="arena-ind-badge" :class="`is-${sideState(match, 'fighterA')}`">{{ sideLabel(sideState(match, 'fighterA')) }}</span>
               <span class="arena-ind-vs">vs</span>
-              <span class="arena-ind-name" :class="{ 'is-win': sideState(match, 'fighterB') === 'win' }">{{ match.fighterB.name }}</span>
-              <small class="arena-ind-sect">{{ match.fighterB.sectName }}</small>
-              <span class="arena-ind-v" :class="`is-${sideState(match, 'fighterB')}`">{{ sideLabel(sideState(match, 'fighterB')) }}</span>
+              <span class="arena-ind-badge" :class="`is-${sideState(match, 'fighterB')}`">{{ sideLabel(sideState(match, 'fighterB')) }}</span>
+              <span class="arena-ind-side is-right" :class="`is-${sideState(match, 'fighterB')}`">
+                <strong>{{ match.fighterB.name }}</strong>
+                <small>{{ match.fighterB.sectName }}</small>
+              </span>
             </div>
           </div>
         </div>
       </section>
 
-      <!-- 宗门战：紧凑单行，按轮分段，点击展开车轮战 -->
+      <!-- 宗门战：风琴折叠，每轮一个手风琴面板，每场可再展开车轮战 -->
       <section v-if="tab === 'team'" class="arena-matches" aria-label="宗门战赛程">
         <p v-if="panel.dateKey !== null" class="arena-day">{{ panel.dateKey }} 战报</p>
         <p v-if="teamRounds.length === 0" class="arena-empty">
           {{ panel.dateKey === null ? '还没有结算过宗门战，12 点后出战报。' : '这一天没有宗门对决。' }}
         </p>
-        <div v-for="rd in teamRounds" :key="rd.round" class="arena-round-group">
-          <p class="arena-round-hd">第 {{ rd.round }} 轮 <small>{{ rd.matches.length }} 场</small></p>
-          <div class="arena-team-list">
-            <div v-for="match in rd.matches" :key="match.id" class="arena-team-item" :class="{ 'is-open': expandedTeams.includes(match.id) }">
+        <div v-for="rd in teamRounds" :key="rd.round" class="arena-accordion">
+          <button
+            class="arena-acc-head"
+            type="button"
+            :aria-expanded="expandedTeamRounds.includes(rd.round)"
+            @click="toggleTeamRound(rd.round)"
+          >
+            <span class="arena-acc-arrow">{{ expandedTeamRounds.includes(rd.round) ? '▾' : '▸' }}</span>
+            <span class="arena-acc-label">第 {{ rd.round }} 轮</span>
+            <small class="arena-acc-count">{{ rd.matches.length }} 场</small>
+          </button>
+          <div v-if="expandedTeamRounds.includes(rd.round)" class="arena-acc-body">
+            <div v-for="match in rd.matches" :key="match.id" class="arena-team-card" :class="{ 'is-open': expandedTeams.includes(match.id) }">
               <button class="arena-team-row" type="button" @click="toggleTeam(match.id)">
                 <span class="arena-team-side" :class="{ 'is-win': match.winnerSectId === match.sectA.id }">{{ match.sectA.name }}</span>
                 <strong class="arena-team-score">{{ match.sectA.kills }}:{{ match.sectB.kills }}</strong>
@@ -507,32 +541,14 @@ const mySectId = computed(() => props.state.sect.id);
 </template>
 
 <style scoped>
-.arena {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  min-width: 0;
-  color: var(--ink-text);
-}
-
+.arena { display: flex; flex-direction: column; gap: 14px; min-width: 0; color: var(--ink-text); }
 .arena-head { display: grid; gap: 6px; }
-
-.arena-title-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 8px;
-}
-
+.arena-title-row { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px; }
 .arena-title { margin: 0; font-size: 20px; letter-spacing: 0.08em; }
 
 .arena-season {
-  color: var(--gold-bright);
-  font-size: 13px;
-  border: 1px solid var(--line-strong);
-  border-radius: 999px;
-  padding: 2px 10px;
+  color: var(--gold-bright); font-size: 13px;
+  border: 1px solid var(--line-strong); border-radius: 999px; padding: 2px 10px;
 }
 
 .arena-status { margin: 0; color: var(--muted); font-size: 13px; }
@@ -540,15 +556,9 @@ const mySectId = computed(() => props.state.sect.id);
 .arena-rules-toggle { justify-self: start; }
 
 .arena-rules {
-  margin: 0;
-  padding: 12px 14px;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  background: rgba(16, 36, 31, 0.6);
-  color: var(--muted);
-  font-size: 13px;
-  line-height: 1.7;
-  white-space: pre-line;
+  margin: 0; padding: 12px 14px;
+  border: 1px solid var(--line); border-radius: 12px; background: rgba(16, 36, 31, 0.6);
+  color: var(--muted); font-size: 13px; line-height: 1.7; white-space: pre-line;
 }
 
 .arena-empty { margin: 0; color: var(--faint); font-size: 13px; }
@@ -558,25 +568,17 @@ const mySectId = computed(() => props.state.sect.id);
   display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px;
   margin: 0 0 8px; color: var(--gold-bright); font-size: 14px; letter-spacing: 0.06em;
 }
-
 .arena-cap { color: var(--muted); font-size: 12px; letter-spacing: 0; }
 .arena-cap.is-over { color: var(--red-bright); }
 
 /* 我的名册 */
-.arena-mine {
-  display: grid; gap: 8px; padding: 12px;
-  border: 1px solid var(--line); border-radius: 14px; background: rgba(16, 36, 31, 0.6);
-}
-
+.arena-mine { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--line); border-radius: 14px; background: rgba(16, 36, 31, 0.6); }
 .arena-mine-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .arena-mine-kind { min-width: 44px; color: var(--gold-bright); font-size: 13px; }
 .arena-mine-names { flex: 1 1 180px; min-width: 0; color: var(--ink-text); font-size: 13px; overflow-wrap: anywhere; }
 .arena-mine-action { margin-left: auto; }
 
-.arena-tag {
-  flex: none; border-radius: 999px; padding: 1px 8px;
-  font-size: 12px; border: 1px solid var(--line-strong);
-}
+.arena-tag { flex: none; border-radius: 999px; padding: 1px 8px; font-size: 12px; border: 1px solid var(--line-strong); }
 .arena-tag.is-set { color: var(--jade-bright); border-color: rgba(119, 184, 154, 0.5); }
 .arena-tag.is-auto { color: var(--gold-bright); }
 
@@ -584,28 +586,17 @@ const mySectId = computed(() => props.state.sect.id);
 .arena-editor { padding: 12px; border: 1px solid var(--line-strong); border-radius: 14px; background: rgba(18, 39, 32, 0.8); }
 .arena-editor-hint { margin: 0 0 10px; color: var(--muted); font-size: 12px; }
 .arena-editor-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; }
-
-.arena-primary {
-  border: 1px solid var(--gold); border-radius: 999px;
-  background: rgba(202, 169, 106, 0.16); color: var(--gold-bright);
-  padding: 6px 16px; font: inherit; cursor: pointer;
-}
+.arena-primary { border: 1px solid var(--gold); border-radius: 999px; background: rgba(202, 169, 106, 0.16); color: var(--gold-bright); padding: 6px 16px; font: inherit; cursor: pointer; }
 .arena-primary:disabled { opacity: 0.45; cursor: not-allowed; }
 
 /* 页签 */
 .arena-tabs { display: flex; gap: 6px; border-bottom: 1px solid var(--line); }
-.arena-tabs button, .arena-rank-toggle button, .arena-duel-head, .arena-team-row { font: inherit; }
-.arena-tabs button {
-  border: 0; border-bottom: 2px solid transparent; background: transparent;
-  color: var(--muted); padding: 8px 12px; cursor: pointer;
-}
+.arena-tabs button, .arena-rank-toggle button, .arena-duel-head, .arena-team-row, .arena-acc-head { font: inherit; }
+.arena-tabs button { border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--muted); padding: 8px 12px; cursor: pointer; }
 .arena-tabs button.is-active { color: var(--gold-bright); border-bottom-color: var(--gold); }
 
-/* 报名状态：紧凑标签 */
-.arena-entry-chips {
-  display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0;
-}
-
+/* 报名状态标签 */
+.arena-entry-chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .arena-chip {
   display: inline-flex; align-items: center; gap: 6px;
   border: 1px solid var(--line); border-radius: 8px;
@@ -617,140 +608,111 @@ const mySectId = computed(() => props.state.sect.id);
 .arena-chip strong { font-size: 13px; }
 .arena-chip small { color: var(--muted); font-size: 11px; }
 
-/* 弟子详情弹窗 */
-.arena-popup-mask {
-  position: fixed; inset: 0; z-index: 9999;
-  display: grid; place-items: center;
-  background: rgba(0, 0, 0, 0.5);
-}
-
-.arena-popup {
-  width: 280px; max-height: 80vh; overflow-y: auto;
-  border: 1px solid var(--line-strong); border-radius: 14px;
-  background: var(--bg-card, rgba(16, 36, 31, 0.95));
-  padding: 14px; color: var(--ink-text);
-}
-
-.arena-popup-head {
-  display: flex; align-items: center; gap: 6px; margin-bottom: 8px;
-}
-.arena-popup-head strong { font-size: 14px; }
-.arena-popup-power { margin-left: auto; color: var(--muted); font-size: 12px; }
-.arena-popup-close {
-  flex: none; border: 0; background: transparent; color: var(--faint);
-  font-size: 16px; cursor: pointer; padding: 0 0 0 6px; line-height: 1;
-}
-.arena-popup-note { margin: 0 0 6px; color: var(--gold); font-size: 12px; }
-
-.arena-popup-list {
-  margin: 0; padding: 0; list-style: none; display: grid; gap: 4px;
-}
+/* 弟子详情弹窗内容 */
+.arena-popup-body { padding: 0; }
+.arena-popup-meta { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.arena-popup-power { margin-left: auto; color: var(--muted); font-size: 13px; }
+.arena-popup-note { margin: 0 0 8px; color: var(--gold); font-size: 12px; }
+.arena-popup-list { margin: 0; padding: 0; list-style: none; display: grid; gap: 0; }
 .arena-popup-list li {
-  display: flex; align-items: baseline; gap: 6px;
-  padding: 4px 0; border-top: 1px solid var(--line); font-size: 13px;
+  display: flex; align-items: baseline; gap: 8px;
+  padding: 7px 0; border-top: 1px solid var(--line); font-size: 13px;
 }
 .arena-popup-list li:first-child { border-top: 0; }
-.arena-popup-list small { color: var(--faint); font-size: 11px; }
+.arena-popup-name { font-weight: 500; }
+.arena-popup-realm { color: var(--faint); font-size: 11px; }
 .arena-popup-dp { margin-left: auto; color: var(--muted); font-size: 12px; }
 
-/* 赛程：按轮分段，紧凑行 */
-.arena-matches { display: flex; flex-direction: column; gap: 10px; }
+/* 风琴折叠赛程 */
+.arena-matches { display: flex; flex-direction: column; gap: 8px; }
 
-.arena-round-group { display: flex; flex-direction: column; gap: 4px; }
-
-.arena-round-hd {
-  margin: 0; color: var(--gold-bright); font-size: 13px; padding: 2px 0;
-  border-bottom: 1px solid var(--line);
-}
-.arena-round-hd small { color: var(--faint); font-size: 11px; margin-left: 6px; }
-
-/* 个人赛：单行对阵 */
-.arena-ind-list { display: flex; flex-direction: column; gap: 2px; }
-
-.arena-ind-row {
-  display: flex; align-items: center; gap: 4px;
-  padding: 3px 6px; border-radius: 6px; font-size: 12px;
-}
-.arena-ind-row:hover { background: rgba(202, 169, 106, 0.06); }
-
-.arena-ind-v {
-  flex: none; width: 18px; text-align: center; font-size: 11px;
-  border-radius: 3px; padding: 0 2px;
-}
-.arena-ind-v.is-win { color: var(--gold-bright); }
-.arena-ind-v.is-lose { color: var(--faint); }
-.arena-ind-v.is-draw { color: var(--muted); }
-
-.arena-ind-name { font-weight: 500; white-space: nowrap; }
-.arena-ind-name.is-win { color: var(--gold-bright); }
-
-.arena-ind-sect { color: var(--faint); font-size: 11px; white-space: nowrap; }
-
-.arena-ind-vs { color: var(--faint); font-size: 10px; flex: none; padding: 0 2px; }
-
-/* 宗门战：单行对阵 */
-.arena-team-list { display: flex; flex-direction: column; gap: 2px; }
-
-.arena-team-item {
-  border: 1px solid var(--line); border-radius: 8px;
+.arena-accordion {
+  border: 1px solid var(--line); border-radius: 10px;
   background: rgba(16, 36, 31, 0.4); overflow: hidden;
 }
 
+.arena-acc-head {
+  display: flex; align-items: center; gap: 6px; width: 100%;
+  border: 0; background: rgba(202, 169, 106, 0.08);
+  color: var(--gold-bright); padding: 8px 12px; cursor: pointer; text-align: left;
+}
+.arena-acc-head:hover { background: rgba(202, 169, 106, 0.14); }
+.arena-acc-arrow { flex: none; font-size: 10px; width: 12px; }
+.arena-acc-label { font-size: 13px; font-weight: 600; }
+.arena-acc-count { color: var(--faint); font-size: 11px; margin-left: auto; }
+
+.arena-acc-body { padding: 6px 8px 8px; display: flex; flex-direction: column; gap: 4px; }
+
+/* 个人赛卡片 */
+.arena-ind-card {
+  display: flex; align-items: center; gap: 0;
+  padding: 4px 8px; border-radius: 8px;
+  background: rgba(16, 36, 31, 0.5);
+  border: 1px solid var(--line);
+}
+.arena-ind-card:hover { border-color: var(--line-strong); }
+
+.arena-ind-side {
+  display: flex; align-items: baseline; gap: 4px;
+  min-width: 0; flex: 1 1 0;
+}
+.arena-ind-side.is-right { justify-content: flex-end; text-align: right; }
+.arena-ind-side strong { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.arena-ind-side small { color: var(--faint); font-size: 10px; white-space: nowrap; flex: none; }
+
+.arena-ind-side.is-win strong { color: var(--gold-bright); }
+.arena-ind-side.is-lose { opacity: 0.55; }
+
+.arena-ind-badge {
+  flex: none; width: 20px; text-align: center;
+  font-size: 10px; font-weight: 600; border-radius: 3px; padding: 1px 0;
+}
+.arena-ind-badge.is-win { color: var(--gold-bright); background: rgba(202, 169, 106, 0.15); }
+.arena-ind-badge.is-lose { color: var(--faint); }
+.arena-ind-badge.is-draw { color: var(--muted); }
+
+.arena-ind-vs { flex: none; color: var(--faint); font-size: 10px; padding: 0 4px; }
+
+/* 宗门战卡片 */
+.arena-team-card {
+  border: 1px solid var(--line); border-radius: 8px;
+  background: rgba(16, 36, 31, 0.5); overflow: hidden;
+}
+
 .arena-team-row {
-  display: flex; align-items: center; gap: 6px;
+  display: flex; align-items: center; gap: 8px;
   width: 100%; border: 0; background: transparent;
-  color: var(--ink-text); padding: 5px 8px; text-align: left; cursor: pointer;
+  color: var(--ink-text); padding: 6px 10px; text-align: left; cursor: pointer;
   font-size: 13px;
 }
+.arena-team-row:hover { background: rgba(202, 169, 106, 0.06); }
 
 .arena-team-side { min-width: 0; overflow-wrap: anywhere; color: var(--muted); }
 .arena-team-side.is-right { text-align: right; margin-left: auto; }
 .arena-team-side.is-win { color: var(--gold-bright); font-weight: 600; }
-
-.arena-team-score { flex: none; color: var(--gold-bright); font-size: 13px; letter-spacing: 0.04em; }
+.arena-team-score { flex: none; color: var(--gold-bright); font-size: 14px; letter-spacing: 0.04em; }
 .arena-team-arrow { flex: none; color: var(--faint); font-size: 10px; }
 
-.arena-duels {
-  display: grid; gap: 2px; margin: 0; padding: 2px 8px 6px; list-style: none;
-}
-
+.arena-duels { display: grid; gap: 2px; margin: 0; padding: 2px 8px 6px; list-style: none; }
 .arena-duel { border-top: 1px solid var(--line); padding-top: 3px; }
-
 .arena-duel-head {
-  display: flex; align-items: center; gap: 4px;
-  width: 100%; border: 0; background: transparent;
-  color: var(--muted); padding: 2px 0; text-align: left; font-size: 12px; cursor: pointer;
+  display: flex; align-items: center; gap: 4px; width: 100%;
+  border: 0; background: transparent; color: var(--muted);
+  padding: 2px 0; text-align: left; font-size: 12px; cursor: pointer;
 }
 .arena-duel-head .is-win { color: var(--gold-bright); }
 .arena-duel-vs { color: var(--faint); font-size: 10px; }
 .arena-duel-res { margin-left: auto; color: var(--jade-bright); font-size: 11px; white-space: nowrap; }
-
-.arena-rounds {
-  margin: 3px 0 0; padding: 0 0 0 12px;
-  color: var(--muted); font-size: 11px; display: grid; gap: 2px;
-}
+.arena-rounds { margin: 3px 0 0; padding: 0 0 0 12px; color: var(--muted); font-size: 11px; display: grid; gap: 2px; }
 
 /* 榜单 */
 .arena-ranks { display: flex; flex-direction: column; gap: 10px; }
-
 .arena-rank-toggle { display: inline-flex; gap: 6px; }
-.arena-rank-toggle button {
-  border: 1px solid var(--line); border-radius: 999px;
-  background: transparent; color: var(--muted); padding: 4px 12px; cursor: pointer;
-}
+.arena-rank-toggle button { border: 1px solid var(--line); border-radius: 999px; background: transparent; color: var(--muted); padding: 4px 12px; cursor: pointer; }
 .arena-rank-toggle button.is-active { color: var(--gold-bright); border-color: var(--gold); }
-
-.arena-rank-grid {
-  display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px;
-}
-
+.arena-rank-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
 .arena-rank-list { display: grid; gap: 3px; margin: 0; padding: 0; list-style: none; }
-
-.arena-rank {
-  display: grid; grid-template-columns: 24px minmax(0, 1fr) auto;
-  align-items: baseline; gap: 2px 6px;
-  padding: 4px 6px; border-radius: 6px; font-size: 13px;
-}
+.arena-rank { display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; align-items: baseline; gap: 2px 6px; padding: 4px 6px; border-radius: 6px; font-size: 13px; }
 .arena-rank.is-mine { background: rgba(202, 169, 106, 0.1); }
 .arena-rank-no { color: var(--gold); text-align: center; font-size: 12px; }
 .arena-rank-name { min-width: 0; overflow-wrap: anywhere; }
