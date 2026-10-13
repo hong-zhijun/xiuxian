@@ -3741,6 +3741,9 @@ export interface WorldSiteRow {
   protected_until: number | null;
   settled_at: number | null;
   rare_hours: number;
+  /** 0052：最近一次撤回山门的宗门与其冷却截止（期间该宗门不能再开辟 / 斗法这一处）。 */
+  withdrawn_sect_id: string | null;
+  withdrawn_until: number | null;
   version: number;
   updated_at: number;
 }
@@ -3828,11 +3831,15 @@ export function updateWorldSiteStatement(input: {
   protectedUntil: number | null;
   settledAt: number | null;
   rareHours: number;
+  /** 0052：撤回山门时写入撤回冷却；不传则保留原值（易主 / 结算不清冷却，过期自然失效）。 */
+  withdrawn?: { sectId: string; until: number };
   now: number;
 }): ParameterizedQuery {
+  const withdrawnSql = input.withdrawn === undefined ? '' : ', withdrawn_sect_id = ?, withdrawn_until = ?';
+  const withdrawnParams = input.withdrawn === undefined ? [] : [input.withdrawn.sectId, input.withdrawn.until];
   return {
     sql: `UPDATE world_sites SET holder_sect_id = ?, holder_name = ?, garrison = ?, held_since = ?,
-            protected_until = ?, settled_at = ?, rare_hours = ?, version = version + 1, updated_at = ?
+            protected_until = ?, settled_at = ?, rare_hours = ?${withdrawnSql}, version = version + 1, updated_at = ?
           WHERE id = ?`,
     params: [
       input.holderSectId,
@@ -3842,6 +3849,7 @@ export function updateWorldSiteStatement(input: {
       input.protectedUntil,
       input.settledAt,
       input.rareHours,
+      ...withdrawnParams,
       input.now,
       input.siteId,
     ],

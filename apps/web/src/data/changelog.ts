@@ -19,6 +19,15 @@ export const MAX_ENTRIES = 5;
 
 export const CHANGELOG: readonly ChangelogEntry[] = [
   {
+    id: '2026-10-13-world-withdraw-cooldown',
+    time: '2026-10-13 22:00',
+    title: '山河舆图 · 撤回冷却',
+    items: [
+      '撤回山门后 24 小时内，本宗不能再开辟或斗法这一处灵地（换一处可以照常打）。',
+      '防止「主力夺地后马上撤回、再派弱队开辟」绕开坐镇规则：想占好灵地，就得让打下它的人留下坐镇。',
+    ],
+  },
+  {
     id: '2026-10-13-world-map',
     time: '2026-10-13 20:00',
     title: '山河舆图上线 · 灵脉争夺下线',

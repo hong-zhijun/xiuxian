@@ -456,6 +456,7 @@ import {
   WORLD_REGIONS,
   WORLD_SITES,
   WORLD_UNLOCK_SECT_LEVEL,
+  WORLD_WITHDRAW_COOLDOWN_MS,
   type WorldSettlement,
   type WorldSiteDef,
 } from './world';
@@ -11252,6 +11253,13 @@ function resourceCapacityOf(resourceId: string, sectLevel: number): number {
     : effectiveCapacity(definition.capacity, findSectLevel(sectLevel).capacityMultiplier);
 }
 
+/** 本宗对这一处的撤回冷却截止（0052）；没有冷却或已过期返回 null。 */
+function withdrawCooldownUntilOf(site: WorldSiteRow, sectId: string, now: number): number | null {
+  if (site.withdrawn_sect_id !== sectId || site.withdrawn_until === null) return null;
+  const until = Number(site.withdrawn_until);
+  return until > now ? until : null;
+}
+
 /** 弟子是否坐镇中：在给定的灵地行里找他的坐镇名单。 */
 function garrisonSiteIn(sites: readonly WorldSiteRow[], discipleId: string): WorldSiteRow | undefined {
   return sites.find((site) => parseGarrison(site.garrison).includes(discipleId));
@@ -11565,6 +11573,8 @@ async function buildWorldPanel(
       blockedReason = '镇守名额已满（先撤回一处）';
     } else if (battlesLeft <= 0) {
       blockedReason = '今日斗法次数已用完';
+    } else if (row !== undefined && withdrawCooldownUntilOf(row, draft.sect.id, now) !== null) {
+      blockedReason = `刚撤回山门，冷却中 · 剩 ${severeInjuryLeftText(withdrawCooldownUntilOf(row, draft.sect.id, now) ?? now, now)}`;
     } else if (holderId === null) {
       action = 'beast';
     } else if (protectedUntil !== null) {
@@ -11682,6 +11692,13 @@ export async function attackWorldSite(
   const { site, def } = await requireWorldSiteRow(db, input.siteId);
   if (site.holder_sect_id === draft.sect.id) {
     throw new AppError('INVALID_STATUS', '这处灵地已经是你的了');
+  }
+  const withdrawnUntil = withdrawCooldownUntilOf(site, draft.sect.id, now);
+  if (withdrawnUntil !== null) {
+    throw new AppError(
+      'INVALID_STATUS',
+      `你刚从「${worldSiteFullName(def.id)}」撤回山门，${severeInjuryLeftText(withdrawnUntil, now)}后才能再来`,
+    );
   }
   const cap = worldSiteCapOf(Number(draft.sect.level));
   if (draft.worldSites.length >= cap) {
@@ -11879,6 +11896,7 @@ export async function withdrawWorldSite(
       protectedUntil: null,
       settledAt: null,
       rareHours: 0,
+      withdrawn: { sectId: draft.sect.id, until: now + WORLD_WITHDRAW_COOLDOWN_MS },
       now,
     }),
   );

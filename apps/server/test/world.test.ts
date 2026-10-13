@@ -130,7 +130,7 @@ async function insertBoss(now: number): Promise<void> {
 async function resetWorldSites(): Promise<void> {
   await env.DB.prepare(
     `UPDATE world_sites SET holder_sect_id = NULL, holder_name = NULL, garrison = NULL, held_since = NULL,
-       protected_until = NULL, settled_at = NULL, rare_hours = 0`,
+       protected_until = NULL, settled_at = NULL, rare_hours = 0, withdrawn_sect_id = NULL, withdrawn_until = NULL`,
   ).run();
 }
 
@@ -746,6 +746,48 @@ describe('山河舆图 · 撤回与纪事', () => {
     expect(
       await refusedOf(() => withdrawWorldSite(env.DB, sect.userId, { siteId: 'east-lingdi' }, NOW + 4 * HOUR)),
     ).toMatchObject({ code: 'INVALID_STATUS' });
+  });
+
+  it('撤回冷却：撤回后 24 小时内本宗不能再开辟 / 斗法这一处（防强队夺地后换弱队），别的宗门不受影响', async () => {
+    await resetWorldSites();
+    const sect = await makeSect(3);
+    // 弱宗：满 24 小时后强宗斗法必胜（浮动钉在 1.0）。
+    const other = await makeSect(3, false);
+    const [a, b, c] = sect.discipleIds as [string, string, string];
+    pinRandom(0.5);
+    await attackWorldSite(env.DB, sect.userId, { siteId: 'east-lingdi', discipleIds: [a, b, c] }, NOW);
+    await withdrawWorldSite(env.DB, sect.userId, { siteId: 'east-lingdi' }, NOW + HOUR);
+    expect(await siteRow('east-lingdi')).toMatchObject({
+      withdrawn_sect_id: sect.sectId,
+      withdrawn_until: NOW + HOUR + 24 * HOUR,
+    });
+
+    // 本宗：换人也进不去，面板给出冷却原因
+    const panel = await getWorld(env.DB, sect.userId, NOW + 2 * HOUR);
+    const site = panel.world.sites.find((item) => item.id === 'east-lingdi')!;
+    expect(site.action).toBeNull();
+    expect(site.blockedReason).toContain('刚撤回山门，冷却中');
+    expect(
+      await refusedOf(() => attackWorldSite(env.DB, sect.userId, { siteId: 'east-lingdi', discipleIds: [a, b, c] }, NOW + 2 * HOUR)),
+    ).toMatchObject({ code: 'INVALID_STATUS' });
+    // 别的灵地照常可打
+    await attackWorldSite(env.DB, sect.userId, { siteId: 'west-lingdi', discipleIds: [a, b, c] }, NOW + 2 * HOUR);
+    expect((await siteRow('west-lingdi')).holder_sect_id).toBe(sect.sectId);
+    await withdrawWorldSite(env.DB, sect.userId, { siteId: 'west-lingdi' }, NOW + 3 * HOUR);
+
+    // 别的宗门不受影响：可以直接开辟；易主后冷却仍在（撤回者 24 小时内也不能来斗法）
+    const [x, y, z] = other.discipleIds as [string, string, string];
+    await attackWorldSite(env.DB, other.userId, { siteId: 'east-lingdi', discipleIds: [x, y, z] }, NOW + 3 * HOUR);
+    expect((await siteRow('east-lingdi')).holder_sect_id).toBe(other.sectId);
+    expect(
+      await refusedOf(() =>
+        attackWorldSite(env.DB, sect.userId, { siteId: 'east-lingdi', discipleIds: [a, b, c] }, NOW + 8 * HOUR),
+      ),
+    ).toMatchObject({ code: 'INVALID_STATUS' });
+
+    // 满 24 小时后冷却解除
+    await attackWorldSite(env.DB, sect.userId, { siteId: 'east-lingdi', discipleIds: [a, b, c] }, NOW + 25 * HOUR + MIN);
+    expect((await siteRow('east-lingdi')).holder_sect_id).toBe(sect.sectId);
   });
 
   it('山河纪事：天下只列斗法与撤回（不含供奉）；本宗列与自己有关的全部', async () => {

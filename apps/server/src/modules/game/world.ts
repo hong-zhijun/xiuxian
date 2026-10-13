@@ -16,6 +16,8 @@ export const WORLD_PARTY_SIZE = 3;
 export const WORLD_DAILY_BATTLES = 10;
 /** 开辟 / 易主后的禁制护持时长：这段时间内不能被斗法。 */
 export const WORLD_PROTECT_MS = 4 * HOUR_MS;
+/** 撤回山门后，撤回的宗门这么久之内不能再开辟 / 斗法这一处（防「强队夺地 → 撤回 → 弱队再开辟」）。 */
+export const WORLD_WITHDRAW_COOLDOWN_MS = 24 * HOUR_MS;
 /** 不能斗法「宗门等级比自己低这么多及以上」的宗门。 */
 export const WORLD_LEVEL_GAP = 3;
 /** 有主灵地的守方战力加成（基点，1000 = +10%）；妖兽不加。 */
