@@ -136,11 +136,17 @@ export function eventDefinition(eventId: string): EventDef | undefined {
   return EVENT_POOL.find((event) => event.id === eventId);
 }
 
-/** 不在随机事件池里、由玩法直接写进 event_log 的系统事件（0042 灵脉争夺；0045 祭炼上线贺礼；0049 灵股挂单）。 */
+/**
+ * 不在随机事件池里、由玩法直接写进 event_log 的系统事件。
+ * veinLost / veinHeld / veinExhausted 是 0042 灵脉争夺的旧记录（已下线，名字保留，老记录还要显示）；
+ * siteLost / siteHeld 是 0051 山河舆图的灵地失陷 / 击退来犯。
+ */
 const SYSTEM_EVENT_NAMES: Readonly<Record<string, string>> = {
   veinLost: '灵脉失守',
   veinHeld: '灵脉守住',
   veinExhausted: '灵脉枯竭',
+  siteLost: '灵地失陷',
+  siteHeld: '击退来犯',
   refineLaunchGift: '祭炼贺礼',
   mondayGift: '周一福利',
   stockOrderFilled: '挂单成交',

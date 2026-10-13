@@ -126,7 +126,9 @@ import type {
   SectRow,
   SectStewardRow,
   DiscipleJourneyRow,
+  WorldSiteRow,
 } from './repository';
+import { parseGarrison, worldSiteFullName } from './world';
 import {
   findStewardOffice,
   findTalent,
@@ -218,6 +220,8 @@ export interface DiscipleView {
   stewardHandoverUntil: string | null;
   /** 天赋重构：不能出战的短原因（「任炼器执事」「执事交接中」）；能出战为 null。前端选人器据此禁选。 */
   combatBlockedReason: string | null;
+  /** 0051 山河舆图：正坐镇的灵地全名（「青木域 · 百草谷」）；没有坐镇为 null。前端据此禁选、标「坐镇」。 */
+  garrisonSiteName: string | null;
   /** 天赋重构 · 丹心：这名弟子每颗聚气丹的修为（无丹心 = 基础 120）。 */
   cultivationPillGain: number;
   /** 0035 凝元丹：这名弟子每颗的修为（无丹心 = 1200）与「服到满」需要几颗（0 = 不可服用）。 */
@@ -1939,6 +1943,8 @@ export interface SectStateInput {
   auctionClaimable?: number;
   /** 0034 执事堂：本宗职位行。 */
   stewards: readonly SectStewardRow[];
+  /** 0051 山河舆图：本宗占着的灵地（用来标出坐镇弟子；其他接口默认空）。 */
+  worldSites?: readonly WorldSiteRow[];
 }
 
 export function buildSectStateView(input: SectStateInput): SectStateView {
@@ -2014,7 +2020,13 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
   for (const row of journeys) {
     if (row.claimed_at === null) pendingJourneys.set(row.disciple_id, row);
   }
-
+  // 0051 山河舆图：坐镇中的弟子 → 灵地全名（坐镇 JSON 只在本宗占着的灵地上有值）。
+  const garrisonSiteNames = new Map<string, string>();
+  for (const site of input.worldSites ?? []) {
+    for (const discipleId of parseGarrison(site.garrison)) {
+      garrisonSiteNames.set(discipleId, worldSiteFullName(site.id));
+    }
+  }
 
   const discipleViews: DiscipleView[] = disciples.map((disciple) => {
     const realm = findRealm(disciple.realm_id);
@@ -2022,6 +2034,7 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
     const cost = breakthroughEnergyCost(disciple.realm_id, disciple.stage);
     const chanceBp = breakthroughChanceBp(config, arrayLevel);
     const injured = disciple.injured_until !== null && disciple.injured_until > now;
+    const garrisonSiteName = garrisonSiteNames.get(disciple.id) ?? null;
     // 0014：历练状态（在外 / 待领取 / 名额与资格原因）全部在服务端算好，前端不复制公式。
     const journeyRow = pendingJourneys.get(disciple.id);
     const journeyView = buildDiscipleJourneyView({
@@ -2033,6 +2046,7 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
       othersAwayCount:
         awayIds.size - (journeyRow !== undefined && awayIds.has(disciple.id) ? 1 : 0),
       inDefenseLineup: lineupContainsDisciple(sect.defense_lineup, disciple.id),
+      garrisoned: garrisonSiteName !== null,
       assignmentNames,
     });
     const away = journeyView.status === 'active';
@@ -2118,6 +2132,7 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
       stewardHandoverUntil:
         handoverUntil !== null && handoverUntil > now ? new Date(handoverUntil).toISOString() : null,
       combatBlockedReason,
+      garrisonSiteName,
       cultivationPillGain: pillGain,
       greatCultivationPillGain: greatPillGain,
       greatCultivationPillsToFull: cultivationPillsToFull(
@@ -2811,6 +2826,8 @@ function buildDiscipleJourneyView(input: {
   discipleCount: number;
   othersAwayCount: number;
   inDefenseLineup: boolean;
+  /** 0051：正坐镇灵地（坐镇中不能外出历练）。 */
+  garrisoned: boolean;
   assignmentNames: ReadonlyMap<string, string>;
 }): DiscipleJourneyView {
   const { disciple, row, now } = input;
@@ -2826,6 +2843,7 @@ function buildDiscipleJourneyView(input: {
     discipleCount: input.discipleCount,
     othersAwayCount: input.othersAwayCount,
     inDefenseLineup: input.inDefenseLineup,
+    garrisoned: input.garrisoned,
     now,
   });
 
@@ -3108,87 +3126,94 @@ export interface AuctionActionResultView {
   message: string;
 }
 
-/* ---------- 0042 灵脉争夺 ---------- */
+/* ---------- 0051 山河舆图 ---------- */
 
-/** 一回合（与 veins.ts 的 VeinRound 同形）。 */
-export interface VeinRoundView {
+/** 一回合（与 world.ts 的 WorldBattleRound 同形）。 */
+export interface WorldRoundView {
   round: number;
   attackerName: string;
   attackerPower: number;
+  /** 守方这一回合缺席（被驱逐 / 重伤 / 妖兽已无）时为 null。 */
   defenderName: string | null;
   defenderPower: number | null;
   winner: 'attacker' | 'defender';
 }
 
-/** 一条灵脉。产出是最小单位 / 小时；时间是毫秒时间戳。 */
-export interface VeinView {
+/** 一处灵地。产出是最小单位 / 小时；时间是 ISO 字符串。 */
+export interface WorldSiteView {
   id: string;
   name: string;
-  tier: 'small' | 'large' | 'eye';
+  regionId: string;
+  regionName: string;
+  tier: 'lingdi' | 'fudi' | 'dongtian' | 'zumai';
   tierName: string;
-  ratePerHour: number;
-  minSectLevel: number;
-  /** 连续占领上限（小时）；null = 不限。 */
-  holdLimitHours: number | null;
+  outputs: { resourceId: string; name: string; perHour: number }[];
+  /** 祖脉的稀有材料（每坐镇满 everyHours 个整点小时得 1 个）；其余为 null。 */
+  rare: { resourceId: string; name: string; everyHours: number } | null;
+  /** 占领者；无主（盘踞妖兽）为 null。 */
   holder: { sectId: string; name: string; level: number; isMe: boolean } | null;
-  /** 守军（按回合顺序）；absent = 已离宗 / 重伤卧床，这一回合缺席。 */
+  /** 坐镇弟子（按回合顺序）；absent = 已离宗 / 重伤卧床，这一回合缺席。 */
   garrison: { discipleId: string; name: string; realmName: string; power: number; absent: boolean }[];
-  /** 在场守军战力之和（未计守方 +10%）。 */
+  /** 在场坐镇弟子战力之和（未计守方 +10%）。 */
   garrisonPower: number;
-  heldSince: number | null;
-  /** 保护期截止（还在保护期内才有值）。 */
-  protectedUntil: number | null;
-  /** 枯竭时刻（不限时的档位为 null）。 */
-  exhaustsAt: number | null;
-  /** 我对这条的枯竭冷却截止（没有为 null）。 */
-  cooldownUntil: number | null;
-  /** 我能做什么：occupy 进驻 / attack 抢夺 / mine 我占着（换守军、撤离）/ null 不能动。 */
-  action: 'occupy' | 'attack' | 'mine' | null;
+  /** 禁制护持截止（还在护持内才有值）。 */
+  protectedUntil: string | null;
+  /** 我能做什么：beast 驱妖开辟 / battle 斗法 / mine 我占着（可撤回山门）/ null 不能动。 */
+  action: 'beast' | 'battle' | 'mine' | null;
   blockedReason: string | null;
 }
 
-export interface VeinBattleView {
+export interface WorldRegionView {
   id: string;
-  veinId: string;
-  veinName: string;
-  attackerName: string;
-  defenderName: string;
-  /** 进攻方是否获胜。 */
-  won: boolean;
-  rounds: VeinRoundView[];
-  createdAt: number;
-  iAttacked: boolean;
-  iDefended: boolean;
-  /** 我失守的、且灵脉仍在对方手里（显示「去夺回」）。 */
-  canRetake: boolean;
+  name: string;
+  /** 主产资源 id 与名字（中州为 null）。 */
+  resourceId: string | null;
+  resourceName: string | null;
 }
 
-/** 灵脉面板（GET /game/veins 与各命令回执里的 veins）。 */
-export interface VeinPanelView {
+/** 山河纪事的一条：text 是服务端拼好的一句话。 */
+export interface WorldLogView {
+  id: string;
+  kind: 'battle' | 'withdraw' | 'settle';
+  createdAt: string;
+  text: string;
+  /** 斗法 / 撤回的灵地 id；供奉为 null。 */
+  siteId: string | null;
+  /** 斗法：进攻方是否获胜；其余为 null。 */
+  won: boolean | null;
+  /** 斗法回合；其余为 null。 */
+  rounds: WorldRoundView[] | null;
+}
+
+/** 山河舆图面板（GET /game/world 与各命令回执里的 world）。 */
+export interface WorldPanelView {
   unlocked: boolean;
   unlockSectLevel: number;
-  partySize: number;
-  dailyAttacks: number;
-  attacksUsed: number;
-  attacksLeft: number;
+  /** 本宗镇守名额上限 / 已占处数。 */
+  cap: number;
+  held: number;
+  dailyBattles: number;
+  battlesUsed: number;
+  battlesLeft: number;
+  /** 禁制护持时长（小时）。 */
+  protectHours: number;
   levelGap: number;
-  protectMinutes: number;
-  exhaustCooldownHours: number;
-  defenderBonusPercent: number;
-  myVeinId: string | null;
-  /** 累计从灵脉获得的灵气（最小单位）。 */
-  harvested: number;
-  veins: VeinView[];
-  battles: VeinBattleView[];
+  partySize: number;
+  regions: WorldRegionView[];
+  sites: WorldSiteView[];
+  /** 纪事筛选：all 天下 / mine 本宗。 */
+  scope: 'all' | 'mine';
+  logs: WorldLogView[];
 }
 
-/** 抢夺回执里的这一战。 */
-export interface VeinBattleResultView {
-  veinId: string;
-  veinName: string;
-  defenderName: string;
+/** 斗法回执里的这一战。 */
+export interface WorldBattleResultView {
+  siteId: string;
+  siteName: string;
+  /** 守方宗门名；妖兽为 null。 */
+  defenderName: string | null;
   won: boolean;
-  rounds: VeinRoundView[];
+  rounds: WorldRoundView[];
   /** 进攻失败时受伤的弟子名。 */
   injured: string[];
 }
@@ -3350,12 +3375,17 @@ export interface HubView {
   };
   /** 秘境：今天在已开放的秘境里还能探几次（各秘境每日次数相加）。 */
   explore: { remaining: number; total: number };
-  veins: {
+  /** 0051 山河舆图：镇守名额与失陷情况（只读汇总）。 */
+  world: {
     unlocked: boolean;
-    /** 本宗正占着的灵脉；没有为 null。 */
-    holding: { name: string; ratePerHour: number } | null;
-    /** 本宗现在就能进驻的无主灵脉条数（够等级、不在枯竭冷却）。 */
-    freeCount: number;
+    /** 镇守名额上限。 */
+    cap: number;
+    /** 本宗正占着的灵地数。 */
+    held: number;
+    /** 还能开辟 / 夺下几处（max(0, cap − held)）。 */
+    freeSlots: number;
+    /** 近 24 小时被夺、且现在不在本宗手里的灵地数。 */
+    lostCount: number;
   };
   auction: { unlocked: boolean; claimable: number; myActive: number };
   market: {

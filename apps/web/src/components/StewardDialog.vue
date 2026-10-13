@@ -28,13 +28,14 @@ const picked = ref<Record<string, string>>({});
 /** 正在确认卸任的职位（两步确认：卸任会让原执事进入交接期）。 */
 const confirmingDismiss = ref<string | null>(null);
 
-/** 能任这个职位的弟子：天赋对得上、不是现任、不在外历练（服务端还会再校验守擂阵容等）。 */
+/** 能任这个职位的弟子：天赋对得上、不是现任、不在外历练、不在坐镇灵地（服务端还会再校验守擂阵容等）。 */
 function candidatesOf(office: StewardOfficeView): DiscipleView[] {
   return props.state.disciples.filter(
     (disciple) =>
       disciple.talent === office.talentId &&
       disciple.id !== office.discipleId &&
-      disciple.journey.status !== 'active',
+      disciple.journey.status !== 'active' &&
+      (disciple.garrisonSiteName ?? null) === null,
   );
 }
 

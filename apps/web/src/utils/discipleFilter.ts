@@ -215,6 +215,8 @@ export interface SelectableDisciple extends FilterableDisciple {
   journey: { status: 'none' | 'active' | 'ready' };
   /** 天赋重构：执事 / 交接期不能出战的短原因（服务端算好）；能出战为 null。 */
   combatBlockedReason?: string | null;
+  /** 0051 山河舆图：坐镇的灵地全名；非 null = 坐镇中。缺省视为未坐镇。 */
+  garrisonSiteName?: string | null;
 }
 
 /** 选人控件的禁用开关（默认全禁；守擂阵容允许带伤守阵）。 */
@@ -230,7 +232,8 @@ export interface SelectionBlockOptions {
 /**
  * 选人控件里「这名弟子为什么不能选」（null = 可选）。
  *
- * 与服务端同一口径：重伤 = `severeInjuredUntil > serverNow`（一律禁选，不受开关影响）；
+ * 与服务端同一口径：坐镇 = `garrisonSiteName` 非 null（最先判定，一律禁选，连论道这种
+ * `blockSteward: false` 的入口也要拦）；重伤 = `severeInjuredUntil > serverNow`（一律禁选，不受开关影响）；
  * 疗伤 = `injuredUntil > serverNow`；在外 = `journey.status === 'active'`
  * （`ready` 是「已归队待领取」，服务端也放行）。挑战 / 守擂 / 秘境 / 赌坊四处共用这一份判定，
  * 免得再出现「前端能选、提交被服务端打回」。
@@ -240,6 +243,9 @@ export function selectionBlockReason(
   serverNowMs: number,
   options: SelectionBlockOptions,
 ): string | null {
+  // 坐镇灵地：不受任何开关影响（坐镇中不能出战、论道、进守擂阵容，服务端一律拒绝）。
+  const garrisonSiteName = disciple.garrisonSiteName ?? null;
+  if (garrisonSiteName !== null) return `坐镇${garrisonSiteName}`;
   // 重伤卧床期间服务端一律拒绝（守擂阵容也上不了场），所以不看 blockInjured / blockAway 开关。
   if (isSeverelyInjured(disciple, serverNowMs)) return '重伤';
   if (options.blockInjured && isInjured(disciple, serverNowMs)) return '疗伤中';

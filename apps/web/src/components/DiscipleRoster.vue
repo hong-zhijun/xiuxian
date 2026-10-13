@@ -139,6 +139,9 @@ const rows = computed<RosterRow[]>(() =>
     // 天赋重构：执事 / 交接期不能出战，比岗位名更值得一眼看到（疗伤、重伤仍优先）。
     if (disciple.stewardOffice !== null) rosterStatus = { key: 'steward', label: '执事' };
     else if (disciple.stewardHandoverUntil !== null) rosterStatus = { key: 'steward', label: '交接中' };
+    // 0051 山河舆图：坐镇中的弟子标出所在灵地（岗位已被锁成修炼，这一条比岗位名更要紧）。
+    const garrisonSiteName = disciple.garrisonSiteName ?? null;
+    if (garrisonSiteName !== null) rosterStatus = { key: 'garrison', label: `坐镇 · ${garrisonSiteName}` };
     if (status.key === 'injured') rosterStatus = status;
     // 重伤剩余时间按 props.serverNowMs（服务器时间口径）倒算；key 会进 `is-severeInjured` 类名。
     const severeLabel = severeInjuryStatusLabel(disciple, props.serverNowMs);

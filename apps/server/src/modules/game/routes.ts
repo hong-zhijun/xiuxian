@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 
 import { AppError, authOf, type AppContext, type AppEnv } from '../../http/appError';
 import { respondOk } from '../../http/envelope';
-import { parseStrictJson } from '../../http/validation';
+import { parseStrictJson, parseStrictQuery } from '../../http/validation';
 import { getDb } from '../../infra/db/client';
 import { clientIpOf } from '../../middleware/rateLimit';
 import { AVATAR_HASH_PATTERN } from './avatarImage';
@@ -57,8 +57,9 @@ import {
   auctionListRequestSchema,
   auctionBidRequestSchema,
   auctionLotRequestSchema,
-  veinPartyRequestSchema,
-  veinWithdrawRequestSchema,
+  worldAttackRequestSchema,
+  worldQuerySchema,
+  worldWithdrawRequestSchema,
   marketTradeRequestSchema,
   marketChartQuerySchema,
   marketOrderPlaceRequestSchema,
@@ -112,11 +113,9 @@ import {
   cancelAuction,
   claimAuction,
   retractAuctionBid,
-  getVeins,
-  occupyVein,
-  attackVein,
-  setVeinGarrison,
-  withdrawVein,
+  getWorld,
+  attackWorldSite,
+  withdrawWorldSite,
   getMarket,
   getMarketChart,
   tradeStock,
@@ -844,40 +843,28 @@ export function createGameRoutes(): Hono<AppEnv> {
     return respondOk(c, { state: result.state, market: result.market });
   });
 
-  // 0042 灵脉争夺：面板（先顺手结算产出 / 枯竭）。
-  routes.get('/game/veins', async (c) => {
+  // 0051 山河舆图：面板（先顺手结算整点供奉；scope = all 天下 / mine 本宗）。
+  routes.get('/game/world', async (c) => {
     const userId = requireUserId(c);
-    const result = await getVeins(getDb(c.env), userId, Date.now());
-    return respondOk(c, { state: result.state, veins: result.veins });
+    const query = parseStrictQuery(worldQuerySchema, c);
+    const result = await getWorld(getDb(c.env), userId, Date.now(), query.scope ?? 'all');
+    return respondOk(c, { state: result.state, world: result.world });
   });
 
-  // 0042 灵脉争夺：进驻 / 抢夺 / 换守军 / 撤离（各自一次受保护 batch，带灵脉 version 守卫）。
-  routes.post('/game/veins/occupy', async (c) => {
+  // 0051 山河舆图：驱妖开辟（无主）/ 斗法夺地（有主）；各自一次受保护 batch，带灵地 version 守卫。
+  routes.post('/game/world/attack', async (c) => {
     const userId = requireUserId(c);
-    const body = await parseStrictJson(veinPartyRequestSchema, c);
-    const result = await occupyVein(getDb(c.env), userId, body, Date.now());
-    return respondOk(c, { state: result.state, veins: result.veins, result: result.result });
+    const body = await parseStrictJson(worldAttackRequestSchema, c);
+    const result = await attackWorldSite(getDb(c.env), userId, body, Date.now());
+    return respondOk(c, { state: result.state, world: result.world, result: result.result });
   });
 
-  routes.post('/game/veins/attack', async (c) => {
+  // 0051 山河舆图：撤回山门（结算给自己，灵地回到妖兽手里，坐镇弟子解锁）。
+  routes.post('/game/world/withdraw', async (c) => {
     const userId = requireUserId(c);
-    const body = await parseStrictJson(veinPartyRequestSchema, c);
-    const result = await attackVein(getDb(c.env), userId, body, Date.now());
-    return respondOk(c, { state: result.state, veins: result.veins, result: result.result });
-  });
-
-  routes.post('/game/veins/garrison', async (c) => {
-    const userId = requireUserId(c);
-    const body = await parseStrictJson(veinPartyRequestSchema, c);
-    const result = await setVeinGarrison(getDb(c.env), userId, body, Date.now());
-    return respondOk(c, { state: result.state, veins: result.veins, result: result.result });
-  });
-
-  routes.post('/game/veins/withdraw', async (c) => {
-    const userId = requireUserId(c);
-    const body = await parseStrictJson(veinWithdrawRequestSchema, c);
-    const result = await withdrawVein(getDb(c.env), userId, body, Date.now());
-    return respondOk(c, { state: result.state, veins: result.veins, result: result.result });
+    const body = await parseStrictJson(worldWithdrawRequestSchema, c);
+    const result = await withdrawWorldSite(getDb(c.env), userId, body, Date.now());
+    return respondOk(c, { state: result.state, world: result.world, result: result.result });
   });
 
   // 0040 拍卖行：面板（先顺手结算到期的单）。

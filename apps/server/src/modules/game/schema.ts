@@ -442,15 +442,20 @@ export const auctionLotRequestSchema = z.strictObject({
   lotId: z.string().min(1).max(64),
 });
 
-/** 0042 灵脉争夺：进驻 / 抢夺 / 换守军（固定 3 人；是否能出战由 service 校验）。 */
-export const veinPartyRequestSchema = z.strictObject({
-  veinId: z.string().min(1).max(32),
+/** 0051 山河舆图：驱妖开辟 / 斗法夺地（固定 3 人；是否能出战由 service 校验）。 */
+export const worldAttackRequestSchema = z.strictObject({
+  siteId: z.string().min(1).max(64),
   discipleIds: z.array(z.string().min(1).max(64)).length(3),
 });
 
-/** 0042 灵脉争夺：撤离。 */
-export const veinWithdrawRequestSchema = z.strictObject({
-  veinId: z.string().min(1).max(32),
+/** 0051 山河舆图：撤回山门。 */
+export const worldWithdrawRequestSchema = z.strictObject({
+  siteId: z.string().min(1).max(64),
+});
+
+/** 0051 山河舆图：面板查询参数（scope：all 天下 / mine 本宗；缺省为 all）。 */
+export const worldQuerySchema = z.strictObject({
+  scope: z.enum(['all', 'mine']).optional(),
 });
 
 /** 0043 灵股：买入 / 卖出（股数上限与能否成交由 service 校验）。 */

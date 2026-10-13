@@ -569,6 +569,8 @@ export interface JourneyEligibilityInput {
   othersAwayCount: number;
   /** 本人是否在某宗手动守擂阵容里（阵容快照按 id 判定）。 */
   inDefenseLineup: boolean;
+  /** 0051 山河舆图：本人是否正坐镇某处灵地（默认 false；坐镇中不能外出历练）。 */
+  garrisoned?: boolean;
   now: number;
 }
 
@@ -582,7 +584,7 @@ export interface JourneyBlock {
 
 /**
  * 与方向无关的不可出发原因；null = 可以出发（方向自身的限制见 journeyDirectionBlockedReason）。
- * 判定顺序即报错优先级：身份 → 未领取记录 → 伤势 → 名额 → 留守 → 阵容。
+ * 判定顺序即报错优先级：身份 → 未领取记录 → 坐镇 → 伤势 → 名额 → 留守 → 阵容。
  *
  * 只有「同时在外的两人名额」映射为 CAPACITY_FULL（计划第 3 节要求的业务错误码），
  * 其余都是 INVALID_STATUS；view 层只取 message 展示。
@@ -599,6 +601,9 @@ export function journeyEligibilityBlock(input: JourneyEligibilityInput): Journey
           ? '正在外历练，尚未归队'
           : '已有待领取的历练收获，先领取后才能再次出发',
     };
+  }
+  if (input.garrisoned === true) {
+    return { code: 'INVALID_STATUS', message: '坐镇灵地中，撤回山门后才能外出历练' };
   }
   if (input.injuredUntil !== null && Number(input.injuredUntil) > input.now) {
     const remaining = Math.ceil((Number(input.injuredUntil) - input.now) / 1_000);

@@ -3322,6 +3322,17 @@ ul {
   white-space: normal;
 }
 
+/* 坐镇灵地（山河舆图）：「坐镇 · 青木域 · 百草谷」较长，窄卡片里允许换行。 */
+.disciple-status.is-garrison {
+  max-width: 100%;
+  border-color: rgba(119, 184, 154, 0.4);
+  color: var(--jade-bright);
+  background: rgba(119, 184, 154, 0.12);
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
 .disciple-detail-button.is-journey-ready {
   flex-wrap: wrap;
   border-color: rgba(234, 209, 154, 0.7);
@@ -4907,6 +4918,11 @@ ul {
   white-space: nowrap;
 }
 
+/* 第二行的警示（如山河舆图的「失陷 n 处」）：红字，同一张卡片里与状态行并排展示。 */
+.hub-card-status.is-warn {
+  color: var(--red-bright);
+}
+
 /* 中等宽度：一行 3 张，状态文字不至于被挤成省略号（手机见 680px 断点：一行 2 张）。 */
 @media (max-width: 900px) {
   .hub-group-cards {
@@ -5075,6 +5091,12 @@ ul {
 /* 标题行给右上角的关闭按钮让位 */
 .modal-card.is-narrow {
   width: min(440px, 100%);
+}
+
+/* 宽弹窗（山河舆图：地图 + 灵地列表 + 纪事）：比默认宽，高度也放宽，内容仍在 .modal-body 里滚动。 */
+.modal-card.is-wide {
+  width: min(1100px, 100%);
+  max-height: min(90vh, 900px);
 }
 
 .modal-card .section-heading,

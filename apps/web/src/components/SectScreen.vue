@@ -89,7 +89,7 @@ import WorldBossDialog from './WorldBossDialog.vue';
 import MeritDialog from './MeritDialog.vue';
 import TowerDialog from './TowerDialog.vue';
 import AuctionDialog from './AuctionDialog.vue';
-import VeinDialog from './VeinDialog.vue';
+import WorldMapDialog from './WorldMapDialog.vue';
 import MarketDialog from './MarketDialog.vue';
 import TodoFloat, { type TodoItem } from './TodoFloat.vue';
 import ModalShell from './ModalShell.vue';
@@ -201,7 +201,7 @@ const openPanel = ref<
   | 'merit'
   | 'tower'
   | 'auction'
-  | 'veins'
+  | 'world'
   | 'market'
   | 'steward'
   | 'daily'
@@ -1711,7 +1711,7 @@ const showAccountDialog = ref(false);
 /* ---------- 首页功能区：状态卡片 + PC 待办浮窗 ---------- */
 
 /**
- * 各玩法此刻的状态摘要（讨伐血量、镇妖塔层数、灵脉、拍卖行、灵股持仓……），GET /game/hub。
+ * 各玩法此刻的状态摘要（讨伐血量、镇妖塔层数、山河舆图、拍卖行、灵股持仓……），GET /game/hub。
  * 首页打开时、关掉功能弹窗后、以及每分钟（标签页可见时）各取一次；取不到时卡片退回默认文案。
  */
 const hub = ref<HubView | null>(null);
@@ -1785,7 +1785,7 @@ function signedPct(value: number): string {
 
 type HubCardId =
   | 'daily' | 'alchemy' | 'forge' | 'refine' | 'steward' | 'defense'
-  | 'boss' | 'tower' | 'explore' | 'veins'
+  | 'boss' | 'tower' | 'explore' | 'world'
   | 'shop' | 'gambling' | 'auction' | 'market' | 'merit';
 
 interface HubCard {
@@ -1793,6 +1793,8 @@ interface HubCard {
   name: string;
   glyph: string;
   status: string;
+  /** 第二行的警示（红字，如山河舆图的「失陷 n 处」）：没有则不显示。 */
+  warn?: string;
   /** 有可领取的东西：卡片名旁亮小红点。 */
   alert?: boolean;
 }
@@ -1810,7 +1812,7 @@ const hubGroups = computed<{ label: string; cards: HubCard[] }[]>(() => {
           ? '每日 08:00 降临'
           : '今日讨伐已结束';
   const tower = h?.tower;
-  const veins = h?.veins;
+  const world = h?.world;
   const auction = h?.auction;
   const market = h?.market;
   const merit = props.state.resources.find((resource) => resource.id === 'bossMerit');
@@ -1867,19 +1869,16 @@ const hubGroups = computed<{ label: string; cards: HubCard[] }[]>(() => {
                   : '今日次数已用完',
         },
         {
-          id: 'veins',
-          name: '灵脉',
-          glyph: '脉',
+          id: 'world',
+          name: '山河舆图',
+          glyph: '舆',
           status:
-            veins === undefined
-              ? '占灵脉产灵气'
-              : !veins.unlocked
+            world === undefined
+              ? '占灵地 · 斗法夺地'
+              : !world.unlocked
                 ? '宗门 3 级开放'
-                : veins.holding
-                  ? `${veins.holding.name} · +${formatAmount(veins.holding.ratePerHour)}/时`
-                  : veins.freeCount > 0
-                    ? `${String(veins.freeCount)} 条无主可进驻`
-                    : '未占领灵脉',
+                : `镇守 ${String(world.held)}/${String(world.cap)} · 尚可开辟 ${String(world.freeSlots)} 处`,
+          warn: world !== undefined && world.lostCount > 0 ? `失陷 ${String(world.lostCount)} 处` : undefined,
         },
       ],
     },
@@ -1939,7 +1938,7 @@ function openHubCard(id: HubCardId): void {
     boss: 'world-boss',
     tower: 'tower',
     explore: 'explore',
-    veins: 'veins',
+    world: 'world',
     shop: 'shop',
     gambling: 'gambling',
     auction: 'auction',
@@ -1972,6 +1971,9 @@ const todoItems = computed<TodoItem[]>(() => {
   if (healableIds.value.length > 0) {
     items.push({ id: 'heal', tone: 'warn', text: `${String(healableIds.value.length)} 名弟子受伤`, action: '去疗伤' });
   }
+  if (h !== null && h.world.lostCount > 0) {
+    items.push({ id: 'world-lost', tone: 'warn', text: `${String(h.world.lostCount)} 处灵地失陷`, action: '去夺回' });
+  }
   if (breakthroughReadyIds.value.length > 0) {
     items.push({ id: 'breakthrough', tone: 'act', text: `${String(breakthroughReadyIds.value.length)} 名弟子可突破`, action: '去突破' });
   }
@@ -1995,8 +1997,8 @@ const todoItems = computed<TodoItem[]>(() => {
   if (props.state.gambling.unlocked && props.state.gambling.remaining > 0) {
     items.push({ id: 'gambling', tone: 'act', text: `赌坊今日还剩 ${String(props.state.gambling.remaining)} 次`, action: '去赌坊' });
   }
-  if (h?.veins.unlocked && h.veins.holding === null && h.veins.freeCount > 0) {
-    items.push({ id: 'veins', tone: 'act', text: `${String(h.veins.freeCount)} 条灵脉无主`, action: '去进驻' });
+  if (h !== null && h.world.unlocked && h.world.freeSlots > 0) {
+    items.push({ id: 'world-free', tone: 'act', text: `山河舆图尚可开辟 ${String(h.world.freeSlots)} 处灵地`, action: '去开辟' });
   }
   if (recruitBadge.value > 0) {
     items.push({ id: 'recruit', tone: 'act', text: `招贤台还可招 ${String(recruitBadge.value)} 人`, action: '去招贤' });
@@ -2049,7 +2051,9 @@ function onTodo(id: string): void {
     if (first !== undefined) openDetail(first.discipleId);
   } else if (id === 'daily') {
     openPanel.value = 'daily';
-  } else if (id === 'tower' || id === 'auction' || id === 'veins' || id === 'steward') {
+  } else if (id === 'world-free' || id === 'world-lost') {
+    openPanel.value = 'world';
+  } else if (id === 'tower' || id === 'auction' || id === 'steward') {
     openPanel.value = id;
   } else if (id === 'boss') {
     openPanel.value = 'world-boss';
@@ -2392,6 +2396,7 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
               <b v-if="card.alert" class="hub-card-alert" role="img" aria-label="有可领取的奖励" />
             </span>
             <span class="hub-card-status">{{ card.status }}</span>
+            <span v-if="card.warn" class="hub-card-status is-warn">{{ card.warn }}</span>
           </button>
         </div>
       </div>
@@ -2759,9 +2764,9 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
     />
   </ModalShell>
 
-  <!-- 0042 灵脉争夺：只在打开时 / 操作后 / 点刷新时请求，不做定时轮询。 -->
-  <ModalShell v-if="openPanel === 'veins'" :loading="busy" label="灵脉争夺" @close="openPanel = null">
-    <VeinDialog
+  <!-- 0051 山河舆图：只在打开时 / 操作后 / 点刷新 / 切换纪事范围时请求，不做定时轮询。 -->
+  <ModalShell v-if="openPanel === 'world'" :loading="busy" label="山河舆图" wide @close="openPanel = null">
+    <WorldMapDialog
       :state="state"
       :busy="busy"
       @state-update="(s: SectStateView) => emit('recruited', s)"

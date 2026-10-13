@@ -23,7 +23,7 @@ import {
 import { GAMBLING_UNLOCK_SECT_LEVEL } from '../../apps/server/src/modules/game/gambling';
 import { MARKET_UNLOCK_SECT_LEVEL } from '../../apps/server/src/modules/game/market';
 import { TOWER_UNLOCK_SECT_LEVEL } from '../../apps/server/src/modules/game/tower';
-import { VEIN_UNLOCK_SECT_LEVEL } from '../../apps/server/src/modules/game/veins';
+import { WORLD_UNLOCK_SECT_LEVEL } from '../../apps/server/src/modules/game/world';
 import { UNITS_PER_DISPLAY } from '../../apps/server/src/modules/game/shop';
 
 /**
@@ -104,13 +104,13 @@ describe('日课任务池（计划 1.1）', () => {
     expect(DAILY_TASK_STONE_PER_LEVEL).toBe(50);
   });
 
-  it('出现条件与解锁常量一致：赌坊 / 镇妖塔 / 灵股 / 灵脉', () => {
+  it('出现条件与解锁常量一致：赌坊 / 镇妖塔 / 灵股 / 山河舆图', () => {
     expect(dailyTaskAvailableIds({ ...LEVEL_ONE_BARE, sectLevel: GAMBLING_UNLOCK_SECT_LEVEL - 1 })).not.toContain('gamble');
     expect(dailyTaskAvailableIds({ ...LEVEL_ONE_BARE, sectLevel: GAMBLING_UNLOCK_SECT_LEVEL })).toContain('gamble');
     expect(dailyTaskAvailableIds({ ...LEVEL_ONE_BARE, sectLevel: MARKET_UNLOCK_SECT_LEVEL - 1 })).not.toContain('stockTrade');
     expect(dailyTaskAvailableIds({ ...LEVEL_ONE_BARE, sectLevel: MARKET_UNLOCK_SECT_LEVEL })).toContain('stockTrade');
-    expect(dailyTaskAvailableIds({ ...LEVEL_ONE_BARE, sectLevel: VEIN_UNLOCK_SECT_LEVEL - 1 })).not.toContain('veinAttack');
-    expect(dailyTaskAvailableIds({ ...LEVEL_ONE_BARE, sectLevel: VEIN_UNLOCK_SECT_LEVEL })).toContain('veinAttack');
+    expect(dailyTaskAvailableIds({ ...LEVEL_ONE_BARE, sectLevel: WORLD_UNLOCK_SECT_LEVEL - 1 })).not.toContain('veinAttack');
+    expect(dailyTaskAvailableIds({ ...LEVEL_ONE_BARE, sectLevel: WORLD_UNLOCK_SECT_LEVEL })).toContain('veinAttack');
     // 镇妖塔：解锁等级且闯过至少一层才有扫荡。
     expect(dailyTaskAvailableIds({ ...LEVEL_THREE_FULL, towerMaxFloor: 0 })).not.toContain('towerSweep');
     expect(dailyTaskAvailableIds({ ...LEVEL_THREE_FULL, sectLevel: TOWER_UNLOCK_SECT_LEVEL - 1 })).not.toContain('towerSweep');

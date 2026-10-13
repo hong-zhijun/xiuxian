@@ -165,6 +165,8 @@ export interface AdvisorDisciple {
   daoInsight: number;
   daoInsightRemaining: number;
   journey?: { status: string };
+  /** 0051 山河舆图：坐镇的灵地全名；非 null = 坐镇中，暂时不能出战。缺省视为未坐镇。 */
+  garrisonSiteName?: string | null;
 }
 
 export interface AdvisorResource {
@@ -525,6 +527,7 @@ function buildMains(state: AdvisorState, gear: AdvisorEquipment | null, nowMs: n
     let note: string | null = null;
     if (isAfter(disciple.severeInjuredUntil, nowMs)) note = '重伤卧床，静养痊愈前无法出战';
     else if (isAfter(disciple.injuredUntil, nowMs)) note = '受伤未愈，先疗伤再出战';
+    else if (disciple.garrisonSiteName) note = `坐镇${disciple.garrisonSiteName}中，撤回山门后才能出战`;
     return {
       discipleId: disciple.id,
       name: disciple.name,

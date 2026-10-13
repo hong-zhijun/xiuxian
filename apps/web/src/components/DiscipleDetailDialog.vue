@@ -190,12 +190,13 @@ function onTabKeydown(event: KeyboardEvent, current: TabId): void {
 
 /* ---------- 头部：姓名 / 境界 / 头像框 / 状态 ---------- */
 
-/** 头部状态：重伤卧床优先（带剩余静养时间），其次在外 / 待领取，最后现有状态优先级。 */
+/** 头部状态：重伤卧床优先（带剩余静养时间），其次在外 / 待领取，再是坐镇，最后现有状态优先级。 */
 const headerStatus = computed(() => journeyBadge(props.disciple.journey, serverNowMs.value));
 const headerStatusLabel = computed(
   () =>
     severeLabel.value ??
     headerStatus.value ??
+    garrisonLabel.value ??
     discipleStatus(props.disciple, serverNowMs.value).label,
 );
 
@@ -611,10 +612,26 @@ const awayHint = computed<string | null>(() =>
 /** 转岗 / 破境 / 服丹 / 出发被挡住的共用原因：重伤卧床优先于在外历练（同一处提示位）。 */
 const actionBlockHint = computed<string | null>(() => severeHint.value ?? awayHint.value);
 
+/**
+ * 0051 山河舆图：坐镇中的灵地全名（null = 没有坐镇）。坐镇只挡转岗 / 驱逐 / 穿卸装备，
+ * 破境 / 服药 / 祭炼照常，所以它不并入 actionBlockHint（那一条也用在破境与服药的提示位上）。
+ */
+const garrisonSite = computed<string | null>(() => props.disciple.garrisonSiteName ?? null);
+const garrisoned = computed(() => garrisonSite.value !== null);
+/** 头部状态标签里的坐镇文案。 */
+const garrisonLabel = computed<string | null>(() => (garrisonSite.value === null ? null : `坐镇 · ${garrisonSite.value}`));
+/** 转岗 / 穿卸装备被坐镇挡住的原因（规则仍由服务端判定）。 */
+const garrisonHint = computed<string | null>(() =>
+  garrisonSite.value === null ? null : `坐镇${garrisonSite.value}中，撤回山门后才能转岗、驱逐或更换装备。`,
+);
+/** 转岗 / 穿卸装备的提示位：重伤、在外优先，其次坐镇。 */
+const transferBlockHint = computed<string | null>(() => actionBlockHint.value ?? garrisonHint.value);
+
 /** 驱逐被历练挡住时的原因：在外与待领取措辞分开，玩家才知道下一步该做什么。 */
 const expelBlockedHint = computed<string | null>(() => {
   if (journey.value.status === 'active') return '在外历练中不能驱逐，请等他归队。';
   if (journey.value.status === 'ready') return '先领取历练收获后才能驱逐。';
+  if (garrisoned.value) return '坐镇灵地中不能驱逐，请先撤回山门。';
   return null;
 });
 
@@ -1034,8 +1051,10 @@ const gearSlots = computed(() =>
   })),
 );
 
-/** 在外历练 / 重伤卧床：穿、卸都会被服务端拒绝（requireNotAway），这里同步置灰并说明原因。 */
-const gearBlocked = computed(() => severeInjured.value || journey.value.status === 'active');
+/** 在外历练 / 重伤卧床 / 坐镇灵地：穿、卸都会被服务端拒绝，这里同步置灰并说明原因。 */
+const gearBlocked = computed(() => severeInjured.value || journey.value.status === 'active' || garrisoned.value);
+/** 祭炼只挡在外与重伤（坐镇中照常可以祭炼，见山河舆图规则）。 */
+const refineBlocked = computed(() => severeInjured.value || journey.value.status === 'active');
 
 /** 正在选装备的部位（null = 没有打开二级面板）。 */
 const gearPickerSlot = ref<EquipmentSlotId | null>(null);
@@ -1068,9 +1087,9 @@ function unequipGear(item: EquipmentItemView | null): void {
   emit('unequip', item.id);
 }
 
-/** 祭炼：在外 / 重伤时与穿卸同样置灰（服务端 requireNotAway 也会拒）。 */
+/** 祭炼：在外 / 重伤时置灰（服务端也会拒）；坐镇中照常可以祭炼。 */
 function refineGear(item: EquipmentItemView | null): void {
-  if (item === null || props.busy || gearBlocked.value) return;
+  if (item === null || props.busy || refineBlocked.value) return;
   emit('refine', item.id);
 }
 </script>
@@ -1369,11 +1388,11 @@ function refineGear(item: EquipmentItemView | null): void {
           <AssignmentSelect
             :model-value="disciple.assignment"
             :options="state.assignments"
-            :disabled="busy || journey.status === 'active' || severeInjured"
+            :disabled="busy || journey.status === 'active' || severeInjured || garrisoned"
             :label="disciple.name"
             @change="emit('assign', disciple.id, $event)"
           />
-          <p v-if="actionBlockHint" class="blocked-hint">{{ actionBlockHint }}</p>
+          <p v-if="transferBlockHint" class="blocked-hint">{{ transferBlockHint }}</p>
         </section>
 
         <section class="disciple-detail-section" aria-labelledby="disciple-injury-title">
@@ -1446,7 +1465,7 @@ function refineGear(item: EquipmentItemView | null): void {
 
           <template v-else>
             <p v-if="gearBlocked" class="blocked-hint">
-              {{ actionBlockHint ?? '在外历练或重伤卧床期间不能穿、卸、祭炼装备。' }}
+              {{ transferBlockHint ?? '在外历练或重伤卧床期间不能穿、卸装备。' }}
             </p>
 
             <ul class="gear-slots">
@@ -1493,8 +1512,8 @@ function refineGear(item: EquipmentItemView | null): void {
                   <button
                     class="quiet-button gear-refine"
                     type="button"
-                    :disabled="busy || gearBlocked"
-                    :aria-disabled="busy || gearBlocked"
+                    :disabled="busy || refineBlocked"
+                    :aria-disabled="busy || refineBlocked"
                     :aria-label="`祭炼 ${slot.worn.name}`"
                     @click="refineGear(slot.worn)"
                   >
@@ -1910,7 +1929,7 @@ function refineGear(item: EquipmentItemView | null): void {
               ref="expelTrigger"
               class="action-button disciple-danger-button"
               type="button"
-              :disabled="busy || journey.status !== 'none'"
+              :disabled="busy || journey.status !== 'none' || garrisoned"
               @click="askExpel"
             >
               驱逐弟子
@@ -2014,7 +2033,7 @@ function refineGear(item: EquipmentItemView | null): void {
         </header>
 
         <p v-if="gearBlocked" class="blocked-hint">
-          {{ actionBlockHint ?? '在外历练或重伤卧床期间不能更换装备。' }}
+          {{ transferBlockHint ?? '在外历练或重伤卧床期间不能更换装备。' }}
         </p>
 
         <ul v-if="gearPickerOptions.length > 0" class="gear-picker-list">

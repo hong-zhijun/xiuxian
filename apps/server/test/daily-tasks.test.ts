@@ -234,13 +234,14 @@ async function insertStockTrade(sectId: string, createdAt: number): Promise<void
     .run();
 }
 
-async function insertVeinBattle(sectId: string, createdAt: number): Promise<void> {
+/** 山河斗法（0051）：今天本宗发起的一场斗法（world_site_logs 里 kind = 'battle'；开辟妖兽也计入）。 */
+async function insertWorldBattle(sectId: string, createdAt: number): Promise<void> {
   await env.DB.prepare(
-    `INSERT INTO vein_battles (id, vein_id, attacker_sect_id, attacker_name, defender_sect_id, defender_name,
-       won, rounds, created_at)
-     VALUES (?, 'vein-1', ?, '攻方', ?, '守方', 1, '[]', ?)`,
+    `INSERT INTO world_site_logs (id, kind, sect_id, sect_name, target_sect_id, target_name, site_id,
+       won, rounds, effects, created_at)
+     VALUES (?, 'battle', ?, '攻方', NULL, NULL, 'east-lingdi', 1, '[]', NULL, ?)`,
   )
-    .bind(crypto.randomUUID(), sectId, sectId, createdAt)
+    .bind(crypto.randomUUID(), sectId, createdAt)
     .run();
 }
 
@@ -374,8 +375,8 @@ describe('宗门日课：进度统计（只数本宗、今天的记录）', () =
     // 灵股交易：今天 1 笔，昨天的不计。
     await insertStockTrade(sect.sectId, today);
     await insertStockTrade(sect.sectId, yesterday);
-    // 灵脉抢夺：今天 1 场。
-    await insertVeinBattle(sect.sectId, today);
+    // 山河斗法：今天 1 场（昨天的不计；只数本宗发起的）。
+    await insertWorldBattle(sect.sectId, today);
 
     await seedDailyRow(sect.sectId, [...DAILY_TASK_IDS]);
     const view = dailyOf(await getDaily(sect));

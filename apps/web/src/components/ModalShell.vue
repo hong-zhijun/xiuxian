@@ -19,6 +19,8 @@ const props = defineProps<{
   label: string;
   /** 窄一点的弹窗（二级弹窗用）。 */
   narrow?: boolean;
+  /** 宽一点的弹窗（山河舆图这类地图 + 列表的大面板）。 */
+  wide?: boolean;
   /** 固定为稳定的视口内高度，内容组件自行提供内部滚动区。 */
   fixedHeight?: boolean;
   /** 弹窗内请求进行中：统一遮罩内容并阻止重复操作。 */
@@ -154,7 +156,7 @@ function restoreFocus(): void {
       <div
         ref="dialog"
         class="modal-card game-panel"
-        :class="{ 'is-narrow': narrow, 'is-fixed-height': fixedHeight, 'is-loading': loading }"
+        :class="{ 'is-narrow': narrow, 'is-wide': wide, 'is-fixed-height': fixedHeight, 'is-loading': loading }"
         role="dialog"
         aria-modal="true"
         :aria-label="label"

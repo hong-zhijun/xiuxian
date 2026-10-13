@@ -3,7 +3,7 @@ import { MARKET_UNLOCK_SECT_LEVEL } from './market';
 import { seededRandom } from './names';
 import { UNITS_PER_DISPLAY } from './shop';
 import { TOWER_UNLOCK_SECT_LEVEL } from './tower';
-import { VEIN_UNLOCK_SECT_LEVEL } from './veins';
+import { WORLD_UNLOCK_SECT_LEVEL } from './world';
 
 /**
  * 宗门日课（每日任务，docs/每日任务开发计划.md）——纯定义与纯计算。
@@ -60,7 +60,8 @@ export const DAILY_TASKS: readonly DailyTaskDef[] = [
   { id: 'towerSweep', name: '镇妖塔扫荡', target: 1, category: 'easy' },
   { id: 'recruit', name: '招募弟子', target: 1, category: 'easy' },
   { id: 'stockTrade', name: '灵股交易', target: 1, category: 'easy' },
-  { id: 'veinAttack', name: '灵脉抢夺', target: 1, category: 'pvp' },
+  // 原「灵脉抢夺」（0051 山河舆图）：id 不改（已抽到的日课行存在库里），名字与计数口径改为今天发起的斗法（含驱妖开辟）。
+  { id: 'veinAttack', name: '山河斗法', target: 1, category: 'pvp' },
 ];
 
 /** 按 id 查任务定义；未知 id 返回 null（调用方据此拒绝）。 */
@@ -135,7 +136,7 @@ function isAvailable(taskId: DailyTaskId, situation: DailyTaskSituation): boolea
     case 'stockTrade':
       return situation.sectLevel >= MARKET_UNLOCK_SECT_LEVEL;
     case 'veinAttack':
-      return situation.sectLevel >= VEIN_UNLOCK_SECT_LEVEL;
+      return situation.sectLevel >= WORLD_UNLOCK_SECT_LEVEL;
     // 讨伐出手 / 登门挑战 / 派弟子历练：没有出现条件。
     default:
       return true;

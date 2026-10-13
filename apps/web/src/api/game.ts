@@ -129,6 +129,8 @@ export interface DiscipleView {
   avatarHash: string | null;
   /** 0014 历练状态：none / active / ready + 名额与不可出发原因（全部服务端算好，前端只渲染）。 */
   journey: DiscipleJourneyView;
+  /** 0051 山河舆图：坐镇的灵地全名（如「青木域 · 百草谷」）；没有坐镇为 null。坐镇中不能转岗、历练、出战。 */
+  garrisonSiteName: string | null;
 
   /** 0019 悟道值：当前可用余额（赌坊赢得，可在弟子详情里分配到属性）。 */
   daoInsight: number;
@@ -2726,101 +2728,119 @@ export async function claimAuction(lotId: string): Promise<AuctionActionResponse
   return apiRequest<AuctionActionResponse>('/api/v1/game/auction/claim', { method: 'POST', body: { lotId } });
 }
 
-/* ---------- 0042 灵脉争夺 ---------- */
+/* ---------- 0051 山河舆图（全服 14 处灵地：驱妖开辟 / 斗法夺地 / 坐镇 / 灵地供奉） ---------- */
 
-export interface VeinRoundView {
+/** 一回合（与后端 view.ts 的 WorldRoundView 一一对应）。 */
+export interface WorldRoundView {
   round: number;
   attackerName: string;
   attackerPower: number;
+  /** 守方这一回合缺席（被驱逐 / 重伤 / 妖兽已无）时为 null。 */
   defenderName: string | null;
   defenderPower: number | null;
   winner: 'attacker' | 'defender';
 }
 
-/** 一条灵脉。产出是最小单位 / 小时；时间是毫秒时间戳。 */
-export interface VeinView {
+/** 一处灵地。产出是最小单位 / 小时；时间是 ISO 字符串。 */
+export interface WorldSiteView {
   id: string;
   name: string;
-  tier: 'small' | 'large' | 'eye';
+  regionId: string;
+  regionName: string;
+  tier: 'lingdi' | 'fudi' | 'dongtian' | 'zumai';
   tierName: string;
-  ratePerHour: number;
-  minSectLevel: number;
-  holdLimitHours: number | null;
+  outputs: { resourceId: string; name: string; perHour: number }[];
+  /** 祖脉的稀有材料（每坐镇满 everyHours 个整点小时得 1 个）；其余为 null。 */
+  rare: { resourceId: string; name: string; everyHours: number } | null;
+  /** 占领者；无主（盘踞妖兽）为 null。 */
   holder: { sectId: string; name: string; level: number; isMe: boolean } | null;
+  /** 坐镇弟子（按回合顺序）；absent = 已离宗 / 重伤卧床，这一回合缺席。 */
   garrison: { discipleId: string; name: string; realmName: string; power: number; absent: boolean }[];
+  /** 在场坐镇弟子战力之和（未计守方 +10%）。 */
   garrisonPower: number;
-  heldSince: number | null;
-  protectedUntil: number | null;
-  exhaustsAt: number | null;
-  cooldownUntil: number | null;
-  action: 'occupy' | 'attack' | 'mine' | null;
+  /** 禁制护持截止（还在护持内才有值）。 */
+  protectedUntil: string | null;
+  /** 我能做什么：beast 驱妖开辟 / battle 斗法 / mine 我占着（可撤回山门）/ null 不能动。 */
+  action: 'beast' | 'battle' | 'mine' | null;
   blockedReason: string | null;
 }
 
-export interface VeinBattleView {
+export interface WorldRegionView {
   id: string;
-  veinId: string;
-  veinName: string;
-  attackerName: string;
-  defenderName: string;
-  won: boolean;
-  rounds: VeinRoundView[];
-  createdAt: number;
-  iAttacked: boolean;
-  iDefended: boolean;
-  canRetake: boolean;
+  name: string;
+  /** 主产资源 id 与名字（中州为 null）。 */
+  resourceId: string | null;
+  resourceName: string | null;
 }
 
-export interface VeinPanelView {
+/** 山河纪事的一条：text 是服务端拼好的一句话。 */
+export interface WorldLogView {
+  id: string;
+  kind: 'battle' | 'withdraw' | 'settle';
+  /** ISO 时间。 */
+  createdAt: string;
+  text: string;
+  /** 斗法 / 撤回的灵地 id；供奉为 null。 */
+  siteId: string | null;
+  /** 斗法：进攻方是否获胜；其余为 null。 */
+  won: boolean | null;
+  /** 斗法回合；其余为 null。 */
+  rounds: WorldRoundView[] | null;
+}
+
+/** 山河舆图面板（GET /game/world 与各命令回执里的 world）。 */
+export interface WorldPanelView {
   unlocked: boolean;
   unlockSectLevel: number;
-  partySize: number;
-  dailyAttacks: number;
-  attacksUsed: number;
-  attacksLeft: number;
+  /** 本宗镇守名额上限 / 已占处数。 */
+  cap: number;
+  held: number;
+  dailyBattles: number;
+  battlesUsed: number;
+  battlesLeft: number;
+  /** 禁制护持时长（小时）。 */
+  protectHours: number;
   levelGap: number;
-  protectMinutes: number;
-  exhaustCooldownHours: number;
-  defenderBonusPercent: number;
-  myVeinId: string | null;
-  harvested: number;
-  veins: VeinView[];
-  battles: VeinBattleView[];
+  partySize: number;
+  regions: WorldRegionView[];
+  sites: WorldSiteView[];
+  /** 纪事筛选：all 天下 / mine 本宗（命令回执里的 world 固定为 all）。 */
+  scope: 'all' | 'mine';
+  logs: WorldLogView[];
 }
 
-export interface VeinBattleResultView {
-  veinId: string;
-  veinName: string;
-  defenderName: string;
+/** 这一战（驱妖开辟 / 斗法）的战报。 */
+export interface WorldBattleResultView {
+  siteId: string;
+  siteName: string;
+  /** 守方宗门名；妖兽为 null。 */
+  defenderName: string | null;
   won: boolean;
-  rounds: VeinRoundView[];
+  rounds: WorldRoundView[];
+  /** 进攻失败时受伤的弟子名。 */
   injured: string[];
 }
 
-export interface VeinActionResponse {
+/** 山河舆图命令回执（POST /game/world/attack 与 /game/world/withdraw）。 */
+export interface WorldActionResponse {
   state: SectStateView;
-  veins: VeinPanelView;
-  result: { message: string; battle: VeinBattleResultView | null };
+  world: WorldPanelView;
+  result: { message: string; battle: WorldBattleResultView | null };
 }
 
-export async function fetchVeins(): Promise<{ state: SectStateView; veins: VeinPanelView }> {
-  return apiRequest<{ state: SectStateView; veins: VeinPanelView }>('/api/v1/game/veins');
+/** 山河舆图面板（GET /game/world?scope=all|mine）：打开时 / 操作后 / 点刷新时请求。 */
+export async function fetchWorld(scope: 'all' | 'mine' = 'all'): Promise<{ state: SectStateView; world: WorldPanelView }> {
+  return apiRequest<{ state: SectStateView; world: WorldPanelView }>(`/api/v1/game/world?scope=${scope}`);
 }
 
-export async function occupyVein(veinId: string, discipleIds: string[]): Promise<VeinActionResponse> {
-  return apiRequest<VeinActionResponse>('/api/v1/game/veins/occupy', { method: 'POST', body: { veinId, discipleIds } });
+/** 驱妖开辟（无主，对 3 只妖兽）或斗法夺地（有主）：discipleIds 即出战顺序（回合顺序）。 */
+export async function attackWorldSite(siteId: string, discipleIds: string[]): Promise<WorldActionResponse> {
+  return apiRequest<WorldActionResponse>('/api/v1/game/world/attack', { method: 'POST', body: { siteId, discipleIds } });
 }
 
-export async function attackVein(veinId: string, discipleIds: string[]): Promise<VeinActionResponse> {
-  return apiRequest<VeinActionResponse>('/api/v1/game/veins/attack', { method: 'POST', body: { veinId, discipleIds } });
-}
-
-export async function setVeinGarrison(veinId: string, discipleIds: string[]): Promise<VeinActionResponse> {
-  return apiRequest<VeinActionResponse>('/api/v1/game/veins/garrison', { method: 'POST', body: { veinId, discipleIds } });
-}
-
-export async function withdrawVein(veinId: string): Promise<VeinActionResponse> {
-  return apiRequest<VeinActionResponse>('/api/v1/game/veins/withdraw', { method: 'POST', body: { veinId } });
+/** 撤回山门：灵地回到盘踞妖兽手里，坐镇弟子立即解锁，没有禁制。 */
+export async function withdrawWorldSite(siteId: string): Promise<WorldActionResponse> {
+  return apiRequest<WorldActionResponse>('/api/v1/game/world/withdraw', { method: 'POST', body: { siteId } });
 }
 
 /* ---------- 0043 灵股行情 ---------- */
@@ -3005,7 +3025,18 @@ export interface HubView {
   tower: { unlocked: boolean; maxFloor: number; sweepable: boolean; failsLeft: number };
   /** 秘境：今天在已开放的秘境里还能探几次（各秘境每日次数相加）。 */
   explore: { remaining: number; total: number };
-  veins: { unlocked: boolean; holding: { name: string; ratePerHour: number } | null; freeCount: number };
+  /** 0051 山河舆图：镇守名额与失陷情况（只读汇总）。 */
+  world: {
+    unlocked: boolean;
+    /** 镇守名额上限。 */
+    cap: number;
+    /** 本宗正占着的灵地数。 */
+    held: number;
+    /** 还能开辟 / 夺下几处（max(0, cap − held)）。 */
+    freeSlots: number;
+    /** 近 24 小时被夺、且现在不在本宗手里的灵地数。 */
+    lostCount: number;
+  };
   auction: { unlocked: boolean; claimable: number; myActive: number };
   market: { unlocked: boolean; holdings: number; profit: number; profitPct: number };
 }

@@ -3728,90 +3728,111 @@ export function auctionLotGuardStatement(guardId: string, lotId: string, version
   };
 }
 
-/* ---------- 0042 灵脉争夺 ---------- */
+/* ---------- 0051 山河舆图 ---------- */
 
-export interface SpiritVeinRow {
+/** 灵地行（world_sites，0051 迁移）：每处灵地一行，占领 / 坐镇 / 结算字段见迁移注释。 */
+export interface WorldSiteRow {
   id: string;
   holder_sect_id: string | null;
   holder_name: string | null;
-  /** 守军弟子 id 的 JSON 数组。 */
+  /** 坐镇弟子 id 的 JSON 数组（按回合顺序）。 */
   garrison: string | null;
   held_since: number | null;
   protected_until: number | null;
   settled_at: number | null;
-  exhausted_sect_id: string | null;
-  exhausted_until: number | null;
+  rare_hours: number;
   version: number;
   updated_at: number;
 }
 
-export interface VeinBattleRow {
+/** 山河纪事行（world_site_logs，0051 迁移）。 */
+export interface WorldSiteLogRow {
   id: string;
-  vein_id: string;
-  attacker_sect_id: string;
-  attacker_name: string;
-  defender_sect_id: string;
-  defender_name: string;
-  won: number;
-  /** 回合 JSON（veins.ts 的 VeinRound[]）。 */
-  rounds: string;
+  kind: 'battle' | 'withdraw' | 'settle';
+  sect_id: string;
+  sect_name: string;
+  target_sect_id: string | null;
+  target_name: string | null;
+  site_id: string | null;
+  won: number | null;
+  /** 斗法回合 JSON（world.ts 的 WorldBattleRound[]）；其余为 null。 */
+  rounds: string | null;
+  /** 供奉的 {资源 id: 最小单位字符串}；其余为 null。 */
+  effects: string | null;
   created_at: number;
 }
 
-export class VeinRepository extends ParamRepository {
-  async listAll(): Promise<SpiritVeinRow[]> {
-    return this.all<SpiritVeinRow>({ sql: 'SELECT * FROM spirit_veins', params: [] });
+export class WorldSiteRepository extends ParamRepository {
+  async listAll(): Promise<WorldSiteRow[]> {
+    return this.all<WorldSiteRow>({ sql: 'SELECT * FROM world_sites', params: [] });
   }
 
-  async findById(veinId: string): Promise<SpiritVeinRow | null> {
-    return this.one<SpiritVeinRow>({ sql: 'SELECT * FROM spirit_veins WHERE id = ?', params: [veinId] });
+  async findById(siteId: string): Promise<WorldSiteRow | null> {
+    return this.one<WorldSiteRow>({ sql: 'SELECT * FROM world_sites WHERE id = ?', params: [siteId] });
   }
 
-  /** 今日（since 起）本宗发起的抢夺次数。 */
-  async countAttacksSince(sectId: string, since: number): Promise<number> {
+  /** 某宗门当前占着的灵地（按 id 排序，顺序稳定）。 */
+  async findByHolder(sectId: string): Promise<WorldSiteRow[]> {
+    return this.all<WorldSiteRow>({
+      sql: 'SELECT * FROM world_sites WHERE holder_sect_id = ? ORDER BY id',
+      params: [sectId],
+    });
+  }
+
+  /** 本宗自 since 起发起的斗法次数（含驱妖开辟）。 */
+  async countBattlesSince(sectId: string, since: number): Promise<number> {
     const row = await this.one<{ cnt: number }>({
-      sql: 'SELECT COUNT(*) AS cnt FROM vein_battles WHERE attacker_sect_id = ? AND created_at >= ?',
+      sql: `SELECT COUNT(*) AS cnt FROM world_site_logs WHERE kind = 'battle' AND sect_id = ? AND created_at >= ?`,
       params: [sectId, since],
     });
     return Number(row?.cnt ?? 0);
   }
 
-  async recentBattles(limit: number): Promise<VeinBattleRow[]> {
-    return this.all<VeinBattleRow>({
-      sql: 'SELECT * FROM vein_battles ORDER BY created_at DESC LIMIT ?',
-      params: [limit],
+  /** 山河纪事（倒序，最多 limit 条）：all = 全服斗法与撤回；mine = 与本宗有关的全部（含自己的供奉）。 */
+  async recentLogs(input: { sectId: string; scope: 'all' | 'mine'; limit: number }): Promise<WorldSiteLogRow[]> {
+    if (input.scope === 'all') {
+      return this.all<WorldSiteLogRow>({
+        sql: `SELECT * FROM world_site_logs WHERE kind IN ('battle', 'withdraw')
+              ORDER BY created_at DESC, id DESC LIMIT ?`,
+        params: [input.limit],
+      });
+    }
+    return this.all<WorldSiteLogRow>({
+      sql: `SELECT * FROM world_site_logs WHERE sect_id = ? OR target_sect_id = ?
+            ORDER BY created_at DESC, id DESC LIMIT ?`,
+      params: [input.sectId, input.sectId, input.limit],
     });
   }
 
-  async harvestedOf(sectId: string): Promise<number> {
-    const row = await this.one<{ harvested: number }>({
-      sql: 'SELECT harvested FROM sect_vein_stats WHERE sect_id = ?',
-      params: [sectId],
+  /** 自 since 起被本宗守方输掉的灵地（去重，只算攻方获胜的斗法）。 */
+  async lostSitesSince(sectId: string, since: number): Promise<string[]> {
+    const rows = await this.all<{ site_id: string }>({
+      sql: `SELECT DISTINCT site_id FROM world_site_logs
+            WHERE kind = 'battle' AND won = 1 AND target_sect_id = ? AND created_at >= ? AND site_id IS NOT NULL`,
+      params: [sectId, since],
     });
-    return Number(row?.harvested ?? 0);
+    return rows.map((row) => row.site_id);
   }
 }
 
 /**
- * 灵脉整行写回（占领者 / 守军 / 计时字段一起写；version +1）。
- * 进驻、易主、换守军、撤离、枯竭、结算都走它，字段语义见 0042 迁移。
+ * 灵地整行写回（占领者 / 坐镇 / 计时 / 稀有进度一起写；version +1）。
+ * 开辟、斗法易主、撤回、整点结算都走它，字段语义见 0051 迁移。
  */
-export function updateSpiritVeinStatement(input: {
-  veinId: string;
+export function updateWorldSiteStatement(input: {
+  siteId: string;
   holderSectId: string | null;
   holderName: string | null;
   garrison: string | null;
   heldSince: number | null;
   protectedUntil: number | null;
   settledAt: number | null;
-  exhaustedSectId: string | null;
-  exhaustedUntil: number | null;
+  rareHours: number;
   now: number;
 }): ParameterizedQuery {
   return {
-    sql: `UPDATE spirit_veins SET holder_sect_id = ?, holder_name = ?, garrison = ?, held_since = ?,
-            protected_until = ?, settled_at = ?, exhausted_sect_id = ?, exhausted_until = ?,
-            version = version + 1, updated_at = ?
+    sql: `UPDATE world_sites SET holder_sect_id = ?, holder_name = ?, garrison = ?, held_since = ?,
+            protected_until = ?, settled_at = ?, rare_hours = ?, version = version + 1, updated_at = ?
           WHERE id = ?`,
     params: [
       input.holderSectId,
@@ -3820,59 +3841,75 @@ export function updateSpiritVeinStatement(input: {
       input.heldSince,
       input.protectedUntil,
       input.settledAt,
-      input.exhaustedSectId,
-      input.exhaustedUntil,
+      input.rareHours,
       input.now,
-      input.veinId,
+      input.siteId,
     ],
   };
 }
 
-export function insertVeinBattleStatement(input: {
+/** 并发守卫：这处灵地的 version 必须仍是读到的值，否则整批回滚。 */
+export function worldSiteGuardStatement(guardId: string, siteId: string, version: number): ParameterizedQuery {
+  return {
+    sql: `INSERT INTO mutation_guards (command_id, valid)
+          SELECT ?, CASE WHEN EXISTS (SELECT 1 FROM world_sites WHERE id = ? AND version = ?) THEN 1 ELSE 0 END`,
+    params: [guardId, siteId, version],
+  };
+}
+
+/**
+ * 山河舆图并发守卫：这几名弟子在提交时都不在任何灵地的坐镇名单里。
+ * 开辟 / 斗法的快照读在提交之前，两条并发命令可能同时把同一个人派去两处（只看灵地 version 挡不住），
+ * 所以出战的人在 batch 里再核对一次（garrison 是 JSON 数组，用 json_each 展开）。
+ */
+export function worldGarrisonFreeGuardStatement(guardId: string, discipleIds: readonly string[]): ParameterizedQuery {
+  const marks = discipleIds.map(() => '?').join(', ');
+  return {
+    sql: `INSERT INTO mutation_guards (command_id, valid)
+          SELECT ?, CASE WHEN NOT EXISTS (
+            SELECT 1 FROM world_sites, json_each(world_sites.garrison) AS member WHERE member.value IN (${marks})
+          ) THEN 1 ELSE 0 END`,
+    params: [guardId, ...discipleIds],
+  };
+}
+
+/** 写一条山河纪事（斗法 / 撤回 / 供奉）。 */
+export function insertWorldSiteLogStatement(input: {
   id: string;
-  veinId: string;
-  attackerSectId: string;
-  attackerName: string;
-  defenderSectId: string;
-  defenderName: string;
-  won: boolean;
-  rounds: string;
+  kind: 'battle' | 'withdraw' | 'settle';
+  sectId: string;
+  sectName: string;
+  targetSectId: string | null;
+  targetName: string | null;
+  siteId: string | null;
+  won: boolean | null;
+  rounds: string | null;
+  effects: string | null;
   now: number;
 }): ParameterizedQuery {
   return {
-    sql: `INSERT INTO vein_battles
-            (id, vein_id, attacker_sect_id, attacker_name, defender_sect_id, defender_name, won, rounds, created_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    sql: `INSERT INTO world_site_logs
+            (id, kind, sect_id, sect_name, target_sect_id, target_name, site_id, won, rounds, effects, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     params: [
       input.id,
-      input.veinId,
-      input.attackerSectId,
-      input.attackerName,
-      input.defenderSectId,
-      input.defenderName,
-      input.won ? 1 : 0,
+      input.kind,
+      input.sectId,
+      input.sectName,
+      input.targetSectId,
+      input.targetName,
+      input.siteId,
+      input.won === null ? null : input.won ? 1 : 0,
       input.rounds,
+      input.effects,
       input.now,
     ],
   };
 }
 
-/** 累计采集（相对加法；没有行就建一行）。 */
-export function addVeinHarvestStatement(sectId: string, amount: number, now: number): ParameterizedQuery {
-  return {
-    sql: `INSERT INTO sect_vein_stats (sect_id, harvested, updated_at) VALUES (?, ?, ?)
-          ON CONFLICT (sect_id) DO UPDATE SET harvested = harvested + excluded.harvested, updated_at = excluded.updated_at`,
-    params: [sectId, amount, now],
-  };
-}
-
-/** 并发守卫：这条灵脉的 version 必须仍是读到的值，否则整批回滚。 */
-export function spiritVeinGuardStatement(guardId: string, veinId: string, version: number): ParameterizedQuery {
-  return {
-    sql: `INSERT INTO mutation_guards (command_id, valid)
-          SELECT ?, CASE WHEN EXISTS (SELECT 1 FROM spirit_veins WHERE id = ? AND version = ?) THEN 1 ELSE 0 END`,
-    params: [guardId, veinId, version],
-  };
+/** 清理 before 之前的山河纪事（定时任务顺带做）。 */
+export function deleteOldWorldSiteLogsStatement(before: number): ParameterizedQuery {
+  return { sql: 'DELETE FROM world_site_logs WHERE created_at < ?', params: [before] };
 }
 
 /* ---------- 0043 灵股行情 ---------- */
@@ -4218,6 +4255,7 @@ export interface DailyTaskCounts {
   challenge: number;
   journey: number;
   stockTrade: number;
+  /** 山河斗法（任务 id 沿用 veinAttack：已抽到的日课行存在库里，不能改）。 */
   veinAttack: number;
 }
 
@@ -4245,7 +4283,8 @@ export class DailyTaskRepository extends ParamRepository {
       challenge: number;
       journey: number;
       stock_trade: number;
-      vein_attack: number;
+      /** 0051：今天本宗发起的山河斗法次数（world_site_logs 里 kind = 'battle'）。 */
+      world_battle: number;
     }>({
       sql: `SELECT
               (SELECT COUNT(*) FROM world_boss_hits WHERE sect_id = ? AND created_at >= ?) AS boss_hit,
@@ -4254,7 +4293,7 @@ export class DailyTaskRepository extends ParamRepository {
               (SELECT COUNT(*) FROM challenge_log WHERE attacker_sect_id = ? AND created_at >= ?) AS challenge,
               (SELECT COUNT(*) FROM disciple_journeys WHERE sect_id = ? AND started_at >= ?) AS journey,
               (SELECT COUNT(*) FROM stock_trades WHERE sect_id = ? AND created_at >= ?) AS stock_trade,
-              (SELECT COUNT(*) FROM vein_battles WHERE attacker_sect_id = ? AND created_at >= ?) AS vein_attack`,
+              (SELECT COUNT(*) FROM world_site_logs WHERE kind = 'battle' AND sect_id = ? AND created_at >= ?) AS world_battle`,
       // 占位符一共 7 组 (sect_id, dayStart)：explore 占两组，其余 5 个子查询各一组，顺序与 SQL 一致。
       params: Array.from({ length: 7 }, () => [sectId, dayStart]).flat(),
     });
@@ -4264,7 +4303,7 @@ export class DailyTaskRepository extends ParamRepository {
       challenge: Number(row?.challenge ?? 0),
       journey: Number(row?.journey ?? 0),
       stockTrade: Number(row?.stock_trade ?? 0),
-      veinAttack: Number(row?.vein_attack ?? 0),
+      veinAttack: Number(row?.world_battle ?? 0),
     };
   }
 }

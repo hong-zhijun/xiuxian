@@ -35,6 +35,8 @@ export interface DispatchDisciple {
   canBreakthrough: boolean;
   severeInjuredUntil?: string | null;
   journey?: { status: string; endsAt: string | null };
+  /** 0051 山河舆图：坐镇的灵地全名；非 null = 坐镇中（岗位被强制为修炼，不能调动）。 */
+  garrisonSiteName?: string | null;
   stewardOffice: string | null;
 }
 
@@ -112,9 +114,10 @@ export function isAway(disciple: DispatchDisciple, serverNowMs: number): boolean
   return !Number.isFinite(endsAt) || endsAt > serverNowMs;
 }
 
-/** 不能转岗（在外历练 / 重伤卧床）。 */
+/** 不能转岗（在外历练 / 重伤卧床 / 坐镇灵地）。 */
 export function isUnavailable(disciple: DispatchDisciple, serverNowMs: number): boolean {
   if (isAway(disciple, serverNowMs)) return true;
+  if ((disciple.garrisonSiteName ?? null) !== null) return true;
   const severe = disciple.severeInjuredUntil ?? null;
   if (severe !== null) {
     const until = Date.parse(severe);
@@ -253,6 +256,8 @@ export function planDispatch(input: DispatchInput): DispatchPlan {
     const candidates = talented
       // 任命只要求不在外（重伤也能坐镇）；现任即使在外也参与比较，免得推荐换下同境界的人。
       .filter((item) => !isAway(item, serverNowMs) || item.id === office.discipleId)
+      // 坐镇中的弟子不能就任执事（服务端 appointSteward 直接拒绝）。
+      .filter((item) => (item.garrisonSiteName ?? null) === null)
       .filter((item) => !lineup.has(item.id))
       .sort(higherRealm);
     const best = candidates[0];
