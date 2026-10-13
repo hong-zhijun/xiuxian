@@ -12,6 +12,7 @@ import RefineTag from './RefineTag.vue';
 /**
  * 装备背包（弹窗内容，外壳由 SectScreen 用 ModalShell 提供）：筛选、多选分解。
  * 默认只列背包里的装备；勾选「显示已穿戴」才把穿在弟子身上的也列出来（只能看，不能分解）。
+ * 「按品质批量」一键选中某品质的全部闲置装备（跳过祭炼过的），再走同一个分解确认。
  * 名称、颜色、分解返还都取自服务端的 `equipment` 视图。
  */
 const props = defineProps<{
@@ -126,6 +127,48 @@ function clearSelection(): void {
   confirmingSalvage.value = false;
 }
 
+/**
+ * 按品质批量选：每个品质一个 chip，点一下选中该品质全部闲置装备，再点一下取消。
+ * 祭炼过的装备不参与（祭炼材料分解不退，避免一键误拆），要拆只能单独勾选。
+ * 品质顺序按炼器品质表（低 → 高），表里没有的品质排在后面。
+ */
+const batchQualities = computed<{ id: string; name: string; color: string; ids: string[] }[]>(() => {
+  const groups = new Map<string, { id: string; name: string; color: string; ids: string[] }>();
+  for (const option of props.equipment.forgeOptions) {
+    groups.set(option.quality, { id: option.quality, name: option.name, color: option.color, ids: [] });
+  }
+  for (const item of props.equipment.items) {
+    if (!isSalvageable(item) || item.refineLevel > 0) continue;
+    let group = groups.get(item.quality);
+    if (group === undefined) {
+      group = { id: item.quality, name: item.qualityName, color: item.color, ids: [] };
+      groups.set(item.quality, group);
+    }
+    group.ids.push(item.id);
+  }
+  return [...groups.values()].filter((group) => group.ids.length > 0);
+});
+
+/** 闲置但祭炼过、不参与批量选择的件数（提示用）。 */
+const refinedIdleCount = computed(
+  () => props.equipment.items.filter((item) => isSalvageable(item) && item.refineLevel > 0).length,
+);
+
+function isQualityPicked(ids: readonly string[]): boolean {
+  return ids.every((id) => selectedIds.value.includes(id));
+}
+
+function toggleQuality(ids: readonly string[]): void {
+  if (props.busy) return;
+  confirmingSalvage.value = false;
+  if (isQualityPicked(ids)) {
+    const drop = new Set(ids);
+    selectedIds.value = selectedIds.value.filter((id) => !drop.has(id));
+  } else {
+    selectedIds.value = [...new Set([...selectedIds.value, ...ids])];
+  }
+}
+
 /** 二次确认（分解不可撤销）：确认后才提交。 */
 const confirmingSalvage = ref(false);
 
@@ -209,6 +252,24 @@ function confirmSalvage(): void {
           >
             祭炼重数
           </button>
+        </div>
+
+        <div v-if="batchQualities.length > 0" class="equipment-filter-row" role="group" aria-label="按品质批量选择分解">
+          <span class="eyebrow">批量</span>
+          <button
+            v-for="option in batchQualities"
+            :key="option.id"
+            class="equipment-chip"
+            :class="{ 'is-active': isQualityPicked(option.ids) }"
+            type="button"
+            :disabled="busy"
+            :aria-pressed="isQualityPicked(option.ids)"
+            :title="isQualityPicked(option.ids) ? `取消选择全部${option.name}` : `选中全部闲置${option.name}`"
+            @click="toggleQuality(option.ids)"
+          >
+            <span :style="{ color: option.color }">{{ option.name }}</span> ×{{ option.ids.length }}
+          </button>
+          <span v-if="refinedIdleCount > 0" class="equipment-batch-note">祭炼过的 {{ refinedIdleCount }} 件不参与，需单独勾选</span>
         </div>
 
         <label v-if="wornCount > 0" class="equipment-worn-toggle">
@@ -311,6 +372,11 @@ function confirmSalvage(): void {
 <style scoped>
 .equipment-panel {
   min-width: 0;
+}
+
+.equipment-batch-note {
+  color: #7d9186;
+  font-size: 11px;
 }
 
 .equipment-choice:focus-visible,
