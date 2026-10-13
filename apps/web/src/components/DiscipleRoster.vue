@@ -30,7 +30,7 @@ import DiscipleAvatar from './DiscipleAvatar.vue';
 import { misplacedHint } from '../utils/discipleDispatch';
 
 /**
- * 门人名册：境界 / 阶段 / 岗位 / 状态 / 修为进度筛选 + 排序 + 精简列表行 +
+ * 门人名册：状态 / 岗位 / 可操作 + 排序（常驻），境界 / 阶段 / 修为进度（折叠在「更多筛选」） + 精简列表行 +
  * 头像快捷破境入口 + 「详情」入口。
  *
  * 所有筛选、排序、状态派生都在 `utils/discipleFilter.ts` 的纯函数里，本组件只持有筛选状态。
@@ -93,8 +93,8 @@ function loadSavedFilter(): DiscipleFilter {
 const filter = ref<DiscipleFilter>(loadSavedFilter());
 const showMoreFilters = ref(false);
 const activeMoreCount = computed(() =>
+  Number(filter.value.realmId !== '') +
   Number(filter.value.stage !== null) +
-  Number(filter.value.assignment !== '') +
   Number(filter.value.progress !== 'all'),
 );
 
@@ -189,6 +189,10 @@ function onStageChange(event: Event): void {
 
 function onAssignmentChange(event: Event): void {
   filter.value = { ...filter.value, assignment: (event.target as HTMLSelectElement).value };
+}
+
+function onOperableChange(event: Event): void {
+  filter.value = { ...filter.value, operableOnly: (event.target as HTMLInputElement).checked };
 }
 
 function onStatusChange(event: Event): void {
@@ -358,14 +362,14 @@ function rowIndexStyle(index: number): Record<string, string> {
 const rowButtons = ref<Record<string, HTMLButtonElement | null>>({});
 /** 头像（破境入口）按钮引用：确认弹窗关闭后把焦点还回头像。 */
 const avatarButtons = ref<Record<string, HTMLButtonElement | null>>({});
-const realmSelect = ref<HTMLSelectElement | null>(null);
+const statusSelect = ref<HTMLSelectElement | null>(null);
 
 /**
- * 弹窗关闭后的焦点归还：依次尝试候选按钮（还在页面上的第一个），都不在了才退回境界筛选框。
+ * 弹窗关闭后的焦点归还：依次尝试候选按钮（还在页面上的第一个），都不在了才退回状态筛选框。
  *
  * - preventScroll：归还焦点不滚动页面（手机上长列表会被拽回顶部）；
  * - 触屏（pointer: coarse）不退回筛选框：手机上给下拉框焦点会出现焦点框、甚至弹出选择器，
- *   看起来像「点了境界筛选」。触屏用户本来也不靠键盘焦点导航。
+ *   看起来像「点了状态筛选」。触屏用户本来也不靠键盘焦点导航。
  */
 function restoreFocus(candidates: (HTMLElement | null | undefined)[]): void {
   void nextTick(() => {
@@ -379,7 +383,7 @@ function restoreFocus(candidates: (HTMLElement | null | undefined)[]): void {
       (document.activeElement as HTMLElement | null)?.blur();
       return;
     }
-    realmSelect.value?.focus({ preventScroll: true });
+    statusSelect.value?.focus({ preventScroll: true });
   });
 }
 
@@ -412,7 +416,7 @@ watch(
   () => props.breakthroughConfirmId,
   (next, previous) => {
     if (previous === null || previous === undefined || next !== null) return;
-    // 破境成功 / 被派出去历练后头像不再是按钮：退到同一行的「详情」按钮，而不是境界筛选框。
+    // 破境成功 / 被派出去历练后头像不再是按钮：退到同一行的「详情」按钮，而不是状态筛选框。
     restoreFocus([avatarButtons.value[previous], rowButtons.value[previous]]);
   },
 );
@@ -423,23 +427,23 @@ watch(
     <div class="disciple-toolbar">
       <div class="disciple-toolbar-main">
         <label class="disciple-field">
-          <span class="disciple-field-label">境界</span>
+          <span class="disciple-field-label">状态</span>
           <span class="disciple-select">
-            <select ref="realmSelect" class="disciple-input" :value="filter.realmId" @change="onRealmChange">
-              <option value="">全部境界</option>
-              <option v-for="realm in realmFilters" :key="realm.realmId" :value="realm.realmId">
-                {{ realm.realmName }}
+            <select ref="statusSelect" class="disciple-input" :value="filter.status" @change="onStatusChange">
+              <option v-for="option in DISCIPLE_STATUS_FILTERS" :key="option.value" :value="option.value">
+                {{ option.label }}
               </option>
             </select>
           </span>
         </label>
 
         <label class="disciple-field">
-          <span class="disciple-field-label">状态</span>
+          <span class="disciple-field-label">岗位</span>
           <span class="disciple-select">
-            <select class="disciple-input" :value="filter.status" @change="onStatusChange">
-              <option v-for="option in DISCIPLE_STATUS_FILTERS" :key="option.value" :value="option.value">
-                {{ option.label }}
+            <select class="disciple-input" :value="filter.assignment" @change="onAssignmentChange">
+              <option value="">全部岗位</option>
+              <option v-for="option in assignments" :key="option.id" :value="option.id">
+                {{ option.name }}
               </option>
             </select>
           </span>
@@ -454,6 +458,15 @@ watch(
               </option>
             </select>
           </span>
+        </label>
+
+        <label
+          class="disciple-operable"
+          :class="{ 'is-active': filter.operableOnly }"
+          title="勾选后不显示执事、坐镇灵地、在外历练、重伤卧床这些暂时不能派活的弟子"
+        >
+          <input type="checkbox" :checked="filter.operableOnly" @change="onOperableChange" />
+          <span>可操作</span>
         </label>
 
         <button
@@ -474,6 +487,18 @@ watch(
       </div>
 
       <div id="disciple-extra-filters" v-show="showMoreFilters" class="disciple-toolbar-extra">
+        <label class="disciple-field">
+          <span class="disciple-field-label">境界</span>
+          <span class="disciple-select">
+            <select class="disciple-input" :value="filter.realmId" @change="onRealmChange">
+              <option value="">全部境界</option>
+              <option v-for="realm in realmFilters" :key="realm.realmId" :value="realm.realmId">
+                {{ realm.realmName }}
+              </option>
+            </select>
+          </span>
+        </label>
+
         <!-- 阶段依附境界；换境界时阶段选择会清空。 -->
         <label class="disciple-field">
           <span class="disciple-field-label">阶段</span>
@@ -482,18 +507,6 @@ watch(
               <option value="">{{ stageFilterEnabled ? '全部阶段' : '先选境界' }}</option>
               <option v-for="option in stageFilters" :key="option.stage" :value="String(option.stage)">
                 {{ option.stageName }}
-              </option>
-            </select>
-          </span>
-        </label>
-
-        <label class="disciple-field">
-          <span class="disciple-field-label">岗位</span>
-          <span class="disciple-select">
-            <select class="disciple-input" :value="filter.assignment" @change="onAssignmentChange">
-              <option value="">全部岗位</option>
-              <option v-for="option in assignments" :key="option.id" :value="option.id">
-                {{ option.name }}
               </option>
             </select>
           </span>

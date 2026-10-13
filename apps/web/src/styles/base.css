@@ -1774,7 +1774,7 @@ ul {
 .disciple-toolbar-main {
   display: grid;
   min-width: 0;
-  grid-template-columns: repeat(3, minmax(112px, 1fr)) auto auto;
+  grid-template-columns: repeat(3, minmax(112px, 1fr)) auto auto auto;
   align-items: end;
   gap: 8px;
 }
@@ -1867,6 +1867,39 @@ ul {
 .disciple-reset:disabled {
   color: #4f6159;
   cursor: not-allowed;
+}
+
+/* 「可操作」勾选：与「更多筛选」同高同框，勾上时描金。 */
+.disciple-operable {
+  display: inline-flex;
+  min-height: 36px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 10px;
+  border: 1px solid rgba(119, 184, 154, 0.16);
+  border-radius: 3px;
+  color: #8fa59a;
+  background: rgba(255, 255, 255, 0.018);
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+}
+
+.disciple-operable:hover,
+.disciple-operable.is-active {
+  border-color: rgba(202, 169, 106, 0.38);
+  color: var(--gold-bright);
+  background: rgba(202, 169, 106, 0.06);
+}
+
+.disciple-operable input {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: var(--gold);
+  cursor: pointer;
 }
 
 .disciple-more {
@@ -6299,7 +6332,7 @@ h2.public-sect-name {
   }
 
   .disciple-toolbar-main {
-    grid-template-columns: repeat(3, minmax(108px, 1fr)) auto auto;
+    grid-template-columns: repeat(3, minmax(108px, 1fr)) auto auto auto;
   }
 
   .disciple-select {
@@ -6531,7 +6564,8 @@ h2.public-sect-name {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .disciple-field-sort {
+  .disciple-field-sort,
+  .disciple-operable {
     grid-column: 1 / -1;
   }
 

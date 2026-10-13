@@ -11,6 +11,7 @@ import {
   filterDisciples,
   isFilterActive,
   isInjured,
+  isOperable,
   matchesProgressFilter,
   realmOptions,
   stageOptions,
@@ -389,6 +390,37 @@ describe('境界筛选项与重置态', () => {
     expect(isFilterActive(withFilter({ sort: 'combatPower' }))).toBe(true);
     // 新键不影响默认态判定：默认仍是招募顺序。
     expect(isFilterActive({ ...DEFAULT_DISCIPLE_FILTER, sort: 'recruitOrder' })).toBe(false);
+  });
+});
+
+describe('「可操作」筛选（operableOnly）', () => {
+  const roster = [
+    makeDisciple({ id: 'free' }),
+    makeDisciple({ id: 'steward', stewardOffice: 'alchemy' }),
+    makeDisciple({ id: 'garrison', garrisonSiteName: '青木域 · 百草谷' }),
+    makeDisciple({ id: 'away', journey: { status: 'active' } }),
+    makeDisciple({ id: 'back', journey: { status: 'ready' } }),
+    makeDisciple({ id: 'severe', severeInjuredUntil: IN_ONE_HOUR }),
+    makeDisciple({ id: 'healed', severeInjuredUntil: ONE_HOUR_AGO }),
+    makeDisciple({ id: 'injured', injuredUntil: IN_ONE_HOUR }),
+  ];
+
+  it('勾选后隐藏执事、坐镇、在外历练、重伤卧床；已归队待领取、轻伤、重伤已愈的照常显示', () => {
+    expect(ids(filterDisciples(roster, withFilter({ operableOnly: true }), SERVER_NOW))).toEqual([
+      'free',
+      'back',
+      'healed',
+      'injured',
+    ]);
+  });
+
+  it('不勾选时全部显示；勾选算「已筛选」', () => {
+    expect(filterDisciples(roster, DEFAULT_DISCIPLE_FILTER, SERVER_NOW)).toHaveLength(roster.length);
+    expect(isFilterActive(withFilter({ operableOnly: true }))).toBe(true);
+  });
+
+  it('缺字段（根级最小结构）视为可操作', () => {
+    expect(isOperable(makeDisciple({ id: 'bare' }), SERVER_NOW)).toBe(true);
   });
 });
 

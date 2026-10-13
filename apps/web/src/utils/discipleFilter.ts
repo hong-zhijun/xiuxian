@@ -47,6 +47,12 @@ export interface FilterableDisciple {
    */
   severeInjuredUntil?: string | null;
   canBreakthrough: boolean;
+  /** 执事职位 id（null / 缺字段 = 不是执事）；「可操作」筛选用。 */
+  stewardOffice?: string | null;
+  /** 0051 山河舆图：坐镇的灵地全名（null / 缺字段 = 未坐镇）；「可操作」筛选用。 */
+  garrisonSiteName?: string | null;
+  /** 历练状态（缺字段视为不在外）；「可操作」筛选用。 */
+  journey?: { status: string };
 }
 
 /** 服务端 `IDLE_ASSIGNMENT`（见 packages/game-core/src/config/schema.ts 的岗位枚举）。 */
@@ -102,6 +108,8 @@ export interface DiscipleFilter {
   /** 修为进度分档（按服务端原始比例判定，见 cultivationTier）。 */
   progress: CultivationProgressTier;
   sort: DiscipleSortKey;
+  /** 只看可操作的弟子：勾选后隐藏执事、坐镇、在外历练、重伤卧床的（见 isOperable）。 */
+  operableOnly: boolean;
 }
 
 export const DEFAULT_DISCIPLE_FILTER: DiscipleFilter = {
@@ -111,6 +119,7 @@ export const DEFAULT_DISCIPLE_FILTER: DiscipleFilter = {
   status: 'all',
   progress: 'all',
   sort: 'recruitOrder',
+  operableOnly: false,
 };
 
 export const DISCIPLE_STATUS_FILTERS: readonly { value: DiscipleStatusFilter; label: string }[] = [
@@ -215,8 +224,6 @@ export interface SelectableDisciple extends FilterableDisciple {
   journey: { status: 'none' | 'active' | 'ready' };
   /** 天赋重构：执事 / 交接期不能出战的短原因（服务端算好）；能出战为 null。 */
   combatBlockedReason?: string | null;
-  /** 0051 山河舆图：坐镇的灵地全名；非 null = 坐镇中。缺省视为未坐镇。 */
-  garrisonSiteName?: string | null;
 }
 
 /** 选人控件的禁用开关（默认全禁；守擂阵容允许带伤守阵）。 */
@@ -434,7 +441,19 @@ export function matchesFilters(
   if (filter.realmId !== '' && filter.stage !== null && disciple.stage !== filter.stage) return false;
   if (filter.assignment !== '' && disciple.assignment !== filter.assignment) return false;
   if (!matchesStatusFilter(disciple, filter.status, serverNowMs)) return false;
+  if (filter.operableOnly && !isOperable(disciple, serverNowMs)) return false;
   return matchesProgressFilter(disciple, filter.progress);
+}
+
+/**
+ * 「可操作」：能被派活的弟子。执事（占着职位）、坐镇灵地、在外历练（已归队待领取的不算在外）、
+ * 重伤卧床的都不算 —— 这些人转岗 / 出战都会被服务端拒绝。疗伤中的仍可转岗，算可操作。
+ */
+export function isOperable(disciple: FilterableDisciple, serverNowMs: number): boolean {
+  if ((disciple.stewardOffice ?? null) !== null) return false;
+  if ((disciple.garrisonSiteName ?? null) !== null) return false;
+  if (disciple.journey?.status === 'active') return false;
+  return !isSeverelyInjured(disciple, serverNowMs);
 }
 
 /**
@@ -536,6 +555,7 @@ export function isFilterActive(filter: DiscipleFilter): boolean {
     filter.assignment !== '' ||
     filter.status !== 'all' ||
     filter.progress !== 'all' ||
-    filter.sort !== 'recruitOrder'
+    filter.sort !== 'recruitOrder' ||
+    filter.operableOnly
   );
 }
