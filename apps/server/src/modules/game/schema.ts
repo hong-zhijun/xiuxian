@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import { ARENA_MAX_ENTRY } from './arena';
 import { MAX_CRAFT_QUANTITY, MAX_PILL_USE_COUNT } from './alchemy';
 import { AVATAR_IMAGE_MAX_BASE64_CHARS, AVATAR_IMAGE_MIMES } from './avatarImage';
 import { BETTABLE_ATTRIBUTES, RACE_BEAST_COUNT, RACE_BET_MAX, RACE_BET_MIN } from './gambling';
@@ -419,6 +420,19 @@ export const dailyTaskClaimRequestSchema = z.strictObject({
 
 /** 0048 宗门日课：开宝箱不带参数（严格：多传字段一律拒绝）。 */
 export const dailyChestRequestSchema = z.strictObject({});
+
+/**
+ * 0053 宗门大比：呈报出战名册（个人赛 / 团队赛各自最多 5 人，不许重复；
+ * 能否出战、战力上限与报名时段由 service 校验）。
+ */
+export const setArenaLineupSchema = z.strictObject({
+  kind: z.enum(['individual', 'team']),
+  discipleIds: z
+    .array(z.string().min(1).max(64))
+    .min(1)
+    .max(ARENA_MAX_ENTRY)
+    .refine((ids) => new Set(ids).size === ids.length, { message: '弟子不能重复' }),
+});
 
 /** 0040 拍卖行：上架。物品 / 数量组合的合法性由 service 校验，这里只做类型与范围；价格是展示单位整数。 */
 export const auctionListRequestSchema = z.strictObject({

@@ -4363,3 +4363,604 @@ export function dailyTasksGuardStatement(
     params: [guardId, sectId, dateKey, version],
   };
 }
+
+/* ---------- 0053 宗门大比（docs/宗门大比开发计划.md 第 6 节） ---------- */
+
+export interface ArenaSeasonRow {
+  id: string;
+  start_date: string;
+  end_date: string;
+  team_power_cap: number | null;
+  /** 0 / 1：赛季奖励是否已发。 */
+  settled: number;
+  created_at: number;
+}
+
+export interface ArenaEntryRow {
+  sect_id: string;
+  /** 'individual' | 'team'。 */
+  kind: string;
+  /** 出战弟子 id 的 JSON 数组（按出战顺序）。 */
+  lineup: string;
+  /** 1 = 系统自动选出（或结算时补位 / 调整）。 */
+  auto: number;
+  date_key: string;
+  created_at: number;
+}
+
+export interface ArenaIndividualScoreRow {
+  date_key: string;
+  disciple_id: string;
+  sect_id: string;
+  /** 宗门当前名（联表读取）。 */
+  sect_name: string;
+  disciple_name: string;
+  combat_power: number;
+  wins: number;
+  losses: number;
+  points: number;
+  total_damage: number;
+  created_at: number;
+}
+
+export interface ArenaTeamScoreRow {
+  date_key: string;
+  sect_id: string;
+  sect_name: string;
+  team_power: number;
+  wins: number;
+  losses: number;
+  points: number;
+  kills: number;
+  created_at: number;
+}
+
+export interface ArenaIndividualMatchRow {
+  id: string;
+  date_key: string;
+  fighter_a_id: string;
+  fighter_a_name: string;
+  fighter_a_sect_id: string;
+  fighter_a_sect_name: string;
+  fighter_a_power: number;
+  fighter_b_id: string;
+  fighter_b_name: string;
+  fighter_b_sect_id: string;
+  fighter_b_sect_name: string;
+  fighter_b_power: number;
+  winner_id: string | null;
+  fighter_a_hp_pct: number;
+  fighter_b_hp_pct: number;
+  created_at: number;
+}
+
+export interface ArenaTeamMatchRow {
+  id: string;
+  date_key: string;
+  sect_a_id: string;
+  sect_a_name: string;
+  sect_b_id: string;
+  sect_b_name: string;
+  winner_sect_id: string;
+  /** 车轮战每场 1v1 的详情 JSON（与 ArenaDuelView 同形）。 */
+  duels: string;
+  sect_a_kills: number;
+  sect_b_kills: number;
+  created_at: number;
+}
+
+export interface ArenaSeasonIndividualRow {
+  season_id: string;
+  disciple_id: string;
+  sect_id: string;
+  sect_name: string;
+  disciple_name: string;
+  total_points: number;
+  total_wins: number;
+  total_losses: number;
+  created_at: number;
+}
+
+export interface ArenaSeasonTeamRow {
+  season_id: string;
+  sect_id: string;
+  sect_name: string;
+  total_points: number;
+  total_wins: number;
+  total_losses: number;
+  total_kills: number;
+  created_at: number;
+}
+
+export class ArenaRepository extends ParamRepository {
+  /** 参赛资格：宗门等级 ≥ minLevel 的宗门（按等级降序、同级按建宗先后）。 */
+  async sectsAtLeast(minLevel: number): Promise<{ id: string; name: string; level: number }[]> {
+    return this.all<{ id: string; name: string; level: number }>({
+      sql: 'SELECT id, name, level FROM sects WHERE level >= ? ORDER BY level DESC, created_at ASC, id ASC',
+      params: [minLevel],
+    });
+  }
+
+  /** 上面那些宗门的全部弟子（战斗属性 / 战力 / 状态列与 DiscipleRepository 同一口径）。 */
+  async disciplesOfSectsAtLeast(minLevel: number): Promise<DiscipleRow[]> {
+    return this.all<DiscipleRow>({
+      sql: `SELECT id, sect_id, name, gender, aptitude, attack, defense, speed, luck, physique, talent,
+                   gear_attack, gear_defense, gear_speed, gear_luck, gear_physique, gear_power_bp,
+                   realm_id, stage, cultivation, cultivation_remainder,
+                   assignment, injured_until, severe_injured_until, body_tempering_count, note, avatar_frame_id, avatar_hash, dao_insight, dao_insight_used,
+                   talent_reroll_count, talent_candidate, steward_handover_until, aptitude_pill_count, created_at
+            FROM disciples
+            WHERE sect_id IN (SELECT id FROM sects WHERE level >= ?)
+            ORDER BY created_at ASC, id ASC`,
+      params: [minLevel],
+    });
+  }
+
+  /** 未领取的历练（在外判定用）。 */
+  async openJourneys(): Promise<{ disciple_id: string; ends_at: number; claimed_at: number | null }[]> {
+    return this.all<{ disciple_id: string; ends_at: number; claimed_at: number | null }>({
+      sql: 'SELECT disciple_id, ends_at, claimed_at FROM disciple_journeys WHERE claimed_at IS NULL',
+      params: [],
+    });
+  }
+
+  /** 在任执事的弟子 id（执事不能出战）。 */
+  async stewardDiscipleIds(): Promise<string[]> {
+    const rows = await this.all<{ disciple_id: string }>({
+      sql: 'SELECT disciple_id FROM sect_stewards WHERE disciple_id IS NOT NULL',
+      params: [],
+    });
+    return rows.map((row) => row.disciple_id);
+  }
+
+  /** 所有灵地的坐镇名单原文（坐镇判定用；JSON 数组文本）。 */
+  async garrisonTexts(): Promise<string[]> {
+    const rows = await this.all<{ garrison: string }>({
+      sql: 'SELECT garrison FROM world_sites WHERE garrison IS NOT NULL',
+      params: [],
+    });
+    return rows.map((row) => row.garrison);
+  }
+
+  async seasonRow(seasonId: string): Promise<ArenaSeasonRow | null> {
+    return this.one<ArenaSeasonRow>({
+      sql: 'SELECT id, start_date, end_date, team_power_cap, settled, created_at FROM arena_seasons WHERE id = ?',
+      params: [seasonId],
+    });
+  }
+
+  /** 某日的报名 / 阵容（手动或自动）。 */
+  async entriesOf(dateKey: string): Promise<ArenaEntryRow[]> {
+    return this.all<ArenaEntryRow>({
+      sql: 'SELECT sect_id, kind, lineup, auto, date_key, created_at FROM arena_entries WHERE date_key = ?',
+      params: [dateKey],
+    });
+  }
+
+  /** 某日是否已结算：写入过任何一条当日积分即视为已结算（结算与守卫用同一判定）。 */
+  async isDaySettled(dateKey: string): Promise<boolean> {
+    const row = await this.one<{ settled: number }>({
+      sql: `SELECT (EXISTS (SELECT 1 FROM arena_individual_scores WHERE date_key = ?)
+                 OR EXISTS (SELECT 1 FROM arena_team_scores WHERE date_key = ?)) AS settled`,
+      params: [dateKey, dateKey],
+    });
+    return Number(row?.settled ?? 0) === 1;
+  }
+
+  /** 最近一次结算的日期键；从未结算为 null。 */
+  async latestSettledDateKey(): Promise<string | null> {
+    const row = await this.one<{ date_key: string | null }>({
+      sql: `SELECT MAX(d) AS date_key FROM (
+              SELECT MAX(date_key) AS d FROM arena_individual_scores
+              UNION ALL
+              SELECT MAX(date_key) AS d FROM arena_team_scores)`,
+      params: [],
+    });
+    return row?.date_key ?? null;
+  }
+
+  async individualScoresOf(dateKey: string): Promise<ArenaIndividualScoreRow[]> {
+    return this.all<ArenaIndividualScoreRow>({
+      sql: `SELECT s.date_key, s.disciple_id, s.sect_id, COALESCE(sects.name, '') AS sect_name, s.disciple_name,
+                   s.combat_power, s.wins, s.losses, s.points, s.total_damage, s.created_at
+            FROM arena_individual_scores s
+            LEFT JOIN sects ON sects.id = s.sect_id
+            WHERE s.date_key = ?`,
+      params: [dateKey],
+    });
+  }
+
+  async teamScoresOf(dateKey: string): Promise<ArenaTeamScoreRow[]> {
+    return this.all<ArenaTeamScoreRow>({
+      sql: `SELECT date_key, sect_id, sect_name, team_power, wins, losses, points, kills, created_at
+            FROM arena_team_scores WHERE date_key = ?`,
+      params: [dateKey],
+    });
+  }
+
+  /** 某日个人赛战报（rowid 即对阵顺序；不含回合详情，个人赛只出对阵卡片）。 */
+  async individualMatchesOf(dateKey: string): Promise<ArenaIndividualMatchRow[]> {
+    return this.all<ArenaIndividualMatchRow>({
+      sql: `SELECT m.id, m.date_key,
+                   m.fighter_a_id, m.fighter_a_name, m.fighter_a_sect_id, COALESCE(sa.name, '') AS fighter_a_sect_name, m.fighter_a_power,
+                   m.fighter_b_id, m.fighter_b_name, m.fighter_b_sect_id, COALESCE(sb.name, '') AS fighter_b_sect_name, m.fighter_b_power,
+                   m.winner_id, m.fighter_a_hp_pct, m.fighter_b_hp_pct, m.created_at
+            FROM arena_individual_matches m
+            LEFT JOIN sects sa ON sa.id = m.fighter_a_sect_id
+            LEFT JOIN sects sb ON sb.id = m.fighter_b_sect_id
+            WHERE m.date_key = ?
+            ORDER BY m.rowid ASC`,
+      params: [dateKey],
+    });
+  }
+
+  async teamMatchesOf(dateKey: string): Promise<ArenaTeamMatchRow[]> {
+    return this.all<ArenaTeamMatchRow>({
+      sql: `SELECT id, date_key, sect_a_id, sect_a_name, sect_b_id, sect_b_name, winner_sect_id, duels,
+                   sect_a_kills, sect_b_kills, created_at
+            FROM arena_team_matches WHERE date_key = ? ORDER BY rowid ASC`,
+      params: [dateKey],
+    });
+  }
+
+  /** 赛季天榜：积分 → 胜场 → disciple_id（与结算取前三同一排序）。 */
+  async seasonIndividualRanking(seasonId: string, limit: number): Promise<ArenaSeasonIndividualRow[]> {
+    return this.all<ArenaSeasonIndividualRow>({
+      sql: `SELECT r.season_id, r.disciple_id, r.sect_id, COALESCE(sects.name, '') AS sect_name, r.disciple_name,
+                   r.total_points, r.total_wins, r.total_losses, r.created_at
+            FROM arena_season_individual r
+            LEFT JOIN sects ON sects.id = r.sect_id
+            WHERE r.season_id = ?
+            ORDER BY r.total_points DESC, r.total_wins DESC, r.disciple_id ASC
+            LIMIT ?`,
+      params: [seasonId, limit],
+    });
+  }
+
+  /** 赛季宗榜：积分 → 总击杀 → sect_id。 */
+  async seasonTeamRanking(seasonId: string, limit: number): Promise<ArenaSeasonTeamRow[]> {
+    return this.all<ArenaSeasonTeamRow>({
+      sql: `SELECT season_id, sect_id, sect_name, total_points, total_wins, total_losses, total_kills, created_at
+            FROM arena_season_team
+            WHERE season_id = ?
+            ORDER BY total_points DESC, total_kills DESC, sect_id ASC
+            LIMIT ?`,
+      params: [seasonId, limit],
+    });
+  }
+
+  /** 报名 / 改阵容（同一宗门同一赛制同一天只留一行）。 */
+  async saveLineup(input: {
+    sectId: string;
+    kind: 'individual' | 'team';
+    lineup: readonly string[];
+    auto: boolean;
+    dateKey: string;
+    now: number;
+  }): Promise<void> {
+    await this.execute(upsertArenaEntryStatement(input));
+  }
+
+  /** 赛季行：没有才建（并发时只有一条插得进去）。 */
+  async ensureSeason(input: { id: string; startDate: string; endDate: string; teamPowerCap: number; now: number }): Promise<void> {
+    await this.execute(insertArenaSeasonStatement(input));
+  }
+}
+
+/** 报名 / 阵容写回：每宗门每种赛制每天一行；重复报名覆盖，auto 随之更新。 */
+export function upsertArenaEntryStatement(input: {
+  sectId: string;
+  kind: 'individual' | 'team';
+  lineup: readonly string[];
+  auto: boolean;
+  dateKey: string;
+  now: number;
+}): ParameterizedQuery {
+  return {
+    sql: `INSERT INTO arena_entries (sect_id, kind, lineup, auto, date_key, created_at)
+          VALUES (?, ?, ?, ?, ?, ?)
+          ON CONFLICT (sect_id, kind, date_key) DO UPDATE SET
+            lineup = excluded.lineup,
+            auto = excluded.auto,
+            created_at = excluded.created_at`,
+    params: [input.sectId, input.kind, JSON.stringify(input.lineup), input.auto ? 1 : 0, input.dateKey, input.now],
+  };
+}
+
+/** 赛季行（已存在则不动：团队赛上限赛季内不变）。 */
+export function insertArenaSeasonStatement(input: {
+  id: string;
+  startDate: string;
+  endDate: string;
+  teamPowerCap: number;
+  now: number;
+}): ParameterizedQuery {
+  return {
+    sql: `INSERT OR IGNORE INTO arena_seasons (id, start_date, end_date, team_power_cap, settled, created_at)
+          VALUES (?, ?, ?, ?, 0, ?)`,
+    params: [input.id, input.startDate, input.endDate, input.teamPowerCap, input.now],
+  };
+}
+
+export interface NewArenaIndividualMatch {
+  id: string;
+  dateKey: string;
+  fighterAId: string;
+  fighterAName: string;
+  fighterASectId: string;
+  fighterAPower: number;
+  fighterBId: string;
+  fighterBName: string;
+  fighterBSectId: string;
+  fighterBPower: number;
+  winnerId: string | null;
+  /** 回合详情 JSON（表里保留；个人赛视图不返回）。 */
+  rounds: string;
+  fighterAHpPct: number;
+  fighterBHpPct: number;
+  now: number;
+}
+
+/**
+ * 个人赛战报写入：按顺序每 6 场合成一条多行 INSERT（15 列 × 6 = 90 个绑定参数，低于 D1 单语句 100 上限）。
+ * 语句顺序即对阵顺序（rowid 递增），战报按它分层。
+ */
+export function insertArenaIndividualMatchStatements(rows: readonly NewArenaIndividualMatch[]): ParameterizedQuery[] {
+  const statements: ParameterizedQuery[] = [];
+  const perStatement = 6;
+  for (let start = 0; start < rows.length; start += perStatement) {
+    const chunk = rows.slice(start, start + perStatement);
+    const placeholders = chunk.map(() => '(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').join(', ');
+    const params: (string | number | null)[] = [];
+    for (const row of chunk) {
+      params.push(
+        row.id,
+        row.dateKey,
+        row.fighterAId,
+        row.fighterAName,
+        row.fighterASectId,
+        row.fighterAPower,
+        row.fighterBId,
+        row.fighterBName,
+        row.fighterBSectId,
+        row.fighterBPower,
+        row.winnerId,
+        row.rounds,
+        row.fighterAHpPct,
+        row.fighterBHpPct,
+        row.now,
+      );
+    }
+    statements.push({
+      sql: `INSERT INTO arena_individual_matches
+              (id, date_key, fighter_a_id, fighter_a_name, fighter_a_sect_id, fighter_a_power,
+               fighter_b_id, fighter_b_name, fighter_b_sect_id, fighter_b_power,
+               winner_id, rounds, fighter_a_hp_pct, fighter_b_hp_pct, created_at)
+            VALUES ${placeholders}`,
+      params,
+    });
+  }
+  return statements;
+}
+
+/** 团队赛一场（一场车轮战一条）。 */
+export function insertArenaTeamMatchStatement(input: {
+  id: string;
+  dateKey: string;
+  sectAId: string;
+  sectAName: string;
+  sectBId: string;
+  sectBName: string;
+  winnerSectId: string;
+  duels: string;
+  sectAKills: number;
+  sectBKills: number;
+  now: number;
+}): ParameterizedQuery {
+  return {
+    sql: `INSERT INTO arena_team_matches
+            (id, date_key, sect_a_id, sect_a_name, sect_b_id, sect_b_name, winner_sect_id, duels,
+             sect_a_kills, sect_b_kills, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    params: [
+      input.id,
+      input.dateKey,
+      input.sectAId,
+      input.sectAName,
+      input.sectBId,
+      input.sectBName,
+      input.winnerSectId,
+      input.duels,
+      input.sectAKills,
+      input.sectBKills,
+      input.now,
+    ],
+  };
+}
+
+/** 个人赛日积分（每名参赛弟子一行，无场次也写一行：写入即代表当天已结算）。 */
+export function insertArenaIndividualScoreStatement(input: {
+  dateKey: string;
+  discipleId: string;
+  sectId: string;
+  discipleName: string;
+  combatPower: number;
+  wins: number;
+  losses: number;
+  points: number;
+  totalDamage: number;
+  now: number;
+}): ParameterizedQuery {
+  return {
+    sql: `INSERT INTO arena_individual_scores
+            (date_key, disciple_id, sect_id, disciple_name, combat_power, wins, losses, points, total_damage, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    params: [
+      input.dateKey,
+      input.discipleId,
+      input.sectId,
+      input.discipleName,
+      input.combatPower,
+      input.wins,
+      input.losses,
+      input.points,
+      input.totalDamage,
+      input.now,
+    ],
+  };
+}
+
+/** 团队赛日积分（每个参赛宗门一行）。 */
+export function insertArenaTeamScoreStatement(input: {
+  dateKey: string;
+  sectId: string;
+  sectName: string;
+  teamPower: number;
+  wins: number;
+  losses: number;
+  points: number;
+  kills: number;
+  now: number;
+}): ParameterizedQuery {
+  return {
+    sql: `INSERT INTO arena_team_scores
+            (date_key, sect_id, sect_name, team_power, wins, losses, points, kills, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    params: [
+      input.dateKey,
+      input.sectId,
+      input.sectName,
+      input.teamPower,
+      input.wins,
+      input.losses,
+      input.points,
+      input.kills,
+      input.now,
+    ],
+  };
+}
+
+/** 赛季天榜累计（同一赛季同一弟子累加积分与胜负）。 */
+export function upsertArenaSeasonIndividualStatement(input: {
+  seasonId: string;
+  discipleId: string;
+  sectId: string;
+  discipleName: string;
+  points: number;
+  wins: number;
+  losses: number;
+  now: number;
+}): ParameterizedQuery {
+  return {
+    sql: `INSERT INTO arena_season_individual
+            (season_id, disciple_id, sect_id, disciple_name, total_points, total_wins, total_losses, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT (season_id, disciple_id) DO UPDATE SET
+            sect_id = excluded.sect_id,
+            disciple_name = excluded.disciple_name,
+            total_points = total_points + excluded.total_points,
+            total_wins = total_wins + excluded.total_wins,
+            total_losses = total_losses + excluded.total_losses`,
+    params: [
+      input.seasonId,
+      input.discipleId,
+      input.sectId,
+      input.discipleName,
+      input.points,
+      input.wins,
+      input.losses,
+      input.now,
+    ],
+  };
+}
+
+/** 赛季宗榜累计（同一赛季同一宗门累加积分、胜负与击杀）。 */
+export function upsertArenaSeasonTeamStatement(input: {
+  seasonId: string;
+  sectId: string;
+  sectName: string;
+  points: number;
+  wins: number;
+  losses: number;
+  kills: number;
+  now: number;
+}): ParameterizedQuery {
+  return {
+    sql: `INSERT INTO arena_season_team
+            (season_id, sect_id, sect_name, total_points, total_wins, total_losses, total_kills, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT (season_id, sect_id) DO UPDATE SET
+            sect_name = excluded.sect_name,
+            total_points = total_points + excluded.total_points,
+            total_wins = total_wins + excluded.total_wins,
+            total_losses = total_losses + excluded.total_losses,
+            total_kills = total_kills + excluded.total_kills`,
+    params: [
+      input.seasonId,
+      input.sectId,
+      input.sectName,
+      input.points,
+      input.wins,
+      input.losses,
+      input.kills,
+      input.now,
+    ],
+  };
+}
+
+/** 奖励发放记录（rewards 为 {资源 id 或 cultivationPill: 数量}，资源为最小单位）。 */
+export function insertArenaRewardStatement(input: {
+  id: string;
+  dateKey: string;
+  kind: 'daily_individual' | 'daily_team' | 'season_individual' | 'season_team';
+  sectId: string;
+  rank: number;
+  rewards: Readonly<Record<string, number>>;
+  now: number;
+}): ParameterizedQuery {
+  return {
+    sql: `INSERT INTO arena_rewards (id, date_key, kind, sect_id, rank, rewards, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    params: [input.id, input.dateKey, input.kind, input.sectId, input.rank, JSON.stringify(input.rewards), input.now],
+  };
+}
+
+/**
+ * 日赛结算守卫：当天还没有任何积分行（没结算过）时才放行；已结算的第二次运行整批回滚（CHECK 失败）。
+ */
+export function arenaDaySettleGuardStatement(guardId: string, dateKey: string): ParameterizedQuery {
+  return {
+    sql: `INSERT INTO mutation_guards (command_id, valid)
+          SELECT ?, CASE WHEN NOT EXISTS (SELECT 1 FROM arena_individual_scores WHERE date_key = ?)
+            AND NOT EXISTS (SELECT 1 FROM arena_team_scores WHERE date_key = ?) THEN 1 ELSE 0 END`,
+    params: [guardId, dateKey, dateKey],
+  };
+}
+
+/** 赛季奖励守卫：赛季还没发过奖（settled = 0）时才放行。 */
+export function arenaSeasonSettleGuardStatement(guardId: string, seasonId: string): ParameterizedQuery {
+  return {
+    sql: `INSERT INTO mutation_guards (command_id, valid)
+          SELECT ?, CASE WHEN EXISTS (SELECT 1 FROM arena_seasons WHERE id = ? AND settled = 0) THEN 1 ELSE 0 END`,
+    params: [guardId, seasonId],
+  };
+}
+
+/** 赛季奖励已发：标记 settled = 1（与守卫、奖励同一批）。 */
+export function markArenaSeasonSettledStatement(seasonId: string): ParameterizedQuery {
+  return {
+    sql: 'UPDATE arena_seasons SET settled = 1 WHERE id = ?',
+    params: [seasonId],
+  };
+}
+
+/** 清理 before 之前的日赛记录（战报 / 日积分 / 阵容）；赛季累计与奖励记录保留。 */
+export function pruneArenaDailyStatements(beforeDateKey: string): ParameterizedQuery[] {
+  return [
+    { sql: 'DELETE FROM arena_individual_matches WHERE date_key < ?', params: [beforeDateKey] },
+    { sql: 'DELETE FROM arena_team_matches WHERE date_key < ?', params: [beforeDateKey] },
+    { sql: 'DELETE FROM arena_individual_scores WHERE date_key < ?', params: [beforeDateKey] },
+    { sql: 'DELETE FROM arena_team_scores WHERE date_key < ?', params: [beforeDateKey] },
+    { sql: 'DELETE FROM arena_entries WHERE date_key < ?', params: [beforeDateKey] },
+  ];
+}

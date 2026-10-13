@@ -2523,6 +2523,117 @@ export async function sweepTower(): Promise<{ state: SectStateView; tower: Tower
   );
 }
 
+/* ---------- 0053 宗门大比（斗法台 / 宗门战；每日 12:00 结算，周日收官） ---------- */
+
+/** 名册上的一名弟子（战力计入装备）。 */
+export interface ArenaFighterView {
+  id: string;
+  name: string;
+  realmName: string;
+  stageName: string;
+  combatPower: number;
+}
+
+export interface ArenaDuelHitView {
+  fighterId: string;
+  name: string;
+  damage: number;
+  crit: boolean;
+  extra: boolean;
+}
+
+export interface ArenaDuelRoundView {
+  round: number;
+  firstId: string;
+  hits: ArenaDuelHitView[];
+  /** 回合结束时的剩余血量（与 fighterAMaxHp 同一口径）。 */
+  fighterAHp: number;
+  fighterBHp: number;
+}
+
+/** 一场 1v1 的详情（团队赛车轮战每场都有）。 */
+export interface ArenaDuelView {
+  fighterA: { id: string; name: string; power: number; hpPct: number };
+  fighterB: { id: string; name: string; power: number; hpPct: number };
+  winnerId: string | null;
+  fighterAMaxHp: number;
+  fighterBMaxHp: number;
+  rounds: ArenaDuelRoundView[];
+}
+
+export interface ArenaIndividualMatchView {
+  id: string;
+  /** 所在层（同一层里每名弟子最多一场）。 */
+  round: number;
+  fighterA: { id: string; name: string; sectName: string; power: number; hpPct: number };
+  fighterB: { id: string; name: string; sectName: string; power: number; hpPct: number };
+  winnerId: string | null;
+}
+
+export interface ArenaTeamMatchView {
+  id: string;
+  sectA: { id: string; name: string; kills: number };
+  sectB: { id: string; name: string; kills: number };
+  winnerSectId: string;
+  duels: ArenaDuelView[];
+}
+
+/** 一个宗门的参赛名单。auto = true 时是系统择优选出（掌门未点将）。 */
+export interface ArenaEntryView {
+  sectId: string;
+  sectName: string;
+  sectLevel: number;
+  auto: boolean;
+  disciples: ArenaFighterView[];
+}
+
+export interface ArenaRankingView {
+  rank: number;
+  /** 个人赛为弟子 id，团队赛为宗门 id。 */
+  id: string;
+  name: string;
+  sectName?: string;
+  points: number;
+  wins: number;
+  losses: number;
+}
+
+/** 宗门大比面板（GET /api/v1/game/arena 与报名回执）。 */
+export interface ArenaView {
+  unlocked: boolean;
+  settled: boolean;
+  canRegister: boolean;
+  /** 距今日结算的毫秒数（未结算且未过 12 点才有；已结算为 null）。 */
+  settleInMs: number | null;
+  teamPowerCap: number | null;
+  seasonId: string;
+  /** 战报与日榜所属日期（最近一次结算；从未结算为 null）。 */
+  dateKey: string | null;
+  myIndividualEntry: ArenaEntryView | null;
+  myTeamEntry: ArenaEntryView | null;
+  allEntries: { individual: ArenaEntryView[]; team: ArenaEntryView[] };
+  individualMatches: ArenaIndividualMatchView[];
+  teamMatches: ArenaTeamMatchView[];
+  dailyIndividualRanking: ArenaRankingView[];
+  dailyTeamRanking: ArenaRankingView[];
+  seasonIndividualRanking: ArenaRankingView[];
+  seasonTeamRanking: ArenaRankingView[];
+}
+
+export async function fetchArena(): Promise<ArenaView> {
+  const data = await apiRequest<{ arena: ArenaView }>('/api/v1/game/arena');
+  return data.arena;
+}
+
+/** 呈报出战名册（个人赛 / 团队赛；discipleIds 的顺序即出战顺序）。 */
+export async function setArenaLineup(kind: 'individual' | 'team', discipleIds: string[]): Promise<ArenaView> {
+  const data = await apiRequest<{ arena: ArenaView }>('/api/v1/game/arena/lineup', {
+    method: 'POST',
+    body: { kind, discipleIds },
+  });
+  return data.arena;
+}
+
 /* ---------- 0048 宗门日课（每天 5 个小任务 + 日课宝箱） ---------- */
 
 /** 日课任务 id（与后端 dailyTasks.ts 的 DAILY_TASK_IDS 同口径）。 */
@@ -3041,6 +3152,8 @@ export interface HubView {
   };
   auction: { unlocked: boolean; claimable: number; myActive: number };
   market: { unlocked: boolean; holdings: number; profit: number; profitPct: number };
+  /** 宗门大比：今天是否已结算，本宗今日两赛制的名次（未结算 / 未参赛为 null）。 */
+  arena: { unlocked: boolean; settled: boolean; myIndividualRank: number | null; myTeamRank: number | null };
 }
 
 export async function fetchHub(): Promise<{ hub: HubView }> {

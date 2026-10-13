@@ -88,6 +88,7 @@ import SectLevelCatalogDialog from './SectLevelCatalogDialog.vue';
 import WorldBossDialog from './WorldBossDialog.vue';
 import MeritDialog from './MeritDialog.vue';
 import TowerDialog from './TowerDialog.vue';
+import ArenaDialog from './ArenaDialog.vue';
 import AuctionDialog from './AuctionDialog.vue';
 import WorldMapDialog from './WorldMapDialog.vue';
 import MarketDialog from './MarketDialog.vue';
@@ -200,6 +201,7 @@ const openPanel = ref<
   | 'world-boss'
   | 'merit'
   | 'tower'
+  | 'arena'
   | 'auction'
   | 'world'
   | 'market'
@@ -1785,7 +1787,7 @@ function signedPct(value: number): string {
 
 type HubCardId =
   | 'daily' | 'alchemy' | 'forge' | 'refine' | 'steward' | 'defense'
-  | 'boss' | 'tower' | 'explore' | 'world'
+  | 'boss' | 'arena' | 'tower' | 'explore' | 'world'
   | 'shop' | 'gambling' | 'auction' | 'market' | 'merit';
 
 interface HubCard {
@@ -1797,6 +1799,16 @@ interface HubCard {
   warn?: string;
   /** 有可领取的东西：卡片名旁亮小红点。 */
   alert?: boolean;
+}
+
+/** 宗门大比卡片第二行：未结算看报名；结算后看本宗今日两赛制的名次。 */
+function arenaCardStatus(arena: HubView['arena'] | undefined): string {
+  if (arena === undefined) return '斗法台 · 宗门战';
+  if (!arena.unlocked) return '宗门 2 级开放';
+  if (!arena.settled) return '名册可呈报 · 12:00 结算';
+  if (arena.myIndividualRank !== null) return `今日已结算 · 斗法台第 ${String(arena.myIndividualRank)} 名`;
+  if (arena.myTeamRank !== null) return `今日已结算 · 宗门战第 ${String(arena.myTeamRank)} 名`;
+  return '今日已结算';
 }
 
 /** 状态卡片：按分组固定顺序，第二行写这个功能此刻的状态。 */
@@ -1841,6 +1853,7 @@ const hubGroups = computed<{ label: string; cards: HubCard[] }[]>(() => {
       label: '出战',
       cards: [
         { id: 'boss', name: '讨伐', glyph: '讨', status: bossStatus },
+        { id: 'arena', name: '宗门大比', glyph: '比', status: arenaCardStatus(h?.arena) },
         {
           id: 'tower',
           name: '镇妖塔',
@@ -1936,6 +1949,7 @@ function openHubCard(id: HubCardId): void {
     steward: 'steward',
     defense: 'defense-lineup',
     boss: 'world-boss',
+    arena: 'arena',
     tower: 'tower',
     explore: 'explore',
     world: 'world',
@@ -2794,6 +2808,11 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
       @notify="onWorldBossNotify"
       @equipment-changed="loadEquipment"
     />
+  </ModalShell>
+
+  <!-- 0053 宗门大比：只在打开时 / 呈报名册后请求，不做定时轮询。 -->
+  <ModalShell v-if="openPanel === 'arena'" :loading="busy" label="宗门大比" wide @close="openPanel = null">
+    <ArenaDialog :state="state" :busy="busy" @notify="onWorldBossNotify" />
   </ModalShell>
 
   <!-- 0025 世界 Boss（讨伐）：只在打开时 / 出手后 / 点刷新时请求，不做定时轮询。 -->

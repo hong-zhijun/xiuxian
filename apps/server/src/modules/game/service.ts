@@ -503,6 +503,64 @@ import {
   type MarketOrderKind,
   type StockDef,
 } from './market';
+import {
+  ARENA_MAX_ENTRY,
+  ARENA_PILL_ID,
+  ARENA_RANKING_SIZE,
+  ARENA_RECORD_KEEP_DAYS,
+  ARENA_SETTLE_HOUR,
+  ARENA_UNLOCK_SECT_LEVEL,
+  ARENA_WIN_POINTS,
+  adjustTeamLineup,
+  applyHandicap,
+  arenaCrossPairs,
+  arenaDateKeyBefore,
+  arenaFightBlockReason,
+  arenaHandicap,
+  arenaHourOf,
+  arenaIndividualOutcome,
+  arenaRoundLayers,
+  arenaSeasonId,
+  arenaSeasonRange,
+  autoSelectLineup,
+  calculateTeamPowerCap,
+  dailyIndividualReward,
+  dailyTeamReward,
+  isArenaSettleTime,
+  isArenaSundaySettle,
+  seasonIndividualReward,
+  seasonTeamReward,
+  simulateArenaDuel,
+  sortArenaIndividuals,
+  sortArenaTeams,
+  type ArenaCandidate,
+  type ArenaFighter,
+} from './arena';
+import {
+  ArenaRepository,
+  arenaDaySettleGuardStatement,
+  arenaSeasonSettleGuardStatement,
+  insertArenaIndividualMatchStatements,
+  insertArenaIndividualScoreStatement,
+  insertArenaRewardStatement,
+  insertArenaTeamMatchStatement,
+  insertArenaTeamScoreStatement,
+  markArenaSeasonSettledStatement,
+  pruneArenaDailyStatements,
+  upsertArenaEntryStatement,
+  upsertArenaSeasonIndividualStatement,
+  upsertArenaSeasonTeamStatement,
+  type NewArenaIndividualMatch,
+} from './repository';
+import type {
+  ArenaDuelView,
+  ArenaEntryView,
+  ArenaFighterView,
+  ArenaIndividualMatchView,
+  ArenaRankingView,
+  ArenaTeamMatchView,
+  ArenaView,
+} from './view';
 import { settleEconomy, resourceRates, type SettleResult } from './settle';
 import {
   simulateTowerBattle,
@@ -12919,6 +12977,7 @@ export async function getHub(db: D1Database, userId: string, now: number): Promi
       profit: value - cost,
       profitPct: pctChange(cost, value),
     },
+    arena: await arenaHubOf(db, sect.id, level, now),
   };
 }
 
@@ -13194,5 +13253,880 @@ export async function openDailyChest(
       pillName,
       message: `开启日课宝箱：玄铁 ×${String(roll.xuantie)}、神木 ×${String(roll.shenmu)}、${pillName} ×1`,
     },
+  };
+}
+
+/* ------------------------------------------------------------------ *
+ * 0053 宗门大比（docs/宗门大比开发计划.md）
+ *
+ * 规则与战斗在 arena.ts（纯函数）。这里做三件事：
+ * - 读名册：全服宗门等级达标者的弟子 + 此刻能否出战（一次读取，面板与结算共用）；
+ * - 取阵容：手动报名的（去掉不能出战的、缺额补齐；团队赛再按上限修正），或系统自动选人；
+ * - 结算：两两配对模拟 → 日积分 / 战报 / 奖励 / 赛季累计 / 阵容写回，整批受守卫（当天只发一次）。
+ * 报名窗口：每天 0:00~12:00（UTC+8）；12:00 起由定时任务结算，之后锁定到次日 0:00。
+ * 奖励入账与讨伐发奖同一口径：每宗门每种资源一条「不超过仓库容量」的相对加法。
+ * ------------------------------------------------------------------ */
+
+/** 名册里的一个宗门：弟子，以及此刻不能出战的弟子 → 原因（能出战的不在表里）。 */
+interface ArenaRosterSect {
+  id: string;
+  name: string;
+  level: number;
+  disciples: DiscipleRow[];
+  blockedReasonOf: ReadonlyMap<string, string>;
+}
+
+/** 全服宗门等级达标者的名册（只读；在外 / 执事 / 坐镇 / 重伤 / 疗伤的弟子记下原因）。 */
+async function loadArenaRoster(db: D1Database, now: number): Promise<ArenaRosterSect[]> {
+  const repo = new ArenaRepository(db);
+  const [sects, disciples, journeys, stewardIds, garrisonTexts] = await Promise.all([
+    repo.sectsAtLeast(ARENA_UNLOCK_SECT_LEVEL),
+    repo.disciplesOfSectsAtLeast(ARENA_UNLOCK_SECT_LEVEL),
+    repo.openJourneys(),
+    repo.stewardDiscipleIds(),
+    repo.garrisonTexts(),
+  ]);
+  const awayIds = journeyAwayIds(journeys, now);
+  const stewardSet = new Set(stewardIds);
+  const garrisonSet = new Set(garrisonTexts.flatMap((text) => parseGarrison(text)));
+  const membersBySect = new Map<string, DiscipleRow[]>();
+  for (const disciple of disciples) {
+    const members = membersBySect.get(disciple.sect_id) ?? [];
+    members.push(disciple);
+    membersBySect.set(disciple.sect_id, members);
+  }
+  return sects.map((sect) => {
+    const members = membersBySect.get(sect.id) ?? [];
+    const blockedReasonOf = new Map<string, string>();
+    for (const disciple of members) {
+      const reason = arenaFightBlockReason({
+        now,
+        away: awayIds.has(disciple.id),
+        steward: stewardSet.has(disciple.id),
+        stewardHandoverUntil:
+          disciple.steward_handover_until === null ? null : Number(disciple.steward_handover_until),
+        garrisoned: garrisonSet.has(disciple.id),
+        severeInjuredUntil: disciple.severe_injured_until === null ? null : Number(disciple.severe_injured_until),
+        injuredUntil: disciple.injured_until === null ? null : Number(disciple.injured_until),
+      });
+      if (reason !== null) blockedReasonOf.set(disciple.id, reason);
+    }
+    return { id: sect.id, name: sect.name, level: Number(sect.level), disciples: members, blockedReasonOf };
+  });
+}
+
+/** 弟子的战力（计入装备）与战斗属性：配对模拟与榜单共用。 */
+function arenaFighterOf(disciple: DiscipleRow): { power: number; fighter: ArenaFighter } {
+  const attrs = battleAttrsOf(disciple);
+  const power = gearedCombatPower(disciple);
+  return {
+    power,
+    fighter: {
+      id: disciple.id,
+      name: disciple.name,
+      power,
+      attack: attrs.attack,
+      defense: attrs.defense,
+      speed: attrs.speed,
+      luck: attrs.luck,
+      physique: attrs.physique,
+    },
+  };
+}
+
+/** 选人候选：战力（计入装备）与此刻能否出战。 */
+function arenaCandidatesOf(sect: ArenaRosterSect): ArenaCandidate[] {
+  return sect.disciples.map((disciple) => ({
+    id: disciple.id,
+    combatPower: gearedCombatPower(disciple),
+    blocked: sect.blockedReasonOf.has(disciple.id),
+  }));
+}
+
+/** 一宗的阵容：手动报名的（去掉不能出战的、缺额补齐；团队赛再按上限修正）或系统自动选出的。 */
+function arenaLineupOf(
+  sect: ArenaRosterSect,
+  kind: 'individual' | 'team',
+  manual: readonly string[] | null,
+  teamPowerCap: number,
+): { ids: string[]; auto: boolean } {
+  const candidates = arenaCandidatesOf(sect);
+  if (kind === 'individual') {
+    return manual === null
+      ? { ids: autoSelectLineup(candidates, ARENA_MAX_ENTRY), auto: true }
+      : { ids: adjustTeamLineup(candidates, manual, Number.POSITIVE_INFINITY), auto: false };
+  }
+  const base = manual ?? autoSelectLineup(candidates, ARENA_MAX_ENTRY);
+  return { ids: adjustTeamLineup(candidates, base, teamPowerCap), auto: manual === null };
+}
+
+/** 前 5 名弟子的总战力（上限按宗门实力算，不随伤势浮动）。 */
+function arenaTopPowerOf(disciples: readonly DiscipleRow[]): number {
+  return disciples
+    .map((disciple) => gearedCombatPower(disciple))
+    .sort((a, b) => b - a)
+    .slice(0, ARENA_MAX_ENTRY)
+    .reduce((sum, power) => sum + power, 0);
+}
+
+function arenaTeamCapFrom(roster: readonly ArenaRosterSect[]): number {
+  return calculateTeamPowerCap(roster.map((sect) => arenaTopPowerOf(sect.disciples)));
+}
+
+/** 团队赛战力上限（只读）：本赛季已建则用存下的值，否则按当前宗门现算。 */
+async function arenaTeamCapOf(db: D1Database, roster: readonly ArenaRosterSect[], now: number): Promise<number> {
+  const stored = await new ArenaRepository(db).seasonRow(arenaSeasonId(now));
+  if (stored === null || stored.team_power_cap === null) return arenaTeamCapFrom(roster);
+  return Number(stored.team_power_cap);
+}
+
+/** 赛季行：没有就按当前宗门算定上限建一行（周一 0 点后第一次运行时建；赛季内不再变）。 */
+async function ensureArenaSeason(db: D1Database, now: number, roster?: readonly ArenaRosterSect[]): Promise<number> {
+  const range = arenaSeasonRange(now);
+  const repo = new ArenaRepository(db);
+  const existing = await repo.seasonRow(range.id);
+  if (existing !== null && existing.team_power_cap !== null) return Number(existing.team_power_cap);
+  const cap = arenaTeamCapFrom(roster ?? (await loadArenaRoster(db, now)));
+  await repo.ensureSeason({ id: range.id, startDate: range.startDate, endDate: range.endDate, teamPowerCap: cap, now });
+  const stored = await repo.seasonRow(range.id);
+  if (stored === null || stored.team_power_cap === null) return cap;
+  return Number(stored.team_power_cap);
+}
+
+/** 阵容 JSON（弟子 id 数组）；脏数据退化为空数组。 */
+function arenaIdsOf(text: string): string[] {
+  try {
+    const value: unknown = JSON.parse(text);
+    return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+/** 战报里的车轮战详情（写入时就是 ArenaDuelView 同形的 JSON）；脏数据退化为空数组。 */
+function arenaDuelsOf(text: string): ArenaDuelView[] {
+  try {
+    const value: unknown = JSON.parse(text);
+    return Array.isArray(value) ? (value as ArenaDuelView[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** 本批次的奖励账本：每宗门每种资源（最小单位）与修为丹颗数，写库时统一按仓库容量入账。 */
+class ArenaRewardLedger {
+  private readonly resources = new Map<string, Record<string, number>>();
+  private readonly pills = new Map<string, number>();
+
+  add(sectId: string, resourceId: string, amount: number): void {
+    if (amount <= 0) return;
+    const bucket = this.resources.get(sectId) ?? {};
+    bucket[resourceId] = (bucket[resourceId] ?? 0) + amount;
+    this.resources.set(sectId, bucket);
+  }
+
+  addPill(sectId: string, count: number): void {
+    if (count <= 0) return;
+    this.pills.set(sectId, (this.pills.get(sectId) ?? 0) + count);
+  }
+
+  resourcesOf(sectId: string): Readonly<Record<string, number>> {
+    return this.resources.get(sectId) ?? {};
+  }
+
+  pillsOf(sectId: string): number {
+    return this.pills.get(sectId) ?? 0;
+  }
+
+  statements(levelOf: ReadonlyMap<string, number>, now: number): ParameterizedQuery[] {
+    const statements: ParameterizedQuery[] = [];
+    for (const [sectId, resources] of this.resources) {
+      for (const [resourceId, amount] of Object.entries(resources)) {
+        statements.push(
+          resourceCreditCappedStatement(
+            sectId,
+            resourceId,
+            amount,
+            resourceCapacityOf(resourceId, levelOf.get(sectId) ?? 1),
+            now,
+          ),
+        );
+      }
+    }
+    for (const [sectId, count] of this.pills) {
+      statements.push(incrementPillInventoryStatement(sectId, ARENA_PILL_ID, count, now));
+    }
+    return statements;
+  }
+}
+
+/** 大比奖励的到账记录（写入天机录；effects 只列资源，丹药写在描述里）。 */
+function arenaRewardEventStatement(
+  sectId: string,
+  description: string,
+  resources: Readonly<Record<string, number>>,
+  now: number,
+): ParameterizedQuery {
+  const effects = Object.fromEntries(
+    Object.entries(resources)
+      .filter(([, amount]) => amount > 0)
+      .map(([resourceId, amount]) => [resourceId, String(amount)]),
+  );
+  return insertEventLogStatement({
+    id: crypto.randomUUID(),
+    sectId,
+    eventId: 'arenaReward',
+    description,
+    effects: JSON.stringify(effects),
+    now,
+  });
+}
+
+/**
+ * 结算一天（UTC+8 的 dateKey）：阵容 → 个人赛两两对战 → 团队赛车轮战 → 积分 / 战报 / 奖励 / 赛季累计 / 阵容写回。
+ * 全部语句同一个受守卫的 batch：守卫要求当天还没有任何积分行，并发或重跑时整批回滚，奖励只发一次。
+ * 没有任何参赛者时什么也不写（下次运行还会再看一眼，代价很小）。
+ */
+async function settleArenaDay(db: D1Database, now: number, dateKey: string): Promise<void> {
+  const roster = await loadArenaRoster(db, now);
+  const cap = await ensureArenaSeason(db, now, roster);
+  const entries = await new ArenaRepository(db).entriesOf(dateKey);
+  const manualOf = (sectId: string, kind: 'individual' | 'team'): string[] | null => {
+    const row = entries.find((entry) => entry.sect_id === sectId && entry.kind === kind);
+    return row === undefined ? null : arenaIdsOf(row.lineup);
+  };
+  const disciplesById = new Map(
+    roster.flatMap((sect) => sect.disciples.map((disciple) => [disciple.id, disciple] as const)),
+  );
+  const levelOf = new Map(roster.map((sect) => [sect.id, sect.level] as const));
+  const seasonId = arenaSeasonId(now);
+
+  const individualPlans = roster
+    .map((sect) => ({ sect, ...arenaLineupOf(sect, 'individual', manualOf(sect.id, 'individual'), cap) }))
+    .filter((plan) => plan.ids.length > 0);
+  const teamPlans = roster
+    .map((sect) => ({ sect, ...arenaLineupOf(sect, 'team', manualOf(sect.id, 'team'), cap) }))
+    .filter((plan) => plan.ids.length > 0);
+  if (individualPlans.length === 0 && teamPlans.length === 0) return;
+
+  const guardId = `${crypto.randomUUID()}:arena-day`;
+  const statements: ParameterizedQuery[] = [arenaDaySettleGuardStatement(guardId, dateKey)];
+  const ledger = new ArenaRewardLedger();
+
+  for (const plan of individualPlans) {
+    statements.push(
+      upsertArenaEntryStatement({ sectId: plan.sect.id, kind: 'individual', lineup: plan.ids, auto: plan.auto, dateKey, now }),
+    );
+  }
+  for (const plan of teamPlans) {
+    statements.push(
+      upsertArenaEntryStatement({ sectId: plan.sect.id, kind: 'team', lineup: plan.ids, auto: plan.auto, dateKey, now }),
+    );
+  }
+
+  const individualEntrants = individualPlans.flatMap((plan) =>
+    plan.ids.map((id) => {
+      const disciple = disciplesById.get(id)!;
+      return { sect: plan.sect, disciple, ...arenaFighterOf(disciple) };
+    }),
+  );
+  type ArenaStat = { points: number; wins: number; losses: number; damage: number };
+  const individualStats = new Map<string, ArenaStat>();
+  for (const entrant of individualEntrants) {
+    individualStats.set(entrant.disciple.id, { points: 0, wins: 0, losses: 0, damage: 0 });
+  }
+  const individualMatches: NewArenaIndividualMatch[] = [];
+  for (const [i, j] of arenaCrossPairs(individualEntrants.map((entrant) => entrant.sect.id))) {
+    const x = individualEntrants[i]!;
+    const y = individualEntrants[j]!;
+    const duel = simulateArenaDuel({
+      fighterA: applyHandicap(x.fighter, arenaHandicap(x.power, y.power)),
+      fighterB: applyHandicap(y.fighter, arenaHandicap(y.power, x.power)),
+      random: Math.random,
+    });
+    const winner = duel.winnerId === null ? null : duel.winnerId === x.fighter.id ? 'a' : 'b';
+    const outcome = arenaIndividualOutcome(winner);
+    const statsX = individualStats.get(x.disciple.id)!;
+    const statsY = individualStats.get(y.disciple.id)!;
+    statsX.points += outcome.a.points;
+    statsX.wins += outcome.a.wins;
+    statsX.losses += outcome.a.losses;
+    statsX.damage += duel.fighterADamage;
+    statsY.points += outcome.b.points;
+    statsY.wins += outcome.b.wins;
+    statsY.losses += outcome.b.losses;
+    statsY.damage += duel.fighterBDamage;
+    individualMatches.push({
+      id: crypto.randomUUID(),
+      dateKey,
+      fighterAId: x.fighter.id,
+      fighterAName: x.fighter.name,
+      fighterASectId: x.sect.id,
+      fighterAPower: Math.floor(x.power),
+      fighterBId: y.fighter.id,
+      fighterBName: y.fighter.name,
+      fighterBSectId: y.sect.id,
+      fighterBPower: Math.floor(y.power),
+      winnerId: duel.winnerId,
+      rounds: JSON.stringify(duel.rounds),
+      fighterAHpPct: duel.fighterAHpPct,
+      fighterBHpPct: duel.fighterBHpPct,
+      now,
+    });
+  }
+  statements.push(...insertArenaIndividualMatchStatements(individualMatches));
+
+  const individualRanking = sortArenaIndividuals(
+    individualEntrants.map((entrant) => ({ entrant, id: entrant.disciple.id, ...individualStats.get(entrant.disciple.id)! })),
+  );
+  const individualBestRank = new Map<string, number>();
+  individualRanking.forEach((row, index) => {
+    const rank = index + 1;
+    const sectId = row.entrant.sect.id;
+    const reward = dailyIndividualReward(rank);
+    ledger.add(sectId, 'spiritStone', reward.spiritStone * 1000);
+    ledger.addPill(sectId, reward.cultivationPill);
+    if (!individualBestRank.has(sectId)) individualBestRank.set(sectId, rank);
+    statements.push(
+      insertArenaRewardStatement({
+        id: crypto.randomUUID(),
+        dateKey,
+        kind: 'daily_individual',
+        sectId,
+        rank,
+        rewards: { spiritStone: reward.spiritStone * 1000, [ARENA_PILL_ID]: reward.cultivationPill },
+        now,
+      }),
+    );
+  });
+  for (const entrant of individualEntrants) {
+    const stats = individualStats.get(entrant.disciple.id)!;
+    statements.push(
+      insertArenaIndividualScoreStatement({
+        dateKey,
+        discipleId: entrant.disciple.id,
+        sectId: entrant.sect.id,
+        discipleName: entrant.disciple.name,
+        combatPower: Math.floor(entrant.power),
+        wins: stats.wins,
+        losses: stats.losses,
+        points: stats.points,
+        totalDamage: Math.floor(stats.damage),
+        now,
+      }),
+    );
+    statements.push(
+      upsertArenaSeasonIndividualStatement({
+        seasonId,
+        discipleId: entrant.disciple.id,
+        sectId: entrant.sect.id,
+        discipleName: entrant.disciple.name,
+        points: stats.points,
+        wins: stats.wins,
+        losses: stats.losses,
+        now,
+      }),
+    );
+  }
+
+  // 团队赛：宗门两两车轮战（没有平局）。赢方弟子带着剩余血量留场，输方出局，下一人满血上场。
+  const teamEntries = teamPlans.map((plan) => {
+    const members = plan.ids.map((id) => {
+      const disciple = disciplesById.get(id)!;
+      return { disciple, ...arenaFighterOf(disciple) };
+    });
+    return { sect: plan.sect, members, power: members.reduce((sum, member) => sum + member.power, 0) };
+  });
+  const teamStats = new Map<string, { points: number; wins: number; losses: number; kills: number }>();
+  for (const team of teamEntries) {
+    teamStats.set(team.sect.id, { points: 0, wins: 0, losses: 0, kills: 0 });
+  }
+  for (const [i, j] of arenaCrossPairs(teamEntries.map((team) => team.sect.id))) {
+    const a = teamEntries[i]!;
+    const b = teamEntries[j]!;
+    const teamHandicapA = arenaHandicap(a.power, b.power);
+    const teamHandicapB = arenaHandicap(b.power, a.power);
+    const duels: ArenaDuelView[] = [];
+    let indexA = 0;
+    let indexB = 0;
+    let killsA = 0;
+    let killsB = 0;
+    let carriedA: number | undefined;
+    let carriedB: number | undefined;
+    while (indexA < a.members.length && indexB < b.members.length) {
+      const x = a.members[indexA]!;
+      const y = b.members[indexB]!;
+      const duel = simulateArenaDuel({
+        fighterA: applyHandicap(x.fighter, Math.max(arenaHandicap(x.power, y.power), teamHandicapA)),
+        fighterB: applyHandicap(y.fighter, Math.max(arenaHandicap(y.power, x.power), teamHandicapB)),
+        startHpA: carriedA,
+        startHpB: carriedB,
+        random: Math.random,
+      });
+      // 没有平局：剩余血量百分比相同就比绝对剩余血量，还相同则掷点。
+      const xWins =
+        duel.winnerId !== null
+          ? duel.winnerId === x.fighter.id
+          : duel.fighterAHp !== duel.fighterBHp
+            ? duel.fighterAHp > duel.fighterBHp
+            : Math.random() < 0.5;
+      duels.push({
+        fighterA: { id: x.fighter.id, name: x.fighter.name, power: Math.floor(x.power), hpPct: duel.fighterAHpPct },
+        fighterB: { id: y.fighter.id, name: y.fighter.name, power: Math.floor(y.power), hpPct: duel.fighterBHpPct },
+        winnerId: xWins ? x.fighter.id : y.fighter.id,
+        fighterAMaxHp: duel.fighterAMaxHp,
+        fighterBMaxHp: duel.fighterBMaxHp,
+        rounds: duel.rounds,
+      });
+      if (xWins) {
+        killsA += 1;
+        carriedA = duel.fighterAHp;
+        carriedB = undefined;
+        indexB += 1;
+      } else {
+        killsB += 1;
+        carriedB = duel.fighterBHp;
+        carriedA = undefined;
+        indexA += 1;
+      }
+    }
+    const aWon = indexA < a.members.length;
+    const statsA = teamStats.get(a.sect.id)!;
+    const statsB = teamStats.get(b.sect.id)!;
+    statsA.kills += killsA;
+    statsB.kills += killsB;
+    if (aWon) {
+      statsA.wins += 1;
+      statsA.points += ARENA_WIN_POINTS;
+      statsB.losses += 1;
+    } else {
+      statsB.wins += 1;
+      statsB.points += ARENA_WIN_POINTS;
+      statsA.losses += 1;
+    }
+    statements.push(
+      insertArenaTeamMatchStatement({
+        id: crypto.randomUUID(),
+        dateKey,
+        sectAId: a.sect.id,
+        sectAName: a.sect.name,
+        sectBId: b.sect.id,
+        sectBName: b.sect.name,
+        winnerSectId: aWon ? a.sect.id : b.sect.id,
+        duels: JSON.stringify(duels),
+        sectAKills: killsA,
+        sectBKills: killsB,
+        now,
+      }),
+    );
+  }
+
+  const teamRanking = sortArenaTeams(teamEntries.map((team) => ({ team, id: team.sect.id, ...teamStats.get(team.sect.id)! })));
+  const teamRankOf = new Map<string, number>();
+  teamRanking.forEach((row, index) => {
+    const rank = index + 1;
+    const sectId = row.team.sect.id;
+    teamRankOf.set(sectId, rank);
+    const reward = dailyTeamReward(rank);
+    ledger.add(sectId, 'spiritStone', reward.spiritStone * 1000);
+    ledger.add(sectId, 'ore', reward.ore * 1000);
+    ledger.add(sectId, BOSS_MERIT_RESOURCE_ID, reward.merit * 1000);
+    statements.push(
+      insertArenaRewardStatement({
+        id: crypto.randomUUID(),
+        dateKey,
+        kind: 'daily_team',
+        sectId,
+        rank,
+        rewards: {
+          spiritStone: reward.spiritStone * 1000,
+          ore: reward.ore * 1000,
+          [BOSS_MERIT_RESOURCE_ID]: reward.merit * 1000,
+        },
+        now,
+      }),
+    );
+  });
+  for (const team of teamEntries) {
+    const stats = teamStats.get(team.sect.id)!;
+    statements.push(
+      insertArenaTeamScoreStatement({
+        dateKey,
+        sectId: team.sect.id,
+        sectName: team.sect.name,
+        teamPower: Math.floor(team.power),
+        wins: stats.wins,
+        losses: stats.losses,
+        points: stats.points,
+        kills: stats.kills,
+        now,
+      }),
+    );
+    statements.push(
+      upsertArenaSeasonTeamStatement({
+        seasonId,
+        sectId: team.sect.id,
+        sectName: team.sect.name,
+        points: stats.points,
+        wins: stats.wins,
+        losses: stats.losses,
+        kills: stats.kills,
+        now,
+      }),
+    );
+  }
+
+  for (const sect of roster) {
+    const teamRank = teamRankOf.get(sect.id);
+    const bestIndividual = individualBestRank.get(sect.id);
+    if (teamRank === undefined && bestIndividual === undefined) continue;
+    const parts: string[] = [];
+    const teamStat = teamStats.get(sect.id);
+    if (teamRank !== undefined && teamStat !== undefined) {
+      parts.push(`宗门战第 ${String(teamRank)} 名（${String(teamStat.wins)} 胜 ${String(teamStat.losses)} 负）`);
+    }
+    if (bestIndividual !== undefined) {
+      const entrantCount = individualEntrants.filter((entrant) => entrant.sect.id === sect.id).length;
+      parts.push(`斗法台 ${String(entrantCount)} 人参赛，最高第 ${String(bestIndividual)} 名`);
+    }
+    if (ledger.pillsOf(sect.id) > 0) parts.push(`修为丹 ${String(ledger.pillsOf(sect.id))} 颗`);
+    statements.push(
+      arenaRewardEventStatement(sect.id, `宗门大比（${dateKey}）：${parts.join('；')}`, ledger.resourcesOf(sect.id), now),
+    );
+  }
+
+  statements.push(...ledger.statements(levelOf, now));
+  statements.push(...pruneArenaDailyStatements(arenaDateKeyBefore(now, ARENA_RECORD_KEEP_DAYS)));
+  statements.push(deleteDiscipleSnapshotGuardStatement(guardId));
+  await runGuardedBatch(db, statements);
+}
+
+/**
+ * 周日收官：赛季天榜前三、宗榜前三各发一次（守卫要求赛季还没发过奖）。
+ * 只在当天的日赛结算之后调用（同一次定时任务里先日赛、后赛季），所以赛季累计已包含周日的积分。
+ */
+async function settleArenaSeason(db: D1Database, now: number): Promise<void> {
+  const seasonId = arenaSeasonId(now);
+  const repo = new ArenaRepository(db);
+  const season = await repo.seasonRow(seasonId);
+  if (season === null || Number(season.settled) === 1) return;
+  const [individuals, teams, roster] = await Promise.all([
+    repo.seasonIndividualRanking(seasonId, 3),
+    repo.seasonTeamRanking(seasonId, 3),
+    loadArenaRoster(db, now),
+  ]);
+  const levelOf = new Map(roster.map((sect) => [sect.id, sect.level] as const));
+  const dateKey = dateKeyUtc8(now);
+  const guardId = `${crypto.randomUUID()}:arena-season`;
+  const statements: ParameterizedQuery[] = [arenaSeasonSettleGuardStatement(guardId, seasonId)];
+  const ledger = new ArenaRewardLedger();
+  const lines = new Map<string, string[]>();
+  const note = (sectId: string, text: string): void => {
+    lines.set(sectId, [...(lines.get(sectId) ?? []), text]);
+  };
+
+  individuals.forEach((row, index) => {
+    const rank = index + 1;
+    const reward = seasonIndividualReward(rank);
+    ledger.add(row.sect_id, 'spiritStone', reward.spiritStone * 1000);
+    ledger.addPill(row.sect_id, reward.cultivationPill);
+    statements.push(
+      insertArenaRewardStatement({
+        id: crypto.randomUUID(),
+        dateKey,
+        kind: 'season_individual',
+        sectId: row.sect_id,
+        rank,
+        rewards: { spiritStone: reward.spiritStone * 1000, [ARENA_PILL_ID]: reward.cultivationPill },
+        now,
+      }),
+    );
+    note(row.sect_id, `天榜第 ${String(rank)} 名（${row.disciple_name}）`);
+  });
+  teams.forEach((row, index) => {
+    const rank = index + 1;
+    const reward = seasonTeamReward(rank);
+    ledger.add(row.sect_id, 'spiritStone', reward.spiritStone * 1000);
+    ledger.add(row.sect_id, BOSS_MERIT_RESOURCE_ID, reward.merit * 1000);
+    ledger.add(row.sect_id, XUANTIE_RESOURCE_ID, reward.xuantie * 1000);
+    statements.push(
+      insertArenaRewardStatement({
+        id: crypto.randomUUID(),
+        dateKey,
+        kind: 'season_team',
+        sectId: row.sect_id,
+        rank,
+        rewards: {
+          spiritStone: reward.spiritStone * 1000,
+          [BOSS_MERIT_RESOURCE_ID]: reward.merit * 1000,
+          [XUANTIE_RESOURCE_ID]: reward.xuantie * 1000,
+        },
+        now,
+      }),
+    );
+    note(row.sect_id, `宗榜第 ${String(rank)} 名`);
+  });
+  for (const [sectId, parts] of lines) {
+    statements.push(
+      arenaRewardEventStatement(sectId, `一纪之赏（${seasonId}）：${parts.join('；')}`, ledger.resourcesOf(sectId), now),
+    );
+  }
+  statements.push(...ledger.statements(levelOf, now));
+  statements.push(markArenaSeasonSettledStatement(seasonId));
+  statements.push(deleteDiscipleSnapshotGuardStatement(guardId));
+  await runGuardedBatch(db, statements);
+}
+
+/**
+ * 定时任务入口（每 10 分钟）：
+ * 1. 本赛季的行不存在就建（周一 0 点后第一次运行即算定团队赛战力上限，赛季内不变）；
+ * 2. 12 点之后、今天还没结算，就结算今天（守卫保证只发一次）；
+ * 3. 周日再结算赛季奖励（同样只发一次）。
+ */
+export async function processArenaTournament(db: D1Database, now: number): Promise<void> {
+  const repo = new ArenaRepository(db);
+  if ((await repo.seasonRow(arenaSeasonId(now))) === null) {
+    await ensureArenaSeason(db, now);
+  }
+  if (!isArenaSettleTime(arenaHourOf(now))) return;
+  const dateKey = dateKeyUtc8(now);
+  if (!(await repo.isDaySettled(dateKey))) {
+    await settleArenaDay(db, now, dateKey);
+  }
+  if (isArenaSundaySettle(now)) {
+    await settleArenaSeason(db, now);
+  } else {
+    // 周日整天没跑到定时任务时，之后的第一次运行补发上一纪的赛季奖励（赛季未发过奖才会发）。
+    await settleArenaSeason(db, now - 7 * 86_400_000);
+  }
+}
+
+/**
+ * GET /game/arena：大比面板（只读，不写库）。
+ * 名册：今日已结算则为实际出场名单，否则为报名名单，未报名的宗门显示系统预计的自动参赛名单；
+ * 战报与日榜：最近一次结算的那一天（今天已结算即今天，否则是昨天或更早）。
+ */
+export async function getArena(db: D1Database, userId: string, now: number): Promise<ArenaView> {
+  const sect = await new SectRepository(db).findByUserId(userId);
+  if (sect === null) throw new AppError('NOT_FOUND', '尚未创建宗门');
+  const repo = new ArenaRepository(db);
+  const roster = await loadArenaRoster(db, now);
+  const dateKey = dateKeyUtc8(now);
+  const seasonId = arenaSeasonId(now);
+  const hour = arenaHourOf(now);
+  const [latest, entries, teamPowerCap, seasonIndividuals, seasonTeams] = await Promise.all([
+    repo.latestSettledDateKey(),
+    repo.entriesOf(dateKey),
+    arenaTeamCapOf(db, roster, now),
+    repo.seasonIndividualRanking(seasonId, ARENA_RANKING_SIZE),
+    repo.seasonTeamRanking(seasonId, ARENA_RANKING_SIZE),
+  ]);
+  const settled = latest === dateKey;
+
+  const fighterViewOf = (disciple: DiscipleRow): ArenaFighterView => ({
+    id: disciple.id,
+    name: disciple.name,
+    realmName: findRealm(disciple.realm_id).name,
+    stageName: findStage(disciple.realm_id, Number(disciple.stage)).name,
+    combatPower: gearedCombatPower(disciple),
+  });
+  const entryViewOf = (sectRoster: ArenaRosterSect, ids: readonly string[], auto: boolean): ArenaEntryView => ({
+    sectId: sectRoster.id,
+    sectName: sectRoster.name,
+    sectLevel: sectRoster.level,
+    auto,
+    disciples: ids.flatMap((id) => {
+      const disciple = sectRoster.disciples.find((item) => item.id === id);
+      return disciple === undefined ? [] : [fighterViewOf(disciple)];
+    }),
+  });
+  const individualEntries: ArenaEntryView[] = [];
+  const teamEntries: ArenaEntryView[] = [];
+  for (const sectRoster of roster) {
+    const candidates = arenaCandidatesOf(sectRoster);
+    const storedIndividual = entries.find((row) => row.sect_id === sectRoster.id && row.kind === 'individual');
+    if (storedIndividual !== undefined) {
+      individualEntries.push(entryViewOf(sectRoster, arenaIdsOf(storedIndividual.lineup), storedIndividual.auto === 1));
+    } else if (!settled) {
+      const ids = autoSelectLineup(candidates, ARENA_MAX_ENTRY);
+      if (ids.length > 0) individualEntries.push(entryViewOf(sectRoster, ids, true));
+    }
+    const storedTeam = entries.find((row) => row.sect_id === sectRoster.id && row.kind === 'team');
+    if (storedTeam !== undefined) {
+      teamEntries.push(entryViewOf(sectRoster, arenaIdsOf(storedTeam.lineup), storedTeam.auto === 1));
+    } else if (!settled) {
+      const ids = adjustTeamLineup(candidates, autoSelectLineup(candidates, ARENA_MAX_ENTRY), teamPowerCap);
+      if (ids.length > 0) teamEntries.push(entryViewOf(sectRoster, ids, true));
+    }
+  }
+
+  let individualMatches: ArenaIndividualMatchView[] = [];
+  let teamMatches: ArenaTeamMatchView[] = [];
+  let dailyIndividualRanking: ArenaRankingView[] = [];
+  let dailyTeamRanking: ArenaRankingView[] = [];
+  if (latest !== null) {
+    const [matchRows, teamMatchRows, scoreRows, teamScoreRows] = await Promise.all([
+      repo.individualMatchesOf(latest),
+      repo.teamMatchesOf(latest),
+      repo.individualScoresOf(latest),
+      repo.teamScoresOf(latest),
+    ]);
+    const layers = arenaRoundLayers(matchRows.map((row) => [row.fighter_a_id, row.fighter_b_id] as const));
+    individualMatches = matchRows.map((row, index) => ({
+      id: row.id,
+      round: layers[index] ?? 1,
+      fighterA: {
+        id: row.fighter_a_id,
+        name: row.fighter_a_name,
+        sectName: row.fighter_a_sect_name,
+        power: Number(row.fighter_a_power),
+        hpPct: Number(row.fighter_a_hp_pct),
+      },
+      fighterB: {
+        id: row.fighter_b_id,
+        name: row.fighter_b_name,
+        sectName: row.fighter_b_sect_name,
+        power: Number(row.fighter_b_power),
+        hpPct: Number(row.fighter_b_hp_pct),
+      },
+      winnerId: row.winner_id,
+    }));
+    teamMatches = teamMatchRows.map((row) => ({
+      id: row.id,
+      sectA: { id: row.sect_a_id, name: row.sect_a_name, kills: Number(row.sect_a_kills) },
+      sectB: { id: row.sect_b_id, name: row.sect_b_name, kills: Number(row.sect_b_kills) },
+      winnerSectId: row.winner_sect_id,
+      duels: arenaDuelsOf(row.duels),
+    }));
+    dailyIndividualRanking = sortArenaIndividuals(
+      scoreRows.map((row) => ({ ...row, id: row.disciple_id, damage: Number(row.total_damage) })),
+    )
+      .slice(0, ARENA_RANKING_SIZE)
+      .map((row, index) => ({
+        rank: index + 1,
+        id: row.disciple_id,
+        name: row.disciple_name,
+        sectName: row.sect_name,
+        points: Number(row.points),
+        wins: Number(row.wins),
+        losses: Number(row.losses),
+      }));
+    dailyTeamRanking = sortArenaTeams(teamScoreRows.map((row) => ({ ...row, id: row.sect_id })))
+      .slice(0, ARENA_RANKING_SIZE)
+      .map((row, index) => ({
+        rank: index + 1,
+        id: row.sect_id,
+        name: row.sect_name,
+        points: Number(row.points),
+        wins: Number(row.wins),
+        losses: Number(row.losses),
+      }));
+  }
+
+  const unlocked = Number(sect.level) >= ARENA_UNLOCK_SECT_LEVEL;
+  const settleAt = dayStartMs(now) + ARENA_SETTLE_HOUR * 3_600_000;
+  return {
+    unlocked,
+    settled,
+    canRegister: unlocked && hour < ARENA_SETTLE_HOUR && !settled,
+    settleInMs: settled ? null : Math.max(0, settleAt - now),
+    teamPowerCap,
+    seasonId,
+    dateKey: latest,
+    myIndividualEntry: individualEntries.find((entry) => entry.sectId === sect.id) ?? null,
+    myTeamEntry: teamEntries.find((entry) => entry.sectId === sect.id) ?? null,
+    allEntries: { individual: individualEntries, team: teamEntries },
+    individualMatches,
+    teamMatches,
+    dailyIndividualRanking,
+    dailyTeamRanking,
+    seasonIndividualRanking: seasonIndividuals.map((row, index) => ({
+      rank: index + 1,
+      id: row.disciple_id,
+      name: row.disciple_name,
+      sectName: row.sect_name,
+      points: Number(row.total_points),
+      wins: Number(row.total_wins),
+      losses: Number(row.total_losses),
+    })),
+    seasonTeamRanking: seasonTeams.map((row, index) => ({
+      rank: index + 1,
+      id: row.sect_id,
+      name: row.sect_name,
+      points: Number(row.total_points),
+      wins: Number(row.total_wins),
+      losses: Number(row.total_losses),
+    })),
+  };
+}
+
+/**
+ * POST /game/arena/lineup：呈报出战名册（个人赛 / 团队赛各一份，0:00~12:00 可改）。
+ * 校验：宗门已解锁 → 今天未过 12 点、未结算 → 弟子都属于本宗且此刻能出战 → 团队赛总战力不超过本赛季上限。
+ */
+export async function setArenaLineup(
+  db: D1Database,
+  userId: string,
+  kind: 'individual' | 'team',
+  discipleIds: readonly string[],
+  now: number,
+): Promise<ArenaView> {
+  const sect = await new SectRepository(db).findByUserId(userId);
+  if (sect === null) throw new AppError('NOT_FOUND', '尚未创建宗门');
+  if (Number(sect.level) < ARENA_UNLOCK_SECT_LEVEL) {
+    throw new AppError('INVALID_STATUS', `宗门 ${String(ARENA_UNLOCK_SECT_LEVEL)} 级解锁宗门大比`);
+  }
+  const repo = new ArenaRepository(db);
+  const dateKey = dateKeyUtc8(now);
+  if (arenaHourOf(now) >= ARENA_SETTLE_HOUR || (await repo.isDaySettled(dateKey))) {
+    throw new AppError('INVALID_STATUS', `今日 ${String(ARENA_SETTLE_HOUR)} 点已结算，明日 0 点起再呈报名册`);
+  }
+  const roster = await loadArenaRoster(db, now);
+  const mine = roster.find((item) => item.id === sect.id);
+  if (mine === undefined) throw new AppError('NOT_FOUND', '尚未创建宗门');
+  const members = discipleIds.map((discipleId) => {
+    const disciple = mine.disciples.find((item) => item.id === discipleId);
+    if (disciple === undefined) throw new AppError('NOT_FOUND', '弟子不存在');
+    return disciple;
+  });
+  for (const member of members) {
+    const reason = mine.blockedReasonOf.get(member.id);
+    if (reason !== undefined) {
+      throw new AppError('INVALID_STATUS', `${member.name}：${reason}，无法呈报出战`);
+    }
+  }
+  if (kind === 'team') {
+    const cap = await ensureArenaSeason(db, now, roster);
+    const total = members.reduce((sum, member) => sum + gearedCombatPower(member), 0);
+    if (total > cap) {
+      throw new AppError('INVALID_STATUS', `出战战力 ${String(total)} 超过本赛季上限 ${String(cap)}，请调换弟子`, {
+        total,
+        cap,
+      });
+    }
+  }
+  await repo.saveLineup({ sectId: sect.id, kind, lineup: discipleIds, auto: false, dateKey, now });
+  return getArena(db, userId, now);
+}
+
+/** 首页「宗门大比」摘要（只读）：今天是否已结算，以及本宗今日两赛制的名次。 */
+async function arenaHubOf(db: D1Database, sectId: string, level: number, now: number): Promise<HubView['arena']> {
+  if (level < ARENA_UNLOCK_SECT_LEVEL) {
+    return { unlocked: false, settled: false, myIndividualRank: null, myTeamRank: null };
+  }
+  const repo = new ArenaRepository(db);
+  const dateKey = dateKeyUtc8(now);
+  const [scoreRows, teamScoreRows] = await Promise.all([repo.individualScoresOf(dateKey), repo.teamScoresOf(dateKey)]);
+  const rankedIndividuals = sortArenaIndividuals(
+    scoreRows.map((row) => ({ ...row, id: row.disciple_id, damage: Number(row.total_damage) })),
+  );
+  const bestIndex = rankedIndividuals.findIndex((row) => row.sect_id === sectId);
+  const rankedTeams = sortArenaTeams(teamScoreRows.map((row) => ({ ...row, id: row.sect_id })));
+  const teamIndex = rankedTeams.findIndex((row) => row.sect_id === sectId);
+  return {
+    unlocked: true,
+    settled: scoreRows.length > 0 || teamScoreRows.length > 0,
+    myIndividualRank: bestIndex < 0 ? null : bestIndex + 1,
+    myTeamRank: teamIndex < 0 ? null : teamIndex + 1,
   };
 }

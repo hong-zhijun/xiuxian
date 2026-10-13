@@ -54,6 +54,7 @@ import {
   worldBossAttackRequestSchema,
   worldBossExchangeRequestSchema,
   towerChallengeRequestSchema,
+  setArenaLineupSchema,
   auctionListRequestSchema,
   auctionBidRequestSchema,
   auctionLotRequestSchema,
@@ -103,6 +104,8 @@ import {
   getTower,
   challengeTower,
   sweepTower,
+  getArena,
+  setArenaLineup,
   getDailyTasks,
   claimDailyTask,
   openDailyChest,
@@ -769,6 +772,21 @@ export function createGameRoutes(): Hono<AppEnv> {
     const userId = requireUserId(c);
     const result = await sweepTower(getDb(c.env), userId, Date.now());
     return respondOk(c, { state: result.state, tower: result.tower, result: result.result });
+  });
+
+  // 0053 宗门大比：面板（名册 / 今日报名或自动参赛 / 最近一次战报与日榜 / 赛季榜；只读）。
+  routes.get('/game/arena', async (c) => {
+    const userId = requireUserId(c);
+    const arena = await getArena(getDb(c.env), userId, Date.now());
+    return respondOk(c, { arena });
+  });
+
+  // 0053 宗门大比：呈报出战名册（个人赛 / 团队赛各一份；0:00~12:00 可改，之后锁定到次日）。
+  routes.post('/game/arena/lineup', async (c) => {
+    const userId = requireUserId(c);
+    const body = await parseStrictJson(setArenaLineupSchema, c);
+    const arena = await setArenaLineup(getDb(c.env), userId, body.kind, body.discipleIds, Date.now());
+    return respondOk(c, { arena });
   });
 
   // 0048 宗门日课：今天的面板（第一次读取时抽好 5 个任务落库；进度现算，不进 /game/sync）。

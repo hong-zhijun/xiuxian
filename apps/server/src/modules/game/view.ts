@@ -3398,6 +3398,15 @@ export interface HubView {
     profit: number;
     profitPct: number;
   };
+  /** 宗门大比：今天是否已结算，以及本宗今日两赛制的名次（未结算 / 未参赛为 null）。 */
+  arena: {
+    unlocked: boolean;
+    settled: boolean;
+    /** 个人赛日排名（本宗排名最高的弟子）。 */
+    myIndividualRank: number | null;
+    /** 团队赛日排名（本宗）。 */
+    myTeamRank: number | null;
+  };
 }
 
 /* ---------- 0048 宗门日课（GET /game/daily-tasks；不进 /game/sync） ---------- */
@@ -3444,4 +3453,103 @@ export interface DailyChestResultView {
   pillId: string;
   pillName: string;
   message: string;
+}
+
+/* ---------- 0053 宗门大比（GET /game/arena；docs/宗门大比开发计划.md 第 8 节） ---------- */
+
+/** 名册上的一名弟子（战力计入装备）。 */
+export interface ArenaFighterView {
+  id: string;
+  name: string;
+  realmName: string;
+  stageName: string;
+  combatPower: number;
+}
+
+/** 一场 1v1 的详情（团队赛车轮战每场都有；个人赛只出对阵卡片，不带回合）。 */
+export interface ArenaDuelView {
+  fighterA: { id: string; name: string; power: number; hpPct: number };
+  fighterB: { id: string; name: string; power: number; hpPct: number };
+  /** 团队赛每场都分出胜负（平局时按剩余血量、再按掷点定胜）。 */
+  winnerId: string | null;
+  /** 满血量（已 × 100）：前端据此把每回合剩余血量换算成百分比。 */
+  fighterAMaxHp: number;
+  fighterBMaxHp: number;
+  rounds: Array<{
+    round: number;
+    firstId: string;
+    hits: Array<{ fighterId: string; name: string; damage: number; crit: boolean; extra: boolean }>;
+    fighterAHp: number;
+    fighterBHp: number;
+  }>;
+}
+
+export interface ArenaIndividualMatchView {
+  id: string;
+  /** 所在层（同一层里每名弟子最多一场，从第 1 层起）。 */
+  round: number;
+  fighterA: { id: string; name: string; sectName: string; power: number; hpPct: number };
+  fighterB: { id: string; name: string; sectName: string; power: number; hpPct: number };
+  winnerId: string | null;
+}
+
+export interface ArenaTeamMatchView {
+  id: string;
+  sectA: { id: string; name: string; kills: number };
+  sectB: { id: string; name: string; kills: number };
+  winnerSectId: string;
+  duels: ArenaDuelView[];
+}
+
+/** 一个宗门的参赛名单（已报名 / 自动参赛）。 */
+export interface ArenaEntryView {
+  sectId: string;
+  sectName: string;
+  sectLevel: number;
+  /** true = 掌门未点将，系统择优选出（或结算时补位 / 调整过）。 */
+  auto: boolean;
+  disciples: ArenaFighterView[];
+}
+
+export interface ArenaRankingView {
+  rank: number;
+  /** 个人赛为弟子 id，团队赛为宗门 id。 */
+  id: string;
+  name: string;
+  sectName?: string;
+  points: number;
+  wins: number;
+  losses: number;
+}
+
+/** 宗门大比面板（GET /game/arena 与报名回执里的 arena）。 */
+export interface ArenaView {
+  /** 宗门已达到解锁等级。 */
+  unlocked: boolean;
+  /** 今日（UTC+8）是否已结算。 */
+  settled: boolean;
+  /** 现在能否呈报 / 修改名册（已解锁、未过 12 点、今日未结算）。 */
+  canRegister: boolean;
+  /** 距今日结算的毫秒数（未结算且未过 12 点时有值；已结算为 null）。 */
+  settleInMs: number | null;
+  /** 团队赛战力上限（本赛季；赛季未建时按当前宗门现算）。 */
+  teamPowerCap: number | null;
+  /** 当前赛季 id（如 '2026-W42'）。 */
+  seasonId: string;
+  /** 战报与日榜所属日期（最近一次结算的日期；从未结算为 null）。 */
+  dateKey: string | null;
+  /** 我的个人赛名单 / 团队赛名单（未解锁为 null）。 */
+  myIndividualEntry: ArenaEntryView | null;
+  myTeamEntry: ArenaEntryView | null;
+  /** 所有宗门的参赛名单（今日报名，或结算后的实际出场名单）。 */
+  allEntries: { individual: ArenaEntryView[]; team: ArenaEntryView[] };
+  /** 最近一次结算的个人赛对阵（按层排列）。 */
+  individualMatches: ArenaIndividualMatchView[];
+  /** 最近一次结算的团队赛对阵。 */
+  teamMatches: ArenaTeamMatchView[];
+  dailyIndividualRanking: ArenaRankingView[];
+  dailyTeamRanking: ArenaRankingView[];
+  /** 本赛季累计（天榜 / 宗榜）。 */
+  seasonIndividualRanking: ArenaRankingView[];
+  seasonTeamRanking: ArenaRankingView[];
 }
