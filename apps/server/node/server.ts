@@ -186,6 +186,12 @@ function start(): void {
       port: PORT,
       fetch: (request, bindings) => {
         const { pathname } = new URL(request.url);
+        if (pathname === '/__settle') {
+          return runScheduledTasks(db, Date.now()).then(
+            () => new Response('OK'),
+            (err) => new Response(String(err), { status: 500 }),
+          );
+        }
         if (pathname.startsWith('/api/')) {
           return app.fetch(withClientIp(request, bindings.incoming), env);
         }
