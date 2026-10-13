@@ -2811,7 +2811,7 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
   </ModalShell>
 
   <!-- 0053 宗门大比：只在打开时 / 呈报名册后请求，不做定时轮询。 -->
-  <ModalShell v-if="openPanel === 'arena'" :loading="busy" label="宗门大比" wide @close="openPanel = null">
+  <ModalShell v-if="openPanel === 'arena'" :loading="busy" label="宗门大比" @close="openPanel = null">
     <ArenaDialog :state="state" :busy="busy" @notify="onWorldBossNotify" />
   </ModalShell>
 
