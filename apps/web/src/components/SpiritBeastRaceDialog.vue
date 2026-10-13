@@ -3,7 +3,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 
 import type { RaceHistoryView, RaceStateView, SectStateView } from '../api/game';
 import { fetchRaceHistory, fetchRaceState, placeRaceBet } from '../api/game';
-import { formatAmount } from '../utils/format';
+import { formatAmount, formatTime } from '../utils/format';
 import ModalShell from './ModalShell.vue';
 import SpiritBeastRaceTrack from './SpiritBeastRaceTrack.vue';
 
@@ -284,11 +284,10 @@ function switchTab(tab: Tab): void {
   }
 }
 
+/** 轮次 key 是 UTC 时间（YYYY-MM-DDTHH:MM），按 UTC 解析后用全站统一的 formatTime 显示成本地时间。 */
 function formatRoundTime(roundKey: string): string {
-  const parts = roundKey.split('T');
-  if (parts.length < 2) return roundKey;
-  const [date, time] = parts;
-  return `${date!.slice(5)} ${time!}`;
+  const ms = Date.parse(`${roundKey}:00Z`);
+  return Number.isFinite(ms) ? formatTime(new Date(ms).toISOString()) : roundKey;
 }
 
 function winRateText(rate: number): string {

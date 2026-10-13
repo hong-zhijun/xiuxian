@@ -2049,7 +2049,8 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
     } else if (disciple.cultivation < stage.requiredCultivation) {
       blockedReason = `修为不足（需要 ${String(stage.requiredCultivation)}）`;
     } else if (energyBalance < cost) {
-      blockedReason = `${energyName}不足（需要 ${String(cost)}）`;
+      // cost 是最小单位，文案按页面上的展示单位（÷1000）写。
+      blockedReason = `${energyName}不足（需要 ${String(Number((cost / 1000).toFixed(2)))}）`;
       blockedOnlyByEnergy = true;
     }
 

@@ -216,7 +216,8 @@ function pickOrder(discipleId: string): number {
 function disabled(disciple: DiscipleView): boolean {
   if (props.busy) return true;
   if (blockedIds.value.has(disciple.id)) return true;
-  return full.value && !isPicked(disciple.id);
+  // 单选：点别人直接换人，不因「已选满 1 人」把其他人禁掉。
+  return props.mode !== 'single' && full.value && !isPicked(disciple.id);
 }
 
 const ordered = computed(() => {
@@ -551,7 +552,7 @@ onUnmounted(() => {
         >
           <input
             class="dp-input"
-            :type="mode === 'single' ? 'radio' : 'checkbox'"
+            type="checkbox"
             :name="groupName"
             :checked="isPicked(disciple.id)"
             :disabled="disabled(disciple)"
