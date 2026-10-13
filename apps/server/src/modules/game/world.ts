@@ -27,8 +27,10 @@ export const WORLD_BEAST_POWER_BP = 9000;
 /** 进攻失败时每名进攻弟子受伤的概率与疗伤时长。 */
 export const WORLD_ATTACK_INJURY_CHANCE = 0.3;
 export const WORLD_ATTACK_INJURY_MS = 30 * 60 * 1000;
-/** 祖脉：每坐镇满这么多个整点小时，结算 1 个稀有材料。 */
+/** 祖脉：每坐镇满这么多个整点小时，结算一次稀有材料。 */
 export const WORLD_RARE_EVERY_HOURS = 6;
+/** 祖脉：每满一次给几个稀有材料（展示单位；原 1 个，2026-10 调整为 5 个）。 */
+export const WORLD_RARE_PER_DROP = 5;
 /** 稀有材料每个的入账（最小单位，即 1 展示单位）。 */
 export const WORLD_RARE_UNIT = 1000;
 /** 山河纪事保留时长（定时任务清理）。 */
@@ -82,7 +84,7 @@ export interface WorldSiteDef {
 /**
  * 全服 14 处灵地（顺序即面板顺序）。每个域只产主产资源：
  * 青木域产药材、赤铜域产矿石、云泽域产灵气、古墟域产灵石；按档位取「灵地 / 福地 / 洞天」的每小时产出。
- * 中州两处是祖脉：每小时灵气 80，另外每坐镇满 6 个整点小时得 1 个玄铁（玄铁祖脉）/ 神木（神木祖脉）。
+ * 中州两处是祖脉：每小时灵气 80，另外每坐镇满 6 个整点小时得 5 个玄铁（玄铁祖脉）/ 神木（神木祖脉）。
  */
 export const WORLD_SITES: readonly WorldSiteDef[] = [
   { id: 'east-lingdi', name: '百草谷', regionId: 'east', tier: 'lingdi', outputs: { herb: 75_000 }, rare: null },
@@ -159,7 +161,7 @@ export interface WorldSettlement {
   hours: number;
   /** 资源 id → 入账（最小单位，未经仓库容量夹住）；hours 为 0 时为空对象。 */
   credits: Record<string, number>;
-  /** 本次结算出的稀有材料个数（只有祖脉有）。 */
+  /** 本次结算出的稀有材料次数（只有祖脉有；每次 WORLD_RARE_PER_DROP 个）。 */
   rareCount: number;
   /** 结算后的 settled_at（整点）。 */
   nextSettledAt: number;
@@ -171,7 +173,7 @@ export interface WorldSettlement {
  * 按整点结算一处灵地（纯函数，计划 1.5）。
  * - 只算完整持有的整点小时 [settledAt, hourFloor(now))；不满一小时的部分作废；
  * - settledAt 恒为整点（占领时 = 下一个整点），所以相减一定整除；
- * - 祖脉：rareHours + hours 满 6 个结算 1 个稀有材料，余数留到下次。
+ * - 祖脉：rareHours + hours 每满 6 个结算一次（5 个稀有材料），余数留到下次。
  */
 export function settleWorldSite(input: {
   outputs: Readonly<Record<string, number>>;
@@ -196,7 +198,8 @@ export function settleWorldSite(input: {
     rareCount = Math.floor(total / WORLD_RARE_EVERY_HOURS);
     nextRareHours = total % WORLD_RARE_EVERY_HOURS;
     if (rareCount > 0) {
-      credits[input.rare.resourceId] = (credits[input.rare.resourceId] ?? 0) + rareCount * WORLD_RARE_UNIT;
+      credits[input.rare.resourceId] =
+        (credits[input.rare.resourceId] ?? 0) + rareCount * WORLD_RARE_PER_DROP * WORLD_RARE_UNIT;
     }
   }
   return { hours, credits, rareCount, nextSettledAt: boundary, nextRareHours };

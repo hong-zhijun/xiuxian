@@ -223,18 +223,21 @@ export function salvageXuantieUnits(quality: EquipmentQuality): number {
 
 /**
  * 世界 Boss 玄铁：伤害占比 ≥ 15% 按关卡给量、伤害第 1 名更多；占比不足 15% 也按关卡给少量（三期）；击退减半（向下取整）。
- * 第 1～5 关查表（资源不足调整：各 +1）；第 6 关起每关再 +2 / 第 1 名 +3 / 不足门槛 +1，到第 10 关封顶。
+ * 第 1～5 关查表（资源不足调整：各 +1；2026-10 血量曲线调整：约 ×1.8，打到第 5 关 ≈ 原来打到第 7 关）；
+ * 第 6 关起每关再 +4 / 第 1 名 +5 / 不足门槛 +2，到第 10 关封顶。
  */
 export const BOSS_XUANTIE_MIN_SHARE = 0.15;
 const BOSS_XUANTIE_BY_STAGE: readonly { base: number; top: number }[] = [
-  { base: 3, top: 4 },
-  { base: 4, top: 6 },
   { base: 5, top: 7 },
-  { base: 7, top: 10 },
+  { base: 7, top: 11 },
   { base: 9, top: 13 },
+  { base: 13, top: 18 },
+  { base: 16, top: 23 },
 ];
 /** 第 5 关以后每多一关的增量：占比达标 / 第 1 名 / 占比不足门槛。 */
-const BOSS_XUANTIE_DEEP_STEP = { base: 2, top: 3, below: 1 } as const;
+const BOSS_XUANTIE_DEEP_STEP = { base: 4, top: 5, below: 2 } as const;
+/** 占比不足门槛时第 1～5 关每关给的玄铁（2026-10：1 → 2）。 */
+const BOSS_XUANTIE_BELOW_BASE = 2;
 /** 玄铁随关卡递增的封顶关卡。 */
 export const BOSS_XUANTIE_MAX_STAGE = 10;
 
@@ -243,9 +246,9 @@ export function bossXuantieFor(input: { stage: number; damageShare: number; isTo
   if (input.damageShare <= 0) return 0;
   const stage = Math.min(BOSS_XUANTIE_MAX_STAGE, Math.max(1, Math.floor(input.stage)));
   const deep = Math.max(0, stage - BOSS_XUANTIE_BY_STAGE.length);
-  // 三期：占比不足门槛的参与者每关也给（第 1～5 关 1 个，之后每关 +1；击退减半后向下取整）。
+  // 三期：占比不足门槛的参与者每关也给（第 1～5 关 2 个，之后每关 +2；击退减半后向下取整）。
   if (input.damageShare < BOSS_XUANTIE_MIN_SHARE) {
-    const below = 1 + BOSS_XUANTIE_DEEP_STEP.below * deep;
+    const below = BOSS_XUANTIE_BELOW_BASE + BOSS_XUANTIE_DEEP_STEP.below * deep;
     return input.repelled ? Math.floor(below / 2) : below;
   }
   const row = BOSS_XUANTIE_BY_STAGE[Math.min(stage, BOSS_XUANTIE_BY_STAGE.length) - 1]!;
@@ -421,7 +424,8 @@ export function bossDropQualities(stage: number): { top: EquipmentQuality; other
   if (stage <= 2) {
     return { top: 'spirit', others: 'common' };
   }
-  if (stage <= 4) {
+  // 2026-10 血量曲线调整：仙品从第 5 关提前到第 4 关（每天打的关数变少，仙品机会不减）。
+  if (stage <= 3) {
     return { top: 'treasure', others: 'spirit' };
   }
   return { top: 'immortal', others: 'treasure' };

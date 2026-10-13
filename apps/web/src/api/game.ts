@@ -2028,6 +2028,8 @@ export interface WorldBossView {
     stage: number;
     tiers: { rank: number; multiplier: number; resources: Record<string, number>; topDamagePill: boolean }[];
     lastHitStone: number;
+    /** 击杀时每种丹药的颗数（第 4 关起 2 颗）。 */
+    pillCount: number;
     dropDescription: string;
     /** 三期：本关伤害占比 100% 时的功勋（展示单位）；实际按 √占比 折算，保底 2。 */
     meritFullShare: number;
@@ -2750,8 +2752,8 @@ export interface WorldSiteView {
   tier: 'lingdi' | 'fudi' | 'dongtian' | 'zumai';
   tierName: string;
   outputs: { resourceId: string; name: string; perHour: number }[];
-  /** 祖脉的稀有材料（每坐镇满 everyHours 个整点小时得 1 个）；其余为 null。 */
-  rare: { resourceId: string; name: string; everyHours: number } | null;
+  /** 祖脉的稀有材料（每坐镇满 everyHours 个整点小时得 amount 个）；其余为 null。 */
+  rare: { resourceId: string; name: string; everyHours: number; amount: number } | null;
   /** 占领者；无主（盘踞妖兽）为 null。 */
   holder: { sectId: string; name: string; level: number; isMe: boolean } | null;
   /** 坐镇弟子（按回合顺序）；absent = 已离宗 / 重伤卧床，这一回合缺席。 */

@@ -1447,9 +1447,11 @@ export interface WorldBossRewardPreviewView {
   /** 0028：当前关卡的装备掉落说明（服务端按 equipment.ts 的品质表拼好，前端只渲染）。 */
   dropDescription: string;
   lastHitStone: number;
+  /** 击杀时每种丹药的颗数（聚气丹 / 第 1 名的淬体丹；第 4 关起 2 颗）。 */
+  pillCount: number;
   /** 装备二期：本关击杀的玄铁（展示单位）；伤害占比 ≥ minSharePercent% 才有，第 1 名拿 top。三期：不足门槛时每关 below 个。 */
   xuantie: { top: number; others: number; minSharePercent: number; below: number };
-  /** 深关神木（展示单位）：第 6 关起 = 本关玄铁的一半（向上取整），之前全是 0。 */
+  /** 深关神木（展示单位）：第 4 关起 = 本关玄铁的一半（向上取整），之前全是 0。 */
   shenmu: { top: number; others: number; below: number };
   /** 三期：本关伤害占比 100% 时的功勋（展示单位）；实际按 √占比 折算，保底 2。 */
   meritFullShare: number;
@@ -3148,8 +3150,8 @@ export interface WorldSiteView {
   tier: 'lingdi' | 'fudi' | 'dongtian' | 'zumai';
   tierName: string;
   outputs: { resourceId: string; name: string; perHour: number }[];
-  /** 祖脉的稀有材料（每坐镇满 everyHours 个整点小时得 1 个）；其余为 null。 */
-  rare: { resourceId: string; name: string; everyHours: number } | null;
+  /** 祖脉的稀有材料（每坐镇满 everyHours 个整点小时得 amount 个）；其余为 null。 */
+  rare: { resourceId: string; name: string; everyHours: number; amount: number } | null;
   /** 占领者；无主（盘踞妖兽）为 null。 */
   holder: { sectId: string; name: string; level: number; isMe: boolean } | null;
   /** 坐镇弟子（按回合顺序）；absent = 已离宗 / 重伤卧床，这一回合缺席。 */

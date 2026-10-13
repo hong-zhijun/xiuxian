@@ -623,7 +623,7 @@ describe('山河舆图 · 斗法（计划 1.4）', () => {
 });
 
 describe('山河舆图 · 整点供奉（计划 1.5）', () => {
-  it('同一宗门的多处灵地合并为一条「灵地供奉」纪事；不满一小时不给；祖脉每 6 小时得 1 个玄铁、余数留存', async () => {
+  it('同一宗门的多处灵地合并为一条「灵地供奉」纪事；不满一小时不给；祖脉每 6 小时得 5 个玄铁、余数留存', async () => {
     await resetWorldSites();
     const owner = await makeSect(6);
     const a = owner.discipleIds as [string, string, string];
@@ -654,7 +654,7 @@ describe('山河舆图 · 整点供奉（计划 1.5）', () => {
     await processWorldSites(env.DB, NOW + 2 * HOUR + 10 * MIN);
     expect(await balanceOf(late.sectId, 'spiritStone')).toBe(200_000 + 50_000);
 
-    // 祖脉：神木 / 玄铁，每坐镇满 6 个整点小时得 1 个，余数留到下次。
+    // 祖脉：神木 / 玄铁，每坐镇满 6 个整点小时得 5 个，余数留到下次。
     const zu = await makeSect(3);
     pinRandom(0.5);
     const energyStart = await balanceOf(zu.sectId, 'spiritualEnergy');
@@ -666,7 +666,7 @@ describe('山河舆图 · 整点供奉（计划 1.5）', () => {
     expect(await balanceOf(zu.sectId, 'xuantie')).toBe(0);
     expect(await siteRow('center-xuantie')).toMatchObject({ rare_hours: 5 });
     await processWorldSites(env.DB, NOW + 6 * HOUR + 10 * MIN);
-    expect(await balanceOf(zu.sectId, 'xuantie')).toBe(1_000);
+    expect(await balanceOf(zu.sectId, 'xuantie')).toBe(5_000);
     expect(await siteRow('center-xuantie')).toMatchObject({ rare_hours: 0 });
     expect(await balanceOf(zu.sectId, 'spiritualEnergy')).toBe(energyStart + 6 * 80_000);
   });

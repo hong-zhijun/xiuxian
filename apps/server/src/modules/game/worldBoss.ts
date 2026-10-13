@@ -16,7 +16,7 @@ import { ARENA_COMBAT_BONUS_BP_PER_LEVEL } from './realms';
  * 三期的三处结构性变化（docs/世界Boss三期开发计划.md 2.1~2.4）：
  * - **掉落人人有份**：装备掉落改为每个参与宗门按 √伤害占比各自判定，不再只给伤害第一。
  * - **功勋**：每关按 √伤害占比发新资源「功勋」，可在讨伐面板兑换玄铁与装备。
- * - **玄铁门槛放宽**：伤害占比不足 15% 的宗门每关也能得 1 个玄铁。
+ * - **玄铁门槛放宽**：伤害占比不足 15% 的宗门每关也能得少量玄铁（2026-10 起第 1～5 关每关 2 个）。
  *
  * 金额一律是最小单位（1 展示单位 = 1000 最小单位）。
  */
@@ -49,10 +49,15 @@ export const WORLD_BOSS_DAMAGE_SCALE = 100;
 /** 血量下限。 */
 export const WORLD_BOSS_MIN_HP = 10_000;
 
-/** 第 1 关的血量 = 一轮伤害 × 这个倍数；每往下一关再 ×1.6（2、3.2、5.1、8.2… 轮）。 */
-export const WORLD_BOSS_ROUNDS_PER_STAGE = 2;
+/**
+ * 第 1 关的血量 = 一轮伤害 × 这个倍数；每往下一关再 ×1.45（6、8.7、12.6、18.3、26.5、38.5… 轮）。
+ * 2026-10 调整：原 2 轮 ×1.6，前几关一个宗门几下就打死；前段加厚、增长放缓，每天打到第 5～6 关，奖励相应上调。
+ */
+export const WORLD_BOSS_ROUNDS_PER_STAGE = 6;
 /** 每关血量相对上一关的倍数。 */
-export const WORLD_BOSS_STAGE_HP_GROWTH = 1.6;
+export const WORLD_BOSS_STAGE_HP_GROWTH = 1.45;
+/** 调整前的血量曲线（2 轮 ×1.6）：上线当天已按旧曲线出了第 1 关的，当天后续关卡仍用旧曲线，第二天起才换新曲线。 */
+export const WORLD_BOSS_LEGACY_HP_CURVE = { roundsPerStage: 2, growth: 1.6 } as const;
 
 /** 打掉这个比例以上算「击退」（而不是单纯逃走）。 */
 export const WORLD_BOSS_FLED_THRESHOLD = 0.7;
@@ -94,14 +99,17 @@ export const WORLD_BOSS_SEVERE_RATE_AT_4 = 0.7;
 /** 体魄每高 10 点，30% / 70% 两档下调 3 个百分点。 */
 export const WORLD_BOSS_SEVERE_PHYSIQUE_STEP = 0.03;
 
-/** 保底 = 12 × 宗门等级 × 1000（最小单位）；资源不足调整：10 → 12。 */
-export const WORLD_BOSS_REWARD_FLOOR_UNIT = 12 * 1000;
+/** 保底 = 18 × 宗门等级 × 1000（最小单位）；资源不足调整：10 → 12；2026-10 血量曲线调整 12 → 18。 */
+export const WORLD_BOSS_REWARD_FLOOR_UNIT = 18 * 1000;
 /** 奖励涉及的资源（按资源分别算）。 */
 export const WORLD_BOSS_POOL_RESOURCES = ['spiritStone', 'herb', 'ore'] as const;
-/** 基础份的产量系数（每关给几小时产出；防通胀由 3.5 下调到 2.5，资源不足调整又回调到 3）。 */
-export const WORLD_BOSS_KILL_POOL_RATE_FACTOR = 3;
-/** 最后一击奖的产量系数（资源不足调整：1.0 → 1.2）。 */
-export const WORLD_BOSS_LAST_HIT_RATE_FACTOR = 1.2;
+/**
+ * 基础份的产量系数（每关给几小时产出；防通胀由 3.5 下调到 2.5，资源不足调整又回调到 3）。
+ * 2026-10 血量曲线调整 3 → 4.5：每天少打 1～2 关，打到第 5 关的合计 ≈ 原来打到第 7 关。
+ */
+export const WORLD_BOSS_KILL_POOL_RATE_FACTOR = 4.5;
+/** 最后一击奖的产量系数（资源不足调整：1.0 → 1.2；2026-10 → 1.8）。 */
+export const WORLD_BOSS_LAST_HIT_RATE_FACTOR = 1.8;
 /**
  * 资源奖励的关卡系数：第 1～5 关每关 +0.3（第 5 关 ×2.2），第 6 关起放慢到每关 +0.1，第 10 关封顶（×2.7）。
  * 防通胀：原来每关 +0.5 且不封顶，关数一多资源奖励按平方增长；第 5 关后曾完全不涨，深关血量 ×1.6 / 关却不加奖励。
@@ -113,14 +121,16 @@ export const WORLD_BOSS_STAGE_REWARD_MAX_STAGE = 5;
 export const WORLD_BOSS_STAGE_REWARD_DEEP_STEP = 0.1;
 /** 资源奖励关卡系数封顶的关卡。 */
 export const WORLD_BOSS_STAGE_REWARD_CAP_STAGE = 10;
-/** 神木从第几关起随玄铁一起发（数量 = 本关玄铁的一半，向上取整）。 */
-export const WORLD_BOSS_SHENMU_FROM_STAGE = 6;
+/** 神木从第几关起随玄铁一起发（数量 = 本关玄铁的一半，向上取整）；2026-10 血量曲线调整 6 → 4。 */
+export const WORLD_BOSS_SHENMU_FROM_STAGE = 4;
 /** 神木资源 id。 */
 export const BOSS_SHENMU_RESOURCE_ID = 'shenmu';
 /** 功勋的关卡系数每关递增量（与资源分开：功勋兑换价按它定，不随资源下调）。 */
 export const WORLD_BOSS_MERIT_STAGE_STEP = 0.5;
 /** 击杀时必发的丹药（每参与宗门）。 */
 export const WORLD_BOSS_KILL_PILL_ID = 'cultivationPill';
+/** 从这一关起，击杀丹药与伤害第 1 名的丹药都发 2 颗（之前 1 颗；2026-10 血量曲线调整）。 */
+export const WORLD_BOSS_DOUBLE_PILL_FROM_STAGE = 4;
 /** 伤害第 1 名的额外丹药。 */
 export const WORLD_BOSS_TOP_DAMAGE_PILL_ID = 'bodyTemperingPill';
 
@@ -313,10 +323,25 @@ export function bossDisplayName(bossIndex: number, stage: number): string {
   return `${stageName(stage)} · ${bossDefAt(bossIndex).name}`;
 }
 
-/** 第 n 关最大血量 = max(10000, 一轮伤害 × 2 × 1.6^(n−1))。 */
-export function stageMaxHp(roundDamage: number, stage: number): number {
-  const rounds = WORLD_BOSS_ROUNDS_PER_STAGE * WORLD_BOSS_STAGE_HP_GROWTH ** Math.max(0, stage - 1);
+/** 第 n 关最大血量 = max(10000, 一轮伤害 × 6 × 1.45^(n−1))；legacy = true 用调整前的 2 × 1.6^(n−1)。 */
+export function stageMaxHp(roundDamage: number, stage: number, legacy = false): number {
+  const roundsPerStage = legacy ? WORLD_BOSS_LEGACY_HP_CURVE.roundsPerStage : WORLD_BOSS_ROUNDS_PER_STAGE;
+  const growth = legacy ? WORLD_BOSS_LEGACY_HP_CURVE.growth : WORLD_BOSS_STAGE_HP_GROWTH;
+  const rounds = roundsPerStage * growth ** Math.max(0, stage - 1);
   return Math.max(WORLD_BOSS_MIN_HP, Math.floor(Math.max(0, roundDamage) * rounds));
+}
+
+/**
+ * 当天是不是旧曲线：看当天第 1 关的血量是否正好是旧曲线的值（且与新曲线不同）。
+ * 新曲线上线当天早上已按旧曲线出了第 1 关时，当天后续关卡沿用旧曲线（「第二天生效」）。
+ */
+export function isLegacyHpCurveDay(firstStageMaxHp: number, roundDamage: number): boolean {
+  return firstStageMaxHp === stageMaxHp(roundDamage, 1, true) && firstStageMaxHp !== stageMaxHp(roundDamage, 1);
+}
+
+/** 击杀时每种丹药发几颗：第 1～3 关 1 颗，第 4 关起 2 颗。 */
+export function bossKillPillCount(stage: number): number {
+  return Math.floor(stage) >= WORLD_BOSS_DOUBLE_PILL_FROM_STAGE ? 2 : 1;
 }
 
 /* ---------- 伤害（2.5） ---------- */
@@ -514,7 +539,7 @@ export function stageResourceRewards(input: {
   for (const resourceId of WORLD_BOSS_POOL_RESOURCES) {
     const rate = input.rates[resourceId] ?? 0;
     const base = Math.max(rate * WORLD_BOSS_KILL_POOL_RATE_FACTOR, rewardFloor(input.sectLevel));
-    rewards[resourceId] = Math.floor(base * factor);
+    rewards[resourceId] = floorReward(base * factor);
   }
   return rewards;
 }
@@ -522,7 +547,12 @@ export function stageResourceRewards(input: {
 /** 最后一击奖（灵石）：max(产出(灵石) × 1, 保底(L)) × 关卡系数。 */
 export function lastHitReward(rateStone: number, sectLevel: number, stage: number): number {
   const base = Math.max(rateStone * WORLD_BOSS_LAST_HIT_RATE_FACTOR, rewardFloor(sectLevel));
-  return Math.floor(base * stageRewardMultiplier(stage));
+  return floorReward(base * stageRewardMultiplier(stage));
+}
+
+/** 奖励取整：先抹掉浮点零头再向下取整（450000 × 2.3 在浮点下是 1034999.99…，不能因此少 1）。 */
+function floorReward(value: number): number {
+  return Math.floor(Number(value.toFixed(6)));
 }
 
 /**
@@ -537,6 +567,8 @@ export function worldBossRewardPreview(input: {
   stage: number;
   tiers: { rank: number; multiplier: number; resources: Record<string, number>; topDamagePill: boolean }[];
   lastHitStone: number;
+  /** 击杀时每种丹药的颗数（聚气丹 / 淬体丹）。 */
+  pillCount: number;
   /** 装备掉落说明（三期 2.1：「按本关伤害占比各自判定：仙品装备 ×1 概率 = 75% × √占比；未得时 40% 概率得 宝品装备 ×1」）。 */
   dropDescription: string;
 } {
@@ -550,6 +582,7 @@ export function worldBossRewardPreview(input: {
     stage: input.stage,
     tiers,
     lastHitStone: lastHitReward(input.rates.spiritStone ?? 0, input.sectLevel, input.stage),
+    pillCount: bossKillPillCount(input.stage),
     dropDescription: bossDropDescription(input.stage),
   };
 }
@@ -564,8 +597,8 @@ export function isFledByDamage(maxHp: number, hp: number): boolean {
 
 /** 功勋资源 id（game-config 的第六种资源）。 */
 export const BOSS_MERIT_RESOURCE_ID = 'bossMerit';
-/** 功勋基数（展示单位）：base = max(WORLD_BOSS_MERIT_MIN, round(它 × 功勋关卡系数 × √伤害占比))。 */
-export const WORLD_BOSS_MERIT_BASE = 10;
+/** 功勋基数（展示单位）：base = max(WORLD_BOSS_MERIT_MIN, round(它 × 功勋关卡系数 × √伤害占比))；2026-10 血量曲线调整 10 → 17。 */
+export const WORLD_BOSS_MERIT_BASE = 17;
 /** 功勋保底（展示单位）：伤害占比再小也不低于它。 */
 export const WORLD_BOSS_MERIT_MIN = 2;
 

@@ -743,8 +743,8 @@ describe('世界 Boss 二期：Cron 逃走与发奖', () => {
     expect(rewardLogs.results[0]!.description).toContain('伤害第 1 名');
     expect(rewardLogs.results[0]!.description).toContain('聚气丹');
     expect(Number(JSON.parse(rewardLogs.results[0]!.effects).spiritStone)).toBeGreaterThan(0);
-    // 三期：第 2 关、单宗门（占比 100%）→ 功勋 = max(2, round(10 × 1.5 × 1)) = 15 展示单位 = 15000 最小单位。
-    expect(JSON.parse(rewardLogs.results[0]!.effects).bossMerit).toBe('15000');
+    // 三期：第 2 关、单宗门（占比 100%）→ 功勋 = max(2, round(17 × 1.5 × 1)) = 26 展示单位 = 26000 最小单位。
+    expect(JSON.parse(rewardLogs.results[0]!.effects).bossMerit).toBe('26000');
 
     // 只有一个参与宗门 → 排名 1（×1.5），第 2 关（×1.2）：factor = 1.8
     const factor = stageRewardMultiplier(2) * rankRewardMultiplier(1);
@@ -761,7 +761,7 @@ describe('世界 Boss 二期：Cron 逃走与发奖', () => {
     expect((await balanceOf(fixture.sectId, 'ore')) - before.ore).toBe(share(rates.ore ?? 0));
     expect((await pillCount(fixture.sectId, 'cultivationPill')) - before.cultivationPill).toBe(1);
     expect((await pillCount(fixture.sectId, 'bodyTemperingPill')) - before.bodyTemperingPill).toBe(1);
-    expect((await balanceOf(fixture.sectId, BOSS_MERIT_RESOURCE_ID)) - before.bossMerit).toBe(15_000);
+    expect((await balanceOf(fixture.sectId, BOSS_MERIT_RESOURCE_ID)) - before.bossMerit).toBe(26_000);
     expect((await bossRow(dayKey, 2))!.rewarded_at).not.toBeNull();
 
     // 再跑两次 Cron：rewarded_at 已写 → 不再发
@@ -774,7 +774,7 @@ describe('世界 Boss 二期：Cron 逃走与发奖', () => {
     expect(Number(rewardLogsAgain?.n)).toBe(1);
     expect(await pillCount(fixture.sectId, 'cultivationPill')).toBe(before.cultivationPill + 1);
     expect(await balanceOf(fixture.sectId, 'herb')).toBe(before.herb + share(rates.herb ?? 0));
-    expect(await balanceOf(fixture.sectId, BOSS_MERIT_RESOURCE_ID)).toBe(before.bossMerit + 15_000);
+    expect(await balanceOf(fixture.sectId, BOSS_MERIT_RESOURCE_ID)).toBe(before.bossMerit + 26_000);
   });
 
   it('奖励入账不超过资源容量：溢出作废并记进天机录；本来就超容量的不往下压', async () => {
@@ -931,8 +931,8 @@ describe('世界 Boss 二期：Cron 逃走与发奖', () => {
     );
     expect(await pillCount(fixture.sectId, 'cultivationPill')).toBe(before.cultivationPill);
     expect(await pillCount(fixture.sectId, 'bodyTemperingPill')).toBe(before.bodyTemperingPill);
-    // 三期：击退也发功勋，但减半（第 1 关、占比 100% → base 10 → 5 展示单位 = 5000 最小单位）。
-    expect((await balanceOf(fixture.sectId, BOSS_MERIT_RESOURCE_ID)) - before.bossMerit).toBe(5_000);
+    // 三期：击退也发功勋，但减半（第 1 关、占比 100% → base 17 → 8 展示单位 = 8000 最小单位）。
+    expect((await balanceOf(fixture.sectId, BOSS_MERIT_RESOURCE_ID)) - before.bossMerit).toBe(8_000);
   });
 
   it('不足 70% 逃走：什么也不发', async () => {
@@ -964,7 +964,7 @@ describe('世界 Boss 二期：Cron 逃走与发奖', () => {
     expect(await balanceOf(fixture.sectId, BOSS_MERIT_RESOURCE_ID)).toBe(before.bossMerit);
   });
 
-  it('占比不足 15% 的参与者每关也能得 1 个玄铁（击杀）', async () => {
+  it('占比不足 15% 的参与者每关也能得 2 个玄铁（击杀）', async () => {
     const small = await makeSect('xuantie-small');
     const big = await makeSect('xuantie-big');
     const now = dayAt(59, 9);
@@ -1003,13 +1003,13 @@ describe('世界 Boss 二期：Cron 逃走与发奖', () => {
     const beforeBig = await balanceOf(big.sectId, 'xuantie');
     await processWorldBoss(env.DB, dayAt(59, 20));
 
-    // 小宗门：占比不足 15% → 三期新规则每关 1 个（展示单位 1 = 1000 最小单位）。
-    expect((await balanceOf(small.sectId, 'xuantie')) - beforeSmall).toBe(1_000);
-    // 大宗门：占比 ≥15% 且伤害第 1 → 第 1 关按表取 top = 4 个 = 4000 最小单位。
-    expect((await balanceOf(big.sectId, 'xuantie')) - beforeBig).toBe(4_000);
+    // 小宗门：占比不足 15% → 每关 2 个（2026-10 由 1 上调；展示单位 2 = 2000 最小单位）。
+    expect((await balanceOf(small.sectId, 'xuantie')) - beforeSmall).toBe(2_000);
+    // 大宗门：占比 ≥15% 且伤害第 1 → 第 1 关按表取 top = 7 个 = 7000 最小单位。
+    expect((await balanceOf(big.sectId, 'xuantie')) - beforeBig).toBe(7_000);
   });
 
-  it('第 6 关击杀：玄铁按深关递增（第 1 名 16 个），另发神木 = 玄铁的一半（8 个）', async () => {
+  it('第 6 关击杀：玄铁按深关递增（第 1 名 28 个），另发神木 = 玄铁的一半（14 个）', async () => {
     const fixture = await makeSect('deep-stage');
     const now = dayAt(58, 9);
     await freezeDay(fixture.sectId, 58);
@@ -1025,8 +1025,8 @@ describe('世界 Boss 二期：Cron 逃走与发奖', () => {
     const beforeShenmu = await balanceOf(fixture.sectId, 'shenmu');
     await processWorldBoss(env.DB, dayAt(58, 12));
 
-    expect((await balanceOf(fixture.sectId, 'xuantie')) - beforeXuantie).toBe(16_000);
-    expect((await balanceOf(fixture.sectId, 'shenmu')) - beforeShenmu).toBe(8_000);
+    expect((await balanceOf(fixture.sectId, 'xuantie')) - beforeXuantie).toBe(28_000);
+    expect((await balanceOf(fixture.sectId, 'shenmu')) - beforeShenmu).toBe(14_000);
   });
 
   it('Cron 顺带清理 2 天前的疲劳记录', async () => {

@@ -197,11 +197,11 @@ describe('装备规则 · 生成装备（计划 1.1）', () => {
 });
 
 describe('装备规则 · 世界 Boss 掉落（三期 2.1）', () => {
-  it('掉落品质按关卡分段：1~2 / 3~4 / 5 及以上', () => {
+  it('掉落品质按关卡分段：1~2 / 3 / 4 及以上（2026-10 仙品提前到第 4 关）', () => {
     expect(bossDropQualities(1)).toEqual({ top: 'spirit', others: 'common' });
     expect(bossDropQualities(2)).toEqual({ top: 'spirit', others: 'common' });
     expect(bossDropQualities(3)).toEqual({ top: 'treasure', others: 'spirit' });
-    expect(bossDropQualities(4)).toEqual({ top: 'treasure', others: 'spirit' });
+    expect(bossDropQualities(4)).toEqual({ top: 'immortal', others: 'treasure' });
     expect(bossDropQualities(5)).toEqual({ top: 'immortal', others: 'treasure' });
     expect(bossDropQualities(9)).toEqual({ top: 'immortal', others: 'treasure' });
   });
@@ -210,14 +210,15 @@ describe('装备规则 · 世界 Boss 掉落（三期 2.1）', () => {
     expect(BOSS_HIGH_DROP_FACTOR).toBe(0.75);
     expect(bossHighDropChance(1, 1)).toBeCloseTo(0.75);
     expect(bossHighDropChance(0.25, 3)).toBeCloseTo(0.375);
-    expect(bossHighDropChance(0.04, 4)).toBeCloseTo(0.15);
+    expect(bossHighDropChance(0.04, 3)).toBeCloseTo(0.15);
     expect(bossHighDropChance(0, 1)).toBe(0);
     expect(bossHighDropChance(-0.5, 1)).toBe(0);
     expect(bossHighDropChance(1.5, 1)).toBeCloseTo(0.75);
   });
 
-  it('高档是仙品（第 5 关起）时改为 25% × √伤害占比', () => {
+  it('高档是仙品（第 4 关起）时改为 25% × √伤害占比', () => {
     expect(BOSS_IMMORTAL_DROP_FACTOR).toBe(0.25);
+    expect(bossHighDropChance(1, 4)).toBeCloseTo(0.25);
     expect(bossHighDropChance(1, 5)).toBeCloseTo(0.25);
     expect(bossHighDropChance(0.25, 9)).toBeCloseTo(0.125);
     expect(bossHighDropChance(1.5, 5)).toBeCloseTo(0.25);
@@ -292,27 +293,27 @@ describe('装备规则 · 分解与加成', () => {
 });
 
 describe('装备二期：玄铁 · 炼器坊', () => {
-  it('世界 Boss 玄铁：占比 <15% 第 1～5 关每关 1 个（击退减半向下取整 = 0）；按关卡给量，第 1 名更多', () => {
-    expect(bossXuantieFor({ stage: 1, damageShare: 0.14, isTop: false, repelled: false })).toBe(1);
-    expect(bossXuantieFor({ stage: 1, damageShare: 0.14, isTop: false, repelled: true })).toBe(0);
+  it('世界 Boss 玄铁：占比 <15% 第 1～5 关每关 2 个（击退减半向下取整）；按关卡给量，第 1 名更多（2026-10 约 ×1.8）', () => {
+    expect(bossXuantieFor({ stage: 1, damageShare: 0.14, isTop: false, repelled: false })).toBe(2);
+    expect(bossXuantieFor({ stage: 1, damageShare: 0.14, isTop: false, repelled: true })).toBe(1);
     expect(bossXuantieFor({ stage: 1, damageShare: 0, isTop: false, repelled: false })).toBe(0);
-    expect(bossXuantieFor({ stage: 1, damageShare: 0.15, isTop: false, repelled: false })).toBe(3);
-    expect(bossXuantieFor({ stage: 1, damageShare: 0.5, isTop: true, repelled: false })).toBe(4);
-    expect(bossXuantieFor({ stage: 4, damageShare: 0.3, isTop: false, repelled: false })).toBe(7);
-    expect(bossXuantieFor({ stage: 5, damageShare: 0.3, isTop: true, repelled: false })).toBe(13);
-    expect(bossXuantieFor({ stage: 2, damageShare: 0.3, isTop: true, repelled: true })).toBe(3);
+    expect(bossXuantieFor({ stage: 1, damageShare: 0.15, isTop: false, repelled: false })).toBe(5);
+    expect(bossXuantieFor({ stage: 1, damageShare: 0.5, isTop: true, repelled: false })).toBe(7);
+    expect(bossXuantieFor({ stage: 4, damageShare: 0.3, isTop: false, repelled: false })).toBe(13);
+    expect(bossXuantieFor({ stage: 5, damageShare: 0.3, isTop: true, repelled: false })).toBe(23);
+    expect(bossXuantieFor({ stage: 2, damageShare: 0.3, isTop: true, repelled: true })).toBe(5);
   });
 
-  it('世界 Boss 玄铁：第 6 关起每关 +2 / 第 1 名 +3 / 不足门槛 +1，第 10 关封顶', () => {
-    expect(bossXuantieFor({ stage: 6, damageShare: 0.3, isTop: false, repelled: false })).toBe(11);
-    expect(bossXuantieFor({ stage: 6, damageShare: 0.3, isTop: true, repelled: false })).toBe(16);
-    expect(bossXuantieFor({ stage: 6, damageShare: 0.1, isTop: false, repelled: false })).toBe(2);
-    expect(bossXuantieFor({ stage: 6, damageShare: 0.1, isTop: false, repelled: true })).toBe(1);
-    expect(bossXuantieFor({ stage: 7, damageShare: 0.3, isTop: true, repelled: false })).toBe(19);
-    expect(bossXuantieFor({ stage: 10, damageShare: 0.3, isTop: false, repelled: false })).toBe(19);
-    expect(bossXuantieFor({ stage: 10, damageShare: 0.3, isTop: true, repelled: false })).toBe(28);
-    expect(bossXuantieFor({ stage: 10, damageShare: 0.1, isTop: false, repelled: false })).toBe(6);
-    expect(bossXuantieFor({ stage: 14, damageShare: 0.3, isTop: true, repelled: false })).toBe(28);
+  it('世界 Boss 玄铁：第 6 关起每关 +4 / 第 1 名 +5 / 不足门槛 +2，第 10 关封顶', () => {
+    expect(bossXuantieFor({ stage: 6, damageShare: 0.3, isTop: false, repelled: false })).toBe(20);
+    expect(bossXuantieFor({ stage: 6, damageShare: 0.3, isTop: true, repelled: false })).toBe(28);
+    expect(bossXuantieFor({ stage: 6, damageShare: 0.1, isTop: false, repelled: false })).toBe(4);
+    expect(bossXuantieFor({ stage: 6, damageShare: 0.1, isTop: false, repelled: true })).toBe(2);
+    expect(bossXuantieFor({ stage: 7, damageShare: 0.3, isTop: true, repelled: false })).toBe(33);
+    expect(bossXuantieFor({ stage: 10, damageShare: 0.3, isTop: false, repelled: false })).toBe(36);
+    expect(bossXuantieFor({ stage: 10, damageShare: 0.3, isTop: true, repelled: false })).toBe(48);
+    expect(bossXuantieFor({ stage: 10, damageShare: 0.1, isTop: false, repelled: false })).toBe(12);
+    expect(bossXuantieFor({ stage: 14, damageShare: 0.3, isTop: true, repelled: false })).toBe(48);
   });
 
   it('秘境玄铁：只有三个高级秘境会掉，概率与数量按表', () => {

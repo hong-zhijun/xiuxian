@@ -453,6 +453,7 @@ import {
   WORLD_PARTY_SIZE,
   WORLD_PROTECT_MS,
   WORLD_RARE_EVERY_HOURS,
+  WORLD_RARE_PER_DROP,
   WORLD_REGIONS,
   WORLD_SITES,
   WORLD_UNLOCK_SECT_LEVEL,
@@ -544,6 +545,8 @@ import {
   WORLD_BOSS_FATIGUE_WINDOW_MS,
   WORLD_BOSS_INJURY_DURATION_MS,
   WORLD_BOSS_KILL_PILL_ID,
+  bossKillPillCount,
+  isLegacyHpCurveDay,
   WORLD_BOSS_MAX_PARTY,
   MERIT_SHOP_CATEGORIES,
   WORLD_BOSS_MERIT_SHOP,
@@ -8883,7 +8886,8 @@ export async function getWorldBoss(
 }
 
 /**
- * 生成第 stage 关：血量 = 一轮伤害 × 3 × 2^(stage−1)，词缀当场随机一个。
+ * 生成第 stage 关：血量见 worldBoss.ts 的 stageMaxHp（一轮伤害 × 6 × 1.45^(stage−1)），词缀当场随机一个。
+ * 2026-10 曲线调整「第二天生效」：当天第 1 关是按旧曲线出的，后续关卡沿用旧曲线（isLegacyHpCurveDay）。
  * `(day_key, stage)` 唯一 —— 并发或重复触发时插不进去，返回 null（调用方据此不广播）。
  */
 async function spawnWorldBossStage(input: {
@@ -8895,7 +8899,9 @@ async function spawnWorldBossStage(input: {
 }): Promise<WorldBossRow | null> {
   const bossIndex = bossIndexFor(dayIndexUtc8(input.now), input.stage);
   const affix = rollAffix(Math.random);
-  const maxHp = stageMaxHp(input.roundDamage, input.stage);
+  const first = input.stage > 1 ? await input.repo.findByDayKeyAndStage(input.dayKey, 1) : null;
+  const legacy = first !== null && isLegacyHpCurveDay(Number(first.max_hp), input.roundDamage);
+  const maxHp = stageMaxHp(input.roundDamage, input.stage, legacy);
   const id = crypto.randomUUID();
   const inserted = await input.repo.insertBossIfAbsent({
     id,
@@ -9499,18 +9505,21 @@ async function rewardWorldBoss(
 
     // 丹药与最后一击只随击杀发放。
     if (killed) {
+      // 2026-10：第 4 关起两种丹药都发 2 颗（bossKillPillCount）。
+      const pillCount = bossKillPillCount(stage);
+      const pillSuffix = pillCount > 1 ? ` ×${String(pillCount)}` : '';
       for (const [sectId] of participants) {
         statements.push(
-          incrementPillInventoryStatement(sectId, WORLD_BOSS_KILL_PILL_ID, 1, now),
+          incrementPillInventoryStatement(sectId, WORLD_BOSS_KILL_PILL_ID, pillCount, now),
         );
-        rewardLedger.get(sectId)?.items.push('聚气丹');
+        rewardLedger.get(sectId)?.items.push(`聚气丹${pillSuffix}`);
       }
       const topSectId = participants[0]?.[0];
       if (topSectId !== undefined) {
         statements.push(
-          incrementPillInventoryStatement(topSectId, WORLD_BOSS_TOP_DAMAGE_PILL_ID, 1, now),
+          incrementPillInventoryStatement(topSectId, WORLD_BOSS_TOP_DAMAGE_PILL_ID, pillCount, now),
         );
-        rewardLedger.get(topSectId)?.items.push('淬体丹');
+        rewardLedger.get(topSectId)?.items.push(`淬体丹${pillSuffix}`);
       }
       const killerSectId = boss.killer_sect_id;
       if (killerSectId !== null) {
@@ -11604,6 +11613,7 @@ async function buildWorldPanel(
               resourceId: def.rare.resourceId,
               name: draft.resourceName(def.rare.resourceId),
               everyHours: WORLD_RARE_EVERY_HOURS,
+              amount: WORLD_RARE_PER_DROP,
             },
       holder:
         row === undefined || holderId === null

@@ -167,7 +167,7 @@ const rulesItems = computed(() => {
     '受伤：出战失败时，每名出战弟子有 30% 概率轻伤，疗伤 30 分钟。',
     `禁制护持：开辟或易主后 ${String(data?.protectHours ?? 4)} 小时内不能被斗法；撤回山门后灵地回到妖兽手里，没有禁制。`,
     `限制：每天最多斗法 ${String(data?.dailyBattles ?? 10)} 次（自然日，驱妖开辟也计入）；不能斗法宗门等级比自己低 ${String(data?.levelGap ?? 3)} 级及以上的宗门。`,
-    '供奉：每个整点按灵地产出入账，只算完整的整点小时；中州祖脉每坐镇满 6 个整点小时另得 1 个稀有材料。',
+    '供奉：每个整点按灵地产出入账，只算完整的整点小时；中州祖脉每坐镇满 6 个整点小时另得 5 个玄铁 / 神木。',
   ];
 });
 
@@ -356,7 +356,7 @@ onUnmounted(() => {
                     {{ item.name }} +{{ formatAmount(item.perHour) }} / 时
                   </span>
                   <span v-if="site.rare !== null" class="world-rare">
-                    每坐镇满 {{ site.rare.everyHours }} 个整点小时得 1 个{{ site.rare.name }}
+                    每坐镇满 {{ site.rare.everyHours }} 个整点小时得 {{ site.rare.amount }} 个{{ site.rare.name }}
                   </span>
                 </p>
                 <p class="world-site-holder">

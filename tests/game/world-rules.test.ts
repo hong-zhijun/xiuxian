@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   WORLD_LEVEL_GAP,
   WORLD_RARE_EVERY_HOURS,
+  WORLD_RARE_PER_DROP,
   WORLD_REGIONS,
   WORLD_SITES,
   beastDefenders,
@@ -112,7 +113,7 @@ describe('山河舆图 · 整点结算（计划 1.5）', () => {
     expect(settleWorldSite({ ...plain, settledAt: T0, now: T0 + HOUR }).credits).toEqual({ herb: 75_000 });
   });
 
-  it('祖脉：本轮 5 小时 + 1 小时 = 满 6 个整点，得 1 个玄铁、余数归零', () => {
+  it('祖脉：本轮 5 小时 + 1 小时 = 满 6 个整点，得 5 个玄铁、余数归零', () => {
     const result = settleWorldSite({
       outputs: { spiritualEnergy: 80_000 },
       rare: { resourceId: 'xuantie' },
@@ -121,16 +122,17 @@ describe('山河舆图 · 整点结算（计划 1.5）', () => {
       now: T0 + HOUR,
     });
     expect(WORLD_RARE_EVERY_HOURS).toBe(6);
+    expect(WORLD_RARE_PER_DROP).toBe(5);
     expect(result).toEqual({
       hours: 1,
-      credits: { spiritualEnergy: 80_000, xuantie: 1_000 },
+      credits: { spiritualEnergy: 80_000, xuantie: 5_000 },
       rareCount: 1,
       nextSettledAt: T0 + HOUR,
       nextRareHours: 0,
     });
   });
 
-  it('祖脉：11 小时 = 1 个稀有材料，余数 5 小时留存到下次', () => {
+  it('祖脉：11 小时 = 满 1 次（5 个稀有材料），余数 5 小时留存到下次', () => {
     const result = settleWorldSite({
       outputs: { spiritualEnergy: 80_000 },
       rare: { resourceId: 'shenmu' },
@@ -138,12 +140,12 @@ describe('山河舆图 · 整点结算（计划 1.5）', () => {
       rareHours: 0,
       now: T0 + 11 * HOUR,
     });
-    expect(result.credits).toEqual({ spiritualEnergy: 880_000, shenmu: 1_000 });
+    expect(result.credits).toEqual({ spiritualEnergy: 880_000, shenmu: 5_000 });
     expect(result.rareCount).toBe(1);
     expect(result.nextRareHours).toBe(5);
   });
 
-  it('祖脉：13 小时（含上次留存）= 2 个稀有材料，余数 1 小时', () => {
+  it('祖脉：13 小时（含上次留存）= 满 2 次（10 个稀有材料），余数 1 小时', () => {
     const result = settleWorldSite({
       outputs: { spiritualEnergy: 80_000 },
       rare: { resourceId: 'xuantie' },
@@ -151,7 +153,7 @@ describe('山河舆图 · 整点结算（计划 1.5）', () => {
       rareHours: 0,
       now: T0 + 13 * HOUR,
     });
-    expect(result.credits.xuantie).toBe(2_000);
+    expect(result.credits.xuantie).toBe(10_000);
     expect(result.rareCount).toBe(2);
     expect(result.nextRareHours).toBe(1);
   });
