@@ -11726,7 +11726,8 @@ async function worldResponse(
   const draft = await draftFor(db, userId, now);
   return {
     state: draft.view(),
-    world: await buildWorldPanel(db, draft, now, 'all'),
+    // 命令回执的纪事按「本宗」（前端默认筛选）给，默认视图下不用再补拉一次。
+    world: await buildWorldPanel(db, draft, now, 'mine'),
     result: { message, battle },
   };
 }

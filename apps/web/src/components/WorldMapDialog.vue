@@ -37,8 +37,8 @@ const panel = ref<WorldPanelView | null>(null);
 const loading = ref(false);
 const submitting = ref(false);
 const showRules = ref(false);
-/** 纪事范围：all 天下 / mine 本宗（切换时带 scope 重新拉取）。 */
-const scope = ref<'all' | 'mine'>('all');
+/** 纪事范围：all 天下 / mine 本宗（切换时带 scope 重新拉取）；默认本宗，自己的供奉一打开就能看到。 */
+const scope = ref<'all' | 'mine'>('mine');
 /** 地图上金边的域（null = 还没拿到面板，拿到后按默认规则定下，之后由玩家点选）。 */
 const selectedRegionId = ref<string | null>(null);
 /** 正在选人的灵地与动作：驱妖开辟（beast）/ 斗法（battle）。 */
@@ -217,7 +217,7 @@ async function run(action: () => Promise<WorldActionResponse>): Promise<boolean>
     if (data.result.battle !== null) lastBattle.value = data.result.battle;
     const lost = data.result.battle !== null && !data.result.battle.won;
     emit('notify', lost ? 'warning' : 'success', '山河舆图', data.result.message);
-    // 命令回执里的纪事固定是「天下」：本宗视图下补拉一次，免得筛选与列表对不上。
+    // 命令回执里的纪事固定是「本宗」（与默认筛选一致）：天下视图下补拉一次，免得筛选与列表对不上。
     if (data.world.scope !== scope.value) void refresh();
     return true;
   } catch (error) {
