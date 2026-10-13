@@ -13,5 +13,3 @@ DELETE FROM arena_season_individual WHERE season_id = '2026-W42';
 DELETE FROM arena_season_team WHERE season_id = '2026-W42';
 DELETE FROM arena_seasons WHERE id = '2026-W42';
 
--- 清掉守卫行，让结算可以重跑
-DELETE FROM disciple_snapshots WHERE kind = 'arena' AND date_key = '2026-10-13';
