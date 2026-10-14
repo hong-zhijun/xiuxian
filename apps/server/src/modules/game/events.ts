@@ -150,6 +150,7 @@ const SYSTEM_EVENT_NAMES: Readonly<Record<string, string>> = {
   arenaReward: '大比奖励',
   refineLaunchGift: '祭炼贺礼',
   mondayGift: '周一福利',
+  discipleCapacityGift: '扩容贺礼',
   stockOrderFilled: '挂单成交',
   stockOrderCancelled: '挂单取消',
   stockOrderExpired: '挂单过期',
