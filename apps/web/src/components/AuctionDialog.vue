@@ -44,6 +44,7 @@ const loading = ref(false);
 const submitting = ref(false);
 const tab = ref<Tab>('hall');
 const kindFilter = ref<KindFilter>('all');
+const sellerFilter = ref<'all' | 'merchant' | 'player'>('all');
 const sortKey = ref<'ending' | 'price'>('ending');
 const showRules = ref(false);
 
@@ -117,7 +118,8 @@ const feePercent = computed(() => (panel.value?.feeBp ?? 1000) / 100);
 
 const hallLots = computed(() => {
   const lots = (panel.value?.hall ?? []).filter(
-    (lot) => kindFilter.value === 'all' || lot.kind === kindFilter.value,
+    (lot) => (kindFilter.value === 'all' || lot.kind === kindFilter.value)
+      && (sellerFilter.value === 'all' || (sellerFilter.value === 'merchant' ? lot.isSystem : !lot.isSystem)),
   );
   if (sortKey.value === 'price') {
     return [...lots].sort((a, b) => (a.currentPrice ?? a.startPrice) - (b.currentPrice ?? b.startPrice));
@@ -325,7 +327,7 @@ function onRetract(lot: AuctionLotView): void {
   const refund = (lot.currentPrice ?? 0) - penalty;
   pendingConfirm.value = {
     title: `撤销对「${lotTitle(lot)}」的出价`,
-    message: `退回 ${stone(refund)} 灵石，违约金 ${stone(penalty)} 灵石赔给卖家；这一单回到无人出价。`,
+    message: `退回 ${stone(refund)} 灵石，违约金 ${stone(penalty)} 灵石${lot.isSystem ? '由商会回收' : '赔给卖家'}；这一单回到无人出价。`,
     confirmText: '确认撤销',
     action: () => run(() => retractAuctionBid(lot.id)),
   };
@@ -375,6 +377,8 @@ function closeSellForm(): void {
 const RULES_TEXT = `拍卖行 · 规则
 
 开放：宗门 3 级。可拍卖背包里的装备（穿在身上的要先卸下）、丹药、玄铁、神木。
+游商：随机到访，每次带来 8～12 单装备、玄铁和神木，停留 6 小时。凡、灵、宝、仙四档装备均可能出现，支持竞拍与一口价；离开后随机间隔 2～6 小时再来，全服共享同一批货。
+      游商成交灵石和撤标违约金由商会回收，无人竞拍的商品到期撤走。
 上架：物品立刻交给拍卖行保管，竞价 24 小时；可另设一口价。每个宗门最多同时上架 10 单。
       起拍价不能低于物品成本的 20%（装备按炼器成本、丹药按炼丹成本，玄铁 / 神木每个 10 灵石）。
       还没人出价时可以下架（大厅和「我的拍卖」里都能点），物品当场退回；有人出价后不能下架。
@@ -418,6 +422,17 @@ onUnmounted(() => {
     <p v-else-if="!panel.unlocked" class="auction-locked">宗门 {{ panel.unlockSectLevel }} 级开放拍卖行。</p>
 
     <template v-else>
+      <div class="auction-merchant" :class="{ 'is-present': panel.merchant.present && panel.merchant.leavesAt !== null && panel.merchant.leavesAt > nowMs }">
+        <template v-if="panel.merchant.present && panel.merchant.leavesAt !== null && panel.merchant.leavesAt > nowMs">
+          <strong>{{ panel.merchant.name }}到访</strong>
+          <span>尚有 {{ panel.merchant.remainingLots }} 单好货 · 停留剩余 {{ timeLeft(panel.merchant.leavesAt) }}</span>
+          <small>装备 · 玄铁 · 神木，竞拍或一口价皆可</small>
+        </template>
+        <template v-else>
+          <strong>游商云游中</strong>
+          <span>不定时携宝而来，到访时会在全服聊天公告。</span>
+        </template>
+      </div>
       <div class="auction-tabs" role="tablist">
         <button
           v-for="item in [
@@ -460,6 +475,11 @@ onUnmounted(() => {
             <option value="ending">即将结束</option>
             <option value="price">价格从低到高</option>
           </select>
+          <select v-model="sellerFilter" class="auction-sort" aria-label="卖家筛选">
+            <option value="all">全部卖家</option>
+            <option value="merchant">游商好货</option>
+            <option value="player">宗门寄售</option>
+          </select>
         </div>
 
         <p v-if="hallLots.length === 0" class="auction-empty">暂时没有在拍的物品。</p>
@@ -469,6 +489,7 @@ onUnmounted(() => {
               <p class="auction-lot-name">
                 <strong>{{ lotTitle(lot) }}</strong>
                 <RefineTag :level="lot.equipment?.refineLevel ?? 0" />
+                <span v-if="lot.isSystem" class="auction-tag is-good">游商</span>
                 <span v-if="lot.isMine" class="auction-tag">我上架的</span>
                 <span v-else-if="lot.isLeading" class="auction-tag is-good">我领先</span>
               </p>
@@ -503,7 +524,7 @@ onUnmounted(() => {
                 class="auction-action"
                 type="button"
                 :disabled="disabled || !lot.retractable"
-                :title="lot.retractable ? `扣 ${stone(lot.retractPenalty)} 灵石违约金给卖家` : '拍卖结束前 2 小时内不能撤销'"
+                :title="lot.retractable ? `扣 ${stone(lot.retractPenalty)} 灵石违约金${lot.isSystem ? '由商会回收' : '给卖家'}` : '拍卖结束前 2 小时内不能撤销'"
                 @click="onRetract(lot)"
               >
                 撤销出价
@@ -655,7 +676,7 @@ onUnmounted(() => {
                   class="auction-action"
                   type="button"
                   :disabled="disabled || !lot.retractable"
-                  :title="lot.retractable ? `扣 ${stone(lot.retractPenalty)} 灵石违约金给卖家` : '拍卖结束前 2 小时内不能撤销'"
+                  :title="lot.retractable ? `扣 ${stone(lot.retractPenalty)} 灵石违约金${lot.isSystem ? '由商会回收' : '给卖家'}` : '拍卖结束前 2 小时内不能撤销'"
                   @click="onRetract(lot)"
                 >
                   撤销出价
@@ -743,6 +764,29 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+.auction-merchant {
+  display: grid;
+  gap: 6px;
+  margin: 8px 0 16px;
+  padding: 14px 16px;
+  border: 1px solid rgba(224, 205, 151, 0.2);
+  border-radius: 12px;
+  color: #aebdb4;
+  background: rgba(224, 205, 151, 0.04);
+}
+
+.auction-merchant.is-present {
+  border-color: rgba(224, 205, 151, 0.5);
+}
+
+.auction-merchant strong {
+  color: #e0cd97;
+}
+
+.auction-merchant small {
+  line-height: 1.5;
+}
+
 .auction-panel {
   display: flex;
   flex-direction: column;

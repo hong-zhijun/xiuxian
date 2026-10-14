@@ -1957,6 +1957,8 @@ const hubGroups = computed<{ label: string; cards: HubCard[] }[]>(() => {
                 ? '宗门 3 级开放'
                 : auction.claimable > 0
                   ? `${String(auction.claimable)} 件待领取`
+                  : auction.merchantStock > 0
+                    ? `游商到访 · ${String(auction.merchantStock)} 单好货`
                   : auction.myActive > 0
                     ? `${String(auction.myActive)} 单在拍`
                     : '竞拍装备丹药',

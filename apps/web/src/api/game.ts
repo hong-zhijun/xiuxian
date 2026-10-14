@@ -2186,7 +2186,7 @@ export interface EquipmentItemView {
   subAttr: string;
   subAttrName: string;
   subValue: number;
-  source: 'forge' | 'boss' | 'tower';
+  source: 'forge' | 'boss' | 'tower' | 'merchant';
   /** 0032 穿在身上时给弟子的战力加成（基点，按品质；0044 起再加祭炼重数的部分）。 */
   powerBonusBp: number;
   /** 0044 祭炼重数 0~12。 */
@@ -2751,6 +2751,7 @@ export interface AuctionLotView {
   quantity: number;
   equipment: AuctionEquipmentView | null;
   sellerName: string;
+  isSystem: boolean;
   isMine: boolean;
   startPrice: number;
   buyoutPrice: number | null;
@@ -2778,6 +2779,7 @@ export interface AuctionListableView {
 }
 
 export interface AuctionView {
+  merchant: { name: string; present: boolean; leavesAt: number | null; remainingLots: number };
   unlocked: boolean;
   unlockSectLevel: number;
   feeBp: number;
@@ -3155,7 +3157,7 @@ export interface HubView {
     /** 这些灵地各自最近一次失陷的时刻（毫秒，服务端时钟）；首页只提示比「已看过」更新的。 */
     lostAt?: number[];
   };
-  auction: { unlocked: boolean; claimable: number; myActive: number };
+  auction: { unlocked: boolean; claimable: number; myActive: number; merchantStock: number };
   market: { unlocked: boolean; holdings: number; profit: number; profitPct: number };
   /** 宗门大比：今天是否已结算，本宗今日两赛制的名次（未结算 / 未参赛为 null）。 */
   arena: { unlocked: boolean; settled: boolean; myIndividualRank: number | null; myTeamRank: number | null };

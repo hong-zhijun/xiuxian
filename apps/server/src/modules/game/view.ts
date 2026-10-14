@@ -3076,6 +3076,7 @@ export interface AuctionLotView {
   quantity: number;
   equipment: AuctionEquipmentView | null;
   sellerName: string;
+  isSystem: boolean;
   isMine: boolean;
   startPrice: number;
   buyoutPrice: number | null;
@@ -3108,6 +3109,7 @@ export interface AuctionListableView {
 
 /** 拍卖行面板（GET /game/auction 与各命令回执里的 auction）。 */
 export interface AuctionView {
+  merchant: { name: string; present: boolean; leavesAt: number | null; remainingLots: number };
   unlocked: boolean;
   unlockSectLevel: number;
   feeBp: number;
@@ -3402,7 +3404,7 @@ export interface HubView {
     /** 这些灵地各自最近一次失陷的时刻（毫秒，新的在前）；前端按「上次打开山河舆图」过滤，看过就不再提示。 */
     lostAt: number[];
   };
-  auction: { unlocked: boolean; claimable: number; myActive: number };
+  auction: { unlocked: boolean; claimable: number; myActive: number; merchantStock: number };
   market: {
     unlocked: boolean;
     /** 持有的股票支数。 */

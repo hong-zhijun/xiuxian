@@ -3494,7 +3494,8 @@ export function upsertStoneBustsStatement(
 
 export interface AuctionLotRow {
   id: string;
-  seller_sect_id: string;
+  seller_sect_id: string | null;
+  merchant_visit_id: string | null;
   seller_name: string;
   /** 'equipment' | 'pill' | 'resource'。 */
   kind: string;
@@ -3524,7 +3525,28 @@ export interface AuctionLotRow {
   seller_net_hash: string | null;
 }
 
+export interface AuctionMerchantStateRow {
+  id: number;
+  version: number;
+  next_arrival_at: number;
+  visit_id: string | null;
+  arrived_at: number | null;
+  leaves_at: number | null;
+}
+
 export class AuctionRepository extends ParamRepository {
+  async merchantState(): Promise<AuctionMerchantStateRow | null> {
+    return this.one<AuctionMerchantStateRow>({ sql: 'SELECT * FROM auction_merchant_state WHERE id = 1', params: [] });
+  }
+
+  async merchantStock(now: number): Promise<number> {
+    const row = await this.one<{ count: number }>({
+      sql: "SELECT COUNT(*) AS count FROM auction_lots WHERE merchant_visit_id IS NOT NULL AND status = 'active' AND ends_at > ?",
+      params: [now],
+    });
+    return Number(row?.count ?? 0);
+  }
+
   async findById(lotId: string): Promise<AuctionLotRow | null> {
     return this.one<AuctionLotRow>({ sql: 'SELECT * FROM auction_lots WHERE id = ?', params: [lotId] });
   }
@@ -3590,7 +3612,8 @@ export class AuctionRepository extends ParamRepository {
 
 export function insertAuctionLotStatement(input: {
   id: string;
-  sellerSectId: string;
+  sellerSectId: string | null;
+  merchantVisitId?: string;
   sellerName: string;
   kind: string;
   itemId: string;
@@ -3606,8 +3629,8 @@ export function insertAuctionLotStatement(input: {
   return {
     sql: `INSERT INTO auction_lots
             (id, seller_sect_id, seller_name, kind, item_id, item_name, quantity, equipment_json,
-             start_price, buyout_price, status, ends_at, version, created_at, seller_net_hash)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, 0, ?, ?)`,
+             start_price, buyout_price, status, ends_at, version, created_at, seller_net_hash, merchant_visit_id)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, 0, ?, ?, ?)`,
     params: [
       input.id,
       input.sellerSectId,
@@ -3622,6 +3645,7 @@ export function insertAuctionLotStatement(input: {
       input.endsAt,
       input.now,
       input.sellerNetHash,
+      input.merchantVisitId ?? null,
     ],
   };
 }

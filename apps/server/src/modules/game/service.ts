@@ -421,6 +421,7 @@ import {
   type AuctionEquipmentSnapshot,
   type AuctionKind,
 } from './auction';
+import { generateMerchantGoods, merchantGapMs, MERCHANT_NAME, MERCHANT_STAY_MS } from './auctionMerchant';
 import {
   deleteOldWorldSiteLogsStatement,
   insertWorldSiteLogStatement,
@@ -10696,12 +10697,14 @@ async function settleAuctionLot(db: D1Database, lot: AuctionLotRow, now: number)
         price,
         bidderSectId: lot.bidder_sect_id!,
         bidderName: lot.bidder_name ?? '',
-        fee: auctionFee(price),
+        fee: lot.seller_sect_id === null ? price : auctionFee(price),
         now,
         deliveredNow: false,
       }),
-      resourceDeltaStatement(lot.seller_sect_id, 'spiritStone', auctionSellerProceeds(price), now),
     );
+    if (lot.seller_sect_id !== null) {
+      statements.push(resourceDeltaStatement(lot.seller_sect_id, 'spiritStone', auctionSellerProceeds(price), now));
+    }
   } else {
     statements.push(markAuctionUnsoldStatement({ lotId: lot.id, status: 'expired', now }));
   }
@@ -10730,6 +10733,38 @@ export async function processAuctions(db: D1Database, now: number): Promise<void
     } catch (error) {
       console.warn(`auction_settle_failed lot=${lot.id} error=${String(error)}`);
     }
+  }
+  await processAuctionMerchant(db, now);
+}
+
+/** 到访、全服货物和公告一次提交；并发定时任务 / 面板请求只允许生成一批。 */
+export async function processAuctionMerchant(db: D1Database, now: number, random: () => number = Math.random): Promise<void> {
+  const state = await new AuctionRepository(db).merchantState();
+  if (state === null || Number(state.next_arrival_at) > now) return;
+  const visitId = crypto.randomUUID();
+  const guardId = `${visitId}:merchant`;
+  const leavesAt = now + MERCHANT_STAY_MS;
+  const nextArrivalAt = leavesAt + merchantGapMs(random);
+  const goods = generateMerchantGoods(random);
+  const statements: ParameterizedQuery[] = [{
+    sql: `INSERT INTO mutation_guards (command_id, valid)
+          SELECT ?, CASE WHEN EXISTS (SELECT 1 FROM auction_merchant_state WHERE id = 1 AND version = ? AND next_arrival_at <= ?) THEN 1 ELSE 0 END`,
+    params: [guardId, Number(state.version), now],
+  }, {
+    sql: 'UPDATE auction_merchant_state SET version = version + 1, next_arrival_at = ?, visit_id = ?, arrived_at = ?, leaves_at = ? WHERE id = 1',
+    params: [nextArrivalAt, visitId, now, leavesAt],
+  }, ...goods.map((item) => insertAuctionLotStatement({
+    ...item, id: crypto.randomUUID(), sellerSectId: null, sellerName: MERCHANT_NAME,
+    merchantVisitId: visitId, sellerNetHash: null, endsAt: leavesAt, now,
+  })), insertChatMessageStatement({
+    id: `${visitId}:announcement`, userId: 'system', sectName: '系统', now,
+    content: `【游商到访】${MERCHANT_NAME}携 ${goods.filter((item) => item.kind === 'equipment').length} 件装备与 ${goods.filter((item) => item.kind === 'resource').length} 单玄铁 / 神木来到拍卖行，停留 6 小时！凡、灵、宝、仙各品质都有机会出现，支持竞拍与一口价，诸位掌门莫错过。`,
+  }), deleteDiscipleSnapshotGuardStatement(guardId)];
+  try {
+    await db.batch(prepareStatements(db, statements));
+  } catch (error) {
+    if (isGuardFailure(error)) return;
+    throw error;
   }
 }
 
@@ -10781,6 +10816,7 @@ function auctionLotViewOf(row: AuctionLotRow, sectId: string, now: number): Auct
       ? null
       : auctionEquipmentViewOf({ ...snapshot, refineLevel: snapshot.refineLevel ?? 0 }),
     sellerName: row.seller_name,
+    isSystem: row.seller_sect_id === null,
     isMine: row.seller_sect_id === sectId,
     startPrice: Number(row.start_price),
     buyoutPrice,
@@ -10807,17 +10843,21 @@ async function buildAuctionView(input: { db: D1Database; draft: SectDraft; now: 
   const { db, draft, now } = input;
   const repo = new AuctionRepository(db);
   const sectId = draft.sect.id;
-  const [hall, myLots, myBids, { items, bagCount }] = await Promise.all([
+  const [hall, myLots, myBids, { items, bagCount }, merchantState, merchantStock] = await Promise.all([
     repo.listActive(now, AUCTION_HALL_LIMIT),
     repo.listBySeller(sectId, AUCTION_LIST_LIMIT),
     repo.listByBidder(sectId, AUCTION_LIST_LIMIT),
     loadEquipment(db, sectId),
+    repo.merchantState(),
+    repo.merchantStock(now),
   ]);
   const myLotViews = myLots.map((row) => auctionLotViewOf(row, sectId, now));
   const myBidViews = myBids.map((row) => auctionLotViewOf(row, sectId, now));
   const claimableIds = new Set(
     [...myLotViews, ...myBidViews].filter((lot) => lot.claimable !== null).map((lot) => lot.id),
   );
+  const merchantLeavesAt = merchantState?.leaves_at === null || merchantState === null ? null : Number(merchantState.leaves_at);
+  const merchantPresent = merchantLeavesAt !== null && merchantLeavesAt > now;
   return {
     unlocked: Number(draft.sect.level) >= AUCTION_UNLOCK_SECT_LEVEL,
     unlockSectLevel: AUCTION_UNLOCK_SECT_LEVEL,
@@ -10833,6 +10873,12 @@ async function buildAuctionView(input: { db: D1Database; draft: SectDraft; now: 
     resourceMaxQuantity: AUCTION_RESOURCE_MAX_QUANTITY,
     bagCount,
     bagCapacity: BAG_CAPACITY,
+    merchant: {
+      name: MERCHANT_NAME,
+      present: merchantPresent,
+      leavesAt: merchantPresent ? merchantLeavesAt : null,
+      remainingLots: merchantStock,
+    },
     hall: hall.map((row) => auctionLotViewOf(row, sectId, now)),
     myLots: myLotViews,
     myBids: myBidViews,
@@ -11176,7 +11222,6 @@ export async function buyoutAuction(
   await requireBagSpaceFor(db, draft, lot);
 
   const price = Number(lot.buyout_price);
-  draft.requireResource('spiritStone', price);
   // 前一个领先者的冻结灵石退回：是自己就直接加回内存余额，是别人就对他做相对加法。
   if (lot.bidder_sect_id !== null && lot.current_price !== null) {
     if (lot.bidder_sect_id === draft.sect.id) {
@@ -11185,7 +11230,10 @@ export async function buyoutAuction(
       draft.addStatement(resourceDeltaStatement(lot.bidder_sect_id, 'spiritStone', Number(lot.current_price), now));
     }
   }
-  draft.addStatement(resourceDeltaStatement(lot.seller_sect_id, 'spiritStone', auctionSellerProceeds(price), now));
+  draft.requireResource('spiritStone', price);
+  if (lot.seller_sect_id !== null) {
+    draft.addStatement(resourceDeltaStatement(lot.seller_sect_id, 'spiritStone', auctionSellerProceeds(price), now));
+  }
   deliverAuctionItem(draft, lot, now);
   draft.addStatement(
     markAuctionSoldStatement({
@@ -11193,7 +11241,7 @@ export async function buyoutAuction(
       price,
       bidderSectId: draft.sect.id,
       bidderName: draft.sect.name,
-      fee: auctionFee(price),
+      fee: lot.seller_sect_id === null ? price : auctionFee(price),
       now,
       deliveredNow: true,
     }),
@@ -12016,7 +12064,7 @@ export async function retractAuctionBid(
   const price = Number(lot.current_price);
   const penalty = auctionRetractPenalty(price);
   draft.addResource('spiritStone', price - penalty);
-  if (penalty > 0) {
+  if (penalty > 0 && lot.seller_sect_id !== null) {
     draft.addStatement(resourceDeltaStatement(lot.seller_sect_id, 'spiritStone', penalty, now));
   }
   draft.addStatement(retractAuctionBidStatement(lot.id));
@@ -12033,7 +12081,7 @@ export async function retractAuctionBid(
     db,
     draft,
     now,
-    `已撤销对 ${auctionItemLabel(lot)} 的出价：退回 ${displayAmount(price - penalty)} 灵石，违约金 ${displayAmount(penalty)} 灵石赔给卖家`,
+    `已撤销对 ${auctionItemLabel(lot)} 的出价：退回 ${displayAmount(price - penalty)} 灵石，违约金 ${displayAmount(penalty)} 灵石${lot.seller_sect_id === null ? '由商会回收' : '赔给卖家'}`,
   );
 }
 
@@ -12892,7 +12940,7 @@ export async function getHub(db: D1Database, userId: string, now: number): Promi
   const todayKey = dateKeyUtc8(now);
 
   const worldRepo = new WorldSiteRepository(db);
-  const [boss, towerRow, worldRows, lostSites, claimable, myActive, holdings, buildings] = await Promise.all([
+  const [boss, towerRow, worldRows, lostSites, claimable, myActive, holdings, buildings, merchantStock] = await Promise.all([
     new WorldBossRepository(db).findLatestByDayKey(todayKey),
     new TowerRepository(db).findBySectId(sect.id),
     worldRepo.listAll(),
@@ -12901,6 +12949,7 @@ export async function getHub(db: D1Database, userId: string, now: number): Promi
     level >= AUCTION_UNLOCK_SECT_LEVEL ? new AuctionRepository(db).countActiveBySeller(sect.id) : Promise.resolve(0),
     level >= MARKET_UNLOCK_SECT_LEVEL ? new MarketRepository(db).holdingsOf(sect.id) : Promise.resolve([]),
     new BuildingRepository(db).findBySectId(sect.id),
+    level >= AUCTION_UNLOCK_SECT_LEVEL ? new AuctionRepository(db).merchantStock(now) : Promise.resolve(0),
   ]);
 
   // 秘境：已开放（宗门等级够、需要演武场的有演武场）的秘境，今日剩余次数相加（与秘境列表同一口径）。
@@ -12973,7 +13022,7 @@ export async function getHub(db: D1Database, userId: string, now: number): Promi
       lostCount: worldLostAt.length,
       lostAt: worldLostAt,
     },
-    auction: { unlocked: level >= AUCTION_UNLOCK_SECT_LEVEL, claimable, myActive },
+    auction: { unlocked: level >= AUCTION_UNLOCK_SECT_LEVEL, claimable, myActive, merchantStock },
     market: {
       unlocked: level >= MARKET_UNLOCK_SECT_LEVEL,
       holdings: held.length,
