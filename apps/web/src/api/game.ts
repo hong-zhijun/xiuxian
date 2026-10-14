@@ -3152,6 +3152,8 @@ export interface HubView {
     freeSlots: number;
     /** 近 24 小时被夺、且现在不在本宗手里的灵地数。 */
     lostCount: number;
+    /** 这些灵地各自最近一次失陷的时刻（毫秒，服务端时钟）；首页只提示比「已看过」更新的。 */
+    lostAt?: number[];
   };
   auction: { unlocked: boolean; claimable: number; myActive: number };
   market: { unlocked: boolean; holdings: number; profit: number; profitPct: number };

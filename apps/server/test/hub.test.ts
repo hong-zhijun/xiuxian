@@ -102,7 +102,7 @@ describe('首页功能区状态', () => {
     );
     expect(won.result.battle?.won).toBe(true);
     expect(await getHub(env.DB, holder.userId, NOW + 5 * HOUR + 1)).toMatchObject({
-      world: { held: 0, freeSlots: 1, lostCount: 1 },
+      world: { held: 0, freeSlots: 1, lostCount: 1, lostAt: [NOW + 5 * HOUR] },
     });
     expect(await getHub(env.DB, raider.userId, NOW + 5 * HOUR + 1)).toMatchObject({
       world: { held: 1, freeSlots: 0, lostCount: 0 },

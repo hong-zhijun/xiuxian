@@ -1728,6 +1728,45 @@ async function loadHub(): Promise<void> {
 }
 
 /**
+ * 山河舆图「失陷」提醒：看过就算处理。打开山河舆图时，把当前已知的最近一次失陷时刻记为「已看过」，
+ * 首页圆圈与待办只统计比它更新的失陷。存在浏览器本地（按宗门区分）；用服务端给的时刻比较，不受本机时钟影响。
+ */
+const worldLostSeenKey = computed(() => `world-lost-seen:${props.state.sect.id}`);
+
+function readWorldLostSeen(): number {
+  try {
+    const value = Number(localStorage.getItem(worldLostSeenKey.value));
+    return Number.isFinite(value) ? value : 0;
+  } catch {
+    return 0;
+  }
+}
+
+const worldLostSeenAt = ref(readWorldLostSeen());
+watch(worldLostSeenKey, () => {
+  worldLostSeenAt.value = readWorldLostSeen();
+});
+
+/** 还没看过的失陷处数（没有 lostAt 的旧接口退回 lostCount）。 */
+const unseenWorldLost = computed(() => {
+  const world = hub.value?.world;
+  if (world === undefined) return 0;
+  if (world.lostAt === undefined) return world.lostCount;
+  return world.lostAt.filter((at) => at > worldLostSeenAt.value).length;
+});
+
+function markWorldLostSeen(): void {
+  const latest = Math.max(worldLostSeenAt.value, ...(hub.value?.world.lostAt ?? []));
+  if (latest <= worldLostSeenAt.value) return;
+  worldLostSeenAt.value = latest;
+  try {
+    localStorage.setItem(worldLostSeenKey.value, String(latest));
+  } catch {
+    /* 存不下只是下次打开首页还会再提示一次 */
+  }
+}
+
+/**
  * 宗门日课摘要（操作栏「日课」卡片的进度 / 小红点、待办提醒用）：挂载时与每次关掉弹窗后读一次，
  * 日课弹窗里领取 / 开箱后由卡片回传最新一份。失败时保留上一次的，不打扰玩家。
  */
@@ -1746,9 +1785,13 @@ const dailyClaimable = computed(
   () => dailyTasks.value?.tasks.filter((task) => task.completed && !task.claimed).length ?? 0,
 );
 
-watch(openPanel, (panel) => {
+watch(openPanel, (panel, previous) => {
+  // 山河舆图：打开即算看过失陷；关掉时拿到最新摘要后再记一次（看的过程中又失陷的也算看过了）。
+  if (panel === 'world') markWorldLostSeen();
   if (panel === null) {
-    void loadHub();
+    void loadHub().then(() => {
+      if (previous === 'world') markWorldLostSeen();
+    });
     void loadDailyTasks();
   }
 });
@@ -1892,8 +1935,8 @@ const hubGroups = computed<{ label: string; cards: HubCard[] }[]>(() => {
                 ? '宗门 3 级开放'
                 : `镇守 ${String(world.held)}/${String(world.cap)} · 尚可开辟 ${String(world.freeSlots)} 处`,
           count:
-            world !== undefined && world.lostCount > 0
-              ? { value: world.lostCount, label: `近 24 小时失陷 ${String(world.lostCount)} 处灵地` }
+            unseenWorldLost.value > 0
+              ? { value: unseenWorldLost.value, label: `新失陷 ${String(unseenWorldLost.value)} 处灵地（打开山河舆图后不再提示）` }
               : undefined,
         },
       ],
@@ -1988,8 +2031,8 @@ const todoItems = computed<TodoItem[]>(() => {
   if (healableIds.value.length > 0) {
     items.push({ id: 'heal', tone: 'warn', text: `${String(healableIds.value.length)} 名弟子受伤`, action: '去疗伤' });
   }
-  if (h !== null && h.world.lostCount > 0) {
-    items.push({ id: 'world-lost', tone: 'warn', text: `${String(h.world.lostCount)} 处灵地失陷`, action: '去夺回' });
+  if (h !== null && unseenWorldLost.value > 0) {
+    items.push({ id: 'world-lost', tone: 'warn', text: `${String(unseenWorldLost.value)} 处灵地失陷`, action: '去夺回' });
   }
   if (breakthroughReadyIds.value.length > 0) {
     items.push({ id: 'breakthrough', tone: 'act', text: `${String(breakthroughReadyIds.value.length)} 名弟子可突破`, action: '去突破' });

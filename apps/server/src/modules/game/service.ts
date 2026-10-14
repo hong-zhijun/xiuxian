@@ -12892,7 +12892,7 @@ export async function getHub(db: D1Database, userId: string, now: number): Promi
   const todayKey = dateKeyUtc8(now);
 
   const worldRepo = new WorldSiteRepository(db);
-  const [boss, towerRow, worldRows, lostSiteIds, claimable, myActive, holdings, buildings] = await Promise.all([
+  const [boss, towerRow, worldRows, lostSites, claimable, myActive, holdings, buildings] = await Promise.all([
     new WorldBossRepository(db).findLatestByDayKey(todayKey),
     new TowerRepository(db).findBySectId(sect.id),
     worldRepo.listAll(),
@@ -12935,10 +12935,11 @@ export async function getHub(db: D1Database, userId: string, now: number): Promi
   const worldCap = worldSiteCapOf(level);
   const worldHeld = worldRows.filter((row) => row.holder_sect_id === sect.id).length;
   const holderOfSite = new Map(worldRows.map((row) => [row.id, row.holder_sect_id]));
-  let worldLost = 0;
-  for (const siteId of new Set(lostSiteIds)) {
-    if (holderOfSite.get(siteId) !== sect.id) worldLost += 1;
-  }
+  // 每处给出最近一次失陷的时刻：前端只提示「打开山河舆图之后」的失陷（看过就算处理）。
+  const worldLostAt = lostSites
+    .filter((site) => holderOfSite.get(site.siteId) !== sect.id)
+    .map((site) => site.lostAt)
+    .sort((a, b) => b - a);
 
   // 灵股：浮动盈亏
   const held = holdings.filter((row) => Number(row.shares) > 0);
@@ -12969,7 +12970,8 @@ export async function getHub(db: D1Database, userId: string, now: number): Promi
       cap: worldCap,
       held: worldHeld,
       freeSlots: Math.max(0, worldCap - worldHeld),
-      lostCount: worldLost,
+      lostCount: worldLostAt.length,
+      lostAt: worldLostAt,
     },
     auction: { unlocked: level >= AUCTION_UNLOCK_SECT_LEVEL, claimable, myActive },
     market: {

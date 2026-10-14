@@ -3807,14 +3807,15 @@ export class WorldSiteRepository extends ParamRepository {
     });
   }
 
-  /** 自 since 起被本宗守方输掉的灵地（去重，只算攻方获胜的斗法）。 */
-  async lostSitesSince(sectId: string, since: number): Promise<string[]> {
-    const rows = await this.all<{ site_id: string }>({
-      sql: `SELECT DISTINCT site_id FROM world_site_logs
-            WHERE kind = 'battle' AND won = 1 AND target_sect_id = ? AND created_at >= ? AND site_id IS NOT NULL`,
+  /** 自 since 起被本宗守方输掉的灵地（每处一行，只算攻方获胜的斗法）与该处最近一次失陷的时刻。 */
+  async lostSitesSince(sectId: string, since: number): Promise<{ siteId: string; lostAt: number }[]> {
+    const rows = await this.all<{ site_id: string; lost_at: number }>({
+      sql: `SELECT site_id, MAX(created_at) AS lost_at FROM world_site_logs
+            WHERE kind = 'battle' AND won = 1 AND target_sect_id = ? AND created_at >= ? AND site_id IS NOT NULL
+            GROUP BY site_id`,
       params: [sectId, since],
     });
-    return rows.map((row) => row.site_id);
+    return rows.map((row) => ({ siteId: row.site_id, lostAt: Number(row.lost_at) }));
   }
 }
 
