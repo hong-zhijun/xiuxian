@@ -4963,9 +4963,30 @@ ul {
   white-space: nowrap;
 }
 
-/* 第二行的警示（如山河舆图的「失陷 n 处」）：红字，同一张卡片里与状态行并排展示。 */
-.hub-card-status.is-warn {
-  color: var(--red-bright);
+/* 右侧红色圆圈（如山河舆图的失陷处数）：竖直居中、跨两行，卡片不因此变成三行。 */
+.hub-card.has-count {
+  position: relative;
+  padding-right: 36px;
+}
+
+.hub-card-count {
+  position: absolute;
+  top: 50%;
+  right: 10px;
+  display: inline-flex;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 5px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  background: var(--red-bright);
+  box-shadow: 0 0 0 2px rgba(8, 20, 17, 0.9);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  transform: translateY(-50%);
 }
 
 /* 中等宽度：一行 3 张，状态文字不至于被挤成省略号（手机见 680px 断点：一行 2 张）。 */

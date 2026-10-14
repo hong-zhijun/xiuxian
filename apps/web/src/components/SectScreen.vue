@@ -1795,8 +1795,8 @@ interface HubCard {
   name: string;
   glyph: string;
   status: string;
-  /** 第二行的警示（红字，如山河舆图的「失陷 n 处」）：没有则不显示。 */
-  warn?: string;
+  /** 右侧红色圆圈里的数字（如山河舆图的失陷处数）与读屏说明：没有则不显示，卡片保持两行。 */
+  count?: { value: number; label: string };
   /** 有可领取的东西：卡片名旁亮小红点。 */
   alert?: boolean;
 }
@@ -1891,7 +1891,10 @@ const hubGroups = computed<{ label: string; cards: HubCard[] }[]>(() => {
               : !world.unlocked
                 ? '宗门 3 级开放'
                 : `镇守 ${String(world.held)}/${String(world.cap)} · 尚可开辟 ${String(world.freeSlots)} 处`,
-          warn: world !== undefined && world.lostCount > 0 ? `失陷 ${String(world.lostCount)} 处` : undefined,
+          count:
+            world !== undefined && world.lostCount > 0
+              ? { value: world.lostCount, label: `近 24 小时失陷 ${String(world.lostCount)} 处灵地` }
+              : undefined,
         },
       ],
     },
@@ -2409,6 +2412,7 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
             v-for="card in group.cards"
             :key="card.id"
             class="hub-card"
+            :class="{ 'has-count': card.count }"
             type="button"
             @click="openHubCard(card.id)"
           >
@@ -2417,7 +2421,9 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
               <b v-if="card.alert" class="hub-card-alert" role="img" aria-label="有可领取的奖励" />
             </span>
             <span class="hub-card-status">{{ card.status }}</span>
-            <span v-if="card.warn" class="hub-card-status is-warn">{{ card.warn }}</span>
+            <b v-if="card.count" class="hub-card-count" :title="card.count.label" role="img" :aria-label="card.count.label">
+              {{ card.count.value }}
+            </b>
           </button>
         </div>
       </div>
