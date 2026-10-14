@@ -35,7 +35,7 @@ it('扩容贺礼给所有已有宗门各加 2000 灵石，保留超容量余额�
     createSect('small', 100_000);
     createSect('full', 5_000_000);
 
-    expect(applyMigrations(db, migrationDir)).toEqual([giftMigration]);
+    expect(applyMigrations(db, migrationDir)).toContain(giftMigration);
     expect(stoneOf('small')).toBe(2_100_000);
     expect(stoneOf('full')).toBe(7_000_000);
     expect(db.prepare("SELECT balance FROM resource_balances WHERE resource_id = 'ore'").all().map((row) => row.balance))
@@ -49,6 +49,10 @@ it('扩容贺礼给所有已有宗门各加 2000 灵石，保留超容量余额�
       expect(gift.description).toContain('2000 灵石');
     }
     expect(eventNameOf('discipleCapacityGift')).toBe('扩容贺礼');
+    const announcement = db.prepare("SELECT user_id, sect_name, content FROM chat_messages WHERE id = 'announcement-disciple-capacity-20261014'").get();
+    expect(announcement).toMatchObject({ user_id: 'system', sect_name: '系统' });
+    expect(announcement?.content).toContain('2000灵石');
+    expect(announcement?.content).toContain('满级可收64人');
 
     createSect('new', 100_000);
     expect(applyMigrations(db, migrationDir)).toEqual([]);
@@ -56,6 +60,7 @@ it('扩容贺礼给所有已有宗门各加 2000 灵石，保留超容量余额�
     expect(stoneOf('full')).toBe(7_000_000);
     expect(stoneOf('new')).toBe(100_000);
     expect(db.prepare("SELECT COUNT(*) AS total FROM event_log WHERE event_id = 'discipleCapacityGift'").get()?.total).toBe(2);
+    expect(db.prepare("SELECT COUNT(*) AS total FROM chat_messages WHERE id = 'announcement-disciple-capacity-20261014'").get()?.total).toBe(1);
   } finally {
     db.close();
   }
