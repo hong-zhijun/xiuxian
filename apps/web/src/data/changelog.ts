@@ -19,6 +19,15 @@ export const MAX_ENTRIES = 5;
 
 export const CHANGELOG: readonly ChangelogEntry[] = [
   {
+    id: '2026-10-14-disciple-capacity',
+    time: '2026-10-14 09:34',
+    title: '宗门扩容 · 更多弟子名额',
+    items: [
+      '宗门 5～15 级的弟子上限提高为 24、28、32、36、40、44、48、52、56、60、64 人，为坐镇灵地、替补和培养新人留出更多名额。',
+      '已有宗门按当前等级获得新增名额，满级可招收 64 人，支持全选弟子批量转岗与破境。',
+    ],
+  },
+  {
     id: '2026-10-13-arena-tournament',
     time: '2026-10-13 13:53',
     title: '宗门大比上线 · 斗法台与宗门战',

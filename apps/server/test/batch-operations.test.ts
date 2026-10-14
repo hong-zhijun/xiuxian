@@ -118,6 +118,102 @@ async function guardRowCount(): Promise<number> {
 /** 炼气一层门槛 30：修为 30 即可破境。 */
 const QI_THRESHOLD = 30;
 
+describe('宗门弟子扩容', () => {
+  it.each([
+    { level: 5, capacity: 24 },
+    { level: 15, capacity: 64 },
+  ])('$level 级已有宗门可招到 $capacity 人，满员后拒绝继续招募', async ({ level, capacity }) => {
+    const fixture = await makeSect(`capacity-${level}`);
+    await env.DB.prepare('UPDATE sects SET level = ? WHERE id = ?')
+      .bind(level, fixture.sectId)
+      .run();
+    for (let count = fixture.discipleIds.length; count < capacity - 1; count += 1) {
+      await seedDisciple(fixture.sectId);
+    }
+    await setBalance(fixture.sectId, 'spiritStone', 1_000_000);
+    await freezeSettlement(fixture.sectId);
+
+    const preview = await fixture.api.get('/api/v1/game/recruit-preview');
+    expect(preview.status).toBe(200);
+    expect(dataOf(preview)).toMatchObject({ canRecruit: true, blockedReason: null });
+    const recruited = await fixture.api.post('/api/v1/game/recruit', {
+      choice: 0,
+      batch: dataOf(preview).batch,
+    });
+    expect(recruited.status).toBe(200);
+    const state = dataOf(recruited).state as Record<string, any>;
+    expect(state.sect.discipleCapacity).toBe(capacity);
+    expect(state.recruit).toMatchObject({
+      discipleCount: capacity,
+      remaining: 0,
+      canRecruit: false,
+      blockedReason: '弟子上限已满',
+    });
+
+    const fullPreview = await fixture.api.get('/api/v1/game/recruit-preview');
+    expect(dataOf(fullPreview)).toMatchObject({ canRecruit: false, blockedReason: '弟子上限已满' });
+    const balanceBefore = await dbBalance(fixture.sectId, 'spiritStone');
+    const rejected = await fixture.api.post('/api/v1/game/recruit', {
+      choice: 0,
+      batch: dataOf(fullPreview).batch,
+    });
+    expect(rejected.status).toBe(409);
+    expect(errorOf(rejected).code).toBe('CAPACITY_FULL');
+    expect(await dbBalance(fixture.sectId, 'spiritStone')).toBe(balanceBefore);
+    const count = await env.DB.prepare('SELECT COUNT(*) AS total FROM disciples WHERE sect_id = ?')
+      .bind(fixture.sectId)
+      .first<{ total: number }>();
+    expect(count?.total).toBe(capacity);
+  });
+
+  it('满编 64 人可一次批量转岗、破境；超过人数限制的请求被拒绝', async () => {
+    const fixture = await makeSect('capacity-batch');
+    await env.DB.prepare('UPDATE sects SET level = 15 WHERE id = ?').bind(fixture.sectId).run();
+    const ids = [...fixture.discipleIds];
+    while (ids.length < 64) ids.push(await seedDisciple(fixture.sectId));
+    await env.DB.prepare("UPDATE disciples SET assignment = 'idle', cultivation = ? WHERE sect_id = ?")
+      .bind(QI_THRESHOLD, fixture.sectId)
+      .run();
+    await setBalance(fixture.sectId, 'spiritualEnergy', 2_000_000);
+    await freezeSettlement(fixture.sectId);
+
+    const assigned = await fixture.api.post('/api/v1/game/assign-batch', {
+      discipleIds: ids,
+      assignment: 'cultivating',
+    });
+    expect(assigned.status).toBe(200);
+    expect((dataOf(assigned) as Record<string, any>).outcome.assigned).toHaveLength(64);
+    const workers = await env.DB.prepare("SELECT COUNT(*) AS total FROM disciples WHERE sect_id = ? AND assignment = 'cultivating'")
+      .bind(fixture.sectId)
+      .first<{ total: number }>();
+    expect(workers?.total).toBe(64);
+
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+    const breakthrough = await fixture.api.post('/api/v1/game/breakthrough-batch', { discipleIds: ids });
+    expect(breakthrough.status).toBe(200);
+    const outcome = (dataOf(breakthrough) as Record<string, any>).outcome;
+    expect(outcome.results).toHaveLength(64);
+    expect(outcome.results.every((item: { success: boolean }) => item.success)).toBe(true);
+    expect(outcome.energySpent).toBe('1280000');
+    expect(await dbBalance(fixture.sectId, 'spiritualEnergy')).toBe(720_000);
+    const advanced = await env.DB.prepare('SELECT COUNT(*) AS total FROM disciples WHERE sect_id = ? AND stage = 2 AND cultivation = 0')
+      .bind(fixture.sectId)
+      .first<{ total: number }>();
+    expect(advanced?.total).toBe(64);
+    expect(await guardRowCount()).toBe(0);
+
+    const tooManyIds = [...ids, crypto.randomUUID()];
+    for (const [path, body] of [
+      ['/api/v1/game/assign-batch', { discipleIds: tooManyIds, assignment: 'idle' }],
+      ['/api/v1/game/breakthrough-batch', { discipleIds: tooManyIds }],
+    ] as const) {
+      const rejected = await fixture.api.post(path, body);
+      expect(rejected.status).toBe(400);
+      expect(errorOf(rejected).code).toBe('VALIDATION_ERROR');
+    }
+  });
+});
+
 describe('批量转岗', () => {
   it('按顺序转岗；已在该岗位 / 在外 / 他宗 id 跳过；采灵岗位按顺序占满名额', async () => {
     const fixture = await makeSect('assign');

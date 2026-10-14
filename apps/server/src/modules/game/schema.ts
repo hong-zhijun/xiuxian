@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { ARENA_MAX_ENTRY } from './arena';
 import { MAX_CRAFT_QUANTITY, MAX_PILL_USE_COUNT } from './alchemy';
 import { AVATAR_IMAGE_MAX_BASE64_CHARS, AVATAR_IMAGE_MIMES } from './avatarImage';
+import { SECT_LEVELS } from './constants';
 import { BETTABLE_ATTRIBUTES, RACE_BEAST_COUNT, RACE_BET_MAX, RACE_BET_MIN } from './gambling';
 import { BAG_CAPACITY } from './equipment';
 import { DAILY_TASK_IDS } from './dailyTasks';
@@ -43,8 +44,8 @@ export const assignRequestSchema = z.strictObject({
   assignment: z.string().min(1).max(32),
 });
 
-/** 批量命令一次最多选几名弟子（宗门弟子上限 35，留出余量）。 */
-export const BATCH_DISCIPLE_LIMIT = 50;
+/** 批量命令覆盖满编宗门，随宗门等级表的最大弟子上限同步调整。 */
+export const BATCH_DISCIPLE_LIMIT = Math.max(...SECT_LEVELS.map((level) => level.discipleCapacity));
 
 /** 批量命令的弟子列表：1~BATCH_DISCIPLE_LIMIT 个且不重复；归属由服务端逐个判定。 */
 const batchDiscipleIdsSchema = z

@@ -289,7 +289,7 @@ export const SECT_LEVELS: readonly SectLevelDef[] = [
   {
     level: 5,
     name: '一流宗门',
-    discipleCapacity: 20,
+    discipleCapacity: 24,
     buildingCapacity: 6,
     capacityMultiplier: 4,
     upgradeCost: { spiritStone: '2000000', ore: '800000', herb: '400000' },
@@ -300,7 +300,7 @@ export const SECT_LEVELS: readonly SectLevelDef[] = [
   {
     level: 6,
     name: '名门大派',
-    discipleCapacity: 23,
+    discipleCapacity: 28,
     buildingCapacity: 6,
     capacityMultiplier: 5,
     upgradeCost: { spiritStone: '3000000', ore: '1200000', herb: '600000' },
@@ -311,7 +311,7 @@ export const SECT_LEVELS: readonly SectLevelDef[] = [
   {
     level: 7,
     name: '地方霸主',
-    discipleCapacity: 26,
+    discipleCapacity: 32,
     buildingCapacity: 7,
     capacityMultiplier: 7,
     upgradeCost: { spiritStone: '4000000', ore: '1600000', herb: '800000' },
@@ -322,7 +322,7 @@ export const SECT_LEVELS: readonly SectLevelDef[] = [
   {
     level: 8,
     name: '十大宗门',
-    discipleCapacity: 29,
+    discipleCapacity: 36,
     buildingCapacity: 7,
     capacityMultiplier: 10,
     upgradeCost: { spiritStone: '5000000', ore: '2000000', herb: '1000000' },
@@ -333,7 +333,7 @@ export const SECT_LEVELS: readonly SectLevelDef[] = [
   {
     level: 9,
     name: '顶级圣地',
-    discipleCapacity: 32,
+    discipleCapacity: 40,
     buildingCapacity: 8,
     capacityMultiplier: 14,
     upgradeCost: {
@@ -349,7 +349,7 @@ export const SECT_LEVELS: readonly SectLevelDef[] = [
   {
     level: 10,
     name: '仙门至尊',
-    discipleCapacity: 35,
+    discipleCapacity: 44,
     buildingCapacity: 8,
     capacityMultiplier: 20,
     upgradeCost: {
@@ -367,7 +367,7 @@ export const SECT_LEVELS: readonly SectLevelDef[] = [
   {
     level: 11,
     name: '洞天福地',
-    discipleCapacity: 38,
+    discipleCapacity: 48,
     buildingCapacity: 8,
     capacityMultiplier: 25,
     upgradeCost: {
@@ -384,7 +384,7 @@ export const SECT_LEVELS: readonly SectLevelDef[] = [
   {
     level: 12,
     name: '上古仙门',
-    discipleCapacity: 41,
+    discipleCapacity: 52,
     buildingCapacity: 8,
     capacityMultiplier: 32,
     upgradeCost: {
@@ -401,7 +401,7 @@ export const SECT_LEVELS: readonly SectLevelDef[] = [
   {
     level: 13,
     name: '万法仙庭',
-    discipleCapacity: 44,
+    discipleCapacity: 56,
     buildingCapacity: 8,
     capacityMultiplier: 40,
     upgradeCost: {
@@ -419,7 +419,7 @@ export const SECT_LEVELS: readonly SectLevelDef[] = [
   {
     level: 14,
     name: '太虚圣宗',
-    discipleCapacity: 47,
+    discipleCapacity: 60,
     buildingCapacity: 8,
     capacityMultiplier: 50,
     upgradeCost: {
@@ -440,7 +440,7 @@ export const SECT_LEVELS: readonly SectLevelDef[] = [
   {
     level: 15,
     name: '道祖仙庭',
-    discipleCapacity: 50,
+    discipleCapacity: 64,
     buildingCapacity: 8,
     capacityMultiplier: 64,
     upgradeCost: {
