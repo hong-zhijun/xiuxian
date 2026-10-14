@@ -2315,9 +2315,16 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
               <strong>{{ formatAmount(liveResources[resource.id] ?? 0) }}</strong>
               <span class="resource-capacity">库容 {{ formatAmount(resource.capacity) }}</span>
             </div>
+            <!-- 两行：宗门自身产速（实时平滑）与山河舆图灵地供奉（整点入账），分开显示。 -->
             <div class="resource-rate">
-              <span>产速</span>
-              <strong>+{{ formatRate(resource.ratePerHour) }}<small>/时</small></strong>
+              <p class="resource-rate-line">
+                <span>产速</span>
+                <strong>+{{ formatRate(resource.ratePerHour) }}<small>/时</small></strong>
+              </p>
+              <p class="resource-rate-line is-world" :class="{ 'is-zero': Number(resource.worldRatePerHour ?? 0) <= 0 }">
+                <span>山河</span>
+                <strong>+{{ formatRate(resource.worldRatePerHour ?? 0) }}<small>/时</small></strong>
+              </p>
             </div>
             <div class="resource-track" aria-hidden="true">
               <span :style="{ width: `${resourcePercent(resource.id, resource.capacity)}%` }" />

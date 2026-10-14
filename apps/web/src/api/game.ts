@@ -27,6 +27,8 @@ export interface ResourceView {
   balance: string;
   capacity: string;
   ratePerHour: string;
+  /** 0051 山河舆图：本宗占着的灵地每小时供奉（最小单位，整点入账）；缺省视为 0。 */
+  worldRatePerHour?: string;
   capped: boolean;
   discarded: string;
 }

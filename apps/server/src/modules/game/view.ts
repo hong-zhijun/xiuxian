@@ -128,7 +128,7 @@ import type {
   DiscipleJourneyRow,
   WorldSiteRow,
 } from './repository';
-import { parseGarrison, worldSiteFullName } from './world';
+import { findWorldSite, parseGarrison, worldSiteFullName } from './world';
 import {
   findStewardOffice,
   findTalent,
@@ -176,6 +176,8 @@ export interface ResourceView {
   capacity: string;
   /** 当前产量（最小单位/小时），前端据此本地平滑显示。 */
   ratePerHour: string;
+  /** 0051 山河舆图：本宗占着的灵地每小时供奉（最小单位；整点入账，不计入 ratePerHour 的平滑显示）；没有为 '0'。 */
+  worldRatePerHour: string;
   capped: boolean;
   /** 本段结算因满仓丢弃的量。 */
   discarded: string;
@@ -1999,6 +2001,14 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
   const energyBalance = balancesByResource.get('spiritualEnergy') ?? 0;
   const energyName = config.resources.find((resource) => resource.id === 'spiritualEnergy')?.name ?? '灵气';
 
+  // 0051 山河舆图：本宗占着的灵地每小时供奉合计（祖脉的玄铁 / 神木按 6 小时一结，不折成每小时）。
+  const worldRates = new Map<string, number>();
+  for (const site of input.worldSites ?? []) {
+    for (const [resourceId, perHour] of Object.entries(findWorldSite(site.id)?.outputs ?? {})) {
+      worldRates.set(resourceId, (worldRates.get(resourceId) ?? 0) + perHour);
+    }
+  }
+
   const resources: ResourceView[] = config.resources.map((definition) => {
     const row = balances.find((item) => item.resource_id === definition.id);
     const settled = settleResult.resources.find((item) => item.resourceId === definition.id);
@@ -2008,6 +2018,7 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
       balance: String(row?.balance ?? 0),
       capacity: String(effectiveCapacity(definition.capacity, capacityMultiplier)),
       ratePerHour: String(resourceRatesNow.get(definition.id) ?? 0),
+      worldRatePerHour: String(worldRates.get(definition.id) ?? 0),
       capped: settled?.capped ?? false,
       discarded: String(settled?.discarded ?? 0),
     };

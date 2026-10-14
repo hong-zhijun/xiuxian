@@ -1576,13 +1576,25 @@ ul {
 }
 
 .resource-rate {
+  display: flex;
   align-self: center;
-  text-align: right;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
 }
 
-.resource-rate span,
-.resource-rate strong {
-  display: block;
+/* 一行一项：「产速 +x/时」与「山河 +x/时」。 */
+.resource-rate-line {
+  display: flex;
+  margin: 0;
+  align-items: baseline;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+/* 山河供奉：没有占灵地时整行变暗，不抢眼。 */
+.resource-rate-line.is-world.is-zero strong {
+  color: #4f6159;
 }
 
 .resource-rate span {
@@ -6540,10 +6552,7 @@ h2.public-sect-name {
 
   .resource-rate {
     grid-column: 2;
-    display: flex;
-    align-items: baseline;
-    gap: 5px;
-    text-align: left;
+    align-items: flex-start;
   }
 
   /* 窄屏：功能卡片两列。 */
