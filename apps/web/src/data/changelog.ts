@@ -19,6 +19,16 @@ export const MAX_ENTRIES = 5;
 
 export const CHANGELOG: readonly ChangelogEntry[] = [
   {
+    id: '2026-10-15-auction-merchant-frequency',
+    time: '2026-10-15 08:50',
+    title: '游商加快到访 · 不再等上一批离开',
+    items: [
+      '云游商人改为每隔 2～4 小时随机带来一批新货，不再叠加之前 6 小时的停留时间。',
+      '每批商品仍保留 6 小时，已有出价和截止时间不变；到访继续发全服公告。',
+      '首页也会检查游商到访，减少后台调度延迟造成的等待。',
+    ],
+  },
+  {
     id: '2026-10-14-auction-merchant',
     time: '2026-10-14 17:06',
     title: '拍卖行 · 游商随机到访',

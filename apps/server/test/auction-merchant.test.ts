@@ -43,7 +43,7 @@ async function balance(sectId: string, resource = 'spiritStone') {
 }
 
 describe('随机游商', () => {
-  it('未到时间不上架；并发到访仅生成一批货和一条公告，刷新不重抽，下一次到访随机在离开后 2～6 小时', async () => {
+  it('未到时间不上架；并发到访仅生成一批货和一条公告，2～4 小时补新货且保留旧批次 6 小时', async () => {
     const fixture = await buyer();
     await processAuctionMerchant(env.DB, NOW - 1, () => 0);
     expect(await repo.merchantStock(NOW)).toBe(0);
@@ -59,16 +59,31 @@ describe('随机游商', () => {
     expect(second.auction.hall.map((lot) => lot.id)).toEqual(first.auction.hall.map((lot) => lot.id));
     expect((await getHub(env.DB, fixture.userId, NOW)).auction.merchantStock).toBe(8);
     const state = await repo.merchantState();
-    expect(state!.next_arrival_at).toBe(NOW + MERCHANT_STAY_MS + 2 * 3_600_000);
-    await processAuctions(env.DB, NOW + MERCHANT_STAY_MS);
-    const absent = await getAuction(env.DB, fixture.userId, NOW + MERCHANT_STAY_MS);
-    expect(absent.auction.merchant.present).toBe(false);
-    expect(absent.auction.hall).toHaveLength(0);
-    expect(absent.auction.claimableCount).toBe(0);
+    expect(state!.next_arrival_at).toBe(NOW + 2 * 3_600_000);
+    await processAuctionMerchant(env.DB, Number(state!.next_arrival_at) - 1, () => 0.999);
+    expect(await repo.merchantStock(Number(state!.next_arrival_at) - 1)).toBe(8);
     await processAuctionMerchant(env.DB, Number(state!.next_arrival_at), () => 0.999);
-    expect(await repo.merchantStock(Number(state!.next_arrival_at))).toBe(12);
+    expect(await repo.merchantStock(Number(state!.next_arrival_at))).toBe(20);
+    const overlapping = await repo.listActive(Number(state!.next_arrival_at), 200);
+    expect(first.auction.hall.every((old) => overlapping.some((lot) => lot.id === old.id && lot.ends_at === old.endsAt))).toBe(true);
     const nextState = await repo.merchantState();
-    expect(nextState!.next_arrival_at).toBe(Number(state!.next_arrival_at) + MERCHANT_STAY_MS + 6 * 3_600_000);
+    expect(nextState!.next_arrival_at).toBe(Number(state!.next_arrival_at) + 4 * 3_600_000);
+    expect(await repo.merchantStock(NOW + MERCHANT_STAY_MS)).toBe(12);
+  });
+
+  it('后台调度晚了时，首页检查仍会到访且只生成一批，不补刷历史批次', async () => {
+    const fixture = await buyer();
+    const delayedNow = NOW + 15 * 3_600_000;
+    const hub = await getHub(env.DB, fixture.userId, delayedNow);
+    expect(hub.auction.merchantStock).toBeGreaterThanOrEqual(8);
+    expect(hub.auction.merchantStock).toBeLessThanOrEqual(12);
+    const state = await repo.merchantState();
+    expect(state?.arrived_at).toBe(delayedNow);
+    expect(Number(state?.next_arrival_at)).toBeGreaterThanOrEqual(delayedNow + 2 * 3_600_000);
+    expect(Number(state?.next_arrival_at)).toBeLessThanOrEqual(delayedNow + 4 * 3_600_000);
+    expect((await getHub(env.DB, fixture.userId, delayedNow)).auction.merchantStock).toBe(hub.auction.merchantStock);
+    expect((await env.DB.prepare("SELECT COUNT(*) AS count FROM chat_messages WHERE content LIKE '【游商到访】%'")
+      .first<{ count: number }>())?.count).toBe(1);
   });
 
   it('一口价交付所有品质装备，材料按数量入账；不生成假宗门或系统灵石余额', async () => {

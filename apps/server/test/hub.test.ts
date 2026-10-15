@@ -7,7 +7,7 @@ import { attackWorldSite, getHub } from '../src/modules/game/service';
 import { dataOf, TestClient } from './support/authClient';
 
 /**
- * 首页功能区状态摘要（GET /game/hub）：只读汇总讨伐 / 镇妖塔 / 山河舆图 / 拍卖行 / 灵股的状态。
+ * 首页功能区状态摘要（GET /game/hub）：汇总各玩法状态，顺手检查到期游商到访，不结算宗门资源。
  * 本文件一份独立内存 D1；14 处灵地是全服共享的行，每个用例开头先清成无主。
  */
 

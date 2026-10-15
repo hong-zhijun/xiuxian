@@ -4,7 +4,7 @@ import { generateEquipment, resolveMainAttr, type EquipmentQuality, type Equipme
 export const MERCHANT_NAME = '云游商人';
 export const MERCHANT_STAY_MS = 6 * 3_600_000;
 export const MERCHANT_MIN_GAP_MS = 2 * 3_600_000;
-export const MERCHANT_MAX_GAP_MS = 6 * 3_600_000;
+export const MERCHANT_MAX_GAP_MS = 4 * 3_600_000;
 
 const EQUIPMENT_START_PRICE: Record<EquipmentQuality, number> = {
   common: 100, spirit: 350, treasure: 1000, immortal: 2500,

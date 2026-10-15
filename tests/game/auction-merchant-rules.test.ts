@@ -77,4 +77,34 @@ describe('游商商品与上线迁移', () => {
       db.close();
     }
   });
+
+  it.each(['首次等待', '旧计划尚未到期', '旧计划已经迟到'])('频率迁移提前%s，保留已有批次并且不推迟到期任务', (scenario) => {
+    const dir = fileURLToPath(new URL('../../migrations/', import.meta.url));
+    const db = new DatabaseSync(':memory:');
+    const hour = 3_600_000;
+    const now = Date.now();
+    try {
+      applyMigrations(db, dir);
+      db.prepare('DELETE FROM d1_migrations WHERE name = ?').run('0060_auction_merchant_frequency.sql');
+      const arrivedAt = scenario === '首次等待' ? null : now - (scenario === '旧计划已经迟到' ? 15 : 1) * hour;
+      const originalNext = scenario === '旧计划已经迟到' ? now - 3 * hour : now + 6 * hour;
+      const leavesAt = arrivedAt === null ? null : arrivedAt + 6 * hour;
+      db.prepare('UPDATE auction_merchant_state SET next_arrival_at = ?, arrived_at = ?, leaves_at = ?, visit_id = ?, version = 7 WHERE id = 1')
+        .run(originalNext, arrivedAt, leavesAt, 'existing-visit');
+      applyMigrations(db, dir);
+      const state = db.prepare('SELECT * FROM auction_merchant_state').get()!;
+      expect(state).toMatchObject({ arrived_at: arrivedAt, leaves_at: leavesAt, visit_id: 'existing-visit', version: 8 });
+      expect(Number(state.next_arrival_at)).toBeLessThanOrEqual(originalNext);
+      if (scenario === '旧计划已经迟到') {
+        expect(Number(state.next_arrival_at)).toBeLessThanOrEqual(now);
+      } else {
+        const base = arrivedAt ?? now;
+        expect(Number(state.next_arrival_at)).toBeGreaterThanOrEqual(base + 2 * hour - 1000);
+        expect(Number(state.next_arrival_at)).toBeLessThanOrEqual(base + 4 * hour);
+      }
+      expect(applyMigrations(db, dir)).toEqual([]);
+    } finally {
+      db.close();
+    }
+  });
 });

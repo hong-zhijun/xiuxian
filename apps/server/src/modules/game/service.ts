@@ -10726,6 +10726,7 @@ async function settleAuctionLot(db: D1Database, lot: AuctionLotRow, now: number)
 
 /** 定时任务：结算所有到期的拍卖（每单各自兜错）。 */
 export async function processAuctions(db: D1Database, now: number): Promise<void> {
+  await processAuctionMerchant(db, now);
   const lots = await new AuctionRepository(db).listExpiredActive(now, 100);
   for (const lot of lots) {
     try {
@@ -10734,7 +10735,6 @@ export async function processAuctions(db: D1Database, now: number): Promise<void
       console.warn(`auction_settle_failed lot=${lot.id} error=${String(error)}`);
     }
   }
-  await processAuctionMerchant(db, now);
 }
 
 /** 到访、全服货物和公告一次提交；并发定时任务 / 面板请求只允许生成一批。 */
@@ -10744,7 +10744,8 @@ export async function processAuctionMerchant(db: D1Database, now: number, random
   const visitId = crypto.randomUUID();
   const guardId = `${visitId}:merchant`;
   const leavesAt = now + MERCHANT_STAY_MS;
-  const nextArrivalAt = leavesAt + merchantGapMs(random);
+  // 商品停留与补货间隔独立：上一批还在竞价，也允许新一批到访。
+  const nextArrivalAt = now + merchantGapMs(random);
   const goods = generateMerchantGoods(random);
   const statements: ParameterizedQuery[] = [{
     sql: `INSERT INTO mutation_guards (command_id, valid)
@@ -10766,6 +10767,10 @@ export async function processAuctionMerchant(db: D1Database, now: number, random
     if (isGuardFailure(error)) return;
     throw error;
   }
+  console.info(JSON.stringify({
+    event: 'auction_merchant_arrived', visitId, scheduledAt: Number(state.next_arrival_at),
+    arrivedAt: now, delayMs: Math.max(0, now - Number(state.next_arrival_at)), nextArrivalAt,
+  }));
 }
 
 function auctionEquipmentViewOf(snapshot: {
@@ -12930,7 +12935,7 @@ export async function cancelStockOrder(
  * 首页功能区：各玩法状态摘要（GET /game/hub）
  *
  * 首页状态卡片第二行与 PC 待办浮窗用；首页打开、关掉弹窗后、以及每分钟各取一次。
- * 只读：不结算、不写库（灵股种子第一次用时会生成一次，与行情面板同一逻辑）。
+ * 不结算宗门资源；已解锁拍卖行时顺手检查游商到访，避免后台调度延迟导致迟迟不上货。
  * ------------------------------------------------------------------ */
 
 export async function getHub(db: D1Database, userId: string, now: number): Promise<HubView> {
@@ -12938,6 +12943,8 @@ export async function getHub(db: D1Database, userId: string, now: number): Promi
   if (sect === null) throw new AppError('NOT_FOUND', '尚未创建宗门');
   const level = Number(sect.level);
   const todayKey = dateKeyUtc8(now);
+
+  if (level >= AUCTION_UNLOCK_SECT_LEVEL) await processAuctionMerchant(db, now);
 
   const worldRepo = new WorldSiteRepository(db);
   const [boss, towerRow, worldRows, lostSites, claimable, myActive, holdings, buildings, merchantStock] = await Promise.all([
