@@ -374,3 +374,63 @@ export function findOrderFill(input: OrderFillInput): { minute: number; price: n
   }
   return null;
 }
+
+/* ---------- 0061 灵股保证金合约 ---------- */
+
+/** 合约固定杠杆：逐仓、一向持仓。 */
+export const MARKET_MARGIN_LEVERAGE = 5;
+/** 维持保证金率（基点，10%）。 */
+export const MARKET_MAINTENANCE_MARGIN_BP = 1000;
+/** 合约每日人工开仓 / 平仓次数上限，与现货共用成交额度。 */
+export const MARKET_MARGIN_DAILY_TRADES = MARKET_DAILY_TRADES;
+
+export type MarketMarginSide = 'long' | 'short';
+export type MarketMarginAction = 'open' | 'close' | 'liquidate';
+
+/** 开仓名义价值对应的逐仓保证金，向上取整避免少扣。 */
+export function marginRequired(notional: number, leverage = MARKET_MARGIN_LEVERAGE): number {
+  return Math.max(1, Math.ceil(notional / leverage));
+}
+
+/** 维持保证金。 */
+export function maintenanceMargin(notional: number): number {
+  return Math.max(1, Math.ceil((notional * MARKET_MAINTENANCE_MARGIN_BP) / 10_000));
+}
+
+/** 合约未实现盈亏：多仓涨价盈利，空仓跌价盈利。 */
+export function marginPnl(side: MarketMarginSide, entryPrice: number, price: number, shares: number): number {
+  const delta = side === 'long' ? price - entryPrice : entryPrice - price;
+  return delta * shares;
+}
+
+/**
+ * 以「保证金 + 未实现盈亏 − 平仓手续费 = 维持保证金」求强平价。
+ * 强平价按最小单位取整，并保证至少为 1。
+ */
+export function marginLiquidationPrice(
+  side: MarketMarginSide,
+  entryPrice: number,
+  shares: number,
+  margin: number,
+  leverage = MARKET_MARGIN_LEVERAGE,
+): number {
+  const notional = entryPrice * shares;
+  const maintenance = maintenanceMargin(notional);
+  const feeRate = MARKET_FEE_BP / 10_000;
+  // 平仓手续费随强平价变化，解方程后得到：
+  // long: margin + (p-entry)*shares - p*shares*feeRate = maintenance
+  // short: margin + (entry-p)*shares - p*shares*feeRate = maintenance
+  if (shares <= 0) return 1;
+  const denom = shares * (1 - feeRate);
+  const raw = side === 'long'
+    ? (maintenance - margin + entryPrice * shares) / denom
+    : (margin + entryPrice * shares - maintenance) / (shares * (1 + feeRate));
+  // leverage 参数保留在签名中，便于未来切换分档杠杆；当前保证金已由调用方按杠杆计算。
+  void leverage;
+  return Math.max(1, Math.floor(raw));
+}
+
+/** 当前价格是否已到达强平线（等于也强平）。 */
+export function marginLiquidationTriggered(side: MarketMarginSide, price: number, liquidationPrice: number): boolean {
+  return side === 'long' ? price <= liquidationPrice : price >= liquidationPrice;
+}

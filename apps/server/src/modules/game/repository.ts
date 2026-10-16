@@ -3993,6 +3993,38 @@ export interface StockOrderRow {
   updated_at: number;
 }
 
+/** 0061：逐仓保证金仓位。 */
+export interface StockMarginPositionRow {
+  sect_id: string;
+  stock_id: string;
+  side: string;
+  shares: number;
+  entry_price: number;
+  margin: number;
+  leverage: number;
+  liquidation_price: number;
+  opened_at: number;
+  checked_minute: number;
+  version: number;
+  updated_at: number;
+}
+
+/** 0061：保证金开仓 / 平仓 / 强平流水。 */
+export interface StockMarginTradeRow {
+  id: string;
+  sect_id: string;
+  stock_id: string;
+  action: string;
+  side: string;
+  shares: number;
+  price: number;
+  notional: number;
+  fee: number;
+  margin: number;
+  pnl: number;
+  created_at: number;
+}
+
 export class MarketRepository extends ParamRepository {
   async seed(): Promise<string | null> {
     const row = await this.one<{ seed: string }>({ sql: "SELECT seed FROM market_state WHERE id = 'main'", params: [] });
@@ -4013,8 +4045,10 @@ export class MarketRepository extends ParamRepository {
 
   async countTradesSince(sectId: string, since: number): Promise<number> {
     const row = await this.one<{ cnt: number }>({
-      sql: 'SELECT COUNT(*) AS cnt FROM stock_trades WHERE sect_id = ? AND created_at >= ?',
-      params: [sectId, since],
+      sql: `SELECT
+              (SELECT COUNT(*) FROM stock_trades WHERE sect_id = ? AND created_at >= ?) +
+              (SELECT COUNT(*) FROM stock_margin_trades WHERE sect_id = ? AND action <> 'liquidate' AND created_at >= ?) AS cnt`,
+      params: [sectId, since, sectId, since],
     });
     return Number(row?.cnt ?? 0);
   }
@@ -4088,10 +4122,60 @@ export class MarketRepository extends ParamRepository {
   /** 0049：[from, to) 之间本宗的成交时刻（挂单按天数笔数用；每天最多 30 笔，行数很少）。 */
   async tradeTimesBetween(sectId: string, from: number, to: number): Promise<number[]> {
     const rows = await this.all<{ created_at: number }>({
-      sql: 'SELECT created_at FROM stock_trades WHERE sect_id = ? AND created_at >= ? AND created_at < ?',
+      sql: `SELECT created_at FROM stock_trades WHERE sect_id = ? AND created_at >= ? AND created_at < ?
+            UNION ALL
+            SELECT created_at FROM stock_margin_trades
+              WHERE sect_id = ? AND action <> 'liquidate' AND created_at >= ? AND created_at < ?`,
+      params: [sectId, from, to, sectId, from, to],
+    });
+    return rows.map((row) => Number(row.created_at));
+  }
+
+  /** 0061：本宗当前的保证金仓位。 */
+  async marginPositionsOf(sectId: string): Promise<StockMarginPositionRow[]> {
+    return this.all<StockMarginPositionRow>({
+      sql: 'SELECT * FROM stock_margin_positions WHERE sect_id = ?',
+      params: [sectId],
+    });
+  }
+
+  /** 0061：全服当前保证金仓位，定时任务按股票和方向扫描。 */
+  async allMarginPositions(limit: number): Promise<StockMarginPositionRow[]> {
+    return this.all<StockMarginPositionRow>({
+      sql: 'SELECT * FROM stock_margin_positions ORDER BY updated_at ASC LIMIT ?',
+      params: [limit],
+    });
+  }
+
+  async marginPositionOf(sectId: string, stockId: string): Promise<StockMarginPositionRow | null> {
+    return this.one<StockMarginPositionRow>({
+      sql: 'SELECT * FROM stock_margin_positions WHERE sect_id = ? AND stock_id = ?',
+      params: [sectId, stockId],
+    });
+  }
+
+  async marginTradesSince(sectId: string, since: number): Promise<number> {
+    const row = await this.one<{ cnt: number }>({
+      sql: 'SELECT COUNT(*) AS cnt FROM stock_margin_trades WHERE sect_id = ? AND created_at >= ?',
+      params: [sectId, since],
+    });
+    return Number(row?.cnt ?? 0);
+  }
+
+  /** 0061：[from, to) 之间合约成交时刻。 */
+  async marginTradeTimesBetween(sectId: string, from: number, to: number): Promise<number[]> {
+    const rows = await this.all<{ created_at: number }>({
+      sql: 'SELECT created_at FROM stock_margin_trades WHERE sect_id = ? AND created_at >= ? AND created_at < ?',
       params: [sectId, from, to],
     });
     return rows.map((row) => Number(row.created_at));
+  }
+
+  async recentMarginTradesOf(sectId: string, limit: number): Promise<StockMarginTradeRow[]> {
+    return this.all<StockMarginTradeRow>({
+      sql: 'SELECT * FROM stock_margin_trades WHERE sect_id = ? ORDER BY created_at DESC LIMIT ?',
+      params: [sectId, limit],
+    });
   }
 }
 
@@ -4156,6 +4240,97 @@ export function stockHoldingGuardStatement(
           SELECT ?, CASE WHEN COALESCE((SELECT version FROM stock_holdings WHERE sect_id = ? AND stock_id = ?), 0) = ?
             THEN 1 ELSE 0 END`,
     params: [guardId, sectId, stockId, version],
+  };
+}
+
+/* ---------- 0061 灵股保证金合约 ---------- */
+
+export function upsertStockMarginPositionStatement(input: {
+  sectId: string;
+  stockId: string;
+  side: 'long' | 'short';
+  shares: number;
+  entryPrice: number;
+  margin: number;
+  leverage: number;
+  liquidationPrice: number;
+  openedAt: number;
+  checkedMinute: number;
+  now: number;
+}): ParameterizedQuery {
+  return {
+    sql: `INSERT INTO stock_margin_positions
+            (sect_id, stock_id, side, shares, entry_price, margin, leverage, liquidation_price, opened_at, checked_minute, version, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+          ON CONFLICT (sect_id, stock_id) DO UPDATE SET
+            side = excluded.side, shares = excluded.shares, entry_price = excluded.entry_price,
+            margin = excluded.margin, leverage = excluded.leverage, liquidation_price = excluded.liquidation_price,
+            opened_at = excluded.opened_at, checked_minute = excluded.checked_minute,
+            version = stock_margin_positions.version + 1, updated_at = excluded.updated_at`,
+    params: [
+      input.sectId, input.stockId, input.side, input.shares, input.entryPrice, input.margin,
+      input.leverage, input.liquidationPrice, input.openedAt, input.checkedMinute, input.now,
+    ],
+  };
+}
+
+export function deleteStockMarginPositionStatement(sectId: string, stockId: string): ParameterizedQuery {
+  return {
+    sql: 'DELETE FROM stock_margin_positions WHERE sect_id = ? AND stock_id = ?',
+    params: [sectId, stockId],
+  };
+}
+
+export function advanceStockMarginPositionStatement(
+  sectId: string,
+  stockId: string,
+  checkedMinute: number,
+  now: number,
+): ParameterizedQuery {
+  return {
+    sql: `UPDATE stock_margin_positions
+          SET checked_minute = ?, version = version + 1, updated_at = ?
+          WHERE sect_id = ? AND stock_id = ?`,
+    params: [checkedMinute, now, sectId, stockId],
+  };
+}
+
+export function stockMarginPositionGuardStatement(
+  guardId: string,
+  sectId: string,
+  stockId: string,
+  version: number,
+): ParameterizedQuery {
+  return {
+    sql: `INSERT INTO mutation_guards (command_id, valid)
+          SELECT ?, CASE WHEN COALESCE((SELECT version FROM stock_margin_positions WHERE sect_id = ? AND stock_id = ?), 0) = ?
+            THEN 1 ELSE 0 END`,
+    params: [guardId, sectId, stockId, version],
+  };
+}
+
+export function insertStockMarginTradeStatement(input: {
+  id: string;
+  sectId: string;
+  stockId: string;
+  action: 'open' | 'close' | 'liquidate';
+  side: 'long' | 'short';
+  shares: number;
+  price: number;
+  notional: number;
+  fee: number;
+  margin: number;
+  pnl: number;
+  now: number;
+}): ParameterizedQuery {
+  return {
+    sql: `INSERT INTO stock_margin_trades
+            (id, sect_id, stock_id, action, side, shares, price, notional, fee, margin, pnl, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    params: [
+      input.id, input.sectId, input.stockId, input.action, input.side, input.shares, input.price,
+      input.notional, input.fee, input.margin, input.pnl, input.now,
+    ],
   };
 }
 
@@ -4258,9 +4433,12 @@ export function stockTradesRangeGuardStatement(
 ): ParameterizedQuery {
   return {
     sql: `INSERT INTO mutation_guards (command_id, valid)
-          SELECT ?, CASE WHEN (SELECT COUNT(*) FROM stock_trades WHERE sect_id = ? AND created_at >= ? AND created_at < ?) = ?
+          SELECT ?, CASE WHEN
+            ((SELECT COUNT(*) FROM stock_trades WHERE sect_id = ? AND created_at >= ? AND created_at < ?) +
+             (SELECT COUNT(*) FROM stock_margin_trades
+                WHERE sect_id = ? AND action <> 'liquidate' AND created_at >= ? AND created_at < ?)) = ?
             THEN 1 ELSE 0 END`,
-    params: [guardId, sectId, from, to, count],
+    params: [guardId, sectId, from, to, sectId, from, to, count],
   };
 }
 
@@ -4325,10 +4503,11 @@ export class DailyTaskRepository extends ParamRepository {
                 + (SELECT COUNT(*) FROM realm_explorations WHERE sect_id = ? AND created_at >= ?) AS explore,
               (SELECT COUNT(*) FROM challenge_log WHERE attacker_sect_id = ? AND created_at >= ?) AS challenge,
               (SELECT COUNT(*) FROM disciple_journeys WHERE sect_id = ? AND started_at >= ?) AS journey,
-              (SELECT COUNT(*) FROM stock_trades WHERE sect_id = ? AND created_at >= ?) AS stock_trade,
+              (SELECT COUNT(*) FROM stock_trades WHERE sect_id = ? AND created_at >= ?)
+                + (SELECT COUNT(*) FROM stock_margin_trades WHERE sect_id = ? AND action <> 'liquidate' AND created_at >= ?) AS stock_trade,
               (SELECT COUNT(*) FROM world_site_logs WHERE kind = 'battle' AND sect_id = ? AND created_at >= ?) AS world_battle`,
-      // 占位符一共 7 组 (sect_id, dayStart)：explore 占两组，其余 5 个子查询各一组，顺序与 SQL 一致。
-      params: Array.from({ length: 7 }, () => [sectId, dayStart]).flat(),
+      // 占位符一共 8 组 (sect_id, dayStart)：explore 占两组，灵股交易占两组，其余 4 个子查询各一组。
+      params: Array.from({ length: 8 }, () => [sectId, dayStart]).flat(),
     });
     return {
       bossHit: Number(row?.boss_hit ?? 0),

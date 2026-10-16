@@ -10,7 +10,7 @@ import type {
   SectStateView,
   StockView,
 } from '../api/game';
-import { cancelStockOrder, fetchMarket, fetchMarketChart, placeStockOrder, tradeStock } from '../api/game';
+import { cancelStockOrder, fetchMarket, fetchMarketChart, placeStockOrder, tradeStock, tradeStockMargin } from '../api/game';
 import { formatAmount } from '../utils/format';
 import ModalShell from './ModalShell.vue';
 
@@ -41,7 +41,8 @@ const showRules = ref(false);
 const selectedId = ref<string>('');
 const range = ref<MarketChartRange>('1h');
 const shares = ref<number>(10);
-type MarketTab = 'news' | 'trades' | 'orders' | 'ranks';
+const marginSide = ref<'long' | 'short'>('long');
+type MarketTab = 'news' | 'trades' | 'orders' | 'ranks' | 'margin';
 const tab = ref<MarketTab>('news');
 /** 挂单表单：类型、触发价（展示单位，输入框里的字符串）、股数。 */
 const orderKind = ref<MarketOrderKind>('limit_buy');
@@ -65,6 +66,7 @@ const tabs = computed<readonly { id: MarketTab; label: string }[]>(() => [
   { id: 'news', label: '坊间消息' },
   { id: 'trades', label: '我的成交' },
   { id: 'orders', label: `挂单 ${String(market.value?.orders.open.length ?? 0)}` },
+  { id: 'margin', label: '合约成交' },
   { id: 'ranks', label: '收益榜' },
 ]);
 
@@ -232,6 +234,16 @@ const sellLockLeft = computed(() => {
 
 /** 还能买多少灵石的（持仓成本上限 − 已有成本）。 */
 const capLeft = computed(() => Math.max(0, (market.value?.positionCap ?? 0) - (selected.value?.holding?.cost ?? 0)));
+
+const marginPosition = computed(() => selected.value?.marginPosition ?? null);
+const marginEstimate = computed(() => {
+  const stock = selected.value;
+  const count = Math.floor(shares.value);
+  if (stock === null || !Number.isFinite(count) || count < 1) return null;
+  const notional = stock.price * count;
+  const fee = Math.max(1, Math.ceil((notional * (market.value?.feeBp ?? 30)) / 10_000));
+  return { notional, fee, margin: Math.max(1, Math.ceil(notional / 5)) };
+});
 
 function fillMax(side: 'buy' | 'sell'): void {
   const stock = selected.value;
@@ -412,6 +424,35 @@ function dateTimeText(iso: string): string {
   return `${String(shifted.getUTCMonth() + 1).padStart(2, '0')}-${String(shifted.getUTCDate()).padStart(2, '0')} ${timeText(ms)}`;
 }
 
+async function tradeMargin(action: 'open' | 'close'): Promise<void> {
+  const stock = selected.value;
+  if (stock === null || disabled.value) return;
+  const count = Math.floor(shares.value);
+  if (!Number.isFinite(count) || count < 1) {
+    emit('notify', 'warning', '灵股合约', '请输入股数');
+    return;
+  }
+  if (action === 'open' && stock.marginPosition !== null) {
+    emit('notify', 'warning', '灵股合约', '已有合约仓位，请先平仓');
+    return;
+  }
+  if (action === 'close' && (stock.marginPosition === null || count > stock.marginPosition.shares)) {
+    emit('notify', 'warning', '灵股合约', '平仓股数超过当前仓位');
+    return;
+  }
+  submitting.value = true;
+  try {
+    const data = await tradeStockMargin(stock.id, action, count, action === 'open' ? marginSide.value : undefined);
+    emit('state-update', data.state);
+    market.value = data.market;
+    emit('notify', data.result.pnl < 0 ? 'warning' : 'success', '灵股合约', data.result.message);
+  } catch (error) {
+    emit('notify', 'warning', '灵股合约', error instanceof Error ? error.message : '合约操作失败，请稍后再试');
+  } finally {
+    submitting.value = false;
+  }
+}
+
 async function trade(side: 'buy' | 'sell'): Promise<void> {
   const stock = selected.value;
   if (stock === null || disabled.value) return;
@@ -498,12 +539,12 @@ watch(selectedId, () => {
 const RULES_TEXT = `灵股 · 规则
 
 开放：宗门 3 级。6 支股票与 1 个综合指数（指数只看不交易），行情每 1 分钟一跳。
-坐庄：系统坐庄，按服务端此刻的价格与你成交，不需要等别人挂单；只能买入、卖出，没有做空和杠杆。
+坐庄：系统坐庄，按服务端此刻的价格与你成交，不需要等别人挂单；现货可买入、卖出，另有逐仓 5 倍保证金合约可做多、做空。
 价格：每支股票围着自己的基准价上下波动，长期不会涨上天或跌到零；镇妖司波动最大，云来商号最稳。
 消息：坊间会不定时传出利好 / 利空消息，消息公布后几个小时内相关股票会慢慢走出一波行情，
       但传闻未必属实（约四分之一不应验或反着走）。看消息、看 K 线抓趋势，有赚有赔。
-手续费：买卖各 0.3%，直接扣除。
-限制：某支股票买入后 10 分钟内不能卖出；每天最多成交 30 笔；每支股票的持仓成本不超过宗门灵石容量的 20%。
+手续费：现货与合约开平仓各 0.3%，直接扣除。
+限制：现货某支股票买入后 10 分钟内不能卖出；每天最多 30 笔人工成交；每支股票合约名义价值不超过宗门灵石容量的 20%。合约权益低于维持保证金时自动爆仓，最多亏完逐仓保证金。
 收益榜：按累计已实现收益（卖出的盈亏）排名。`;
 
 /** 说明弹窗正文：首行标题已由弹窗标题栏给出。 */
@@ -701,7 +742,31 @@ onUnmounted(() => {
             </button>
           </div>
 
-          <!-- 挂单：设好触发价和股数，价格到了服务端自动成交（结果在「挂单」标签里） -->
+          <div class="market-margin-form">
+             <p class="market-order-title">
+               <strong>保证金合约 · 5 倍</strong>
+               <span v-if="marginPosition">{{ marginPosition.side === 'long' ? '多仓' : '空仓' }} {{ marginPosition.shares }} 股</span>
+             </p>
+             <div v-if="marginPosition" class="market-holding">
+               <span>开仓 {{ price(marginPosition.entryPrice) }}</span>
+               <span>强平 {{ price(marginPosition.liquidationPrice) }}</span>
+               <span :class="toneOf(marginPosition.unrealizedPnl)">浮盈亏 {{ signed(marginPosition.unrealizedPnl / 1000) }}</span>
+               <span :class="{ 'market-lock': marginPosition.liquidationRisk }">权益率 {{ marginPosition.marginRatio.toFixed(2) }}%</span>
+             </div>
+             <div class="market-ranges" role="radiogroup" aria-label="合约方向">
+               <button class="market-range" :class="{ 'is-active': marginSide === 'long' }" type="button" @click="marginSide = 'long'">做多</button>
+               <button class="market-range" :class="{ 'is-active': marginSide === 'short' }" type="button" @click="marginSide = 'short'">做空</button>
+             </div>
+             <p v-if="marginEstimate" class="market-estimate">
+               名义价值 {{ formatAmount(marginEstimate.notional) }} · 保证金 {{ formatAmount(marginEstimate.margin) }} · 手续费 {{ formatAmount(marginEstimate.fee) }}
+             </p>
+             <div class="market-trade-buttons">
+               <button class="market-buy" type="button" :disabled="disabled || !market.unlocked || market.tradesLeft <= 0 || marginPosition !== null" @click="tradeMargin('open')">开仓</button>
+               <button class="market-sell" type="button" :disabled="disabled || !market.unlocked || market.tradesLeft <= 0 || marginPosition === null" @click="tradeMargin('close')">平仓</button>
+             </div>
+           </div>
+
+           <!-- 挂单：设好触发价和股数，价格到了服务端自动成交（结果在「挂单」标签里） -->
           <div class="market-order-form">
             <p class="market-order-title">
               <strong>挂单</strong>
@@ -785,7 +850,18 @@ onUnmounted(() => {
         </li>
       </ul>
 
-      <ul v-else-if="tab === 'orders'" class="market-lines">
+      <ul v-else-if="tab === 'margin'"
+         class="market-lines">
+         <li v-if="market.marginTrades.length === 0" class="market-empty">还没有合约成交。</li>
+         <li v-for="item in market.marginTrades" :key="item.id">
+           <span class="market-time">{{ timeText(item.createdAt) }}</span>
+           <span :class="item.side === 'long' ? 'is-up' : 'is-down'">{{ item.action === 'open' ? '开' : item.action === 'close' ? '平' : '爆' }}{{ item.side === 'long' ? '多' : '空' }}</span>
+           {{ item.stockName }} {{ item.shares }} 股 @ {{ price(item.price) }}
+           <span v-if="item.action !== 'open'" :class="toneOf(item.pnl)">（{{ signed(item.pnl / 1000) }}）</span>
+         </li>
+       </ul>
+
+       <ul v-else-if="tab === 'orders'" class="market-lines">
         <li v-if="market.orders.open.length === 0 && market.orders.recent.length === 0" class="market-empty">
           还没有挂单。在上面的「挂单」里设好触发价，价格到了自动成交。
         </li>
@@ -1281,6 +1357,7 @@ onUnmounted(() => {
   font-size: 11px;
 }
 
+.market-margin-form,
 .market-order-form {
   display: flex;
   flex-direction: column;

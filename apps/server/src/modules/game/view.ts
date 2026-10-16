@@ -3236,6 +3236,20 @@ export interface WorldBattleResultView {
 /* ---------- 0043 灵股行情 ---------- */
 
 /** 一支股票的持仓（价格 / 金额都是最小单位）。 */
+export interface StockMarginPositionView {
+  side: 'long' | 'short';
+  shares: number;
+  entryPrice: number;
+  margin: number;
+  leverage: number;
+  liquidationPrice: number;
+  unrealizedPnl: number;
+  equity: number;
+  marginRatio: number;
+  liquidationRisk: boolean;
+  openedAt: number;
+}
+
 export interface StockHoldingView {
   shares: number;
   /** 持仓成本（不含手续费）。 */
@@ -3267,6 +3281,8 @@ export interface StockView {
   high24h: number;
   low24h: number;
   holding: StockHoldingView | null;
+  /** 0061：逐仓保证金合约仓位。 */
+  marginPosition: StockMarginPositionView | null;
 }
 
 export interface MarketNewsView {
@@ -3312,6 +3328,20 @@ export interface MarketView {
   stocks: StockView[];
   news: MarketNewsView[];
   myTrades: StockTradeView[];
+  /** 0061：最近保证金合约成交。 */
+  marginTrades: {
+    id: string;
+    stockId: string;
+    stockName: string;
+    action: 'open' | 'close' | 'liquidate';
+    side: 'long' | 'short';
+    shares: number;
+    price: number;
+    fee: number;
+    margin: number;
+    pnl: number;
+    createdAt: number;
+  }[];
   /** 我的累计已实现收益（最小单位）。 */
   myProfit: number;
   ranks: { rank: number; sectName: string; profit: number; isMe: boolean }[];
@@ -3354,6 +3384,19 @@ export interface MarketChartView {
   /** 每根分钟数。 */
   candleMinutes: number;
   candles: { t: number; o: number; h: number; l: number; c: number }[];
+}
+
+export interface MarketMarginTradeResultView {
+  action: 'open' | 'close';
+  side: 'long' | 'short';
+  stockId: string;
+  stockName: string;
+  shares: number;
+  price: number;
+  fee: number;
+  margin: number;
+  pnl: number;
+  message: string;
 }
 
 export interface MarketTradeResultView {

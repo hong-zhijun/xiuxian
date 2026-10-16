@@ -2,6 +2,7 @@ import {
   processArenaTournament,
   processAuctions,
   processStockOrders,
+  processStockMarginPositions,
   processWorldBoss,
   processWorldSites,
   settleCurrentRound,
@@ -37,6 +38,11 @@ export async function runScheduledTasks(db: D1Database, now: number): Promise<vo
     await processStockOrders(db, now);
   } catch (error) {
     console.warn(`process_stock_orders_failed error=${String(error)}`);
+  }
+  try {
+    await processStockMarginPositions(db, now);
+  } catch (error) {
+    console.warn(`process_stock_margin_positions_failed error=${String(error)}`);
   }
   try {
     await processArenaTournament(db, now);

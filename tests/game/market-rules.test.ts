@@ -8,6 +8,10 @@ import {
   marketMinuteOf,
   marketPositionCap,
   marketSellableAt,
+  marginLiquidationPrice,
+  marginLiquidationTriggered,
+  marginPnl,
+  marginRequired,
   newsBetween,
   newsOfSlot,
   seedNumberOf,
@@ -97,5 +101,20 @@ describe('灵股 · K 线与交易规则', () => {
     expect(marketPositionCap(10_000_000)).toBe(2_000_000);
     expect(marketSellableAt(1_000)).toBe(1_000 + 600_000);
     expect(marketSellableAt(null)).toBeNull();
+  });
+
+  it('保证金合约：5 倍保证金、方向收益与强平边界', () => {
+    expect(marginRequired(1_000_000)).toBe(200_000);
+    expect(marginPnl('long', 100_000, 110_000, 10)).toBe(100_000);
+    expect(marginPnl('short', 100_000, 90_000, 10)).toBe(100_000);
+    const longLiq = marginLiquidationPrice('long', 100_000, 10, marginRequired(1_000_000));
+    const shortLiq = marginLiquidationPrice('short', 100_000, 10, marginRequired(1_000_000));
+    expect(longLiq).toBeGreaterThan(0);
+    expect(longLiq).toBeLessThan(100_000);
+    expect(shortLiq).toBeGreaterThan(100_000);
+    expect(marginLiquidationTriggered('long', longLiq, longLiq)).toBe(true);
+    expect(marginLiquidationTriggered('short', shortLiq, shortLiq)).toBe(true);
+    expect(marginLiquidationTriggered('long', longLiq + 1, longLiq)).toBe(false);
+    expect(marginLiquidationTriggered('short', shortLiq - 1, shortLiq)).toBe(false);
   });
 });
