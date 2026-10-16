@@ -472,7 +472,12 @@ import {
   closeStockOrderStatement,
   insertStockOrderStatement,
   insertStockTradeStatement,
+  insertStockMarginTradeStatement,
+  advanceStockMarginPositionStatement,
   stockHoldingGuardStatement,
+  stockMarginPositionGuardStatement,
+  upsertStockMarginPositionStatement,
+  deleteStockMarginPositionStatement,
   stockOrderCountGuardStatement,
   stockOrderGuardStatement,
   stockTradesRangeGuardStatement,
@@ -480,6 +485,7 @@ import {
   MarketRepository,
   type StockHoldingRow,
   type StockOrderRow,
+  type StockMarginPositionRow,
 } from './repository';
 import {
   findOrderFill,
@@ -507,7 +513,14 @@ import {
   STOCKS,
   type ChartRange,
   type MarketOrderKind,
+  type MarketMarginSide,
   type StockDef,
+  marginLiquidationPrice,
+  marginPnl,
+  marginRequired,
+  marginLiquidationTriggered,
+  MARKET_MARGIN_DAILY_TRADES,
+  MARKET_MARGIN_LEVERAGE,
 } from './market';
 import {
   ARENA_MAX_ENTRY,
@@ -752,6 +765,8 @@ import {
   type WorldSiteView,
   type MarketChartView,
   type MarketOrderView,
+  type MarketMarginTradeResultView,
+  type StockMarginPositionView,
   type MarketTradeResultView,
   type MarketView,
   type StockView,
@@ -2563,7 +2578,7 @@ export async function recruitDisciple(
     },
   };
 }
- 
+
 /**
  * 招贤台刷新（V5.2）：结算 → 校验本境界刷新额度 → used+1（并把授予等级写成当前等级）
  * → 用「刷新后的 used」作刷新序号生成新一批候选人。
@@ -12292,7 +12307,7 @@ function pctChange(from: number, to: number): number {
 async function buildMarketView(db: D1Database, draft: SectDraft, now: number): Promise<MarketView> {
   const seed = await marketSeedOf(db, now);
   const repo = new MarketRepository(db);
-  const [holdings, tradesUsed, trades, ranks, myProfit, openOrders, recentOrders] = await Promise.all([
+  const [holdings, tradesUsed, trades, ranks, myProfit, openOrders, recentOrders, marginPositions, marginTrades] = await Promise.all([
     repo.holdingsOf(draft.sect.id),
     repo.countTradesSince(draft.sect.id, dayStartMs(now)),
     repo.recentTradesOf(draft.sect.id, MARKET_RECENT_TRADES),
@@ -12300,9 +12315,12 @@ async function buildMarketView(db: D1Database, draft: SectDraft, now: number): P
     repo.realizedProfitOf(draft.sect.id),
     repo.openOrdersOf(draft.sect.id),
     repo.recentClosedOrdersOf(draft.sect.id, MARKET_ORDER_RECENT),
+    repo.marginPositionsOf(draft.sect.id),
+    repo.recentMarginTradesOf(draft.sect.id, MARKET_MARGIN_RECENT),
   ]);
   const minute = marketMinuteOf(now);
   const holdingOf = new Map(holdings.map((row) => [row.stock_id, row]));
+  const marginPositionOf = new Map(marginPositions.map((row) => [row.stock_id, row]));
   const lockedOf = lockedSharesByStock(openOrders);
   const stocks: StockView[] = STOCKS.map((stock) => {
     const price = stockPriceAt(seed, stock, minute);
@@ -12318,6 +12336,7 @@ async function buildMarketView(db: D1Database, draft: SectDraft, now: number): P
     const cost = row === undefined ? 0 : Number(row.cost);
     const locked = lockedOf.get(stock.id) ?? 0;
     const marketValue = price * shares;
+    const marginPosition = marginPositionOf.get(stock.id);
     return {
       id: stock.id,
       name: stock.name,
@@ -12342,8 +12361,9 @@ async function buildMarketView(db: D1Database, draft: SectDraft, now: number): P
               sellableAt: marketSellableAt(row?.last_buy_at === null || row === undefined ? null : Number(row.last_buy_at)),
               locked,
               available: Math.max(0, shares - locked),
-            },
-    };
+             },
+       marginPosition: marginPosition === undefined ? null : marginPositionViewOf(marginPosition, price),
+     };
   });
   const indexNow = marketIndexAt(seed, minute);
   return {
@@ -12381,7 +12401,21 @@ async function buildMarketView(db: D1Database, draft: SectDraft, now: number): P
       createdAt: Number(row.created_at),
     })),
     myProfit,
-    ranks: ranks.map((row, index) => ({
+    marginTrades: marginTrades.map((row) => ({
+       id: row.id,
+       stockId: row.stock_id,
+       stockName: findStock(row.stock_id)?.name ?? row.stock_id,
+       action: row.action === 'close' ? 'close' : row.action === 'liquidate' ? 'liquidate' : 'open',
+       side: row.side === 'short' ? 'short' : 'long',
+       shares: Number(row.shares),
+       price: Number(row.price),
+       fee: Number(row.fee),
+       margin: Number(row.margin),
+       pnl: Number(row.pnl),
+       createdAt: Number(row.created_at),
+     })),
+
+     ranks: ranks.map((row, index) => ({
       rank: index + 1,
       sectName: row.sect_name,
       profit: Number(row.profit),
@@ -12403,6 +12437,7 @@ export async function getMarket(
   now: number,
 ): Promise<{ state: SectStateView; market: MarketView }> {
   await processOrdersOfUser(db, userId, now);
+  await processMarginPositionsOfUser(db, userId, now);
   const draft = await draftFor(db, userId, now);
   return { state: draft.view(), market: await buildMarketView(db, draft, now) };
 }
@@ -12437,6 +12472,7 @@ export async function tradeStock(
   now: number,
 ): Promise<{ state: SectStateView; market: MarketView; result: MarketTradeResultView }> {
   await processOrdersOfUser(db, userId, now);
+  await processMarginPositionsOfUser(db, userId, now);
   const draft = await draftFor(db, userId, now);
   requireMarketUnlocked(draft);
   const stock = findStock(input.stockId);
@@ -12556,6 +12592,263 @@ export async function tradeStock(
     state: draft.view(),
     market: await buildMarketView(db, draft, now),
     result: { side: input.side, stockId: stock.id, stockName: stock.name, shares, price, amount, fee, profit, message },
+  };
+}
+
+/* ------------------------------------------------------------------ *
+ * 0063 灵股保证金合约
+ *
+ * 逐仓、一向持仓、固定杠杆。合约仓位与现货 / 挂单分表；强平按行情分钟逐分钟扫描。
+ * ------------------------------------------------------------------ */
+
+const MARKET_MARGIN_RECENT = 20;
+const MARKET_MARGIN_BATCH = 200;
+
+function marginPositionGuardOf(sectId: string, stockId: string, version: number): { id: string; statement: ParameterizedQuery } {
+  const id = `${crypto.randomUUID()}:stock-margin`;
+  return { id, statement: stockMarginPositionGuardStatement(id, sectId, stockId, version) };
+}
+
+async function runMarginBatch(
+  db: D1Database,
+  position: StockMarginPositionRow,
+  writes: readonly ParameterizedQuery[],
+): Promise<boolean> {
+  const guard = marginPositionGuardOf(position.sect_id, position.stock_id, Number(position.version));
+  try {
+    await db.batch(
+      prepareStatements(db, [
+        guard.statement,
+        ...writes,
+        deleteDiscipleSnapshotGuardStatement(guard.id),
+      ]),
+    );
+    return true;
+  } catch (error) {
+    if (isGuardFailure(error)) return false;
+    throw error;
+  }
+}
+
+/** 当前价格下保证金仓位的展示值。 */
+function marginPositionViewOf(row: StockMarginPositionRow, price: number): StockMarginPositionView {
+  const side = row.side as MarketMarginSide;
+  const shares = Number(row.shares);
+  const entryPrice = Number(row.entry_price);
+  const margin = Number(row.margin);
+  const notional = price * shares;
+  const pnl = marginPnl(side, entryPrice, price, shares);
+  const fee = marketFee(notional);
+  const equity = Math.max(0, margin + pnl - fee);
+  return {
+    side,
+    shares,
+    entryPrice,
+    margin,
+    leverage: Number(row.leverage),
+    liquidationPrice: Number(row.liquidation_price),
+    unrealizedPnl: pnl - fee,
+    equity,
+    marginRatio: notional <= 0 ? 0 : Math.round((equity / notional) * 10_000) / 100,
+    liquidationRisk: marginLiquidationTriggered(side, price, Number(row.liquidation_price)),
+    openedAt: Number(row.opened_at),
+  };
+}
+
+/** 处理一笔仓位在 [checked_minute + 1, currentMinute] 的首次强平分钟。 */
+async function settleStockMarginPosition(
+  db: D1Database,
+  position: StockMarginPositionRow,
+  now: number,
+): Promise<void> {
+  const from = Number(position.checked_minute) + 1;
+  const to = marketMinuteOf(now);
+  if (from > to) return;
+  const stock = findStock(position.stock_id);
+  if (stock === undefined) return;
+  const seed = await marketSeedOf(db, now);
+  const side = position.side as MarketMarginSide;
+  let trigger: { minute: number; price: number } | null = null;
+  for (let minute = from; minute <= to; minute += 1) {
+    const price = stockPriceAt(seed, stock, minute);
+    if (marginLiquidationTriggered(side, price, Number(position.liquidation_price))) {
+      trigger = { minute, price };
+      break;
+    }
+  }
+  if (trigger === null) {
+    await runMarginBatch(db, position, [
+      advanceStockMarginPositionStatement(position.sect_id, position.stock_id, to, now),
+    ]);
+    return;
+  }
+  const shares = Number(position.shares);
+  const margin = Number(position.margin);
+  const price = trigger.price;
+  const notional = price * shares;
+  const fee = marketFee(notional);
+  const grossPnl = marginPnl(side, Number(position.entry_price), price, shares);
+  const payout = Math.max(0, margin + grossPnl - fee);
+  const writes: ParameterizedQuery[] = [
+    deleteStockMarginPositionStatement(position.sect_id, position.stock_id),
+    insertStockMarginTradeStatement({
+      id: crypto.randomUUID(),
+      sectId: position.sect_id,
+      stockId: position.stock_id,
+      action: 'liquidate',
+      side,
+      shares,
+      price,
+      notional,
+      fee,
+      margin,
+      pnl: grossPnl - fee,
+      now: trigger.minute * MARKET_TICK_MS,
+    }),
+    insertEventLogStatement({
+      id: crypto.randomUUID(),
+      sectId: position.sect_id,
+      eventId: 'stockMarginLiquidated',
+      description: `${stock.name}${side === 'long' ? '多仓' : '空仓'} ${String(shares)} 股已爆仓，强平价 ${priceTextOf(price)}${payout > 0 ? `，退回 ${displayAmount(payout)} 灵石` : ''}`,
+      effects: '{}',
+      now: trigger.minute * MARKET_TICK_MS,
+    }),
+  ];
+  if (payout > 0) writes.splice(1, 0, resourceDeltaStatement(position.sect_id, 'spiritStone', payout, trigger.minute * MARKET_TICK_MS));
+  await runMarginBatch(db, position, writes);
+}
+
+async function settleStockMarginPositionSafely(db: D1Database, position: StockMarginPositionRow, now: number): Promise<void> {
+  try {
+    await settleStockMarginPosition(db, position, now);
+  } catch (error) {
+    console.warn(`stock_margin_settle_failed sect=${position.sect_id} stock=${position.stock_id} error=${String(error)}`);
+  }
+}
+
+async function processMarginPositionsOfSect(db: D1Database, sectId: string, now: number): Promise<void> {
+  const positions = await new MarketRepository(db).marginPositionsOf(sectId);
+  for (const position of positions) await settleStockMarginPositionSafely(db, position, now);
+}
+
+async function processMarginPositionsOfUser(db: D1Database, userId: string, now: number): Promise<void> {
+  const sect = await new SectRepository(db).findByUserId(userId);
+  if (sect !== null) await processMarginPositionsOfSect(db, sect.id, now);
+}
+
+/** 定时任务：逐分钟扫描全服保证金仓位，首次越线即强平。 */
+export async function processStockMarginPositions(db: D1Database, now: number): Promise<void> {
+  const positions = await new MarketRepository(db).allMarginPositions(MARKET_MARGIN_BATCH);
+  for (const position of positions) await settleStockMarginPositionSafely(db, position, now);
+}
+
+/**
+ * POST /game/market/margin：开多 / 开空 / 平仓。
+ * 开仓扣逐仓保证金与开仓费；平仓返还剩余权益；反向下单须先平仓。
+ */
+export async function tradeStockMargin(
+  db: D1Database,
+  userId: string,
+  input: { stockId: string; action: 'open' | 'close'; side?: MarketMarginSide; shares: number },
+  now: number,
+): Promise<{ state: SectStateView; market: MarketView; result: MarketMarginTradeResultView }> {
+  await processOrdersOfUser(db, userId, now);
+  await processMarginPositionsOfUser(db, userId, now);
+  const draft = await draftFor(db, userId, now);
+  requireMarketUnlocked(draft);
+  const stock = findStock(input.stockId);
+  if (stock === undefined) throw new AppError('NOT_FOUND', '股票不存在');
+  const shares = input.shares;
+  if (!Number.isInteger(shares) || shares < 1 || shares > MARKET_MAX_SHARES_PER_TRADE) {
+    throw new AppError('VALIDATION_ERROR', `一笔 1～${String(MARKET_MAX_SHARES_PER_TRADE)} 股`);
+  }
+  const repo = new MarketRepository(db);
+  const sectId = draft.sect.id;
+  const position = await repo.marginPositionOf(sectId, stock.id);
+  const seed = await marketSeedOf(db, now);
+  const price = stockPriceAt(seed, stock, marketMinuteOf(now));
+  const tradesUsed = await repo.countTradesSince(sectId, dayStartMs(now));
+  if (tradesUsed >= MARKET_MARGIN_DAILY_TRADES) {
+    throw new AppError('DAILY_LIMIT', `今日灵股成交已达 ${String(MARKET_MARGIN_DAILY_TRADES)} 笔，明日再来`);
+  }
+  const dayStart = dayStartMs(now);
+  const tradesGuardId = `${crypto.randomUUID()}:stock-margin-trades`;
+  const guards: { id: string; statement: ParameterizedQuery }[] = [
+    { id: tradesGuardId, statement: stockTradesRangeGuardStatement(tradesGuardId, sectId, dayStart, dayStart + ONE_DAY_MS, tradesUsed) },
+  ];
+  const side = input.side;
+  if (input.action === 'open') {
+    if (side !== 'long' && side !== 'short') throw new AppError('VALIDATION_ERROR', '开仓必须选择做多或做空');
+    if (position !== null) throw new AppError('INVALID_STATUS', `已有${position.side === 'long' ? '多' : '空'}仓，请先平仓`);
+    const notional = price * shares;
+    const cap = marketPositionCap(draft.resourceCapacityOf('spiritStone'));
+    if (notional > cap) throw new AppError('INVALID_STATUS', `合约名义价值最多 ${displayAmount(cap)} 灵石`);
+    const margin = marginRequired(notional, MARKET_MARGIN_LEVERAGE);
+    const fee = marketFee(notional);
+    draft.requireResource('spiritStone', margin + fee);
+    const liquidationPrice = marginLiquidationPrice(side, price, shares, margin, MARKET_MARGIN_LEVERAGE);
+    guards.push(marginPositionGuardOf(sectId, stock.id, 0));
+    draft.addStatement(upsertStockMarginPositionStatement({
+      sectId, stockId: stock.id, side, shares, entryPrice: price, margin,
+      leverage: MARKET_MARGIN_LEVERAGE, liquidationPrice, openedAt: now,
+      checkedMinute: marketMinuteOf(now), now,
+    }));
+    draft.addStatement(insertStockMarginTradeStatement({
+      id: crypto.randomUUID(), sectId, stockId: stock.id, action: 'open', side, shares,
+      price, notional, fee, margin, pnl: 0, now,
+    }));
+    try {
+      await draft.commit({ extraGuards: guards });
+    } catch (error) {
+      if (error instanceof AppError && error.code === 'INVALID_STATUS') throw new AppError('INVALID_STATUS', '合约仓位刚有变动，请刷新后再试');
+      throw error;
+    }
+    return {
+      state: draft.view(),
+      market: await buildMarketView(db, draft, now),
+      result: { action: 'open', side, stockId: stock.id, stockName: stock.name, shares, price, fee, margin, pnl: 0, message: `以 ${displayAmount(price)} 开${side === 'long' ? '多' : '空'} ${String(shares)} 股，保证金 ${displayAmount(margin)} 灵石` },
+    };
+  }
+  if (position === null) throw new AppError('INVALID_STATUS', '当前没有这支股票的合约仓位');
+  if (shares > Number(position.shares)) throw new AppError('INVALID_STATUS', `当前仓位只有 ${String(position.shares)} 股`);
+  const posSide = position.side as MarketMarginSide;
+  const closeMargin = shares === Number(position.shares)
+    ? Number(position.margin)
+    : Math.floor((Number(position.margin) * shares) / Number(position.shares));
+  const grossPnl = marginPnl(posSide, Number(position.entry_price), price, shares);
+  const notional = price * shares;
+  const fee = marketFee(notional);
+  const netPnl = grossPnl - fee;
+  const payout = Math.max(0, closeMargin + netPnl);
+  draft.addResource('spiritStone', payout);
+  if (shares === Number(position.shares)) {
+    guards.push(marginPositionGuardOf(sectId, stock.id, Number(position.version)));
+    draft.addStatement(deleteStockMarginPositionStatement(sectId, stock.id));
+  } else {
+    const remainingShares = Number(position.shares) - shares;
+    const remainingMargin = Number(position.margin) - closeMargin;
+    const liquidationPrice = marginLiquidationPrice(posSide, Number(position.entry_price), remainingShares, remainingMargin, Number(position.leverage));
+    guards.push(marginPositionGuardOf(sectId, stock.id, Number(position.version)));
+    draft.addStatement(upsertStockMarginPositionStatement({
+      sectId, stockId: stock.id, side: posSide, shares: remainingShares, entryPrice: Number(position.entry_price),
+      margin: remainingMargin, leverage: Number(position.leverage), liquidationPrice,
+      openedAt: Number(position.opened_at), checkedMinute: marketMinuteOf(now), now,
+    }));
+  }
+  draft.addStatement(insertStockMarginTradeStatement({
+    id: crypto.randomUUID(), sectId, stockId: stock.id, action: 'close', side: posSide, shares,
+    price, notional, fee, margin: closeMargin, pnl: netPnl, now,
+  }));
+  try {
+    await draft.commit({ extraGuards: guards });
+  } catch (error) {
+    if (error instanceof AppError && error.code === 'INVALID_STATUS') throw new AppError('INVALID_STATUS', '合约仓位刚有变动，请刷新后再试');
+    throw error;
+  }
+  return {
+    state: draft.view(),
+    market: await buildMarketView(db, draft, now),
+    result: { action: 'close', side: posSide, stockId: stock.id, stockName: stock.name, shares, price, fee, margin: closeMargin, pnl: netPnl, message: `以 ${displayAmount(price)} 平${posSide === 'long' ? '多' : '空'} ${String(shares)} 股，${netPnl >= 0 ? '盈利' : '亏损'} ${displayAmount(Math.abs(netPnl))}，返还 ${displayAmount(payout)} 灵石` },
   };
 }
 

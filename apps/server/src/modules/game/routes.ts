@@ -64,6 +64,7 @@ import {
   worldQuerySchema,
   worldWithdrawRequestSchema,
   marketTradeRequestSchema,
+  marketMarginRequestSchema,
   marketChartQuerySchema,
   marketOrderPlaceRequestSchema,
   marketOrderCancelRequestSchema,
@@ -125,6 +126,7 @@ import {
   getMarket,
   getMarketChart,
   tradeStock,
+  tradeStockMargin,
   placeStockOrder,
   cancelStockOrder,
   getHub,
@@ -862,6 +864,14 @@ export function createGameRoutes(): Hono<AppEnv> {
     const userId = requireUserId(c);
     const body = await parseStrictJson(marketTradeRequestSchema, c);
     const result = await tradeStock(getDb(c.env), userId, body, Date.now());
+    return respondOk(c, { state: result.state, market: result.market, result: result.result });
+  });
+
+  // 0063 灵股保证金：开多 / 开空 / 平仓，服务端按当前分钟价格结算。
+  routes.post('/game/market/margin', async (c) => {
+    const userId = requireUserId(c);
+    const body = await parseStrictJson(marketMarginRequestSchema, c);
+    const result = await tradeStockMargin(getDb(c.env), userId, body, Date.now());
     return respondOk(c, { state: result.state, market: result.market, result: result.result });
   });
 

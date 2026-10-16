@@ -3022,6 +3022,20 @@ export async function withdrawWorldSite(siteId: string): Promise<WorldActionResp
 
 /* ---------- 0043 灵股行情 ---------- */
 
+export interface StockMarginPositionView {
+  side: 'long' | 'short';
+  shares: number;
+  entryPrice: number;
+  margin: number;
+  leverage: number;
+  liquidationPrice: number;
+  unrealizedPnl: number;
+  equity: number;
+  marginRatio: number;
+  liquidationRisk: boolean;
+  openedAt: number;
+}
+
 export interface StockHoldingView {
   shares: number;
   cost: number;
@@ -3049,6 +3063,7 @@ export interface StockView {
   high24h: number;
   low24h: number;
   holding: StockHoldingView | null;
+  marginPosition: StockMarginPositionView | null;
 }
 
 export interface MarketNewsView {
@@ -3089,6 +3104,19 @@ export interface MarketView {
   stocks: StockView[];
   news: MarketNewsView[];
   myTrades: StockTradeView[];
+  marginTrades: {
+    id: string;
+    stockId: string;
+    stockName: string;
+    action: 'open' | 'close' | 'liquidate';
+    side: 'long' | 'short';
+    shares: number;
+    price: number;
+    fee: number;
+    margin: number;
+    pnl: number;
+    createdAt: number;
+  }[];
   myProfit: number;
   ranks: { rank: number; sectName: string; profit: number; isMe: boolean }[];
   orders: MarketOrdersView;
@@ -3157,6 +3185,19 @@ export async function fetchMarketChart(stockId: string, range: MarketChartRange)
   );
 }
 
+export interface MarketMarginTradeResultView {
+  action: 'open' | 'close';
+  side: 'long' | 'short';
+  stockId: string;
+  stockName: string;
+  shares: number;
+  price: number;
+  fee: number;
+  margin: number;
+  pnl: number;
+  message: string;
+}
+
 export async function tradeStock(
   stockId: string,
   side: 'buy' | 'sell',
@@ -3165,6 +3206,18 @@ export async function tradeStock(
   return apiRequest<{ state: SectStateView; market: MarketView; result: MarketTradeResultView }>(
     '/api/v1/game/market/trade',
     { method: 'POST', body: { stockId, side, shares } },
+  );
+}
+
+export async function tradeStockMargin(
+  stockId: string,
+  action: 'open' | 'close',
+  shares: number,
+  side?: 'long' | 'short',
+): Promise<{ state: SectStateView; market: MarketView; result: MarketMarginTradeResultView }> {
+  return apiRequest<{ state: SectStateView; market: MarketView; result: MarketMarginTradeResultView }>(
+    '/api/v1/game/market/margin',
+    { method: 'POST', body: { stockId, action, shares, side } },
   );
 }
 
