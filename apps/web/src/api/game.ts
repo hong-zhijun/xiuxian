@@ -1225,6 +1225,8 @@ export type JourneyStatusView = 'none' | 'active' | 'ready';
 
 /** 历练结果（只在到期后公开；未领取时 claimedAt 为 null）。 */
 export interface JourneyOutcomeView {
+  /** 0061 是否被紧急召回（召回的记录收获全部作废、不会受伤）。 */
+  recalled: boolean;
   /** 返程实际入账的修为（受返程门槛封顶；最高阶段为 0）。 */
   cultivationAwarded: number;
   /** 出发时快照的计划修为（含额外收获，未按门槛截断）。 */
@@ -1379,6 +1381,26 @@ export async function claimJourney(
 ): Promise<{ state: SectStateView; outcome: JourneyClaimOutcomeView }> {
   return apiRequest<{ state: SectStateView; outcome: JourneyClaimOutcomeView }>(
     '/api/v1/game/claim-journey',
+    { method: 'POST', body: { journeyId } },
+  );
+}
+
+/** 0061 紧急召回回执（POST /game/recall-journey 的 outcome）：召回的历练一无所获。 */
+export interface JourneyRecallOutcomeView {
+  journeyId: string;
+  discipleId: string;
+  discipleName: string;
+  direction: JourneyDirection;
+  directionName: string;
+  message: string;
+}
+
+/** 0061 紧急召回：在外弟子立刻归队，本趟收获全部作废、不会受伤，免费。 */
+export async function recallJourney(
+  journeyId: string,
+): Promise<{ state: SectStateView; outcome: JourneyRecallOutcomeView }> {
+  return apiRequest<{ state: SectStateView; outcome: JourneyRecallOutcomeView }>(
+    '/api/v1/game/recall-journey',
     { method: 'POST', body: { journeyId } },
   );
 }
@@ -2206,6 +2228,18 @@ export interface EquipmentItemView {
       powerBonusGainBp: number;
     } | null;
   };
+  /**
+   * 洗练预览（全部由服务端算好；品质不认识时为 null）：副属性拆成基础 + 祭炼，
+   * 洗练只重洗基础部分（subMin~subMax），祭炼部分原样保留。
+   */
+  reroll: {
+    subBase: number;
+    subRefine: number;
+    subMin: number;
+    subMax: number;
+    /** 两种模式各自的单次消耗（最小单位字符串）。 */
+    cost: Record<RerollMode, Record<string, string>>;
+  } | null;
   /** 穿在谁身上；null = 在背包里（背包 = 本宗未穿戴的装备）。 */
   discipleId: string | null;
   discipleName: string | null;
@@ -2336,6 +2370,20 @@ export interface RefineEquipmentOutcome {
   cost: Record<string, string>;
 }
 
+/** 洗练模式：attr = 种类与数值一起洗，value = 锁定种类只洗数值。两种都直接覆盖。 */
+export type RerollMode = 'attr' | 'value';
+
+/** 洗练回执（POST /game/reroll-equipment 的 outcome）；数值都含祭炼加成。 */
+export interface RerollEquipmentOutcome {
+  equipmentId: string;
+  name: string;
+  mode: RerollMode;
+  from: { subAttr: string; subAttrName: string; subValue: number };
+  to: { subAttr: string; subAttrName: string; subValue: number };
+  /** 本次实际扣掉的材料（最小单位字符串）。 */
+  cost: Record<string, string>;
+}
+
 /** 0028 读取装备面板（GET /game/equipment）：只读，不结算；装备明细不放进 /game/sync。 */
 export async function fetchEquipment(): Promise<{
   state: SectStateView;
@@ -2401,6 +2449,17 @@ export async function refineEquipment(
   return apiRequest<{ state: SectStateView; outcome: RefineEquipmentOutcome }>(
     '/api/v1/game/refine-equipment',
     { method: 'POST', body: { equipmentId } },
+  );
+}
+
+/** 洗练（POST /game/reroll-equipment）：重洗副属性的基础部分，结果以服务端为准、直接覆盖。 */
+export async function rerollEquipment(
+  equipmentId: string,
+  mode: RerollMode,
+): Promise<{ state: SectStateView; outcome: RerollEquipmentOutcome }> {
+  return apiRequest<{ state: SectStateView; outcome: RerollEquipmentOutcome }>(
+    '/api/v1/game/reroll-equipment',
+    { method: 'POST', body: { equipmentId, mode } },
   );
 }
 

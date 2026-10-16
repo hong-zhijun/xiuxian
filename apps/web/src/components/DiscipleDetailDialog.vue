@@ -111,6 +111,8 @@ const emit = defineEmits<{
   requestJourneyPreview: [discipleId: string];
   startJourney: [discipleId: string, direction: JourneyDirection, durationSeconds: number];
   claimJourney: [journeyId: string];
+  /** 0061 紧急召回：在外弟子立刻归队（收获作废）。组件内二次确认后才 emit。 */
+  recallJourney: [journeyId: string];
   /** 0028 穿戴：把背包里的这件装备穿给本弟子（该部位原有的那件自动回背包）。 */
   equip: [equipmentId: string, discipleId: string];
   /** 0028 卸下：本弟子身上的这件装备回背包（背包满时服务端会拒绝）。 */
@@ -334,11 +336,12 @@ watch(
     avatarCropFile.value = null;
   },
 );
-// 切到别的弟子时不把上一位的裁剪弹窗带过去。
+// 切到别的弟子时不把上一位的裁剪弹窗、召回确认带过去。
 watch(
   () => props.disciple.id,
   () => {
     avatarCropFile.value = null;
+    confirmingRecall.value = false;
   },
 );
 
@@ -548,6 +551,29 @@ function confirmStart(): void {
   emit('startJourney', props.disciple.id, direction.direction, duration.durationSeconds);
 }
 
+/* ---------- 0061 紧急召回：在外时二次确认后才 emit ---------- */
+const confirmingRecall = ref(false);
+
+// 归队 / 召回成功后（不再在外）收起确认。
+watch(
+  () => journey.value.status,
+  (status) => {
+    if (status !== 'active') confirmingRecall.value = false;
+  },
+);
+
+function askRecall(): void {
+  if (props.busy || journey.value.status !== 'active') return;
+  confirmingRecall.value = true;
+}
+
+function confirmRecall(): void {
+  if (props.busy) return;
+  const journeyId = journey.value.journeyId;
+  if (journeyId === null) return;
+  emit('recallJourney', journeyId);
+}
+
 function requestClaim(): void {
   if (props.busy) return;
   const journeyId = journey.value.journeyId;
@@ -658,6 +684,9 @@ function recordResultLines(record: JourneyRecordView): string[] {
   if (recordOutcome === null) {
     return [`预计 ${formatTime(record.endsAt)} 归队，结果到期后可见。`];
   }
+  if (recordOutcome.recalled) {
+    return ['紧急召回，本次一无所获'];
+  }
   const lines = [
     recordOutcome.cultivationAwarded > 0 ? `修为 +${recordOutcome.cultivationAwarded}` : '修为无增益',
   ];
@@ -686,7 +715,7 @@ const journal = computed<JournalEntry[]>(() =>
       directionName: record.directionName,
       durationText: durationHours(record.durationSeconds),
       status: record.status,
-      statusLabel: RECORD_STATUS_LABELS[record.status],
+      statusLabel: record.outcome?.recalled === true ? '已召回' : RECORD_STATUS_LABELS[record.status],
       resultLines: recordResultLines(record),
     })),
 );
@@ -1672,9 +1701,30 @@ function refineGear(item: EquipmentItemView | null): void {
             <p class="disciple-detail-hint">
               原岗位「{{ journey.originalAssignmentName ?? '闲置' }}」仍为他保留；在外期间该岗位收益与静修暂停。
             </p>
-            <button class="action-button primary-action disciple-journey-start" type="button" disabled>
-              <span>在外历练中</span>
+            <button
+              v-if="!confirmingRecall"
+              class="action-button disciple-journey-start"
+              type="button"
+              :disabled="busy"
+              @click="askRecall"
+            >
+              <span>紧急召回</span>
             </button>
+            <div v-else class="disciple-expel-confirm" role="group" aria-labelledby="disciple-recall-confirm-title">
+              <p id="disciple-recall-confirm-title" class="disciple-expel-question">
+                确认召回「{{ disciple.name }}」？
+              </p>
+              <ul class="disciple-expel-warnings">
+                <li>他会立刻归队，本次历练的修为、资源与额外奖励全部作废。</li>
+                <li>召回不消耗资源，也不会受伤；之后可以马上再次出发。</li>
+              </ul>
+              <div class="disciple-expel-actions">
+                <button class="action-button" type="button" :disabled="busy" @click="confirmingRecall = false">取消</button>
+                <button class="action-button primary-action" type="button" :disabled="busy" @click="confirmRecall">
+                  {{ busy ? '召回中…' : '确认召回' }}
+                </button>
+              </div>
+            </div>
           </div>
 
           <div v-if="journey.status === 'ready'" class="journey-ready">

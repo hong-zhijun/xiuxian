@@ -223,8 +223,11 @@ import {
   refineCostUnits,
   refineMainGain,
   refineSubGain,
+  rerollCostUnits,
+  rerollSubAttr,
   resolveMainAttr,
   rollRefine,
+  type RerollMode,
   salvageOreUnits,
   slotNameOf,
   withGear,
@@ -285,6 +288,8 @@ import {
   updateResourceSettledStatement,
   updateEquipmentHolderStatement,
   updateEquipmentRefineStatement,
+  updateEquipmentSubStatement,
+  recallDiscipleJourneyStatement,
   updateSectChallengeCounterStatement,
   updateSectDefenseLineupStatement,
   updateSectLevelStatement,
@@ -706,6 +711,7 @@ import {
   type SparHistoryEntryView,
   type SparResultView,
   type JourneyClaimOutcomeView,
+  type JourneyRecallOutcomeView,
   type JourneyDirectionPreviewView,
   type JourneyDurationPreviewView,
   type JourneyPreviewView,
@@ -1877,6 +1883,25 @@ class SectDraft {
         ? { ...row, balance: Number(row.balance) + amount, updated_at: this.now }
         : row,
     );
+  }
+
+  /**
+   * 0061：紧急召回（条件更新 + 内存同步）：记录直接收口为「已领取、无收获」，
+   * 弟子立刻不再在外。ends_at 至少比出发时刻晚 1 毫秒（表上 CHECK ends_at > started_at）。
+   */
+  markJourneyRecalled(journey: DiscipleJourneyRow): void {
+    const endsAt = Math.max(this.now, Number(journey.started_at) + 1);
+    this.addStatement(recallDiscipleJourneyStatement(journey.id, this.sect.id, endsAt, this.now));
+    journey.ends_at = endsAt;
+    journey.completed_at = this.now;
+    journey.claimed_at = this.now;
+    journey.recalled_at = this.now;
+    journey.cultivation_awarded = 0;
+    journey.reward_cultivation = 0;
+    journey.reward_resources = '{}';
+    journey.extra_harvest = 0;
+    journey.injured = 0;
+    journey.bonus_detail = '{}';
   }
 
   /** 0014：领取标记（条件更新 + 内存同步）。 */
@@ -5986,6 +6011,99 @@ export async function refineEquipment(
   };
 }
 
+export interface RerollEquipmentOutcome {
+  equipmentId: string;
+  name: string;
+  mode: RerollMode;
+  /** 洗练前 / 后的副属性（数值含祭炼加成）。 */
+  from: { subAttr: string; subAttrName: string; subValue: number };
+  to: { subAttr: string; subAttrName: string; subValue: number };
+  /** 本次实际扣掉的材料（最小单位字符串）。 */
+  cost: Record<string, string>;
+}
+
+/**
+ * 洗练（POST /game/reroll-equipment）：重洗副属性的基础部分，祭炼拿到的副属性加成原样保留。
+ *
+ * - attr：种类（不与主属性相同，可能洗回原种类）与数值一起洗；value：锁定种类只洗数值；
+ * - 两种都直接覆盖，洗低了不回退；
+ * - 解锁与祭炼相同（宗门 2 级）；穿在在外历练 / 重伤弟子身上的不能洗；
+ * - 穿在身上的同批重算弟子 gear 列（战力立刻变）。
+ */
+export async function rerollEquipment(
+  db: D1Database,
+  userId: string,
+  equipmentId: string,
+  mode: RerollMode,
+  now: number,
+): Promise<{ state: SectStateView; outcome: RerollEquipmentOutcome }> {
+  const draft = await draftFor(db, userId, now);
+  requireForgeUnlocked(draft);
+  const { items } = await loadEquipment(db, draft.sect.id);
+  const item = items.find((row) => row.id === equipmentId);
+  if (item === undefined) {
+    throw new AppError('NOT_FOUND', '装备不存在');
+  }
+  if (!isEquipmentQuality(item.quality)) {
+    throw new AppError('INVALID_STATUS', '这件装备不能洗练');
+  }
+  const holder = item.disciple_id === null ? null : draft.discipleById(item.disciple_id);
+  if (holder !== null) {
+    requireNotAway(draft, holder, '洗练装备');
+  }
+
+  const cost = rerollCostUnits(item.quality, mode);
+  for (const [resourceId, amount] of Object.entries(cost)) {
+    draft.requireResource(resourceId, amount);
+  }
+
+  const rolled = rerollSubAttr({
+    quality: item.quality,
+    mainAttr: item.main_attr,
+    subAttr: item.sub_attr,
+    refineLevel: Number(item.refine_level ?? 0),
+    mode,
+    random: Math.random,
+  });
+  draft.addStatement(
+    updateEquipmentSubStatement({
+      equipmentId: item.id,
+      sectId: draft.sect.id,
+      subAttr: rolled.subAttr,
+      subValue: rolled.subValue,
+    }),
+  );
+  if (holder !== null) {
+    // 内存里同步改成新值（随命令返回的 state 立刻带上新战力）；库里的 SUM 排在 update 之后。
+    const nextItems = items.map((row) =>
+      row.id === item.id ? { ...row, sub_attr: rolled.subAttr, sub_value: rolled.subValue } : row,
+    );
+    applyGearRefresh(draft, holder.id, nextItems);
+  }
+
+  // 装备行进守卫：防止同一件装备同时被上架 / 卸下 / 分解；扣料已在 draft 里，同批提交。
+  if (holder === null) {
+    await draft.commit({ equipmentItems: [{ id: item.id, discipleId: null }] });
+  } else {
+    await draft.commitDisciple([{ id: holder.id }], undefined, {
+      equipmentItems: [{ id: item.id, discipleId: item.disciple_id }],
+    });
+  }
+  return {
+    state: draft.view(),
+    outcome: {
+      equipmentId: item.id,
+      name: item.name,
+      mode,
+      from: { subAttr: item.sub_attr, subAttrName: attrNameOf(item.sub_attr), subValue: Number(item.sub_value) },
+      to: { subAttr: rolled.subAttr, subAttrName: attrNameOf(rolled.subAttr), subValue: rolled.subValue },
+      cost: Object.fromEntries(
+        Object.entries(cost).map(([resourceId, units]) => [resourceId, String(units)]),
+      ),
+    },
+  };
+}
+
 /**
  * GET /game/equipment：装备面板（顺带结算并返回 state）。
  * 装备明细**不进** /game/sync（额度考虑），只有这个接口返回。
@@ -6616,6 +6734,7 @@ export async function startJourney(
     cultivation_awarded: null,
     created_at: now,
     bonus_detail: serializeJourneyBonus(bonus),
+    recalled_at: null,
   });
 
   await draft.commitJourneyStart(disciple.id, activeCount, atHomeCount);
@@ -6774,6 +6893,53 @@ export async function claimJourney(
     },
   };
 }
+/**
+ * 0061 紧急召回（POST /game/recall-journey）：在外（未到期）的弟子立刻归队。
+ *
+ * - 本趟收获全部作废（修为、资源、额外收获、机遇 / 悟道 / 淬炼都不给），也不会受伤；免费；
+ * - 只能召回仍在外的记录：已到期待领取的请直接领取；
+ * - 记录同批收口为「已领取」，所以召回后立刻可以转岗、出发或参与其他玩法；
+ * - 提交复用领取的受保护 batch：守卫复核记录仍未完成 / 未领取、奖励快照未变，并发召回 / 结算整批回滚。
+ */
+export async function recallJourney(
+  db: D1Database,
+  userId: string,
+  journeyId: string,
+  now: number,
+): Promise<{ state: SectStateView; outcome: JourneyRecallOutcomeView }> {
+  const draft = await draftFor(db, userId, now);
+
+  // 跨宗 id 一律 NOT_FOUND（与领取同一口径，不泄露他人记录）。
+  const stored = await new DiscipleJourneyRepository(db).findByIdForSect(journeyId, draft.sect.id);
+  if (stored === null) {
+    throw new AppError('NOT_FOUND', '历练记录不存在');
+  }
+  const journey = draft.openJourneyById(journeyId);
+  if (stored.claimed_at !== null || journey === undefined) {
+    throw new AppError('INVALID_STATUS', '该弟子已归队');
+  }
+  if (journeyStatusOf(journey, now) !== 'active') {
+    throw new AppError('INVALID_STATUS', '弟子已归队，请直接领取收获');
+  }
+
+  draft.markJourneyRecalled(journey);
+  await draft.commitJourneyClaim(journeyId, null);
+
+  const direction = asJourneyDirection(journey.direction);
+  const directionName = findJourneyDirection(direction).name;
+  return {
+    state: draft.view(),
+    outcome: {
+      journeyId: journey.id,
+      discipleId: journey.disciple_id,
+      discipleName: journey.disciple_name,
+      direction,
+      directionName,
+      message: `${journey.disciple_name}已被紧急召回，本次${directionName}一无所获`,
+    },
+  };
+}
+
 /* ------------------------------------------------------------------ *
  * V6：交互式秘境探索（迁移 0015）
  *

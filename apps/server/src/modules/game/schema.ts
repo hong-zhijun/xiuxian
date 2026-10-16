@@ -174,6 +174,12 @@ export const refineEquipmentRequestSchema = z.strictObject({
   equipmentId: z.string().min(1).max(64),
 });
 
+/** 洗练：装备 id + 模式（attr = 种类与数值一起洗，value = 锁定种类只洗数值）。 */
+export const rerollEquipmentRequestSchema = z.strictObject({
+  equipmentId: z.string().min(1).max(64),
+  mode: z.enum(['attr', 'value']),
+});
+
 /**
  * 0013 弟子私有备注：只做「类型 + 宽松长度上限」的第一道防线，
  * 真正的规则（trim / 单行纯文本 / 无控制字符 / ≤60 个 Unicode 字符）在
@@ -224,6 +230,11 @@ export const startJourneyRequestSchema = z.strictObject({
 
 /** 0014 领取：只带历练记录 id；归属与状态由 service 判定（跨宗 id 一律 NOT_FOUND）。 */
 export const claimJourneyRequestSchema = z.strictObject({
+  journeyId: z.string().min(1).max(64),
+});
+
+/** 0061 紧急召回：只带历练记录 id（只能召回本宗仍在外的记录）。 */
+export const recallJourneyRequestSchema = z.strictObject({
   journeyId: z.string().min(1).max(64),
 });
 

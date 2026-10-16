@@ -1,4 +1,5 @@
-import { readFileSync, readdirSync } from 'node:fs';
+import { copyFileSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -7,8 +8,14 @@ import { expect, it } from 'vitest';
 import { applyMigrations } from '../../apps/server/node/migrate';
 import { eventNameOf } from '../../apps/server/src/modules/game/events';
 
-const migrationDir = fileURLToPath(new URL('../../migrations/', import.meta.url));
+const sourceDir = fileURLToPath(new URL('../../migrations/', import.meta.url));
 const giftMigration = '0057_disciple_capacity_gift.sql';
+
+// 只放到本次福利的最后一份迁移为止：之后再加的福利迁移不会叠到这里的余额断言上。
+const migrationDir = mkdtempSync(join(tmpdir(), 'gift-migrations-'));
+for (const file of readdirSync(sourceDir).filter((name) => name.endsWith('.sql') && name <= '0058_disciple_capacity_announcement.sql')) {
+  copyFileSync(join(sourceDir, file), join(migrationDir, file));
+}
 
 it('扩容贺礼给所有已有宗门各加 2000 灵石，保留超容量余额，重复部署不重发，新宗门不补发', () => {
   const db = new DatabaseSync(':memory:');
@@ -63,5 +70,6 @@ it('扩容贺礼给所有已有宗门各加 2000 灵石，保留超容量余额�
     expect(db.prepare("SELECT COUNT(*) AS total FROM chat_messages WHERE id = 'announcement-disciple-capacity-20261014'").get()?.total).toBe(1);
   } finally {
     db.close();
+    rmSync(migrationDir, { recursive: true, force: true });
   }
 });

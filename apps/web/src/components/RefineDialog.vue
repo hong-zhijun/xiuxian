@@ -13,7 +13,13 @@ export interface RefineResult {
 <script setup lang="ts">
 import { computed, onUnmounted, ref, watch } from 'vue';
 
-import type { EquipmentItemView, RefineGuideView, ResourceView } from '../api/game';
+import type {
+  EquipmentItemView,
+  RefineGuideView,
+  RerollEquipmentOutcome,
+  RerollMode,
+  ResourceView,
+} from '../api/game';
 import { formatAmount, formatBp } from '../utils/format';
 import ModalShell from './ModalShell.vue';
 import RefineGuideDialog from './RefineGuideDialog.vue';
@@ -27,6 +33,9 @@ import RefineTag, { REFINE_LEVEL_NAMES } from './RefineTag.vue';
  * 祭炼动画（纯 SVG + CSS）：点下去先「炼制」至少 MIN_FORGE_MS（鼎火转旺、火星上升、法宝悬浮），
  * 结果到了再放「成功」（光环炸开，颜色按新重数：普通金 / 通灵紫 / 圆满赤金）或「未成」（青烟、法宝一抖），
  * 放完回到待机。炼制期间显示点下去那一刻的装备快照，免得结果在动画揭晓前就从数据里漏出来。
+ *
+ * 「洗练」标签页：重洗副属性的基础部分（祭炼加成保留），两种模式都直接覆盖；
+ * 区间、拆分与消耗都取自服务端的 `item.reroll`，点「洗练」只 emit，结果由上层通过 rerollOutcome 交回。
  */
 const props = defineProps<{
   item: EquipmentItemView;
@@ -35,13 +44,19 @@ const props = defineProps<{
   result: RefineResult | null;
   /** 「说明」弹窗的数据（装备面板里的 refineGuide）。 */
   guide: RefineGuideView;
+  /** 最近一次洗练回执（上层在请求成功后给；只显示属于这件装备的那条）。 */
+  rerollOutcome: RerollEquipmentOutcome | null;
 }>();
+
+type Tab = 'refine' | 'reroll';
+const tab = ref<Tab>('refine');
 
 /** 「说明」：叠出概率与花费表（默认选中这件装备的品质）。 */
 const showGuide = ref(false);
 
 const emit = defineEmits<{
   refine: [equipmentId: string];
+  reroll: [equipmentId: string, mode: RerollMode];
   close: [];
 }>();
 
@@ -86,10 +101,9 @@ const resultText = computed(() => {
   return '';
 });
 
-/** 本次消耗逐项：资源名、需要、拥有（都是最小单位），拥有不足的那项标红。 */
-const costRows = computed(() => {
-  if (next.value === null) return [];
-  return Object.entries(next.value.cost).map(([resourceId, need]) => {
+/** 消耗逐项：资源名、需要、拥有（都是最小单位），拥有不足的那项标红。 */
+function costRowsOf(cost: Record<string, string>) {
+  return Object.entries(cost).map(([resourceId, need]) => {
     const resource = props.resources.find((item) => item.id === resourceId);
     const have = Number(resource?.balance ?? 0);
     return {
@@ -100,7 +114,9 @@ const costRows = computed(() => {
       lacking: have < Number(need),
     };
   });
-});
+}
+
+const costRows = computed(() => (next.value === null ? [] : costRowsOf(next.value.cost)));
 
 const canRefine = computed(
   () => !props.busy && !animating.value && next.value !== null && costRows.value.every((row) => !row.lacking),
@@ -119,6 +135,34 @@ const milestoneHint = computed(() => {
       return null;
   }
 });
+
+/* ---------- 洗练 ---------- */
+
+const rerollMode = ref<RerollMode>('attr');
+const reroll = computed(() => props.item.reroll);
+const rerollCostRows = computed(() =>
+  reroll.value === null ? [] : costRowsOf(reroll.value.cost[rerollMode.value]),
+);
+const canReroll = computed(
+  () => !props.busy && !animating.value && reroll.value !== null && rerollCostRows.value.every((row) => !row.lacking),
+);
+/** 只显示这件装备的最近一次洗练结果。 */
+const lastReroll = computed(() =>
+  props.rerollOutcome !== null && props.rerollOutcome.equipmentId === props.item.id ? props.rerollOutcome : null,
+);
+/** 同种类时按升降上色；换了种类不比较。 */
+const lastRerollTrend = computed(() => {
+  const outcome = lastReroll.value;
+  if (outcome === null || outcome.from.subAttr !== outcome.to.subAttr) return '';
+  if (outcome.to.subValue > outcome.from.subValue) return 'is-up';
+  if (outcome.to.subValue < outcome.from.subValue) return 'is-down';
+  return '';
+});
+
+function startReroll(): void {
+  if (!canReroll.value) return;
+  emit('reroll', props.item.id, rerollMode.value);
+}
 
 function clearTimer(): void {
   if (timer !== undefined) {
@@ -168,7 +212,7 @@ onUnmounted(clearTimer);
     <section class="refine-dialog" aria-labelledby="refine-title">
       <header class="section-heading panel-heading compact-heading">
         <div>
-          <p class="eyebrow">祭炼</p>
+          <p class="eyebrow">{{ tab === 'refine' ? '祭炼' : '洗练' }}</p>
           <h2 id="refine-title" :style="{ color: view.color }">{{ view.name }}<RefineTag :level="view.refineLevel" /></h2>
         </div>
         <button class="quiet-button refine-guide-button" type="button" @click="showGuide = true">说明</button>
@@ -176,6 +220,32 @@ onUnmounted(clearTimer);
 
       <p class="refine-owner">{{ ownerText }}</p>
 
+      <div v-if="item.reroll" class="refine-tabs" role="tablist" aria-label="祭炼 / 洗练">
+        <button
+          class="refine-tab"
+          :class="{ 'is-active': tab === 'refine' }"
+          type="button"
+          role="tab"
+          :aria-selected="tab === 'refine'"
+          :disabled="animating"
+          @click="tab = 'refine'"
+        >
+          祭炼
+        </button>
+        <button
+          class="refine-tab"
+          :class="{ 'is-active': tab === 'reroll' }"
+          type="button"
+          role="tab"
+          :aria-selected="tab === 'reroll'"
+          :disabled="animating"
+          @click="tab = 'reroll'"
+        >
+          洗练
+        </button>
+      </div>
+
+      <template v-if="tab === 'refine' || !reroll">
       <!-- 祭炼动画：鼎、鼎火、悬浮的法宝；炼制 / 成功 / 未成三种状态由 phase 切换 class。 -->
       <div class="refine-stage">
         <svg
@@ -283,6 +353,72 @@ onUnmounted(clearTimer);
           </button>
         </div>
       </template>
+      </template>
+
+      <!-- 洗练：重洗副属性的基础部分，祭炼加成保留；直接覆盖。 -->
+      <template v-else>
+        <dl class="refine-changes">
+          <div>
+            <dt>当前副属性</dt>
+            <dd>
+              {{ item.subAttrName }} {{ item.subValue }}
+              <span v-if="reroll.subRefine > 0" class="reroll-split">（基础 {{ reroll.subBase }} + 祭炼 {{ reroll.subRefine }}）</span>
+            </dd>
+          </div>
+          <div>
+            <dt>基础区间</dt>
+            <dd>{{ reroll.subMin }} ~ {{ reroll.subMax }}</dd>
+          </div>
+        </dl>
+
+        <div class="reroll-modes" role="radiogroup" aria-label="洗练方式">
+          <button
+            class="reroll-mode"
+            :class="{ 'is-active': rerollMode === 'attr' }"
+            type="button"
+            role="radio"
+            :aria-checked="rerollMode === 'attr'"
+            @click="rerollMode = 'attr'"
+          >
+            <strong>洗种类</strong>
+            <span>种类与数值一起重洗</span>
+          </button>
+          <button
+            class="reroll-mode"
+            :class="{ 'is-active': rerollMode === 'value' }"
+            type="button"
+            role="radio"
+            :aria-checked="rerollMode === 'value'"
+            @click="rerollMode = 'value'"
+          >
+            <strong>只洗数值</strong>
+            <span>锁定{{ item.subAttrName }}，只重洗数值</span>
+          </button>
+        </div>
+
+        <p class="refine-note">
+          {{ rerollMode === 'attr' ? '不会洗出主属性，也可能洗回原种类。' : '' }}结果直接覆盖原属性，洗低了不会退回；祭炼加成始终保留。
+        </p>
+
+        <p v-if="lastReroll" class="reroll-result" :class="lastRerollTrend" aria-live="polite">
+          上次洗练：{{ lastReroll.from.subAttrName }} {{ lastReroll.from.subValue }} →
+          {{ lastReroll.to.subAttrName }} {{ lastReroll.to.subValue }}
+        </p>
+
+        <ul class="refine-cost" aria-label="本次消耗">
+          <li v-for="row in rerollCostRows" :key="row.resourceId" :class="{ 'is-lacking': row.lacking }">
+            <span>{{ row.name }}</span>
+            <span>需要 {{ formatAmount(row.need) }} / 拥有 {{ formatAmount(row.have) }}</span>
+          </li>
+        </ul>
+
+        <div class="disciple-break-confirm-actions">
+          <button class="action-button" type="button" @click="emit('close')">取消</button>
+          <button class="action-button primary-action" type="button" :disabled="!canReroll" @click="startReroll">
+            <span>{{ busy ? '洗练中…' : '洗练' }}</span>
+          </button>
+        </div>
+      </template>
     </section>
 
     <RefineGuideDialog
@@ -308,6 +444,90 @@ onUnmounted(clearTimer);
   align-self: center;
   padding: 4px 10px;
   font-size: 12px;
+}
+
+.refine-tabs {
+  display: flex;
+  gap: 6px;
+}
+
+.refine-tab {
+  padding: 5px 12px;
+  border: 1px solid rgba(119, 184, 154, 0.16);
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.02);
+  color: #9db3a8;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.refine-tab.is-active {
+  border-color: rgba(234, 209, 154, 0.55);
+  background: rgba(202, 169, 106, 0.12);
+  color: var(--gold-bright, #ead19a);
+}
+
+.refine-tab:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.reroll-split {
+  color: #7d9186;
+  font-size: 12px;
+}
+
+.reroll-modes {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.reroll-mode {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px;
+  border: 1px solid rgba(119, 184, 154, 0.16);
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.02);
+  color: #9db3a8;
+  text-align: left;
+  cursor: pointer;
+}
+
+.reroll-mode strong {
+  color: #dce6e0;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.reroll-mode span {
+  font-size: 11px;
+}
+
+.reroll-mode.is-active {
+  border-color: rgba(234, 209, 154, 0.55);
+  background: rgba(202, 169, 106, 0.12);
+}
+
+.reroll-mode.is-active strong {
+  color: var(--gold-bright, #ead19a);
+}
+
+.reroll-result {
+  margin: 0;
+  color: #dce6e0;
+  font-size: 12px;
+}
+
+.reroll-result.is-up {
+  color: #7fd3a5;
+}
+
+.reroll-result.is-down {
+  color: #e08a7a;
 }
 
 .refine-owner {

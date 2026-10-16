@@ -1611,13 +1611,15 @@ export interface DiscipleJourneyRow {
   created_at: number;
   /** 0036 历练额外奖励（受控 JSON：机遇 / 悟道 / 淬炼，见 journey.ts 的 JourneyBonus）；旧记录为 '{}'。 */
   bonus_detail: string;
+  /** 0061 紧急召回时刻；NULL = 正常归队。 */
+  recalled_at: number | null;
 }
 
 /** 历练表的完整列清单（避免 SELECT * 与将来加列时的静默漂移）。 */
 const JOURNEY_COLUMNS = `id, sect_id, disciple_id, disciple_name, direction, duration_seconds,
        original_assignment, started_at, ends_at, completed_at, claimed_at,
        reward_cultivation, reward_resources, extra_harvest, injured, injury_chance_bp,
-       cultivation_awarded, created_at, bonus_detail`;
+       cultivation_awarded, created_at, bonus_detail, recalled_at`;
 
 export class DiscipleJourneyRepository extends ParamRepository {
   /**
@@ -1710,6 +1712,27 @@ export function insertDiscipleJourneyStatement(row: {
       row.now,
       row.bonusDetail,
     ],
+  };
+}
+
+/**
+ * 0061 紧急召回：把仍在外的记录一次收口 —— 返程 / 完成 / 领取都记为召回时刻，奖励快照清零。
+ * 条件里要求「未完成、未领取、尚未到期」：并发下最多生效一次，到期后的记录不会被误召回。
+ * endsAt 由调用方保证 > started_at（表上的 CHECK）。
+ */
+export function recallDiscipleJourneyStatement(
+  journeyId: string,
+  sectId: string,
+  endsAt: number,
+  now: number,
+): ParameterizedQuery {
+  return {
+    sql: `UPDATE disciple_journeys
+             SET ends_at = ?, completed_at = ?, claimed_at = ?, recalled_at = ?,
+                 cultivation_awarded = 0, reward_cultivation = 0, reward_resources = '{}',
+                 extra_harvest = 0, injured = 0, bonus_detail = '{}'
+           WHERE id = ? AND sect_id = ? AND completed_at IS NULL AND claimed_at IS NULL AND ends_at > ?`,
+    params: [endsAt, now, now, now, journeyId, sectId, now],
   };
 }
 
@@ -3212,6 +3235,19 @@ export function updateEquipmentRefineStatement(input: {
   return {
     sql: 'UPDATE equipment SET refine_level = ?, main_value = ?, sub_value = ? WHERE id = ? AND sect_id = ?',
     params: [input.refineLevel, input.mainValue, input.subValue, input.equipmentId, input.sectId],
+  };
+}
+
+/** 洗练：覆盖副属性的种类与数值（祭炼加成已由调用方加回 subValue）。 */
+export function updateEquipmentSubStatement(input: {
+  equipmentId: string;
+  sectId: string;
+  subAttr: string;
+  subValue: number;
+}): ParameterizedQuery {
+  return {
+    sql: 'UPDATE equipment SET sub_attr = ?, sub_value = ? WHERE id = ? AND sect_id = ?',
+    params: [input.subAttr, input.subValue, input.equipmentId, input.sectId],
   };
 }
 

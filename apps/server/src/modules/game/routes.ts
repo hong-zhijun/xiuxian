@@ -16,6 +16,7 @@ import {
   challengeRequestSchema,
   chooseRealmExploreSchema,
   claimJourneyRequestSchema,
+  recallJourneyRequestSchema,
   craftPillRequestSchema,
   createSectRequestSchema,
   daoDebateRequestSchema,
@@ -28,6 +29,7 @@ import {
   journeyPreviewQuerySchema,
   recruitRequestSchema,
   refineEquipmentRequestSchema,
+  rerollEquipmentRequestSchema,
   renameDiscipleRequestSchema,
   renameSectRequestSchema,
   salvageEquipmentRequestSchema,
@@ -79,6 +81,7 @@ import {
   challengeSect,
   chooseRealmExplore,
   claimJourney,
+  recallJourney,
   craftPill,
   createSect,
   daoDebate,
@@ -141,6 +144,7 @@ import {
   previewRecruit,
   recruitDisciple,
   refineEquipment,
+  rerollEquipment,
   refreshRecruit,
   renameDisciple,
   renameSect,
@@ -442,6 +446,14 @@ export function createGameRoutes(): Hono<AppEnv> {
     return respondOk(c, { state: result.state, outcome: result.outcome });
   });
 
+  // 洗练（结算 → 解锁 / 归属 / 在外校验 → 扣材料 + 重洗副属性，一次受保护 batch）。
+  routes.post('/game/reroll-equipment', async (c) => {
+    const userId = requireUserId(c);
+    const body = await parseStrictJson(rerollEquipmentRequestSchema, c);
+    const result = await rerollEquipment(getDb(c.env), userId, body.equipmentId, body.mode, Date.now());
+    return respondOk(c, { state: result.state, outcome: result.outcome });
+  });
+
   // 0013：保存弟子私有备注（结算 → 归属校验 → 归一化 → 单列写回，一次受保护 batch）。
   routes.post('/game/set-disciple-note', async (c) => {
     const userId = requireUserId(c);
@@ -563,6 +575,14 @@ export function createGameRoutes(): Hono<AppEnv> {
     const userId = requireUserId(c);
     const body = await parseStrictJson(claimJourneyRequestSchema, c);
     const result = await claimJourney(getDb(c.env), userId, body.journeyId, Date.now());
+    return respondOk(c, { state: result.state, outcome: result.outcome });
+  });
+
+  // 0061：紧急召回（结算 → 只能召回仍在外的 → 记录收口、收获作废，一次受保护 batch）。
+  routes.post('/game/recall-journey', async (c) => {
+    const userId = requireUserId(c);
+    const body = await parseStrictJson(recallJourneyRequestSchema, c);
+    const result = await recallJourney(getDb(c.env), userId, body.journeyId, Date.now());
     return respondOk(c, { state: result.state, outcome: result.outcome });
   });
 
