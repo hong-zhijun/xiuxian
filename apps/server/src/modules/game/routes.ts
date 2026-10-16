@@ -28,6 +28,7 @@ import {
   journeyPreviewQuerySchema,
   recruitRequestSchema,
   refineEquipmentRequestSchema,
+  rerollEquipmentRequestSchema,
   renameDiscipleRequestSchema,
   renameSectRequestSchema,
   salvageEquipmentRequestSchema,
@@ -139,6 +140,7 @@ import {
   previewRecruit,
   recruitDisciple,
   refineEquipment,
+  rerollEquipment,
   refreshRecruit,
   renameDisciple,
   renameSect,
@@ -437,6 +439,14 @@ export function createGameRoutes(): Hono<AppEnv> {
     const userId = requireUserId(c);
     const body = await parseStrictJson(refineEquipmentRequestSchema, c);
     const result = await refineEquipment(getDb(c.env), userId, body.equipmentId, Date.now());
+    return respondOk(c, { state: result.state, outcome: result.outcome });
+  });
+
+  // 洗练（结算 → 解锁 / 归属 / 在外校验 → 扣材料 + 重洗副属性，一次受保护 batch）。
+  routes.post('/game/reroll-equipment', async (c) => {
+    const userId = requireUserId(c);
+    const body = await parseStrictJson(rerollEquipmentRequestSchema, c);
+    const result = await rerollEquipment(getDb(c.env), userId, body.equipmentId, body.mode, Date.now());
     return respondOk(c, { state: result.state, outcome: result.outcome });
   });
 

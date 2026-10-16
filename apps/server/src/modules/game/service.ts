@@ -223,8 +223,11 @@ import {
   refineCostUnits,
   refineMainGain,
   refineSubGain,
+  rerollCostUnits,
+  rerollSubAttr,
   resolveMainAttr,
   rollRefine,
+  type RerollMode,
   salvageOreUnits,
   slotNameOf,
   withGear,
@@ -285,6 +288,7 @@ import {
   updateResourceSettledStatement,
   updateEquipmentHolderStatement,
   updateEquipmentRefineStatement,
+  updateEquipmentSubStatement,
   updateSectChallengeCounterStatement,
   updateSectDefenseLineupStatement,
   updateSectLevelStatement,
@@ -5964,6 +5968,99 @@ export async function refineEquipment(
       success,
       fromLevel,
       toLevel: success ? target : fromLevel,
+      cost: Object.fromEntries(
+        Object.entries(cost).map(([resourceId, units]) => [resourceId, String(units)]),
+      ),
+    },
+  };
+}
+
+export interface RerollEquipmentOutcome {
+  equipmentId: string;
+  name: string;
+  mode: RerollMode;
+  /** 洗练前 / 后的副属性（数值含祭炼加成）。 */
+  from: { subAttr: string; subAttrName: string; subValue: number };
+  to: { subAttr: string; subAttrName: string; subValue: number };
+  /** 本次实际扣掉的材料（最小单位字符串）。 */
+  cost: Record<string, string>;
+}
+
+/**
+ * 洗练（POST /game/reroll-equipment）：重洗副属性的基础部分，祭炼拿到的副属性加成原样保留。
+ *
+ * - attr：种类（不与主属性相同，可能洗回原种类）与数值一起洗；value：锁定种类只洗数值；
+ * - 两种都直接覆盖，洗低了不回退；
+ * - 解锁与祭炼相同（宗门 2 级）；穿在在外历练 / 重伤弟子身上的不能洗；
+ * - 穿在身上的同批重算弟子 gear 列（战力立刻变）。
+ */
+export async function rerollEquipment(
+  db: D1Database,
+  userId: string,
+  equipmentId: string,
+  mode: RerollMode,
+  now: number,
+): Promise<{ state: SectStateView; outcome: RerollEquipmentOutcome }> {
+  const draft = await draftFor(db, userId, now);
+  requireForgeUnlocked(draft);
+  const { items } = await loadEquipment(db, draft.sect.id);
+  const item = items.find((row) => row.id === equipmentId);
+  if (item === undefined) {
+    throw new AppError('NOT_FOUND', '装备不存在');
+  }
+  if (!isEquipmentQuality(item.quality)) {
+    throw new AppError('INVALID_STATUS', '这件装备不能洗练');
+  }
+  const holder = item.disciple_id === null ? null : draft.discipleById(item.disciple_id);
+  if (holder !== null) {
+    requireNotAway(draft, holder, '洗练装备');
+  }
+
+  const cost = rerollCostUnits(item.quality, mode);
+  for (const [resourceId, amount] of Object.entries(cost)) {
+    draft.requireResource(resourceId, amount);
+  }
+
+  const rolled = rerollSubAttr({
+    quality: item.quality,
+    mainAttr: item.main_attr,
+    subAttr: item.sub_attr,
+    refineLevel: Number(item.refine_level ?? 0),
+    mode,
+    random: Math.random,
+  });
+  draft.addStatement(
+    updateEquipmentSubStatement({
+      equipmentId: item.id,
+      sectId: draft.sect.id,
+      subAttr: rolled.subAttr,
+      subValue: rolled.subValue,
+    }),
+  );
+  if (holder !== null) {
+    // 内存里同步改成新值（随命令返回的 state 立刻带上新战力）；库里的 SUM 排在 update 之后。
+    const nextItems = items.map((row) =>
+      row.id === item.id ? { ...row, sub_attr: rolled.subAttr, sub_value: rolled.subValue } : row,
+    );
+    applyGearRefresh(draft, holder.id, nextItems);
+  }
+
+  // 装备行进守卫：防止同一件装备同时被上架 / 卸下 / 分解；扣料已在 draft 里，同批提交。
+  if (holder === null) {
+    await draft.commit({ equipmentItems: [{ id: item.id, discipleId: null }] });
+  } else {
+    await draft.commitDisciple([{ id: holder.id }], undefined, {
+      equipmentItems: [{ id: item.id, discipleId: item.disciple_id }],
+    });
+  }
+  return {
+    state: draft.view(),
+    outcome: {
+      equipmentId: item.id,
+      name: item.name,
+      mode,
+      from: { subAttr: item.sub_attr, subAttrName: attrNameOf(item.sub_attr), subValue: Number(item.sub_value) },
+      to: { subAttr: rolled.subAttr, subAttrName: attrNameOf(rolled.subAttr), subValue: rolled.subValue },
       cost: Object.fromEntries(
         Object.entries(cost).map(([resourceId, units]) => [resourceId, String(units)]),
       ),

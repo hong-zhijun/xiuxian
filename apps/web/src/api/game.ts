@@ -2206,6 +2206,18 @@ export interface EquipmentItemView {
       powerBonusGainBp: number;
     } | null;
   };
+  /**
+   * 洗练预览（全部由服务端算好；品质不认识时为 null）：副属性拆成基础 + 祭炼，
+   * 洗练只重洗基础部分（subMin~subMax），祭炼部分原样保留。
+   */
+  reroll: {
+    subBase: number;
+    subRefine: number;
+    subMin: number;
+    subMax: number;
+    /** 两种模式各自的单次消耗（最小单位字符串）。 */
+    cost: Record<RerollMode, Record<string, string>>;
+  } | null;
   /** 穿在谁身上；null = 在背包里（背包 = 本宗未穿戴的装备）。 */
   discipleId: string | null;
   discipleName: string | null;
@@ -2336,6 +2348,20 @@ export interface RefineEquipmentOutcome {
   cost: Record<string, string>;
 }
 
+/** 洗练模式：attr = 种类与数值一起洗，value = 锁定种类只洗数值。两种都直接覆盖。 */
+export type RerollMode = 'attr' | 'value';
+
+/** 洗练回执（POST /game/reroll-equipment 的 outcome）；数值都含祭炼加成。 */
+export interface RerollEquipmentOutcome {
+  equipmentId: string;
+  name: string;
+  mode: RerollMode;
+  from: { subAttr: string; subAttrName: string; subValue: number };
+  to: { subAttr: string; subAttrName: string; subValue: number };
+  /** 本次实际扣掉的材料（最小单位字符串）。 */
+  cost: Record<string, string>;
+}
+
 /** 0028 读取装备面板（GET /game/equipment）：只读，不结算；装备明细不放进 /game/sync。 */
 export async function fetchEquipment(): Promise<{
   state: SectStateView;
@@ -2401,6 +2427,17 @@ export async function refineEquipment(
   return apiRequest<{ state: SectStateView; outcome: RefineEquipmentOutcome }>(
     '/api/v1/game/refine-equipment',
     { method: 'POST', body: { equipmentId } },
+  );
+}
+
+/** 洗练（POST /game/reroll-equipment）：重洗副属性的基础部分，结果以服务端为准、直接覆盖。 */
+export async function rerollEquipment(
+  equipmentId: string,
+  mode: RerollMode,
+): Promise<{ state: SectStateView; outcome: RerollEquipmentOutcome }> {
+  return apiRequest<{ state: SectStateView; outcome: RerollEquipmentOutcome }>(
+    '/api/v1/game/reroll-equipment',
+    { method: 'POST', body: { equipmentId, mode } },
   );
 }
 

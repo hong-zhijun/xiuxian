@@ -174,6 +174,12 @@ export const refineEquipmentRequestSchema = z.strictObject({
   equipmentId: z.string().min(1).max(64),
 });
 
+/** 洗练：装备 id + 模式（attr = 种类与数值一起洗，value = 锁定种类只洗数值）。 */
+export const rerollEquipmentRequestSchema = z.strictObject({
+  equipmentId: z.string().min(1).max(64),
+  mode: z.enum(['attr', 'value']),
+});
+
 /**
  * 0013 弟子私有备注：只做「类型 + 宽松长度上限」的第一道防线，
  * 真正的规则（trim / 单行纯文本 / 无控制字符 / ≤60 个 Unicode 字符）在

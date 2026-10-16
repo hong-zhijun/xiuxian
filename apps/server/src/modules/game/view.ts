@@ -111,6 +111,10 @@ import {
   refinePowerBonusBp,
   refineSubGain,
   refineSuccessBp,
+  REROLL_MODES,
+  rerollCostUnits,
+  splitSubValue,
+  findQuality,
   slotNameOf,
   withGear,
   type AttrSet,
@@ -498,6 +502,18 @@ export interface EquipmentItemView {
       powerBonusGainBp: number;
     } | null;
   };
+  /**
+   * 洗练预览（全部由服务端算好；品质不认识时为 null）：副属性拆成基础 + 祭炼，
+   * 洗练只重洗基础部分（subMin~subMax），祭炼部分原样保留。
+   */
+  reroll: {
+    subBase: number;
+    subRefine: number;
+    subMin: number;
+    subMax: number;
+    /** 两种模式各自的单次消耗（最小单位字符串）：attr = 种类与数值一起洗，value = 锁定种类只洗数值。 */
+    cost: Record<string, Record<string, string>>;
+  } | null;
   /** 穿在谁身上；null = 在背包里（背包 = 本宗门未穿戴的装备）。 */
   discipleId: string | null;
   discipleName: string | null;
@@ -636,6 +652,29 @@ function refineViewOf(quality: string, refineLevel: number): EquipmentItemView['
   };
 }
 
+/** 洗练预览：品质不认识（脏值）时为 null，前端不显示洗练。 */
+function rerollViewOf(quality: string, refineLevel: number, subValue: number): EquipmentItemView['reroll'] {
+  const def = findQuality(quality);
+  if (def === undefined || !isEquipmentQuality(quality)) {
+    return null;
+  }
+  const { base, refine } = splitSubValue(quality, refineLevel, subValue);
+  return {
+    subBase: base,
+    subRefine: refine,
+    subMin: def.subMin,
+    subMax: def.subMax,
+    cost: Object.fromEntries(
+      REROLL_MODES.map((mode) => [
+        mode,
+        Object.fromEntries(
+          Object.entries(rerollCostUnits(quality, mode)).map(([resourceId, units]) => [resourceId, String(units)]),
+        ),
+      ]),
+    ),
+  };
+}
+
 /** 装备行 → 视图（纯映射；discipleName 由调用方按本宗弟子表查好）。 */
 export function equipmentItemViewOf(row: EquipmentRow, discipleName: string | null): EquipmentItemView {
   const refineLevel = Number(row.refine_level ?? 0);
@@ -657,6 +696,7 @@ export function equipmentItemViewOf(row: EquipmentRow, discipleName: string | nu
     powerBonusBp: qualityPowerBonusBp(row.quality) + refinePowerBonusBp(refineLevel),
     refineLevel,
     refine: refineViewOf(row.quality, refineLevel),
+    reroll: rerollViewOf(row.quality, refineLevel, Number(row.sub_value)),
     discipleId: row.disciple_id,
     discipleName: row.disciple_id === null ? null : discipleName,
     createdAt: new Date(Number(row.created_at)).toISOString(),

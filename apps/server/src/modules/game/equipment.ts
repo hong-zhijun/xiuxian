@@ -717,3 +717,82 @@ export function refineSubGain(quality: EquipmentQuality, targetLevel: number): n
 export function refinePowerBonusBp(level: number): number {
   return REFINE_POWER_BP[level] ?? 0;
 }
+
+/** 祭炼到第 refineLevel 重为止，副属性累计拿到的加成（5 重、12 重两次之和；未到则为 0）。 */
+export function refineSubGainTotal(quality: EquipmentQuality, refineLevel: number): number {
+  let total = 0;
+  for (let level = 1; level <= Math.min(REFINE_MAX_LEVEL, refineLevel); level += 1) {
+    total += refineSubGain(quality, level);
+  }
+  return total;
+}
+
+/* ---------- 洗练：重洗副属性 ---------- */
+
+/**
+ * 洗练模式：
+ * - attr：副属性种类与数值一起重洗（种类仍不与主属性相同，可能洗回原种类）；
+ * - value：锁定种类，只重洗数值。
+ * 两种都直接覆盖，洗低了也不回退。
+ */
+export type RerollMode = 'attr' | 'value';
+export const REROLL_MODES: readonly RerollMode[] = ['attr', 'value'];
+
+/** 洗练每次固定消耗的玄铁（展示单位）。 */
+export const REROLL_XUANTIE = 1;
+/** 洗练每次消耗的灵石（展示单位），按品质。 */
+export const REROLL_SPIRIT_STONE: Readonly<Record<EquipmentQuality, number>> = {
+  common: 20,
+  spirit: 40,
+  treasure: 80,
+  immortal: 150,
+};
+/** 只洗数值（锁定种类）的灵石倍数；玄铁不翻倍。 */
+export const REROLL_VALUE_SPIRIT_MULTIPLIER = 2;
+
+export function isRerollMode(value: string): value is RerollMode {
+  return REROLL_MODES.some((mode) => mode === value);
+}
+
+/** 洗练一次的消耗（最小单位）。 */
+export function rerollCostUnits(quality: EquipmentQuality, mode: RerollMode): Record<string, number> {
+  const multiplier = mode === 'value' ? REROLL_VALUE_SPIRIT_MULTIPLIER : 1;
+  return {
+    spiritStone: REROLL_SPIRIT_STONE[quality] * multiplier * ORE_UNITS_PER_DISPLAY,
+    [XUANTIE_RESOURCE_ID]: REROLL_XUANTIE * ORE_UNITS_PER_DISPLAY,
+  };
+}
+
+/**
+ * 副属性拆成「基础 + 祭炼」：库里只存总值，祭炼部分按重数现算。
+ * 基础值夹到不小于 0（理论上不会出现的脏值不至于算出负数）。
+ */
+export function splitSubValue(
+  quality: EquipmentQuality,
+  refineLevel: number,
+  subValue: number,
+): { base: number; refine: number } {
+  const refine = refineSubGainTotal(quality, refineLevel);
+  return { base: Math.max(0, subValue - refine), refine };
+}
+
+/**
+ * 洗练一次：只重洗基础部分（本品质区间内的整数，含两端），祭炼加成原样加回。
+ * 随机消耗顺序：attr 模式先取 ① 副属性种类，再取 ② 数值；value 模式只取数值。
+ */
+export function rerollSubAttr(input: {
+  quality: EquipmentQuality;
+  mainAttr: string;
+  subAttr: string;
+  refineLevel: number;
+  mode: RerollMode;
+  random: () => number;
+}): { subAttr: EquipmentAttr; subValue: number; base: number } {
+  const qualityDef = findQuality(input.quality) ?? EQUIPMENT_QUALITIES[0]!;
+  const candidates = EQUIPMENT_ATTRS.filter((attr) => attr !== input.mainAttr);
+  const subAttr =
+    input.mode === 'attr' || !isEquipmentAttr(input.subAttr) ? pick(candidates, input.random) : input.subAttr;
+  const span = qualityDef.subMax - qualityDef.subMin + 1;
+  const base = qualityDef.subMin + Math.min(span - 1, Math.max(0, Math.floor(input.random() * span)));
+  return { subAttr, subValue: base + refineSubGainTotal(input.quality, input.refineLevel), base };
+}

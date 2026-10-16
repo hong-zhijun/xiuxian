@@ -19,6 +19,16 @@ export const MAX_ENTRIES = 5;
 
 export const CHANGELOG: readonly ChangelogEntry[] = [
   {
+    id: '2026-10-16-equipment-reroll',
+    time: '2026-10-16 10:30',
+    title: '祭炼堂 · 新增洗练',
+    items: [
+      '祭炼弹窗新增「洗练」页，可重洗装备的副属性：「洗种类」种类与数值一起洗，「只洗数值」锁定种类只洗数值。',
+      '每次消耗 1 玄铁和灵石（凡品 20 / 灵品 40 / 宝品 80 / 仙品 150，只洗数值灵石翻倍）。',
+      '只重洗副属性的基础部分，祭炼五重、十二重拿到的副属性加成始终保留；洗练结果直接覆盖，洗低了不会退回。',
+    ],
+  },
+  {
     id: '2026-10-15-auction-merchant-frequency',
     time: '2026-10-15 08:50',
     title: '游商加快到访 · 不再等上一批离开',

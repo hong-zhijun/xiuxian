@@ -19,6 +19,8 @@ import type {
   PublicSectView,
   RecruitOutcome,
   RecruitPreview,
+  RerollEquipmentOutcome,
+  RerollMode,
   SecretRealmView,
   SectStateView,
   ShopExchangeDirection,
@@ -42,6 +44,7 @@ import {
   fetchSecretRealms,
   forgeEquipment,
   refineEquipment,
+  rerollEquipment,
   salvageEquipment,
   shopBuy,
   shopExchange,
@@ -1118,6 +1121,8 @@ const refineItem = computed(
  */
 const refineResult = ref<RefineResult | null>(null);
 let refineSeq = 0;
+/** 最近一次洗练回执：交给祭炼弹窗的「洗练」页显示「上次洗练：A → B」。 */
+const rerollOutcome = ref<RerollEquipmentOutcome | null>(null);
 
 /**
  * 装备回执里的 state：与坊市同一处理 —— App.vue 上「SectScreen 自己拿到新 state」的入口只有
@@ -1254,6 +1259,33 @@ async function onRefineEquipment(equipmentId: string): Promise<void> {
     refineSeq += 1;
     refineResult.value = { seq: refineSeq, equipmentId, success: false, toLevel: 0, error: true };
     emit('notify', 'error', '祭炼未成', caught instanceof Error ? caught.message : '祭炼失败，请稍后重试。');
+  } finally {
+    equipmentSubmitting.value = false;
+  }
+}
+
+/**
+ * 洗练（POST /game/reroll-equipment）：直接覆盖副属性；弹窗保持打开，装备视图刷新后显示新值。
+ * 弹窗中途关掉了才用 toast 补一句结果。
+ */
+async function onRerollEquipment(equipmentId: string, mode: RerollMode): Promise<void> {
+  if (props.busy || equipmentSubmitting.value) return;
+  equipmentSubmitting.value = true;
+  try {
+    const { state: next, outcome } = await rerollEquipment(equipmentId, mode);
+    handOffEquipmentState(next);
+    await loadEquipment();
+    rerollOutcome.value = outcome;
+    if (refineTargetId.value !== equipmentId) {
+      emit(
+        'notify',
+        'success',
+        '洗练完成',
+        `${outcome.name}：${outcome.from.subAttrName} ${String(outcome.from.subValue)} → ${outcome.to.subAttrName} ${String(outcome.to.subValue)}`,
+      );
+    }
+  } catch (caught) {
+    emit('notify', 'error', '洗练未成', caught instanceof Error ? caught.message : '洗练失败，请稍后重试。');
   } finally {
     equipmentSubmitting.value = false;
   }
@@ -3284,7 +3316,9 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
       :busy="busy || equipmentSubmitting"
       :result="refineResult"
       :guide="equipment!.refineGuide"
+      :reroll-outcome="rerollOutcome"
       @refine="onRefineEquipment"
+      @reroll="onRerollEquipment"
       @close="refineTargetId = null"
     />
   </main>

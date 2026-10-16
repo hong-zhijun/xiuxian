@@ -3215,6 +3215,19 @@ export function updateEquipmentRefineStatement(input: {
   };
 }
 
+/** 洗练：覆盖副属性的种类与数值（祭炼加成已由调用方加回 subValue）。 */
+export function updateEquipmentSubStatement(input: {
+  equipmentId: string;
+  sectId: string;
+  subAttr: string;
+  subValue: number;
+}): ParameterizedQuery {
+  return {
+    sql: 'UPDATE equipment SET sub_attr = ?, sub_value = ? WHERE id = ? AND sect_id = ?',
+    params: [input.subAttr, input.subValue, input.equipmentId, input.sectId],
+  };
+}
+
 /** 0044 隐藏补偿：写某宗门某一重的连续失败次数（绝对值，upsert）。 */
 export function upsertRefineFailsStatement(
   sectId: string,
