@@ -3334,7 +3334,7 @@ export interface StockView {
   high24h: number;
   low24h: number;
   holding: StockHoldingView | null;
-  /** 0061：逐仓保证金合约仓位。 */
+  /** 0063：逐仓保证金合约仓位。 */
   marginPosition: StockMarginPositionView | null;
 }
 
@@ -3381,7 +3381,7 @@ export interface MarketView {
   stocks: StockView[];
   news: MarketNewsView[];
   myTrades: StockTradeView[];
-  /** 0061：最近保证金合约成交。 */
+  /** 0063：最近保证金合约成交。 */
   marginTrades: {
     id: string;
     stockId: string;

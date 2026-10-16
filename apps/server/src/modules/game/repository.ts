@@ -4029,7 +4029,7 @@ export interface StockOrderRow {
   updated_at: number;
 }
 
-/** 0061：逐仓保证金仓位。 */
+/** 0063：逐仓保证金仓位。 */
 export interface StockMarginPositionRow {
   sect_id: string;
   stock_id: string;
@@ -4045,7 +4045,7 @@ export interface StockMarginPositionRow {
   updated_at: number;
 }
 
-/** 0061：保证金开仓 / 平仓 / 强平流水。 */
+/** 0063：保证金开仓 / 平仓 / 强平流水。 */
 export interface StockMarginTradeRow {
   id: string;
   sect_id: string;
@@ -4167,7 +4167,7 @@ export class MarketRepository extends ParamRepository {
     return rows.map((row) => Number(row.created_at));
   }
 
-  /** 0061：本宗当前的保证金仓位。 */
+  /** 0063：本宗当前的保证金仓位。 */
   async marginPositionsOf(sectId: string): Promise<StockMarginPositionRow[]> {
     return this.all<StockMarginPositionRow>({
       sql: 'SELECT * FROM stock_margin_positions WHERE sect_id = ?',
@@ -4175,7 +4175,7 @@ export class MarketRepository extends ParamRepository {
     });
   }
 
-  /** 0061：全服当前保证金仓位，定时任务按股票和方向扫描。 */
+  /** 0063：全服当前保证金仓位，定时任务按股票和方向扫描。 */
   async allMarginPositions(limit: number): Promise<StockMarginPositionRow[]> {
     return this.all<StockMarginPositionRow>({
       sql: 'SELECT * FROM stock_margin_positions ORDER BY updated_at ASC LIMIT ?',
@@ -4198,7 +4198,7 @@ export class MarketRepository extends ParamRepository {
     return Number(row?.cnt ?? 0);
   }
 
-  /** 0061：[from, to) 之间合约成交时刻。 */
+  /** 0063：[from, to) 之间合约成交时刻。 */
   async marginTradeTimesBetween(sectId: string, from: number, to: number): Promise<number[]> {
     const rows = await this.all<{ created_at: number }>({
       sql: 'SELECT created_at FROM stock_margin_trades WHERE sect_id = ? AND created_at >= ? AND created_at < ?',
@@ -4279,7 +4279,7 @@ export function stockHoldingGuardStatement(
   };
 }
 
-/* ---------- 0061 灵股保证金合约 ---------- */
+/* ---------- 0063 灵股保证金合约 ---------- */
 
 export function upsertStockMarginPositionStatement(input: {
   sectId: string;

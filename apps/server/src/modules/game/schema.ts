@@ -491,7 +491,7 @@ export const marketTradeRequestSchema = z.strictObject({
   shares: z.number().int().min(1).max(100_000),
 });
 
-/** 0061 灵股保证金：开多 / 开空 / 平仓。金额按服务端当前价结算。 */
+/** 0063 灵股保证金：开多 / 开空 / 平仓。金额按服务端当前价结算。 */
 export const marketMarginRequestSchema = z.strictObject({
   stockId: z.string().min(1).max(32),
   action: z.enum(['open', 'close']),

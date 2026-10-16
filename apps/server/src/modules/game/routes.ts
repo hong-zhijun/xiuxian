@@ -867,7 +867,7 @@ export function createGameRoutes(): Hono<AppEnv> {
     return respondOk(c, { state: result.state, market: result.market, result: result.result });
   });
 
-  // 0061 灵股保证金：开多 / 开空 / 平仓，服务端按当前分钟价格结算。
+  // 0063 灵股保证金：开多 / 开空 / 平仓，服务端按当前分钟价格结算。
   routes.post('/game/market/margin', async (c) => {
     const userId = requireUserId(c);
     const body = await parseStrictJson(marketMarginRequestSchema, c);
