@@ -1496,3 +1496,101 @@ describe('0036 历练额外奖励', () => {
     expect(await bonusFields(discipleId)).toMatchObject({ luck: 100, dao_insight: 0, dao_insight_used: 50 });
   });
 });
+
+describe('0061 紧急召回：立刻归队、收获作废、免费', () => {
+  const recall = (fixture: JourneyFixture, journeyId: string): Promise<ApiResult> =>
+    fixture.api.post('/api/v1/game/recall-journey', { journeyId });
+
+  it('在外弟子召回后立刻归队：记录收口为已领取、奖励清零、不会受伤，资源不变', async () => {
+    const fixture = await makeSect('recall');
+    const discipleId = fixture.discipleIds[0]!;
+    const journeyId = await startOk(fixture, discipleId, 'gathering', 21_600);
+    // 出发时抽中了受伤：召回后也不该受伤。
+    await env.DB.prepare('UPDATE disciple_journeys SET injured = 1, extra_harvest = 1 WHERE id = ?')
+      .bind(journeyId)
+      .run();
+    await freezeSettlement(fixture.sectId);
+    const herbBefore = await dbBalance(fixture.sectId, 'herb');
+    const oreBefore = await dbBalance(fixture.sectId, 'ore');
+    const stoneBefore = await dbBalance(fixture.sectId, 'spiritStone');
+
+    const recalled = await recall(fixture, journeyId);
+    expect(recalled.status).toBe(200);
+    const data = dataOf(recalled) as Record<string, any>;
+    expect(data.outcome).toMatchObject({ journeyId, discipleId, direction: 'gathering', directionName: '采集' });
+    expect(data.outcome.message).toContain('紧急召回');
+
+    const row = (await journeyRow(journeyId)) as JourneyRow & { recalled_at: number | null; bonus_detail: string };
+    expect(row.recalled_at).not.toBeNull();
+    expect(row.completed_at).not.toBeNull();
+    expect(row.claimed_at).not.toBeNull();
+    expect(row).toMatchObject({
+      reward_cultivation: 0,
+      reward_resources: '{}',
+      extra_harvest: 0,
+      injured: 0,
+      cultivation_awarded: 0,
+      bonus_detail: '{}',
+    });
+    expect(row.ends_at).toBeGreaterThan(row.started_at);
+    expect(row.ends_at).toBeLessThanOrEqual(Date.now());
+
+    expect((await discipleRow(discipleId))?.injured_until).toBeNull();
+    expect(await dbBalance(fixture.sectId, 'herb')).toBe(herbBefore);
+    expect(await dbBalance(fixture.sectId, 'ore')).toBe(oreBefore);
+    expect(await dbBalance(fixture.sectId, 'spiritStone')).toBe(stoneBefore);
+
+    // 回执里的 state：弟子不再在外，名额释放，历史里标出召回。
+    const disciple = (data.state.disciples as Record<string, any>[]).find((item) => item.id === discipleId)!;
+    expect(disciple.journey.status).toBe('none');
+    expect(data.state.journey.activeCount).toBe(0);
+    const record = (data.state.journey.recent as Record<string, any>[]).find((item) => item.id === journeyId)!;
+    expect(record.status).toBe('claimed');
+    expect(record.outcome).toMatchObject({ recalled: true, injured: false, extraHarvest: false, cultivationAwarded: 0 });
+    expect(record.outcome.resources).toEqual({});
+    expect(await mutationGuardCount()).toBe(0);
+  });
+
+  it('召回后可以马上再次出发', async () => {
+    const fixture = await makeSect('recall2');
+    const discipleId = fixture.discipleIds[0]!;
+    const first = await startOk(fixture, discipleId, 'daoSeeking', 7_200);
+    expect((await recall(fixture, first)).status).toBe(200);
+    const second = await startOk(fixture, discipleId, 'daoSeeking', 7_200);
+    expect(second).not.toBe(first);
+    expect(await journeyCount(fixture.sectId)).toBe(2);
+  });
+
+  it('已到期待领取的不能召回；召回过的不能再召回或领取', async () => {
+    const fixture = await makeSect('recall3');
+    const readyId = await startOk(fixture, fixture.discipleIds[0]!, 'gathering', 7_200);
+    const now = Date.now();
+    await transportJourney(readyId, now - 3 * HOUR, now - 1_000);
+    const rejected = await recall(fixture, readyId);
+    expect(rejected.status).toBe(409);
+    expect(errorOf(rejected).message).toContain('直接领取');
+    expect((await journeyRow(readyId))!.claimed_at).toBeNull();
+
+    const activeId = await startOk(fixture, fixture.discipleIds[1]!, 'gathering', 7_200);
+    expect((await recall(fixture, activeId)).status).toBe(200);
+    const again = await recall(fixture, activeId);
+    expect(again.status).toBe(409);
+    expect(errorOf(again).code).toBe('INVALID_STATUS');
+    const claimed = await fixture.claim(activeId);
+    expect(claimed.status).toBe(409);
+  });
+
+  it('跨宗 / 不存在的记录返回 NOT_FOUND；多余字段被 schema 拒绝', async () => {
+    const fixture = await makeSect('recall4');
+    const other = await makeSect('recall5');
+    const otherJourney = await startOk(other, other.discipleIds[0]!, 'gathering', 7_200);
+    const cross = await recall(fixture, otherJourney);
+    expect(cross.status).toBe(404);
+    expect((await journeyRow(otherJourney))!.claimed_at).toBeNull();
+    expect((await recall(fixture, crypto.randomUUID())).status).toBe(404);
+
+    const rejected = await fixture.api.post('/api/v1/game/recall-journey', { journeyId: otherJourney, force: true });
+    expect(rejected.status).toBe(400);
+    expect(errorOf(rejected).code).toBe('VALIDATION_ERROR');
+  });
+});

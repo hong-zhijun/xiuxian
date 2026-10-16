@@ -1225,6 +1225,8 @@ export type JourneyStatusView = 'none' | 'active' | 'ready';
 
 /** 历练结果（只在到期后公开；未领取时 claimedAt 为 null）。 */
 export interface JourneyOutcomeView {
+  /** 0061 是否被紧急召回（召回的记录收获全部作废、不会受伤）。 */
+  recalled: boolean;
   /** 返程实际入账的修为（受返程门槛封顶；最高阶段为 0）。 */
   cultivationAwarded: number;
   /** 出发时快照的计划修为（含额外收获，未按门槛截断）。 */
@@ -1379,6 +1381,26 @@ export async function claimJourney(
 ): Promise<{ state: SectStateView; outcome: JourneyClaimOutcomeView }> {
   return apiRequest<{ state: SectStateView; outcome: JourneyClaimOutcomeView }>(
     '/api/v1/game/claim-journey',
+    { method: 'POST', body: { journeyId } },
+  );
+}
+
+/** 0061 紧急召回回执（POST /game/recall-journey 的 outcome）：召回的历练一无所获。 */
+export interface JourneyRecallOutcomeView {
+  journeyId: string;
+  discipleId: string;
+  discipleName: string;
+  direction: JourneyDirection;
+  directionName: string;
+  message: string;
+}
+
+/** 0061 紧急召回：在外弟子立刻归队，本趟收获全部作废、不会受伤，免费。 */
+export async function recallJourney(
+  journeyId: string,
+): Promise<{ state: SectStateView; outcome: JourneyRecallOutcomeView }> {
+  return apiRequest<{ state: SectStateView; outcome: JourneyRecallOutcomeView }>(
+    '/api/v1/game/recall-journey',
     { method: 'POST', body: { journeyId } },
   );
 }

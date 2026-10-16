@@ -16,6 +16,7 @@ import {
   challengeRequestSchema,
   chooseRealmExploreSchema,
   claimJourneyRequestSchema,
+  recallJourneyRequestSchema,
   craftPillRequestSchema,
   createSectRequestSchema,
   daoDebateRequestSchema,
@@ -79,6 +80,7 @@ import {
   challengeSect,
   chooseRealmExplore,
   claimJourney,
+  recallJourney,
   craftPill,
   createSect,
   daoDebate,
@@ -571,6 +573,14 @@ export function createGameRoutes(): Hono<AppEnv> {
     const userId = requireUserId(c);
     const body = await parseStrictJson(claimJourneyRequestSchema, c);
     const result = await claimJourney(getDb(c.env), userId, body.journeyId, Date.now());
+    return respondOk(c, { state: result.state, outcome: result.outcome });
+  });
+
+  // 0061：紧急召回（结算 → 只能召回仍在外的 → 记录收口、收获作废，一次受保护 batch）。
+  routes.post('/game/recall-journey', async (c) => {
+    const userId = requireUserId(c);
+    const body = await parseStrictJson(recallJourneyRequestSchema, c);
+    const result = await recallJourney(getDb(c.env), userId, body.journeyId, Date.now());
     return respondOk(c, { state: result.state, outcome: result.outcome });
   });
 

@@ -233,6 +233,11 @@ export const claimJourneyRequestSchema = z.strictObject({
   journeyId: z.string().min(1).max(64),
 });
 
+/** 0061 紧急召回：只带历练记录 id（只能召回本宗仍在外的记录）。 */
+export const recallJourneyRequestSchema = z.strictObject({
+  journeyId: z.string().min(1).max(64),
+});
+
 /**
  * V6 交互式秘境探索（0015）：id/choiceId 只做「类型 + 宽松长度」的第一道防线，
  * 秘境与选项的合法性、探索记录的归属、是否仍有进行中的探索都在 service 层判定。

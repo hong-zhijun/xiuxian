@@ -12,6 +12,7 @@ import {
   challenge,
   chooseRealmExplore,
   claimJourney,
+  recallJourney,
   craftPill,
   daoDebate,
   expelDisciple,
@@ -56,6 +57,7 @@ import type {
   HealBatchOutcome,
   InsightAllocateOutcome,
   JourneyClaimOutcomeView,
+  JourneyRecallOutcomeView,
   JourneyDirection,
   RecruitPreview,
   ResourceView,
@@ -990,6 +992,21 @@ function onClaimJourney(journeyId: string): void {
   );
 }
 
+/** 0061 紧急召回：弟子立刻归队，本趟收获作废（文案沿用服务端 message）。 */
+function onRecallJourney(journeyId: string): void {
+  void runAction(
+    () => recallJourney(journeyId),
+    (data) => {
+      const outcome = data.outcome as JourneyRecallOutcomeView | undefined;
+      return {
+        tone: 'warning',
+        title: outcome === undefined ? '弟子已召回' : `${outcome.discipleName} 已召回`,
+        message: outcome?.message ?? '弟子已归队，本次历练没有收获。',
+      };
+    },
+  );
+}
+
 async function onLogout(): Promise<void> {
   if (busy.value) return;
   busy.value = true;
@@ -1136,6 +1153,7 @@ onUnmounted(() => {
       @expel="onExpelDisciple"
       @start-journey="onStartJourney"
       @claim-journey="onClaimJourney"
+      @recall-journey="onRecallJourney"
       @notify="notify"
     />
 

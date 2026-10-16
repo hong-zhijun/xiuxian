@@ -1150,6 +1150,8 @@ export type JourneyStatusView = JourneyStatus;
 
 /** 历练结果（只在到期后公开；未领取时 claimedAt 为 null）。 */
 export interface JourneyOutcomeView {
+  /** 0061 是否被紧急召回（召回的记录收获全部作废、不会受伤）。 */
+  recalled: boolean;
   /** 返程实际入账的修为（按返程时的剩余门槛封顶；最高阶段为 0）。 */
   cultivationAwarded: number;
   /** 出发时快照的计划修为（含额外收获，未按门槛截断）。 */
@@ -1282,6 +1284,16 @@ export interface JourneyClaimOutcomeView {
   endsAt: string;
   /** 0036 额外奖励的实际结果文案（如「淬炼有成，幸运 +1」）；没有为空数组。 */
   bonusTexts: string[];
+  message: string;
+}
+
+/** 0061 紧急召回回执（POST /game/recall-journey 的 outcome）：召回的历练一无所获。 */
+export interface JourneyRecallOutcomeView {
+  journeyId: string;
+  discipleId: string;
+  discipleName: string;
+  direction: JourneyDirection;
+  directionName: string;
   message: string;
 }
 
@@ -2833,6 +2845,7 @@ function journeyOutcomeView(row: DiscipleJourneyRow, now: number): JourneyOutcom
   const injured = Number(row.injured) === 1;
   const bonus = parseJourneyBonus(row.bonus_detail);
   return {
+    recalled: row.recalled_at !== null && row.recalled_at !== undefined,
     cultivationAwarded: Number(row.cultivation_awarded ?? 0),
     cultivationPlanned: Number(row.reward_cultivation),
     resources: parseJourneyRewardResources(row.reward_resources),

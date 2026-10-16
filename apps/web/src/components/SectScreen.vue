@@ -171,6 +171,8 @@ const emit = defineEmits<{
   requestJourneyPreview: [discipleId: string];
   startJourney: [discipleId: string, direction: JourneyDirection, durationSeconds: number];
   claimJourney: [journeyId: string];
+  /** 0061 紧急召回。 */
+  recallJourney: [journeyId: string];
   /** 0017 保存头像框样式（白名单 id，见 utils/avatarFrames.ts）。 */
   setAvatarFrame: [discipleId: string, frameId: AvatarFrameId];
   /** 0038 自定义头像：上传（浏览器里已压缩好）/ 移除。 */
@@ -1529,6 +1531,11 @@ function onDetailStartJourney(
 function onDetailClaimJourney(journeyId: string): void {
   if (props.busy) return;
   emit('claimJourney', journeyId);
+}
+
+function onDetailRecallJourney(journeyId: string): void {
+  if (props.busy) return;
+  emit('recallJourney', journeyId);
 }
 
 function onDetailNotify(tone: ToastTone, title: string, message: string): void {
@@ -3029,6 +3036,7 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
         @request-journey-preview="onDetailRequestJourneyPreview"
         @start-journey="onDetailStartJourney"
         @claim-journey="onDetailClaimJourney"
+        @recall-journey="onDetailRecallJourney"
         @notify="onDetailNotify"
         @set-avatar-frame="onDetailSetAvatarFrame"
         @set-avatar-image="onDetailSetAvatarImage"

@@ -289,6 +289,7 @@ import {
   updateEquipmentHolderStatement,
   updateEquipmentRefineStatement,
   updateEquipmentSubStatement,
+  recallDiscipleJourneyStatement,
   updateSectChallengeCounterStatement,
   updateSectDefenseLineupStatement,
   updateSectLevelStatement,
@@ -697,6 +698,7 @@ import {
   type SparHistoryEntryView,
   type SparResultView,
   type JourneyClaimOutcomeView,
+  type JourneyRecallOutcomeView,
   type JourneyDirectionPreviewView,
   type JourneyDurationPreviewView,
   type JourneyPreviewView,
@@ -1866,6 +1868,25 @@ class SectDraft {
         ? { ...row, balance: Number(row.balance) + amount, updated_at: this.now }
         : row,
     );
+  }
+
+  /**
+   * 0061：紧急召回（条件更新 + 内存同步）：记录直接收口为「已领取、无收获」，
+   * 弟子立刻不再在外。ends_at 至少比出发时刻晚 1 毫秒（表上 CHECK ends_at > started_at）。
+   */
+  markJourneyRecalled(journey: DiscipleJourneyRow): void {
+    const endsAt = Math.max(this.now, Number(journey.started_at) + 1);
+    this.addStatement(recallDiscipleJourneyStatement(journey.id, this.sect.id, endsAt, this.now));
+    journey.ends_at = endsAt;
+    journey.completed_at = this.now;
+    journey.claimed_at = this.now;
+    journey.recalled_at = this.now;
+    journey.cultivation_awarded = 0;
+    journey.reward_cultivation = 0;
+    journey.reward_resources = '{}';
+    journey.extra_harvest = 0;
+    journey.injured = 0;
+    journey.bonus_detail = '{}';
   }
 
   /** 0014：领取标记（条件更新 + 内存同步）。 */
@@ -6698,6 +6719,7 @@ export async function startJourney(
     cultivation_awarded: null,
     created_at: now,
     bonus_detail: serializeJourneyBonus(bonus),
+    recalled_at: null,
   });
 
   await draft.commitJourneyStart(disciple.id, activeCount, atHomeCount);
@@ -6856,6 +6878,53 @@ export async function claimJourney(
     },
   };
 }
+/**
+ * 0061 紧急召回（POST /game/recall-journey）：在外（未到期）的弟子立刻归队。
+ *
+ * - 本趟收获全部作废（修为、资源、额外收获、机遇 / 悟道 / 淬炼都不给），也不会受伤；免费；
+ * - 只能召回仍在外的记录：已到期待领取的请直接领取；
+ * - 记录同批收口为「已领取」，所以召回后立刻可以转岗、出发或参与其他玩法；
+ * - 提交复用领取的受保护 batch：守卫复核记录仍未完成 / 未领取、奖励快照未变，并发召回 / 结算整批回滚。
+ */
+export async function recallJourney(
+  db: D1Database,
+  userId: string,
+  journeyId: string,
+  now: number,
+): Promise<{ state: SectStateView; outcome: JourneyRecallOutcomeView }> {
+  const draft = await draftFor(db, userId, now);
+
+  // 跨宗 id 一律 NOT_FOUND（与领取同一口径，不泄露他人记录）。
+  const stored = await new DiscipleJourneyRepository(db).findByIdForSect(journeyId, draft.sect.id);
+  if (stored === null) {
+    throw new AppError('NOT_FOUND', '历练记录不存在');
+  }
+  const journey = draft.openJourneyById(journeyId);
+  if (stored.claimed_at !== null || journey === undefined) {
+    throw new AppError('INVALID_STATUS', '该弟子已归队');
+  }
+  if (journeyStatusOf(journey, now) !== 'active') {
+    throw new AppError('INVALID_STATUS', '弟子已归队，请直接领取收获');
+  }
+
+  draft.markJourneyRecalled(journey);
+  await draft.commitJourneyClaim(journeyId, null);
+
+  const direction = asJourneyDirection(journey.direction);
+  const directionName = findJourneyDirection(direction).name;
+  return {
+    state: draft.view(),
+    outcome: {
+      journeyId: journey.id,
+      discipleId: journey.disciple_id,
+      discipleName: journey.disciple_name,
+      direction,
+      directionName,
+      message: `${journey.disciple_name}已被紧急召回，本次${directionName}一无所获`,
+    },
+  };
+}
+
 /* ------------------------------------------------------------------ *
  * V6：交互式秘境探索（迁移 0015）
  *

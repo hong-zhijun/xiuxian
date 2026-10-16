@@ -19,6 +19,15 @@ export const MAX_ENTRIES = 5;
 
 export const CHANGELOG: readonly ChangelogEntry[] = [
   {
+    id: '2026-10-16-journey-recall',
+    time: '2026-10-16 12:00',
+    title: '历练 · 新增紧急召回',
+    items: [
+      '弟子详情的「历练」页，在外历练的弟子可以「紧急召回」，确认后立刻归队。',
+      '召回免费、不会受伤，但本次历练的修为、资源和额外奖励全部作废；召回后可以马上转岗或再次出发。',
+    ],
+  },
+  {
     id: '2026-10-16-equipment-reroll',
     time: '2026-10-16 10:30',
     title: '祭炼堂 · 新增洗练',
