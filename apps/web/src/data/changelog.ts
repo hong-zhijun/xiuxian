@@ -19,6 +19,12 @@ export const MAX_ENTRIES = 5;
 
 export const CHANGELOG: readonly ChangelogEntry[] = [
   {
+    id: '2026-10-18-world-boss-auto-gift',
+    time: '2026-10-18 12:05',
+    title: '自动讨伐上线贺礼',
+    items: ['为庆祝世界 Boss 自动讨伐上线，更新时已建立的每个宗门获赠聚气丹 ×200，已直接放入丹药库存，无需领取。'],
+  },
+  {
     id: '2026-10-18-world-boss-auto',
     time: '2026-10-18 12:00',
     title: '世界 Boss · 自动讨伐上线',
