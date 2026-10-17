@@ -366,6 +366,7 @@ import {
 } from './repository';
 import {
   WorldBossRepository,
+  WorldBossAutoRepository,
   incrementPillInventoryStatement,
   insertDiscipleBossBattleStatement,
   insertWorldBossHitStatement,
@@ -618,7 +619,6 @@ import {
   WORLD_BOSS_AFFIX_NONE,
   WORLD_BOSS_CLOSE_HOUR,
   WORLD_BOSS_COOLDOWN_MS,
-  WORLD_BOSS_DAILY_ATTACK_LIMIT_DEFAULT,
   WORLD_BOSS_FATIGUE_WINDOW_MS,
   WORLD_BOSS_INJURY_DURATION_MS,
   WORLD_BOSS_KILL_PILL_ID,
@@ -643,7 +643,6 @@ import {
   isFledByDamage,
   isWorldBossAttackable,
   lastHitReward,
-  parseDailyAttackLimit,
   rollAffix,
   rollDamage,
   rollOutcome,
@@ -6993,11 +6992,6 @@ export function realmExploreEnabled(env: Env): boolean {
   return readStringVar(env.REALM_EXPLORE_ENABLED) === 'true';
 }
 
-/** 讨伐每日出手上限（环境变量 WORLD_BOSS_DAILY_ATTACK_LIMIT；没配 / 写错用默认 120，0 = 不限）。 */
-export function worldBossDailyAttackLimit(env: Env): number {
-  return parseDailyAttackLimit(readStringVar(env.WORLD_BOSS_DAILY_ATTACK_LIMIT));
-}
-
 /** 把入库的遭遇 JSON 还原成视图；脏数据返回 null（不让一条坏记录卡死整个 sync）。 */
 function encounterViewOf(json: string | null): EncounterView | null {
   if (json === null) {
@@ -8950,8 +8944,6 @@ async function buildWorldBossView(input: {
   rewardContext?: { rates: Record<string, number>; sectLevel: number };
   /** 已经读到的关卡行（出手后传刚读回来的那一行，省一次查询）。 */
   boss?: WorldBossRow | null;
-  /** 每日出手上限（0 = 不限），由路由按环境变量传入。 */
-  dailyAttackLimit: number;
 }): Promise<WorldBossView> {
   const repo = new WorldBossRepository(input.db);
   const { now } = input;
@@ -8995,15 +8987,15 @@ async function buildWorldBossView(input: {
     boss === null ? Promise.resolve([]) : repo.sectDamageRows(boss.id);
   const hitPromise: Promise<WorldBossHitRow[]> =
     boss === null ? Promise.resolve([]) : repo.recentHitsByBoss(boss.id, WORLD_BOSS_HIT_FEED_LIMIT);
-  const [rankRows, hitRows, topRow, killedToday, bestStage, attacksToday] = await Promise.all([
+  const [rankRows, hitRows, topRow, killedToday, bestStage, attacksToday, autoSetting] = await Promise.all([
     rankPromise,
     hitPromise,
     repo.topHit(),
     repo.countKilledByDayKey(dayKey),
     repo.maxKilledStage(),
     repo.countHitsBySectSince(input.sectId, todayStart),
+    new WorldBossAutoRepository(input.db).findBySectId(input.sectId),
   ]);
-  const limitReached = input.dailyAttackLimit > 0 && attacksToday >= input.dailyAttackLimit;
 
   const ranks: WorldBossRankView[] = rankRows.map((row, index) => ({
     sectId: row.sect_id,
@@ -9050,10 +9042,13 @@ async function buildWorldBossView(input: {
     cooldownSeconds,
     fatigue,
     fatigueTimes,
-    // 今日出手次数用满了也算「此刻不能出手」（面板按钮与 state 里的角标一起灭）。
-    attackable: bossAttackable && !limitReached,
+    attackable: bossAttackable,
     attacksToday,
-    dailyAttackLimit: input.dailyAttackLimit,
+    autoEnabled: autoSetting !== null && Number(autoSetting.enabled) === 1,
+    autoPauseReason: autoSetting?.pause_reason ?? null,
+    autoLastRunAt: autoSetting?.last_run_at === null || autoSetting?.last_run_at === undefined
+      ? null
+      : Number(autoSetting.last_run_at),
     ranks,
     hits: hitRows.map(toWorldBossHitView),
     topHit: topRow === null ? null : toWorldBossHitView(topRow),
@@ -9110,7 +9105,8 @@ export async function getWorldBoss(
   db: D1Database,
   userId: string,
   now: number,
-  dailyAttackLimit: number = WORLD_BOSS_DAILY_ATTACK_LIMIT_DEFAULT,
+  /** @deprecated 旧调用方可能仍传环境上限；世界 Boss 现已取消每日出手上限，参数会被忽略。 */
+  _legacyDailyAttackLimit?: number,
 ): Promise<{ state: SectStateView; boss: WorldBossView }> {
   const draft = await draftFor(db, userId, now);
   const boss = await buildWorldBossView({
@@ -9118,11 +9114,195 @@ export async function getWorldBoss(
     sectId: draft.sect.id,
     now,
     rewardContext: worldBossRewardContext(draft.view()),
-    dailyAttackLimit,
   });
   // 面板已经算过「能不能出手」，顺手让 state 里的角标与它一致。
   draft.worldBossAttackable = boss.attackable;
   return { state: draft.view(), boss };
+}
+
+const WORLD_BOSS_AUTO_LEASE_MS = 5 * 60_000;
+const WORLD_BOSS_AUTO_RUN_BUDGET_MS = 25_000;
+const WORLD_BOSS_AUTO_RETRY_MS = 60_000;
+const WORLD_BOSS_AUTO_COOLDOWN_WAIT_MS = WORLD_BOSS_COOLDOWN_MS;
+
+/** 自动讨伐开关：写入宗门级持久化设置，开关打开后由 Cron 继续执行。 */
+export async function setWorldBossAuto(
+  db: D1Database,
+  userId: string,
+  enabled: boolean,
+  now: number,
+): Promise<{ state: SectStateView; boss: WorldBossView }> {
+  const draft = await draftFor(db, userId, now);
+  await draft.commit();
+  await new WorldBossAutoRepository(db).setEnabled(draft.sect.id, enabled, now);
+  return getWorldBoss(db, userId, now);
+}
+
+interface WorldBossAutoRunResult {
+  nextRunAt: number;
+  result: string;
+  pauseReason: string | null;
+}
+
+function activeUntil(value: string | null, now: number): boolean {
+  if (value === null) return false;
+  const until = Date.parse(value);
+  return Number.isFinite(until) && until > now;
+}
+
+function autoWorldBossParty(state: SectStateView, boss: WorldBossView, now: number): string[] {
+  const sortAttribute = boss.boss?.affix.sortAttribute ?? 'attack';
+  const score = (disciple: SectStateView['disciples'][number]): number => {
+    const value = disciple[sortAttribute] + (disciple.gear?.[sortAttribute] ?? 0);
+    return disciple.combatPower * (1 + value * 0.005);
+  };
+  return state.disciples
+    .filter(
+      (disciple) =>
+        !activeUntil(disciple.injuredUntil, now) &&
+        !activeUntil(disciple.severeInjuredUntil, now) &&
+        disciple.journey.status !== 'active' &&
+        disciple.combatBlockedReason === null &&
+        disciple.garrisonSiteName === null &&
+        (boss.fatigue[disciple.id] ?? 0) < 3,
+    )
+    .sort((left, right) => score(right) - score(left))
+    .slice(0, WORLD_BOSS_MAX_PARTY)
+    .map((disciple) => disciple.id);
+}
+
+function errorMessageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function sleepForWorldBossAuto(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+/**
+ * 单个宗门的自动讨伐循环。
+ * 每一轮都会重新读面板；有普通伤员就整批疗伤（库存不足时按现有规则自动炼制），
+ * 治疗后立即重新选人并出手。循环受 Worker 单次 Cron 预算限制，下一轮由持久化 next_run_at 接续。
+ */
+async function runWorldBossAutoForSect(
+  db: D1Database,
+  userId: string,
+  sectId: string,
+  now: number,
+  sleep: (milliseconds: number) => Promise<void> = sleepForWorldBossAuto,
+): Promise<WorldBossAutoRunResult> {
+  const autoRepo = new WorldBossAutoRepository(db);
+  let currentNow = now;
+  const deadline = now + WORLD_BOSS_AUTO_RUN_BUDGET_MS;
+  let attacks = 0;
+
+  while (currentNow <= deadline) {
+    const setting = await autoRepo.findBySectId(sectId);
+    if (setting === null || Number(setting.enabled) !== 1) {
+      return { nextRunAt: 0, result: 'disabled', pauseReason: null };
+    }
+
+    const current = await getWorldBoss(db, userId, currentNow);
+    if (!current.boss.attackable || current.boss.boss === null || current.boss.boss.status !== 'active') {
+      return {
+        nextRunAt: currentNow + WORLD_BOSS_AUTO_RETRY_MS,
+        result: attacks === 0 ? 'waiting' : `attacked:${String(attacks)}`,
+        pauseReason: current.boss.phase === 'closed' ? null : '当前没有可讨伐的妖王',
+      };
+    }
+
+    const injuredIds = current.state.disciples
+      .filter((disciple) => activeUntil(disciple.injuredUntil, currentNow))
+      .map((disciple) => disciple.id);
+    let healError: string | null = null;
+    if (injuredIds.length > 0) {
+      try {
+        await healDisciplesBatch(db, userId, injuredIds, currentNow, true);
+      } catch (error) {
+        // 受伤弟子可能正在历练，或回春丹与炼丹资源都不足；保留错误，继续尝试派健康弟子。
+        healError = errorMessageOf(error);
+      }
+    }
+
+    // 治疗好的弟子在这一轮马上进入候选，不等下一次定时任务。
+    const refreshed = await getWorldBoss(db, userId, currentNow);
+    if (!refreshed.boss.attackable || refreshed.boss.boss === null || refreshed.boss.boss.status !== 'active') {
+      return {
+        nextRunAt: currentNow + WORLD_BOSS_AUTO_RETRY_MS,
+        result: attacks === 0 ? 'waiting' : `attacked:${String(attacks)}`,
+        pauseReason: null,
+      };
+    }
+    const party = autoWorldBossParty(refreshed.state, refreshed.boss, currentNow);
+    if (party.length === 0) {
+      return {
+        nextRunAt: currentNow + WORLD_BOSS_AUTO_RETRY_MS,
+        result: attacks === 0 ? 'paused' : `attacked:${String(attacks)}`,
+        pauseReason: healError ?? '暂无可出战的弟子',
+      };
+    }
+
+    try {
+      await attackWorldBoss(db, userId, { discipleIds: party }, currentNow);
+      attacks += 1;
+    } catch (error) {
+      if (error instanceof AppError && error.code === 'COOLDOWN_ACTIVE') {
+        const remaining = Number(error.details?.remainingSeconds ?? 1);
+        return {
+          nextRunAt: currentNow + Math.max(1, remaining) * 1000,
+          result: attacks === 0 ? 'waiting' : `attacked:${String(attacks)}`,
+          pauseReason: null,
+        };
+      }
+      return {
+        nextRunAt: currentNow + WORLD_BOSS_AUTO_RETRY_MS,
+        result: attacks === 0 ? 'paused' : `attacked:${String(attacks)}`,
+        pauseReason: errorMessageOf(error),
+      };
+    }
+
+    currentNow += WORLD_BOSS_AUTO_COOLDOWN_WAIT_MS;
+    if (currentNow > deadline) break;
+    await sleep(WORLD_BOSS_AUTO_COOLDOWN_WAIT_MS);
+  }
+
+  return {
+    nextRunAt: currentNow,
+    result: `attacked:${String(attacks)}`,
+    pauseReason: null,
+  };
+}
+
+/** 定时任务入口：抢租约后执行各宗门的自动循环，关闭页面 / 退出登录不影响它。 */
+export async function processWorldBossAuto(
+  db: D1Database,
+  now: number,
+  sleep: (milliseconds: number) => Promise<void> = sleepForWorldBossAuto,
+): Promise<void> {
+  const repo = new WorldBossAutoRepository(db);
+  const due = await repo.findDue(now);
+  for (const item of due) {
+    const leaseUntil = now + WORLD_BOSS_AUTO_LEASE_MS;
+    if (!(await repo.acquireLease(item.sect_id, now, leaseUntil))) continue;
+    let run: WorldBossAutoRunResult;
+    try {
+      run = await runWorldBossAutoForSect(db, item.user_id, item.sect_id, now, sleep);
+    } catch (error) {
+      run = {
+        nextRunAt: now + WORLD_BOSS_AUTO_RETRY_MS,
+        result: 'paused',
+        pauseReason: errorMessageOf(error),
+      };
+    }
+    await repo.finishRun({
+      sectId: item.sect_id,
+      leaseUntil,
+      now,
+      nextRunAt: run.nextRunAt,
+      result: run.result,
+      pauseReason: run.pauseReason,
+    });
+  }
 }
 
 /**
@@ -9246,7 +9426,8 @@ export async function attackWorldBoss(
   userId: string,
   input: { discipleIds: readonly string[] },
   now: number,
-  dailyAttackLimit: number = WORLD_BOSS_DAILY_ATTACK_LIMIT_DEFAULT,
+  /** @deprecated 旧调用方兼容参数；现已取消每日出手上限。 */
+  _legacyDailyAttackLimit?: number,
 ): Promise<{ state: SectStateView; result: WorldBossAttackResultView; boss: WorldBossView }> {
   const draft = await draftFor(db, userId, now);
   const repo = new WorldBossRepository(db);
@@ -9273,18 +9454,6 @@ export async function attackWorldBoss(
       throw new AppError('COOLDOWN_ACTIVE', '出手太快，妖王还没缓过神', {
         remainingSeconds: Math.ceil(remainingMs / 1000),
       });
-    }
-  }
-
-  // 每日出手上限（防协议脚本全天刷；0 = 不限）：按 UTC+8 自然日数本宗门的出手记录。
-  if (dailyAttackLimit > 0) {
-    const attacksToday = await repo.countHitsBySectSince(draft.sect.id, dayStartMs(now));
-    if (attacksToday >= dailyAttackLimit) {
-      throw new AppError(
-        'DAILY_LIMIT',
-        `今日出手次数已达上限（${String(attacksToday)}/${String(dailyAttackLimit)}），明日再战`,
-        { attacksToday, dailyAttackLimit },
-      );
     }
   }
 
@@ -9510,12 +9679,11 @@ export async function attackWorldBoss(
       now,
       boss: viewBoss,
       rewardContext: worldBossRewardContext(draft.view()),
-      dailyAttackLimit,
     }),
   };
 }
 /**
- * 0027 世界 Boss：Cron 的每 10 分钟处理（出现 → 逃走 → 发奖 → 清理疲劳记录）。
+ * 0027 世界 Boss：Cron 的每分钟处理（出现 → 自动讨伐 → 逃走 → 发奖 → 清理疲劳记录）。
  *
  * Workers 不等未完成的 Promise，所以每一步都 await；各步各自兜错，
  * 前一步失败不会挡住后面的发奖。
@@ -9525,6 +9693,11 @@ export async function processWorldBoss(db: D1Database, now: number): Promise<voi
     await spawnWorldBoss(db, now);
   } catch (error) {
     console.warn(`world_boss_spawn_failed now=${String(now)} error=${String(error)}`);
+  }
+  try {
+    await processWorldBossAuto(db, now);
+  } catch (error) {
+    console.warn(`world_boss_auto_failed now=${String(now)} error=${String(error)}`);
   }
   try {
     await fleeExpiredWorldBosses(db, now);

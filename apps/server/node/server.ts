@@ -38,8 +38,6 @@ const DEFAULT_VARS: Record<string, string> = {
   LOGIN_RATE_LIMIT_WINDOW_SECONDS: '60',
   ALLOWED_ORIGINS: '',
   REALM_EXPLORE_ENABLED: 'true',
-  /** 讨伐每日出手上限（0 = 不限）；改 .env 里的 WORLD_BOSS_DAILY_ATTACK_LIMIT 后重启即可。 */
-  WORLD_BOSS_DAILY_ATTACK_LIMIT: '120',
   OPENROUTER_API_KEY: '',
 };
 
@@ -195,8 +193,8 @@ function start(): void {
     (info) => console.log(`开山立派已启动：http://${HOST}:${String(info.port)}（数据库 ${DB_PATH}）`),
   );
 
-  // 与 Workers Cron 的 */10 对齐：每个整 10 分钟跑一次，上一轮跑完才排下一轮。
-  const TICK_MS = 10 * 60 * 1000;
+  // 与 Workers Cron 的每分钟触发对齐：上一轮跑完才排下一轮。
+  const TICK_MS = 60 * 1000;
   let timer: NodeJS.Timeout | undefined;
   const scheduleNext = (): void => {
     const delay = TICK_MS - (Date.now() % TICK_MS) + 1000;

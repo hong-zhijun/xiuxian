@@ -2737,6 +2737,18 @@ export interface DiscipleBattleCountRow {
   times: string | null;
 }
 
+/** 世界 Boss 自动讨伐的持久化开关与调度状态。 */
+export interface WorldBossAutoSettingRow {
+  sect_id: string;
+  enabled: number;
+  lock_until: number;
+  next_run_at: number;
+  last_run_at: number | null;
+  last_result: string | null;
+  pause_reason: string | null;
+  updated_at: number;
+}
+
 export class WorldBossRepository extends ParamRepository {
   async findById(bossId: string): Promise<WorldBossRow | null> {
     return this.one<WorldBossRow>({
@@ -2837,7 +2849,7 @@ export class WorldBossRepository extends ParamRepository {
     return row?.created_at === null || row?.created_at === undefined ? null : Number(row.created_at);
   }
 
-  /** 该宗门自 since 起的出手次数（每日出手上限用；走 (sect_id, created_at DESC) 索引）。 */
+  /** 该宗门自 since 起的出手次数（面板统计；走 (sect_id, created_at DESC) 索引）。 */
   async countHitsBySectSince(sectId: string, since: number): Promise<number> {
     const row = await this.one<{ total: number }>({
       sql: 'SELECT COUNT(*) AS total FROM world_boss_hits WHERE sect_id = ? AND created_at >= ?',
@@ -2950,6 +2962,90 @@ export class WorldBossRepository extends ParamRepository {
   /** 单条写入（出现 / 逃走 / 半血标记 / 最后一击标记 / 清理疲劳）：与 ChatMessageRepository 同一处理。 */
   override async execute(query: ParameterizedQuery): Promise<D1Result> {
     return super.execute(query);
+  }
+}
+
+/**
+ * 世界 Boss 自动讨伐调度表的读写。
+ * 租约更新使用条件 UPDATE，多个 Cron / Node 定时器同时唤醒时只有一个能拿到执行权。
+ */
+export class WorldBossAutoRepository extends ParamRepository {
+  async findBySectId(sectId: string): Promise<WorldBossAutoSettingRow | null> {
+    return this.one<WorldBossAutoSettingRow>({
+      sql: 'SELECT sect_id, enabled, lock_until, next_run_at, last_run_at, last_result, pause_reason, updated_at FROM world_boss_auto_settings WHERE sect_id = ?',
+      params: [sectId],
+    });
+  }
+
+  async findDue(now: number): Promise<{ sect_id: string; user_id: string; setting: WorldBossAutoSettingRow }[]> {
+    const rows = await this.all<WorldBossAutoSettingRow & { user_id: string }>({
+      sql: `SELECT s.user_id, a.sect_id, a.enabled, a.lock_until, a.next_run_at,
+                   a.last_run_at, a.last_result, a.pause_reason, a.updated_at
+              FROM world_boss_auto_settings a
+              JOIN sects s ON s.id = a.sect_id
+             WHERE a.enabled = 1 AND a.next_run_at <= ? AND a.lock_until < ?
+             ORDER BY a.next_run_at ASC, a.sect_id ASC`,
+      params: [now, now],
+    });
+    return rows.map((row) => ({
+      sect_id: row.sect_id,
+      user_id: row.user_id,
+      setting: row,
+    }));
+  }
+
+  async setEnabled(sectId: string, enabled: boolean, now: number): Promise<void> {
+    await this.execute({
+      sql: `INSERT INTO world_boss_auto_settings
+              (sect_id, enabled, lock_until, next_run_at, last_run_at, last_result, pause_reason, updated_at)
+            VALUES (?, ?, 0, ?, NULL, NULL, NULL, ?)
+            ON CONFLICT (sect_id) DO UPDATE SET
+              enabled = excluded.enabled,
+              lock_until = 0,
+              next_run_at = excluded.next_run_at,
+              pause_reason = NULL,
+              updated_at = excluded.updated_at`,
+      params: [sectId, enabled ? 1 : 0, enabled ? now : 0, now],
+    });
+  }
+
+  async acquireLease(sectId: string, now: number, leaseUntil: number): Promise<boolean> {
+    const result = await this.execute({
+      sql: `UPDATE world_boss_auto_settings
+               SET lock_until = ?, updated_at = ?
+             WHERE sect_id = ? AND enabled = 1 AND lock_until < ? AND next_run_at <= ?`,
+      params: [leaseUntil, now, sectId, now, now],
+    });
+    return Number(result.meta.changes) === 1;
+  }
+
+  async finishRun(input: {
+    sectId: string;
+    leaseUntil: number;
+    now: number;
+    nextRunAt: number;
+    result: string;
+    pauseReason: string | null;
+  }): Promise<void> {
+    await this.execute({
+      sql: `UPDATE world_boss_auto_settings
+               SET lock_until = 0,
+                   next_run_at = ?,
+                   last_run_at = ?,
+                   last_result = ?,
+                   pause_reason = ?,
+                   updated_at = ?
+             WHERE sect_id = ? AND lock_until = ?`,
+      params: [
+        input.nextRunAt,
+        input.now,
+        input.result,
+        input.pauseReason,
+        input.now,
+        input.sectId,
+        input.leaseUntil,
+      ],
+    });
   }
 }
 

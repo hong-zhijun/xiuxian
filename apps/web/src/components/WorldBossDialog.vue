@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue';
+import { computed, onMounted, onUnmounted, ref } from 'vue';
 import type { CSSProperties } from 'vue';
 
 import type {
@@ -8,7 +8,7 @@ import type {
   WorldBossMemberOutcomeView,
   WorldBossView,
 } from '../api/game';
-import { attackWorldBoss, fetchWorldBoss } from '../api/game';
+import { attackWorldBoss, fetchWorldBoss, setWorldBossAuto } from '../api/game';
 import { formatAmount } from '../utils/format';
 import { severeRiskPercent } from '../utils/worldBossRisk';
 import { selectionBlockReason } from '../utils/discipleFilter';
@@ -18,8 +18,8 @@ import ModalShell from './ModalShell.vue';
 /**
  * 0027 世界 Boss（讨伐，二期）面板（计划 §阶段三）。
  *
- * 只在「打开时 / 出手后 / 点刷新」请求接口，**不做定时轮询**；
- * 「距结束」与「出手冷却」都是拿到数据后由前端计时器自己走（每秒递减，不再发请求）。
+ * 面板打开、出手后和点刷新时请求接口；自动讨伐打开时每 15 秒同步一次服务端状态。
+ * 「距结束」与「出手冷却」都是拿到数据后由前端计时器自己走（每秒递减）。
  */
 const props = defineProps<{
   state: SectStateView;
@@ -34,6 +34,7 @@ const emit = defineEmits<{
 const panel = ref<WorldBossView | null>(null);
 const loading = ref(false);
 const submitting = ref(false);
+const autoBusy = ref(false);
 const selected = ref<string[]>([]);
 const showRules = ref(false);
 /** 奖励说明：各名次能拿到什么（数字由服务端按本宗门产出算好）。 */
@@ -172,14 +173,7 @@ const canAttack = computed(
     props.busy !== true,
 );
 
-/** 今日出手次数已用满（上限由服务端下发；0 = 不限）。 */
-const attackLimitReached = computed(() => {
-  const limit = panel.value?.dailyAttackLimit ?? 0;
-  return limit > 0 && (panel.value?.attacksToday ?? 0) >= limit;
-});
-
 const attackButtonText = computed(() => {
-  if (attackLimitReached.value) return '今日出手次数已用完';
   if (cooldown.value > 0) return `冷却 ${String(cooldown.value)}s`;
   return `出手讨伐（已选 ${String(selected.value.length)} 人）`;
 });
@@ -357,39 +351,39 @@ async function submit(): Promise<boolean> {
   }
 }
 
-/* ---------- 自动讨伐：一键选人 → 等冷却 → 出手，循环到没人可出战（受伤 / 已出战 3 次）为止 ---------- */
+/* ---------- 服务端自动讨伐开关 ---------- */
 
-const autoRunning = ref(false);
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => window.setTimeout(resolve, ms));
+async function toggleAuto(event: Event): Promise<void> {
+  const current = panel.value;
+  if (current === null || autoBusy.value) return;
+  autoBusy.value = true;
+  try {
+    const data = await setWorldBossAuto(!current.autoEnabled);
+    emit('state-update', data.state);
+    applyPanel(data.boss);
+    selected.value = [];
+    emit(
+      'notify',
+      data.boss.autoEnabled ? 'success' : 'warning',
+      '自动讨伐',
+      data.boss.autoEnabled ? '已开启，服务端会自动疗伤并循环出战' : '已关闭，当前出手完成后停止',
+    );
+  } catch (error) {
+    const input = event.currentTarget;
+    if (input instanceof HTMLInputElement) input.checked = current.autoEnabled;
+    emit('notify', 'warning', '自动讨伐', error instanceof Error ? error.message : '设置失败，请稍后再试');
+  } finally {
+    autoBusy.value = false;
+  }
 }
 
-async function autoAttack(): Promise<void> {
-  if (autoRunning.value) {
-    autoRunning.value = false;
-    return;
-  }
-  autoRunning.value = true;
-  let rounds = 0;
-  try {
-    while (autoRunning.value) {
-      await nextTick();
-      autoPick();
-      if (selected.value.length === 0) break;
-      while (autoRunning.value && cooldown.value > 0 && remaining.value > 0) await sleep(500);
-      if (!autoRunning.value || !canAttack.value) break;
-      if (!(await submit())) break;
-      rounds += 1;
-    }
-  } finally {
-    const stoppedByUser = !autoRunning.value;
-    autoRunning.value = false;
-    selected.value = [];
-    if (!stoppedByUser) {
-      emit('notify', 'success', '自动讨伐', `已结束，共出手 ${String(rounds)} 次（没有可出战的弟子或已不能出手）`);
-    }
-  }
+let refreshTimer: number | undefined;
+
+function startRefreshTimer(): void {
+  if (refreshTimer !== undefined) window.clearInterval(refreshTimer);
+  refreshTimer = window.setInterval(() => {
+    if (panel.value?.autoEnabled === true) void refresh();
+  }, 15_000);
 }
 
 /** 点了别处就收掉词缀气泡。 */
@@ -399,11 +393,12 @@ function onDocumentClick(): void {
 
 onMounted(() => {
   void refresh();
+  startRefreshTimer();
   document.addEventListener('click', onDocumentClick);
 });
 
 onUnmounted(() => {
-  autoRunning.value = false;
+  if (refreshTimer !== undefined) window.clearInterval(refreshTimer);
   stopCountdown();
   document.removeEventListener('click', onDocumentClick);
   if (hitTimer !== null) window.clearTimeout(hitTimer);
@@ -419,7 +414,7 @@ const RULES_TEXT = `讨伐 · 玩法说明
 
 连战：每天 08:00 第 1 关降临，打死立刻出下一关（第 1 关血量 = 一轮伤害 × 6，之后每关 ×1.45）；
       23:00 起力竭（伤害 ×1.5），0 点当前关逃走，血量被打掉 70% 以上记为「击退」。
-出手：同一宗门每 3 秒只能出手一次，每天出手次数有上限（出手按钮下方可见）；每次派 1~10 名弟子（可点「一键选人」）。
+出手：同一宗门每 3 秒只能出手一次；每次派 1~10 名弟子（可点「一键选人」）。打开自动讨伐后，服务端会在每次出手前批量治疗普通伤员（缺回春丹会自动炼制），治疗完成的弟子立即加入下一次出战。
 弟子：在外历练 / 疗伤中 / 重伤卧床 / 坐镇灵地的弟子不能出战。
 受伤：概率 = 3% −（体魄 − 50）/10 × 1%，夹在 1%~8%；受伤后疗伤 30 分钟，回春丹可治。
 重伤：本小时第 4 次出手 30%、第 5 次 70%、第 6 次起必定重伤（体魄每高 10 点让前两档下调 3 个百分点）；
@@ -635,17 +630,20 @@ const RULES_TEXT = `讨伐 · 玩法说明
         <span v-if="submitting">讨伐中…</span>
         <span v-else>{{ attackButtonText }}</span>
       </button>
-      <button
-        class="boss-attack-button"
-        type="button"
-        :disabled="!autoRunning && (!(panel?.attackable ?? false) || remaining <= 0 || attackLimitReached || busy === true)"
-        @click="autoAttack"
-      >
-        {{ autoRunning ? '停止自动讨伐' : '自动讨伐（受伤或出战 3 次的弟子不上）' }}
-      </button>
-      <p v-if="panel && panel.dailyAttackLimit > 0" class="boss-attack-count">
-        今日出手 {{ panel.attacksToday }} / {{ panel.dailyAttackLimit }}
+      <label class="boss-auto-toggle">
+        <input
+          type="checkbox"
+          :checked="panel?.autoEnabled === true"
+          :disabled="panel === null || autoBusy || busy === true"
+          @change="toggleAuto"
+        />
+        <span>开启服务端自动讨伐</span>
+      </label>
+      <p v-if="panel?.autoEnabled" class="boss-auto-hint">
+        已开启：每次攻击前自动批量疗伤，缺回春丹会自动炼制，治疗好的弟子立即加入下一次攻击。
+        <span v-if="panel.autoPauseReason">当前暂停：{{ panel.autoPauseReason }}</span>
       </p>
+      <p v-if="panel" class="boss-attack-count">今日已出手 {{ panel.attacksToday }} 次</p>
 
       <!-- 本关伤害榜 -->
       <section class="boss-section">
@@ -1151,6 +1149,37 @@ const RULES_TEXT = `讨伐 · 玩法说明
   font-size: 13px;
   cursor: pointer;
   transition: background-color 150ms ease, border-color 150ms ease;
+}
+
+.boss-auto-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--gold, #caa96a);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.boss-auto-toggle input {
+  accent-color: var(--gold, #caa96a);
+}
+
+.boss-auto-toggle:has(input:disabled) {
+  color: #63756c;
+  cursor: not-allowed;
+}
+
+.boss-auto-hint {
+  margin: -5px 0 0;
+  color: #8fa79b;
+  font-size: 12px;
+  line-height: 1.6;
+  text-align: center;
+}
+
+.boss-auto-hint span {
+  color: #e0a05a;
 }
 
 .boss-attack-count {

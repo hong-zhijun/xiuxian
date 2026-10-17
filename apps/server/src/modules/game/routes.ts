@@ -54,6 +54,7 @@ import {
   usePillRequestSchema,
   wheelSpinRequestSchema,
   worldBossAttackRequestSchema,
+  worldBossAutoRequestSchema,
   worldBossExchangeRequestSchema,
   towerChallengeRequestSchema,
   setArenaLineupSchema,
@@ -104,6 +105,7 @@ import {
   chooseTalent,
   dismissSteward,
   attackWorldBoss,
+  setWorldBossAuto,
   exchangeBossMerit,
   getTower,
   challengeTower,
@@ -134,7 +136,6 @@ import {
   getRaceHistory,
   getRaceState,
   getWorldBoss,
-  worldBossDailyAttackLimit,
   placeRaceBet,
   listChallengeHistory,
   listLeaderboard,
@@ -727,22 +728,24 @@ export function createGameRoutes(): Hono<AppEnv> {
   // 0025 世界 Boss（讨伐）：面板数据（今天的 Boss、今日伤害榜、出手记录、史上最强一击）。
   routes.get('/game/world-boss', async (c) => {
     const userId = requireUserId(c);
-    const result = await getWorldBoss(getDb(c.env), userId, Date.now(), worldBossDailyAttackLimit(c.env));
+    const result = await getWorldBoss(getDb(c.env), userId, Date.now());
     return respondOk(c, { state: result.state, boss: result.boss });
   });
 
-  // 0025 世界 Boss（讨伐）：出手（1~3 名弟子；每宗每日 3 次，参与奖出手时立即发）。
+  // 0025 世界 Boss（讨伐）：出手（1~10 名弟子；受 3 秒冷却与疲劳 / 伤势规则约束）。
   routes.post('/game/world-boss/attack', async (c) => {
     const userId = requireUserId(c);
     const body = await parseStrictJson(worldBossAttackRequestSchema, c);
-    const result = await attackWorldBoss(
-      getDb(c.env),
-      userId,
-      body,
-      Date.now(),
-      worldBossDailyAttackLimit(c.env),
-    );
+    const result = await attackWorldBoss(getDb(c.env), userId, body, Date.now());
     return respondOk(c, { state: result.state, result: result.result, boss: result.boss });
+  });
+
+  // 自动讨伐：只保存宗门开关，实际疗伤 / 选人 / 出手由服务端定时任务执行。
+  routes.post('/game/world-boss/auto', async (c) => {
+    const userId = requireUserId(c);
+    const body = await parseStrictJson(worldBossAutoRequestSchema, c);
+    const result = await setWorldBossAuto(getDb(c.env), userId, body.enabled, Date.now());
+    return respondOk(c, { state: result.state, boss: result.boss });
   });
 
   // 0034 执事堂：任命 / 卸任（结算 → 职位与天赋 / 每日一次 / 在外 / 守擂校验 → 一次受保护 batch）。

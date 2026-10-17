@@ -403,11 +403,16 @@ export const raceBetRequestSchema = z.strictObject({
 });
 
 /**
- * 0025 世界 Boss 讨伐出手：只做「类型 + 人数」的第一道防线（1~3 个）。
- * 去重、时段、每日次数与弟子资格（本宗 / 不在历练与疗伤中）全部在 service 里判定。
+ * 0025 世界 Boss 讨伐出手：只做「类型 + 人数」的第一道防线（1~10 个）。
+ * 去重、时段与弟子资格（本宗 / 不在历练与疗伤中）全部在 service 里判定。
  */
 export const worldBossAttackRequestSchema = z.strictObject({
   discipleIds: z.array(z.string().min(1).max(64)).min(1).max(10),
+});
+
+/** 世界 Boss 自动讨伐开关；实际调度由服务端定时任务执行，退出页面后仍然生效。 */
+export const worldBossAutoRequestSchema = z.strictObject({
+  enabled: z.boolean(),
 });
 
 /**

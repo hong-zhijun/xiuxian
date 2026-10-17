@@ -2035,12 +2035,16 @@ export interface WorldBossView {
   fatigue: Record<string, number>;
   /** 最近 60 分钟内每次出战讨伐的时间（毫秒，升序），用于「冒进冷却」倒计时。 */
   fatigueTimes: Record<string, number[]>;
-  /** 此刻能否出手：Boss 在讨伐中 + 开放时段 + 今日出手次数没用满。 */
+  /** 此刻能否出手：Boss 在讨伐中 + 开放时段。 */
   attackable: boolean;
   /** 本宗门今天已出手次数。 */
   attacksToday: number;
-  /** 每日出手上限（0 = 不限；由服务端配置）。 */
-  dailyAttackLimit: number;
+  /** 是否已打开服务端自动讨伐。 */
+  autoEnabled: boolean;
+  /** 自动讨伐最近一次暂停原因；正常运行或尚未暂停时为 null。 */
+  autoPauseReason: string | null;
+  /** 自动讨伐最近一次调度时间。 */
+  autoLastRunAt: number | null;
   ranks: WorldBossRankView[];
   hits: WorldBossHitView[];
   topHit: WorldBossHitView | null;
@@ -2106,6 +2110,16 @@ export async function attackWorldBoss(discipleIds: string[]): Promise<{
     result: WorldBossAttackResultView;
     boss: WorldBossView;
   }>('/api/v1/game/world-boss/attack', { method: 'POST', body: { discipleIds } });
+}
+
+export async function setWorldBossAuto(enabled: boolean): Promise<{
+  state: SectStateView;
+  boss: WorldBossView;
+}> {
+  return apiRequest<{ state: SectStateView; boss: WorldBossView }>('/api/v1/game/world-boss/auto', {
+    method: 'POST',
+    body: { enabled },
+  });
 }
 
 /**
