@@ -101,6 +101,20 @@ export interface DiscipleRow {
   steward_handover_until: number | null;
   /** 0035 已服用培元丹次数（上限 APTITUDE_PILL_MAX_USES，见 alchemy.ts）。 */
   aptitude_pill_count: number;
+  /** 0066 功法：主修功法 id；null = 没有主修。 */
+  technique_id: string | null;
+  /** 0066 功法：主修时的熟练度基点（换功法减半后的值；0~10000）。 */
+  technique_prof_base: number;
+  /** 0066 功法：主修时刻（UTC 毫秒）；null = 没有主修。熟练度 = base + (now − since) / 48h。 */
+  technique_since: number | null;
+}
+
+/** 0066 功法：宗门级收录 / 参悟进度（level = 0 未收录，scrolls 为持有残卷数）。 */
+export interface SectTechniqueRow {
+  sect_id: string;
+  technique_id: string;
+  level: number;
+  scrolls: number;
 }
 
 /** 0034 执事堂：每宗门每个职位一行；disciple_id 为 null = 空缺（行保留，用来记当天是否已任命）。 */
@@ -270,7 +284,8 @@ export class DiscipleRepository extends ParamRepository {
                    gear_attack, gear_defense, gear_speed, gear_luck, gear_physique, gear_power_bp,
                    realm_id, stage, cultivation, cultivation_remainder,
                    assignment, injured_until, severe_injured_until, body_tempering_count, note, avatar_frame_id, avatar_hash, dao_insight, dao_insight_used,
-                   talent_reroll_count, talent_candidate, steward_handover_until, aptitude_pill_count, created_at
+                   talent_reroll_count, talent_candidate, steward_handover_until, aptitude_pill_count,
+                   technique_id, technique_prof_base, technique_since, created_at
             FROM disciples WHERE sect_id = ? ORDER BY created_at ASC, id ASC`,
       params: [sectId],
     });
@@ -282,7 +297,8 @@ export class DiscipleRepository extends ParamRepository {
                    gear_attack, gear_defense, gear_speed, gear_luck, gear_physique, gear_power_bp,
                    realm_id, stage, cultivation, cultivation_remainder,
                    assignment, injured_until, severe_injured_until, body_tempering_count, note, avatar_frame_id, avatar_hash, dao_insight, dao_insight_used,
-                   talent_reroll_count, talent_candidate, steward_handover_until, aptitude_pill_count, created_at
+                   talent_reroll_count, talent_candidate, steward_handover_until, aptitude_pill_count,
+                   technique_id, technique_prof_base, technique_since, created_at
             FROM disciples WHERE id = ?`,
       params: [discipleId],
     });
@@ -3590,6 +3606,76 @@ export function sectTowerGuardStatement(guardId: string, sectId: string, version
   };
 }
 
+/* ---------- 0066 功法（docs/功法开发计划.md） ---------- */
+
+export class TechniqueRepository extends ParamRepository {
+  /** 本宗功法行（未收录但持有残卷的也有行）。 */
+  async findBySectId(sectId: string): Promise<SectTechniqueRow[]> {
+    return this.all<SectTechniqueRow>({
+      sql: 'SELECT sect_id, technique_id, level, scrolls FROM sect_techniques WHERE sect_id = ?',
+      params: [sectId],
+    });
+  }
+}
+
+/** 收录 / 参悟：写回本宗某功法的绝对值（level / scrolls）；没有行就建一行。 */
+export function upsertSectTechniqueStatement(input: {
+  sectId: string;
+  techniqueId: string;
+  level: number;
+  scrolls: number;
+}): ParameterizedQuery {
+  return {
+    sql: `INSERT INTO sect_techniques (sect_id, technique_id, level, scrolls) VALUES (?, ?, ?, ?)
+          ON CONFLICT (sect_id, technique_id) DO UPDATE SET level = excluded.level, scrolls = excluded.scrolls`,
+    params: [input.sectId, input.techniqueId, input.level, input.scrolls],
+  };
+}
+
+/** 残卷入账（拍卖 / 云游商人 / 世界 Boss 掉落）：在原有数量上加 delta，没有行就建一行。 */
+export function addTechniqueScrollsStatement(sectId: string, techniqueId: string, delta: number): ParameterizedQuery {
+  return {
+    sql: `INSERT INTO sect_techniques (sect_id, technique_id, level, scrolls) VALUES (?, ?, 0, ?)
+          ON CONFLICT (sect_id, technique_id) DO UPDATE SET scrolls = sect_techniques.scrolls + excluded.scrolls`,
+    params: [sectId, techniqueId, delta],
+  };
+}
+
+/** 功法命令的并发守卫：本宗这门功法的等级与残卷数仍是读快照时的值，否则整批回滚。 */
+export function techniqueGuardStatement(
+  guardId: string,
+  input: { sectId: string; techniqueId: string; level: number; scrolls: number },
+): ParameterizedQuery {
+  return {
+    sql: `INSERT INTO mutation_guards (command_id, valid)
+          SELECT ?, CASE WHEN COALESCE((SELECT level FROM sect_techniques WHERE sect_id = ? AND technique_id = ?), 0) = ?
+                          AND COALESCE((SELECT scrolls FROM sect_techniques WHERE sect_id = ? AND technique_id = ?), 0) = ?
+                         THEN 1 ELSE 0 END`,
+    params: [
+      guardId,
+      input.sectId,
+      input.techniqueId,
+      input.level,
+      input.sectId,
+      input.techniqueId,
+      input.scrolls,
+    ],
+  };
+}
+
+/** 弟子主修写回：功法 id（null = 卸下，熟练度与时刻一并清空）、熟练度基点、主修时刻。 */
+export function updateDiscipleTechniqueStatement(input: {
+  discipleId: string;
+  techniqueId: string | null;
+  profBase: number;
+  since: number | null;
+}): ParameterizedQuery {
+  return {
+    sql: 'UPDATE disciples SET technique_id = ?, technique_prof_base = ?, technique_since = ? WHERE id = ?',
+    params: [input.techniqueId, input.profBase, input.since, input.discipleId],
+  };
+}
+
 /* ---------- 0046 赌石（docs/赌石开发计划.md） ---------- */
 
 export class StoneGambleRepository extends ParamRepository {
@@ -4826,7 +4912,8 @@ export class ArenaRepository extends ParamRepository {
                    gear_attack, gear_defense, gear_speed, gear_luck, gear_physique, gear_power_bp,
                    realm_id, stage, cultivation, cultivation_remainder,
                    assignment, injured_until, severe_injured_until, body_tempering_count, note, avatar_frame_id, avatar_hash, dao_insight, dao_insight_used,
-                   talent_reroll_count, talent_candidate, steward_handover_until, aptitude_pill_count, created_at
+                   talent_reroll_count, talent_candidate, steward_handover_until, aptitude_pill_count,
+                   technique_id, technique_prof_base, technique_since, created_at
             FROM disciples
             WHERE sect_id IN (SELECT id FROM sects WHERE level >= ?)
             ORDER BY created_at ASC, id ASC`,

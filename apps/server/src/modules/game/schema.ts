@@ -430,6 +430,22 @@ export const towerChallengeRequestSchema = z.strictObject({
   discipleIds: z.array(z.string().min(1).max(64)).length(5),
 });
 
+/** 0066 镇妖塔胜率预估：入参同挑战（固定 5 人；不扣次数、不写库）。 */
+export const towerPreviewRequestSchema = z.strictObject({
+  discipleIds: z.array(z.string().min(1).max(64)).length(5),
+});
+
+/** 0066 功法：收录 / 参悟只带功法 id（是否已收录、残卷与灵石是否足够由 service 校验）。 */
+export const techniqueRequestSchema = z.strictObject({
+  techniqueId: z.string().min(1).max(32),
+});
+
+/** 0066 功法：设置 / 更换 / 卸下弟子主修（techniqueId 为 null 即卸下；只能选已收录的，由 service 校验）。 */
+export const setDiscipleTechniqueRequestSchema = z.strictObject({
+  discipleId: z.string().min(1).max(64),
+  techniqueId: z.string().min(1).max(32).nullable(),
+});
+
 /** 0048 宗门日课：领取哪个任务（只认任务池里的 id；是否在今天的列表里、是否完成由 service 校验）。 */
 export const dailyTaskClaimRequestSchema = z.strictObject({
   taskId: z.enum(DAILY_TASK_IDS),

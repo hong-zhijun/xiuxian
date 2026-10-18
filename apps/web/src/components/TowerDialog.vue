@@ -1,8 +1,15 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 
-import type { SectStateView, TowerChallengeResultView, TowerRoundView, TowerView } from '../api/game';
-import { challengeTower, fetchTower, sweepTower } from '../api/game';
+import type {
+  SectStateView,
+  TechniqueSummaryView,
+  TowerChallengeResultView,
+  TowerPreviewView,
+  TowerRoundView,
+  TowerView,
+} from '../api/game';
+import { challengeTower, fetchTower, previewTower, sweepTower } from '../api/game';
 import { formatAmount } from '../utils/format';
 import { selectionBlockReason } from '../utils/discipleFilter';
 import DisciplePicker from './DisciplePicker.vue';
@@ -224,15 +231,77 @@ async function sweep(): Promise<void> {
 function roundLine(round: TowerRoundView, monsterName: string): string {
   const parts: string[] = [];
   if (round.poisonDamage > 0) parts.push(`剧毒 −${formatNumber(round.poisonDamage)}`);
+  // 0066 功法：战报行里带上标志效果标签（如「张三【剑气】 12,000」）。
   const hits = round.hits
-    .map((hit) => `${hit.name}${hit.extra ? '追击' : ''} ${formatNumber(hit.damage)}${hit.crit ? '（暴击）' : ''}`)
+    .map(
+      (hit) =>
+        `${hit.name}${(hit.tags ?? []).map((tag) => `【${tag}】`).join('')}${hit.extra ? '追击' : ''} ${formatNumber(hit.damage)}${hit.crit ? '（暴击）' : ''}`,
+    )
     .join('、');
   const strike = round.monsterDamage > 0 ? `${monsterName}反击 −${formatNumber(round.monsterDamage)}` : '';
   const ordered = round.teamFirst ? [hits, strike] : [strike, hits];
   parts.push(...ordered.filter((text) => text !== ''));
+  const heals = (round.heals ?? []).map((heal) => `${heal.name}【血身】回血 +${formatNumber(heal.amount)}`).join('、');
+  if (heals !== '') parts.push(heals);
   parts.push(`妖物 ${formatNumber(round.monsterHp)} / 队伍 ${formatNumber(round.teamHp)}`);
   return `第 ${String(round.round)} 回合：${parts.join(' · ')}`;
 }
+
+/** 结算摘要一行：「张三 · 【太乙剑诀】触发 4 次，额外造成 3.2 万伤害」。 */
+function techniqueSummaryLine(entry: TechniqueSummaryView): string {
+  const parts: string[] = [];
+  if (entry.triggers > 0) parts.push(`触发 ${String(entry.triggers)} 次`);
+  if (entry.bonusDamage > 0) parts.push(`额外造成 ${wanText(entry.bonusDamage)} 伤害`);
+  if (entry.healed > 0) parts.push(`回复 ${formatNumber(entry.healed)} 血量`);
+  if (entry.hpBonus > 0) parts.push(`开场血量 +${formatNumber(entry.hpBonus)}`);
+  return `${entry.name} · 【${entry.techniqueName}】${parts.join('，')}`;
+}
+
+function wanText(value: number): string {
+  return value >= 10_000 ? `${(value / 10_000).toFixed(1)} 万` : formatNumber(value);
+}
+
+/* ---------- 0066 功法：胜率预估（选满 5 人后防抖 400ms；不扣次数、不写库） ---------- */
+
+const preview = ref<TowerPreviewView | null>(null);
+const previewLoading = ref(false);
+let previewTimer: ReturnType<typeof setTimeout> | null = null;
+let previewSeq = 0;
+
+watch(
+  selected,
+  (ids) => {
+    if (previewTimer !== null) clearTimeout(previewTimer);
+    previewTimer = null;
+    previewSeq += 1;
+    const seq = previewSeq;
+    if (ids.length !== partySize.value) {
+      preview.value = null;
+      previewLoading.value = false;
+      return;
+    }
+    previewLoading.value = true;
+    const picked = [...ids];
+    previewTimer = setTimeout(() => {
+      previewTimer = null;
+      void previewTower(picked)
+        .then((result) => {
+          if (seq === previewSeq) preview.value = result;
+        })
+        .catch(() => {
+          if (seq === previewSeq) preview.value = null;
+        })
+        .finally(() => {
+          if (seq === previewSeq) previewLoading.value = false;
+        });
+    }, 400);
+  },
+  { deep: true },
+);
+
+onUnmounted(() => {
+  if (previewTimer !== null) clearTimeout(previewTimer);
+});
 
 const battleSummary = computed(() => {
   const battle = lastBattle.value;
@@ -405,6 +474,12 @@ onMounted(() => {
           {{ lastBattle.won ? '镇压成功' : lastBattle.failReason === 'wiped' ? '力竭败退' : '回合耗尽' }}
           · 第 {{ lastBattle.floor }} 层 {{ lastBattle.monsterName }}
         </p>
+        <!-- 0066 功法：结算摘要（有弟子触发过标志效果时显示在顶部）。 -->
+        <ul v-if="lastBattle.techniqueSummary.length > 0" class="tower-technique-summary">
+          <li v-for="entry in lastBattle.techniqueSummary" :key="entry.discipleId">
+            {{ techniqueSummaryLine(entry) }}
+          </li>
+        </ul>
         <p class="tower-result-line">{{ lastBattle.message }}</p>
         <p class="tower-result-line is-quiet">{{ battleSummary }}</p>
         <button class="tower-quiet-button tower-log-toggle" type="button" @click.stop="showLog = !showLog">
@@ -423,6 +498,7 @@ onMounted(() => {
         :max="partySize"
         :busy="submitting || busy === true"
         sort="power"
+        show-technique
         :title="`选择出战弟子（固定 ${partySize} 人）`"
         :extra-sort="monster?.affix?.sortAttribute"
       >
@@ -435,6 +511,12 @@ onMounted(() => {
 
       <p v-if="strengthPercent !== null" class="tower-strength" :class="strengthTone">
         已选弟子平均战力约为本层标准的 {{ strengthPercent }}%{{ monster?.isBoss ? '（首领层建议 110% 以上）' : '' }}
+      </p>
+      <p v-if="preview !== null || previewLoading" class="tower-strength tower-preview" role="status">
+        <template v-if="preview !== null">
+          预估胜率 <strong>{{ preview.winRate }}%</strong>（服务端模拟 {{ preview.samples }} 场，平均 {{ preview.avgRounds }} 回合）
+        </template>
+        <template v-else>正在推演胜率…</template>
       </p>
 
       <p v-if="bagBlocked" class="tower-bag-warning">
@@ -950,4 +1032,18 @@ onMounted(() => {
     align-items: stretch;
   }
 }
+.tower-preview {
+  margin-top: 4px;
+}
+
+.tower-technique-summary {
+  display: grid;
+  gap: 4px;
+  margin: 8px 0 0;
+  padding: 0 0 0 1.1em;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--gold);
+}
+
 </style>

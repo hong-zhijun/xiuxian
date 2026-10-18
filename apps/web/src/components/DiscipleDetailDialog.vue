@@ -96,6 +96,8 @@ const emit = defineEmits<{
   /** 天赋重构：洗髓丹二选一（accept = true 换成新天赋，false 保留原天赋）。 */
   chooseTalent: [discipleId: string, accept: boolean];
   saveNote: [discipleId: string, note: string];
+  /** 0066 功法：设置 / 更换 / 卸下主修（techniqueId 为 null 即卸下；只能选已收录的，服务端校验）。 */
+  setTechnique: [discipleId: string, techniqueId: string | null];
   /** 0017 保存头像框样式（frameId 只可能是白名单里的固定 id）。 */
   setAvatarFrame: [discipleId: string, frameId: AvatarFrameId];
   /** 0038 上传自定义头像（image 已在浏览器里裁剪压缩好）。 */
@@ -218,6 +220,21 @@ watch(serverNote, (next) => {
 
 function onNoteInput(event: Event): void {
   noteDraft.value = (event.target as HTMLInputElement).value;
+}
+
+/** 0066 功法：主修下拉的草稿（空串 = 无 / 卸下）；切换弟子或服务端回填后同步。 */
+const techniqueDraft = ref(props.disciple.techniqueId ?? '');
+watch(
+  () => props.disciple.techniqueId,
+  (value) => {
+    techniqueDraft.value = value ?? '';
+  },
+);
+/** 熟练度百分比（服务端给的是基点，0~10000）。 */
+const techniquePercent = computed(() => Math.floor(props.disciple.techniqueProficiency / 100));
+function saveTechnique(): void {
+  if (props.busy) return;
+  emit('setTechnique', props.disciple.id, techniqueDraft.value === '' ? null : techniqueDraft.value);
 }
 
 function saveNote(): void {
@@ -1909,6 +1926,55 @@ function refineGear(item: EquipmentItemView | null): void {
           </p>
         </section>
 
+        <section class="disciple-detail-section disciple-technique" aria-labelledby="disciple-technique-title">
+          <h3 id="disciple-technique-title" class="disciple-detail-title">主修功法</h3>
+          <p class="disciple-technique-line">
+            <strong>{{ disciple.techniqueName }}</strong>
+            <span v-if="disciple.techniqueId !== null">
+              · {{ disciple.techniqueLevel }} 级 · 熟练度 {{ techniquePercent }}%
+            </span>
+          </p>
+          <div
+            v-if="disciple.techniqueId !== null"
+            class="disciple-technique-bar"
+            role="progressbar"
+            aria-label="功法熟练度"
+            :aria-valuenow="techniquePercent"
+            aria-valuemin="0"
+            aria-valuemax="100"
+          >
+            <span :style="{ width: `${String(techniquePercent)}%` }" />
+          </div>
+          <div class="disciple-technique-row">
+            <select
+              v-model="techniqueDraft"
+              class="disciple-input"
+              aria-label="选择主修功法"
+              :disabled="busy || state.learnedTechniques.length === 0"
+            >
+              <option value="">无（卸下主修）</option>
+              <option v-for="item in state.learnedTechniques" :key="item.id" :value="item.id">
+                {{ item.name }}（{{ item.level }} 级）
+              </option>
+            </select>
+            <button
+              class="action-button"
+              type="button"
+              :disabled="busy || techniqueDraft === (disciple.techniqueId ?? '')"
+              @click="saveTechnique"
+            >
+              {{ disciple.techniqueId === null ? '设为主修' : '更换' }}
+            </button>
+          </div>
+          <p class="disciple-note-meta">
+            {{
+              state.learnedTechniques.length === 0
+                ? '藏经阁尚未收录功法，收录后可在此设为主修。'
+                : '换功法时熟练度减半后重新攀升；卸下则清零。在外历练与重伤中也可更换。'
+            }}
+          </p>
+        </section>
+
         <section class="disciple-detail-section" aria-labelledby="disciple-rename-title">
           <h3 id="disciple-rename-title" class="disciple-detail-title">改名</h3>
           <div class="disciple-note-row">
@@ -2151,4 +2217,42 @@ function refineGear(item: EquipmentItemView | null): void {
   padding: 4px 10px;
   font-size: 11px;
 }
+.disciple-technique-line {
+  margin: 0 0 6px;
+  font-size: 14px;
+}
+
+.disciple-technique-bar {
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--line);
+}
+
+.disciple-technique-bar > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--jade-dark, var(--jade)), var(--jade));
+}
+
+.disciple-technique-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 8px;
+}
+
+.disciple-technique-row .disciple-input {
+  flex: 1;
+  min-width: 0;
+}
+
+@media (max-width: 480px) {
+  .disciple-technique-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
+
 </style>

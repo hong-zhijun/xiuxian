@@ -383,6 +383,10 @@ export function rollDamage(input: {
   critRateMultiplier?: number;
   /** 天赋重构 · 会心：Σ(会心弟子的贡献 × 会心加成)，只在暴击时加进伤害基数；缺省 0。 */
   critBonusBase?: number;
+  /** 功法 · 暴击伤害倍率加成（破军：出战弟子的平均值）；缺省 0。 */
+  critMultiplierBonus?: number;
+  /** 功法 · 未暴击伤害倍率（天机 0.85 的出战弟子平均值）；缺省 1。 */
+  nonCritMultiplier?: number;
   random: () => number;
 }): { damage: number; crit: boolean } {
   const fluctuation =
@@ -395,8 +399,9 @@ export function rollDamage(input: {
   const crit = input.random() < critRate;
   const partyBase = Math.max(0, input.partyBase);
   const base = crit
-    ? partyBase * WORLD_BOSS_CRIT_MULTIPLIER + Math.max(0, input.critBonusBase ?? 0)
-    : partyBase;
+    ? partyBase * (WORLD_BOSS_CRIT_MULTIPLIER + (input.critMultiplierBonus ?? 0)) +
+      Math.max(0, input.critBonusBase ?? 0)
+    : partyBase * (input.nonCritMultiplier ?? 1);
   const damage = Math.floor(
     base *
       arenaCombatMultiplier(input.arenaLevel) *
@@ -459,15 +464,21 @@ export function rollOutcome(input: {
   berserk: boolean;
   /** 铁骨减免（基点）；缺省 0。 */
   injuryReductionBp?: number;
+  /** 功法：普通受伤 / 重伤概率倍率（血身、金刚、百毒）；缺省 1。 */
+  normalInjuryMultiplier?: number;
+  severeInjuryMultiplier?: number;
   random: () => number;
 }): { severe: boolean; injured: boolean } {
   const keep = 1 - Math.min(10_000, Math.max(0, input.injuryReductionBp ?? 0)) / 10_000;
+  const severeMultiplier = input.severeInjuryMultiplier ?? 1;
+  const normalMultiplier = input.normalInjuryMultiplier ?? 1;
   const severeBase = severeInjuryChance(input.fatigueCount, input.physique, input.berserk);
-  const severeRate = severeBase >= 1 ? 1 : severeBase * keep;
+  const severeRate = severeBase >= 1 ? Math.min(1, severeMultiplier) : severeBase * keep * severeMultiplier;
   if (input.random() < severeRate) {
     return { severe: true, injured: false };
   }
-  const injured = input.random() < normalInjuryChance(input.physique, input.berserk) * keep;
+  const injured =
+    input.random() < normalInjuryChance(input.physique, input.berserk) * keep * normalMultiplier;
   return { severe: false, injured };
 }
 

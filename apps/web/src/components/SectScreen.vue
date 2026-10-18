@@ -91,6 +91,7 @@ import SectLevelCatalogDialog from './SectLevelCatalogDialog.vue';
 import WorldBossDialog from './WorldBossDialog.vue';
 import MeritDialog from './MeritDialog.vue';
 import TowerDialog from './TowerDialog.vue';
+import TechniqueDialog from './TechniqueDialog.vue';
 import ArenaDialog from './ArenaDialog.vue';
 import AuctionDialog from './AuctionDialog.vue';
 import WorldMapDialog from './WorldMapDialog.vue';
@@ -162,6 +163,8 @@ const emit = defineEmits<{
   notify: [tone: ToastTone, title: string, message: string];
   /** 详情里保存私有备注（note 为空串 = 清空）；App.vue 绑定了这个名字。 */
   'save-note': [discipleId: string, note: string];
+  /** 0066 功法：弟子主修设置 / 更换 / 卸下（由 App.vue 调接口）。 */
+  'set-technique': [discipleId: string, techniqueId: string | null];
   /** 详情底部二次确认后的驱逐请求；App.vue 绑定了这个名字。 */
   expel: [discipleId: string];
   /**
@@ -192,6 +195,7 @@ const emit = defineEmits<{
 /** 操作条里的弹窗开关：天机录 / 秘境探索 / 讨伐 / 江湖榜 / 守擂阵容 / 演武录 / 炼丹 / 炼器 / 赌坊 / 坊市（宗门晋升与建筑仍在右栏常驻）。 */
 const openPanel = ref<
   | 'events'
+  | 'techniques'
   | 'explore'
   | 'leaderboard'
   | 'disciple-leaderboard'
@@ -1496,6 +1500,11 @@ function onDetailSaveNote(discipleId: string, note: string): void {
   emit('save-note', discipleId, note);
 }
 
+function onDetailSetTechnique(discipleId: string, techniqueId: string | null): void {
+  if (props.busy) return;
+  emit('set-technique', discipleId, techniqueId);
+}
+
 function onDetailExpel(discipleId: string): void {
   if (props.busy) return;
   emit('expel', discipleId);
@@ -2629,6 +2638,17 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
                   <path d="m5 11 4-4 4 4" />
                 </svg>
               </button>
+              <!-- 0066 功法：藏经阁的入口（收录 / 参悟在弹窗里）。 -->
+              <button
+                v-if="building.defId === 'scriptureLibrary'"
+                class="quiet-button technique-entry"
+                type="button"
+                :disabled="busy"
+                aria-label="打开功法藏经阁"
+                @click="openPanel = 'techniques'"
+              >
+                功法
+              </button>
             </li>
           </ul>
 
@@ -2907,6 +2927,16 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
     />
   </ModalShell>
 
+  <!-- 0066 藏经阁：收录 / 参悟功法（只在打开时与操作后请求）。 -->
+  <ModalShell v-if="openPanel === 'techniques'" :loading="busy" label="藏经阁" @close="openPanel = null">
+    <TechniqueDialog
+      :state="state"
+      :busy="busy"
+      @state-update="(s: SectStateView) => emit('recruited', s)"
+      @notify="onWorldBossNotify"
+    />
+  </ModalShell>
+
   <!-- 0053 宗门大比：只在打开时 / 呈报名册后请求，不做定时轮询。 -->
   <ModalShell v-if="openPanel === 'arena'" :loading="busy" label="宗门大比" @close="openPanel = null">
     <ArenaDialog :state="state" :busy="busy" @notify="onWorldBossNotify" />
@@ -3032,6 +3062,7 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
         @use-pill="onUsePill"
         @choose-talent="onChooseTalent"
         @save-note="onDetailSaveNote"
+        @set-technique="onDetailSetTechnique"
         @expel="onDetailExpel"
         @request-journey-preview="onDetailRequestJourneyPreview"
         @start-journey="onDetailStartJourney"

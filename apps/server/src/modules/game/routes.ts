@@ -57,6 +57,9 @@ import {
   worldBossAutoRequestSchema,
   worldBossExchangeRequestSchema,
   towerChallengeRequestSchema,
+  towerPreviewRequestSchema,
+  techniqueRequestSchema,
+  setDiscipleTechniqueRequestSchema,
   setArenaLineupSchema,
   auctionListRequestSchema,
   auctionBidRequestSchema,
@@ -110,6 +113,11 @@ import {
   getTower,
   challengeTower,
   sweepTower,
+  previewTower,
+  getTechniqueLibrary,
+  learnTechnique,
+  upgradeTechnique,
+  setDiscipleTechnique,
   getArena,
   setArenaLineup,
   getDailyTasks,
@@ -797,6 +805,51 @@ export function createGameRoutes(): Hono<AppEnv> {
     const userId = requireUserId(c);
     const result = await sweepTower(getDb(c.env), userId, Date.now());
     return respondOk(c, { state: result.state, tower: result.tower, result: result.result });
+  });
+
+  // 0066 镇妖塔胜率预估：服务端模拟 50 次，返回胜率与平均回合数（不扣次数、不写库）。
+  routes.post('/game/tower/preview', async (c) => {
+    const userId = requireUserId(c);
+    const body = await parseStrictJson(towerPreviewRequestSchema, c);
+    const result = await previewTower(getDb(c.env), userId, body, Date.now());
+    return respondOk(c, { preview: result.preview });
+  });
+
+  // 0066 功法：藏经阁面板（全部功法 + 本宗收录 / 参悟 / 残卷状态；只读）。
+  routes.get('/game/techniques', async (c) => {
+    const userId = requireUserId(c);
+    const result = await getTechniqueLibrary(getDb(c.env), userId, Date.now());
+    return respondOk(c, { library: result.library });
+  });
+
+  // 0066 功法：收录（扣残卷，宗门需建有藏经阁）。
+  routes.post('/game/techniques/learn', async (c) => {
+    const userId = requireUserId(c);
+    const body = await parseStrictJson(techniqueRequestSchema, c);
+    const result = await learnTechnique(getDb(c.env), userId, body.techniqueId, Date.now());
+    return respondOk(c, { state: result.state, library: result.library, result: result.result });
+  });
+
+  // 0066 功法：参悟升级（扣残卷 + 灵石）。
+  routes.post('/game/techniques/upgrade', async (c) => {
+    const userId = requireUserId(c);
+    const body = await parseStrictJson(techniqueRequestSchema, c);
+    const result = await upgradeTechnique(getDb(c.env), userId, body.techniqueId, Date.now());
+    return respondOk(c, { state: result.state, library: result.library, result: result.result });
+  });
+
+  // 0066 功法：设置 / 更换 / 卸下弟子主修（任何时候都能换，在外 / 重伤中也可以）。
+  routes.post('/game/disciples/technique', async (c) => {
+    const userId = requireUserId(c);
+    const body = await parseStrictJson(setDiscipleTechniqueRequestSchema, c);
+    const state = await setDiscipleTechnique(
+      getDb(c.env),
+      userId,
+      body.discipleId,
+      body.techniqueId,
+      Date.now(),
+    );
+    return respondOk(c, { state });
   });
 
   // 0053 宗门大比：面板（名册 / 今日报名或自动参赛 / 最近一次战报与日榜 / 赛季榜；只读）。

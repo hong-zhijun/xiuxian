@@ -72,6 +72,11 @@ export interface DiscipleView {
   /** 天赋重构：洗髓丹已服 / 剩余次数。 */
   talentRerollUses: number;
   talentRerollRemaining: number;
+  /** 0066 功法：主修功法 id / 名称（「无」）/ 参悟等级 / 熟练度基点（0~10000，读时现算）。 */
+  techniqueId: string | null;
+  techniqueName: string;
+  techniqueLevel: number;
+  techniqueProficiency: number;
   /** 天赋重构：洗髓丹洗出、待二选一的候选天赋；null = 没有。 */
   talentCandidate: { id: string; name: string; effect: string } | null;
   /** 天赋重构：所任执事职位 id；不是执事为 null。 */
@@ -197,6 +202,8 @@ export interface RenameView {
 }
 
 export interface SectStateView {
+  /** 0066 功法：宗门已收录的功法（弟子「更换主修」的候选）。 */
+  learnedTechniques: { id: string; name: string; level: number }[];
   sect: {
     id: string;
     name: string;
@@ -2094,6 +2101,8 @@ export interface WorldBossAttackResultView {
   nextStage: number | null;
   /** 本次每名弟子的判定结果（正常 / 受伤 / 重伤）。 */
   members: WorldBossMemberOutcomeView[];
+  /** 功法加成（整数百分比；没有功法为 0）。 */
+  techniqueBonusPercent: number;
 }
 
 export async function fetchWorldBoss(): Promise<{ state: SectStateView; boss: WorldBossView }> {
@@ -2540,6 +2549,8 @@ export interface TowerHitView {
   damage: number;
   crit: boolean;
   extra: boolean;
+  /** 本次出手触发的功法标签（如 ['剑气']）。 */
+  tags?: string[];
 }
 
 export interface TowerRoundView {
@@ -2550,6 +2561,8 @@ export interface TowerRoundView {
   monsterDamage: number;
   monsterHp: number;
   teamHp: number;
+  /** 血身：本回合结束的回血记录。 */
+  heals?: { discipleId: string; name: string; amount: number }[];
 }
 
 export interface TowerChallengeResultView {
@@ -2568,6 +2581,8 @@ export interface TowerChallengeResultView {
   equipment: { id: string; name: string; quality: string; qualityName: string; slot: string; slotName: string } | null;
   members: { discipleId: string; name: string; power: number }[];
   message: string;
+  /** 功法结算摘要：每名触发过标志效果的弟子一条。 */
+  techniqueSummary: TechniqueSummaryView[];
 }
 
 export interface TowerSweepResultView {
@@ -2596,6 +2611,104 @@ export async function sweepTower(): Promise<{ state: SectStateView; tower: Tower
     '/api/v1/game/tower/sweep',
     { method: 'POST' },
   );
+}
+
+/* ---------- 0066 功法（藏经阁 / 主修 / 镇妖塔胜率预估） ---------- */
+
+/** 结算摘要的一行（镇妖塔）：bonusDamage 只统计标志效果额外带来的伤害（不含代价）。 */
+export interface TechniqueSummaryView {
+  discipleId: string;
+  name: string;
+  techniqueId: string;
+  techniqueName: string;
+  triggers: number;
+  bonusDamage: number;
+  healed: number;
+  hpBonus: number;
+}
+
+/** 藏经阁里的一门功法。残卷与灵石为最小单位。 */
+export interface TechniqueCatalogView {
+  id: string;
+  name: string;
+  school: string;
+  schoolName: string;
+  tier: string;
+  tierName: string;
+  tag: string;
+  towerGain: string;
+  cost: string;
+  bossGain: string;
+  learned: boolean;
+  level: number;
+  scrolls: number;
+  learnScrolls: number;
+  learnRemaining: number;
+  upgradeScrolls: number | null;
+  upgradeStone: number | null;
+  scrollName: string;
+  levelFactor: number;
+  disciplesUsing: number;
+}
+
+export interface TechniqueLibraryView {
+  unlocked: boolean;
+  scriptureLevel: number;
+  maxLevel: number;
+  schools: { id: string; name: string }[];
+  items: TechniqueCatalogView[];
+}
+
+/** 镇妖塔胜率预估：胜率为 0~100 的整数。 */
+export interface TowerPreviewView {
+  floor: number;
+  samples: number;
+  winRate: number;
+  avgRounds: number;
+}
+
+export async function fetchTechniques(): Promise<{ library: TechniqueLibraryView }> {
+  return apiRequest<{ library: TechniqueLibraryView }>('/api/v1/game/techniques');
+}
+
+export async function learnTechnique(techniqueId: string): Promise<{
+  state: SectStateView;
+  library: TechniqueLibraryView;
+  result: { message: string };
+}> {
+  return apiRequest<{ state: SectStateView; library: TechniqueLibraryView; result: { message: string } }>(
+    '/api/v1/game/techniques/learn',
+    { method: 'POST', body: { techniqueId } },
+  );
+}
+
+export async function upgradeTechnique(techniqueId: string): Promise<{
+  state: SectStateView;
+  library: TechniqueLibraryView;
+  result: { message: string };
+}> {
+  return apiRequest<{ state: SectStateView; library: TechniqueLibraryView; result: { message: string } }>(
+    '/api/v1/game/techniques/upgrade',
+    { method: 'POST', body: { techniqueId } },
+  );
+}
+
+/** 设置 / 更换 / 卸下主修（techniqueId 为 null 即卸下）。 */
+export async function setDiscipleTechnique(discipleId: string, techniqueId: string | null): Promise<SectStateView> {
+  const data = await apiRequest<{ state: SectStateView }>('/api/v1/game/disciples/technique', {
+    method: 'POST',
+    body: { discipleId, techniqueId },
+  });
+  return data.state;
+}
+
+/** 镇妖塔胜率预估（服务端模拟 50 场，不扣次数、不写库）。 */
+export async function previewTower(discipleIds: string[]): Promise<TowerPreviewView> {
+  const data = await apiRequest<{ preview: TowerPreviewView }>('/api/v1/game/tower/preview', {
+    method: 'POST',
+    body: { discipleIds },
+  });
+  return data.preview;
 }
 
 /* ---------- 0053 宗门大比（斗法台 / 宗门战；每日 12:00 结算，周日收官） ---------- */

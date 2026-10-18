@@ -1,6 +1,7 @@
 import { REALMS } from './constants';
 import type { EquipmentQuality } from './equipment';
 import { ARENA_COMBAT_BONUS_BP_PER_LEVEL } from './realms';
+import type { TechniqueModifiers } from './techniques';
 
 /**
  * 镇妖塔（单人爬塔）——纯定义与纯计算（docs/镇妖塔开发计划.md）。
@@ -246,6 +247,8 @@ export interface TowerFighter {
   critBonusBp: number;
   /** 铁骨：受到伤害减免（基点）。 */
   damageReductionBp: number;
+  /** 主修功法的战斗修正（techniques.ts）；没有主修为 undefined，走原有路径。 */
+  technique?: TechniqueModifiers;
 }
 
 export interface TowerHit {
@@ -255,6 +258,29 @@ export interface TowerHit {
   crit: boolean;
   /** 身法追击（同一回合的第二次出手）。 */
   extra: boolean;
+  /** 本次出手触发的功法标志效果标签（如 ['剑气']）；没有触发时不带这个字段。 */
+  tags?: string[];
+}
+
+/** 血身回血记录（每回合结束，只有这回合真的回了血才有）。 */
+export interface TowerHeal {
+  discipleId: string;
+  name: string;
+  amount: number;
+}
+
+/** 结算摘要：每名触发过标志效果的弟子一条（bonusDamage 只统计标志效果额外带来的伤害，不含代价）。 */
+export interface TowerTechniqueSummary {
+  discipleId: string;
+  name: string;
+  techniqueId: string;
+  techniqueName: string;
+  /** 标志效果触发次数（金刚开场计 1 次）。 */
+  triggers: number;
+  bonusDamage: number;
+  healed: number;
+  /** 开场血量提升（金刚 / 百毒的体魄权重与血量倍率带来的增量）；没有为 0。 */
+  hpBonus: number;
 }
 
 export interface TowerRound {
@@ -269,6 +295,8 @@ export interface TowerRound {
   /** 回合结束时的妖物血量 / 队伍血量。 */
   monsterHp: number;
   teamHp: number;
+  /** 血身：本回合结束时的回血记录；没有回血时不带这个字段。 */
+  heals?: TowerHeal[];
 }
 
 export interface TowerBattleResult {
@@ -283,16 +311,30 @@ export interface TowerBattleResult {
   vigor: number;
   /** 队伍平均身法 ≥ 妖物身法 → 每回合先手。 */
   teamFirst: boolean;
+  /** 结算摘要（只有有弟子触发过功法标志效果时才有）。 */
+  techniqueSummary?: TowerTechniqueSummary[];
 }
 
 function between(random: () => number, range: readonly [number, number]): number {
   return range[0] + random() * (range[1] - range[0]);
 }
 
-/** 弟子血量 = 4.5 × 战力 ×（0.5 + 体魄 / 100）（已 × DAMAGE_SCALE）。 */
-export function towerFighterHp(fighter: Pick<TowerFighter, 'power' | 'physique'>): number {
+/**
+ * 弟子血量 = 4.5 × 战力 ×（0.5 + 体魄 / 100）（已 × DAMAGE_SCALE）。
+ * 功法修正：金刚改体魄权重（默认 1），百毒 / 太乙 / 背水改血量倍率（默认 1）；没有功法时与原公式完全一致。
+ */
+export function towerFighterHp(
+  fighter: Pick<TowerFighter, 'power' | 'physique'> & { technique?: TechniqueModifiers },
+): number {
+  const tower = fighter.technique?.tower;
+  const weight = tower?.physiqueWeight ?? 1;
+  const multiplier = tower?.hpMultiplier ?? 1;
   return Math.floor(
-    TOWER_DISCIPLE_HP_FACTOR * Math.max(0, fighter.power) * (0.5 + Math.max(0, fighter.physique) / 100) * TOWER_DAMAGE_SCALE,
+    TOWER_DISCIPLE_HP_FACTOR *
+      Math.max(0, fighter.power) *
+      (0.5 + (weight * Math.max(0, fighter.physique)) / 100) *
+      TOWER_DAMAGE_SCALE *
+      multiplier,
   );
 }
 
@@ -302,14 +344,22 @@ export function towerCritRate(luck: number, affix: TowerAffixDef | null): number
   return Math.min(1, (Math.max(0, luck) / 100) * TOWER_CRIT_RATE_MAX * multiplier);
 }
 
-/** 追击概率：(身法 − 妖物身法) × 0.5%，夹在 0~30%。 */
-export function towerExtraActionChance(speed: number, monsterSpeed: number): number {
-  return Math.min(TOWER_EXTRA_ACTION_MAX, Math.max(0, (speed - monsterSpeed) * TOWER_EXTRA_ACTION_PER_POINT));
+/**
+ * 追击概率：(身法 − 妖物身法) × 0.5%，夹在 0~上限（默认 30%）。
+ * bonus 是功法的概率加成（鬼影 +10% × S，仍受上限约束）；没有功法时 bonus = 0。
+ */
+export function towerExtraActionChance(
+  speed: number,
+  monsterSpeed: number,
+  max: number = TOWER_EXTRA_ACTION_MAX,
+  bonus = 0,
+): number {
+  return Math.min(max, Math.max(0, (speed - monsterSpeed) * TOWER_EXTRA_ACTION_PER_POINT) + bonus);
 }
 
-/** 攻击修正：0.75 + 0.25 × min(2, 攻击 / 标准属性)。 */
-export function towerAttackFactor(attack: number, standardAttr: number): number {
-  const ratio = standardAttr <= 0 ? 1 : Math.min(TOWER_ATTACK_RATIO_CAP, Math.max(0, attack) / standardAttr);
+/** 攻击修正：0.75 + 0.25 × min(上限, 攻击 / 标准属性)；上限默认 2（青锋 / 太乙的功法加成另算）。 */
+export function towerAttackFactor(attack: number, standardAttr: number, cap: number = TOWER_ATTACK_RATIO_CAP): number {
+  const ratio = standardAttr <= 0 ? 1 : Math.min(cap, Math.max(0, attack) / standardAttr);
   return 0.75 + 0.25 * ratio;
 }
 
@@ -350,6 +400,11 @@ export function simulateTowerBattle(input: {
   const avgDefense = input.fighters.reduce((sum, f) => sum + f.defense, 0) / count;
   const avgReduction =
     input.fighters.reduce((sum, f) => sum + Math.min(10_000, Math.max(0, f.damageReductionBp)), 0) / count / 10_000;
+  // 流云：每名持有者让妖物对队伍的伤害 +10% ÷ 出战人数（没有流云时乘 1，结果不变）。
+  const monsterDamageMultiplier =
+    1 + input.fighters.reduce((sum, f) => sum + (f.technique?.tower.monsterDamageBonus ?? 0), 0) / count;
+  // 百毒不侵：免除自己那一份剧毒的人数。
+  const immuneCount = input.fighters.filter((f) => f.technique?.tower.poisonImmune === true).length;
   const teamFirst = avgSpeed >= monster.speed;
   // 身法从高到低；同身法保持派出顺序（sort 稳定）。
   const order = [...input.fighters].sort((a, b) => b.speed - a.speed);
@@ -363,35 +418,177 @@ export function simulateTowerBattle(input: {
   let monsterHp = monsterMaxHp;
   const rounds: TowerRound[] = [];
 
-  const strike = (fighter: TowerFighter, extra: boolean): TowerHit => {
-    const fluctuation = between(input.random, TOWER_DISCIPLE_FLUCTUATION);
-    const crit = input.random() < towerCritRate(fighter.luck, affix);
-    let multiplier = crit ? TOWER_CRIT_MULTIPLIER + Math.max(0, fighter.critBonusBp) / 10_000 : 1;
-    if (!crit && affix?.id === 'aegis') multiplier *= TOWER_AEGIS_NORMAL_FACTOR;
-    if (affix?.id === 'ironWall' && fighter.attack < standardAttr) multiplier *= TOWER_IRON_WALL_PENALTY;
-    const damage = Math.floor(
-      Math.max(0, fighter.power) *
-        towerAttackFactor(fighter.attack, standardAttr) *
-        arena *
-        fluctuation *
-        multiplier *
-        TOWER_DAMAGE_SCALE,
+  // 功法结算摘要：只给有主修的弟子建条目；没有任何触发时结果里不带这个字段。
+  const summary = new Map<string, TowerTechniqueSummary>();
+  const summaryOf = (fighter: TowerFighter, technique: TechniqueModifiers): TowerTechniqueSummary => {
+    const existing = summary.get(fighter.id);
+    if (existing !== undefined) return existing;
+    const created: TowerTechniqueSummary = {
+      discipleId: fighter.id,
+      name: fighter.name,
+      techniqueId: technique.id,
+      techniqueName: technique.name,
+      triggers: 0,
+      bonusDamage: 0,
+      healed: 0,
+      hpBonus: 0,
+    };
+    summary.set(fighter.id, created);
+    return created;
+  };
+  // 开场血量提升：金刚（体魄权重）与百毒（血量倍率）带来的增量；金刚开场计一次触发。
+  for (const fighter of input.fighters) {
+    const technique = fighter.technique;
+    if (technique === undefined) continue;
+    const hpBonus = Math.max(
+      0,
+      towerFighterHp(fighter) - towerFighterHp({ power: fighter.power, physique: fighter.physique }),
     );
-    return { discipleId: fighter.id, name: fighter.name, damage, crit, extra };
+    const weightBonus = technique.tower.physiqueWeight > 1;
+    if (weightBonus || hpBonus > 0) {
+      const entry = summaryOf(fighter, technique);
+      entry.hpBonus = hpBonus;
+      if (weightBonus) entry.triggers += 1;
+    }
+  }
+
+  const strikeCounts = new Map<string, number>();
+  /**
+   * 一次出手。随机源取用顺序：浮动 → 暴击判定 →（剑气的触发判定，仅太乙）。
+   * chainTag 非空时表示这是功法带来的连续追击（流云 / 鬼影），整次伤害记作功法的额外伤害。
+   */
+  const strike = (fighter: TowerFighter, extra: boolean, round: number, chainTag: string | null): TowerHit => {
+    const technique = fighter.technique;
+    const mods = technique?.tower;
+    const index = strikeCounts.get(fighter.id) ?? 0;
+    strikeCounts.set(fighter.id, index + 1);
+    const fluctuation = between(input.random, TOWER_DISCIPLE_FLUCTUATION);
+    const roll = input.random();
+    const naturalRate = towerCritRate(fighter.luck, affix);
+    // 天机：暴击率 ×(1 + S)；破甲：本场第一次出手必定暴击，暴击倍率替换为 ×(1 + 2S)。
+    const boostedRate = mods === undefined ? naturalRate : Math.min(1, naturalRate * mods.critRateMultiplier);
+    const forcedCrit = mods !== undefined && index === 0 ? mods.firstStrikeCritMultiplier : null;
+    const crit = forcedCrit !== null || roll < boostedRate;
+    const naturalCrit = roll < naturalRate;
+    const lowHpActive = mods !== undefined && mods.lowHpThreshold > 0 && teamHp < teamMaxHp * mods.lowHpThreshold;
+    const cap = TOWER_ATTACK_RATIO_CAP + (mods?.attackCapBonus ?? 0);
+    /** 伤害（labels = true 时带上功法的增益；false 时只保留代价，用来算「标志效果额外带来的伤害」）。 */
+    const damageOf = (isCrit: boolean, labels: boolean): number => {
+      let multiplier = 1;
+      if (isCrit) {
+        multiplier =
+          (labels && forcedCrit !== null ? forcedCrit : TOWER_CRIT_MULTIPLIER) + Math.max(0, fighter.critBonusBp) / 10_000;
+        if (labels && mods !== undefined) multiplier += mods.critMultiplierBonus;
+      }
+      if (!isCrit && affix?.id === 'aegis') multiplier *= TOWER_AEGIS_NORMAL_FACTOR;
+      if (affix?.id === 'ironWall' && fighter.attack < standardAttr) multiplier *= TOWER_IRON_WALL_PENALTY;
+      if (mods !== undefined) {
+        // 青锋：本场第一次出手的增益；破甲：之后每次出手的代价。
+        if (index === 0) {
+          if (labels) multiplier *= mods.firstStrikeMultiplier;
+        } else {
+          multiplier *= mods.laterStrikeMultiplier;
+        }
+        multiplier *= mods.strikeMultiplier;
+        if (!isCrit) multiplier *= mods.nonCritMultiplier;
+        // 九转：第 1 回合的代价；之后回合的增益。
+        if (round === 1) {
+          multiplier *= mods.round1Multiplier;
+        } else if (labels) {
+          multiplier *= 1 + mods.roundGrowth * (round - 1);
+        }
+        // 背水：队伍血量低于阈值时的增益。
+        if (labels && lowHpActive) multiplier *= mods.lowHpMultiplier;
+      }
+      return Math.floor(
+        Math.max(0, fighter.power) *
+          towerAttackFactor(fighter.attack, standardAttr, cap) *
+          arena *
+          fluctuation *
+          multiplier *
+          TOWER_DAMAGE_SCALE,
+      );
+    };
+
+    let damage = damageOf(crit, true);
+    const tags: string[] = [];
+    if (technique !== undefined && mods !== undefined) {
+      const labelTriggered =
+        (index === 0 && (mods.firstStrikeMultiplier !== 1 || forcedCrit !== null)) ||
+        (crit && crit !== naturalCrit) ||
+        (crit && mods.critMultiplierBonus !== 0) ||
+        (round >= 2 && mods.roundGrowth !== 0) ||
+        lowHpActive;
+      if (labelTriggered) {
+        const entry = summaryOf(fighter, technique);
+        entry.triggers += 1;
+        entry.bonusDamage += damage - damageOf(naturalCrit, false);
+        tags.push(technique.tag);
+      }
+      // 剑气：每次出手 25% 概率额外造成 50% × S 的伤害（触发率为开关型，不缩放）。
+      if (mods.procChance > 0 && input.random() < mods.procChance) {
+        const procExtra = Math.floor(damage * mods.procRatio);
+        const entry = summaryOf(fighter, technique);
+        entry.triggers += 1;
+        entry.bonusDamage += procExtra;
+        tags.push(technique.tag);
+        damage += procExtra;
+      }
+    }
+    if (chainTag !== null && technique !== undefined) {
+      const entry = summaryOf(fighter, technique);
+      entry.triggers += 1;
+      entry.bonusDamage += damage;
+      tags.push(chainTag);
+    }
+    const hit: TowerHit = { discipleId: fighter.id, name: fighter.name, damage, crit, extra };
+    if (tags.length > 0) hit.tags = tags;
+    return hit;
   };
 
   /** 队伍出手：打死妖物返回 true。 */
-  const teamActs = (hits: TowerHit[]): boolean => {
+  const teamActs = (hits: TowerHit[], round: number): boolean => {
     for (const fighter of order) {
-      const first = strike(fighter, false);
+      const first = strike(fighter, false, round, null);
       hits.push(first);
       monsterHp = Math.max(0, monsterHp - first.damage);
       if (monsterHp <= 0) return true;
-      if (input.random() < towerExtraActionChance(fighter.speed, monster.speed)) {
-        const second = strike(fighter, true);
+      const technique = fighter.technique;
+      if (technique === undefined) {
+        if (input.random() < towerExtraActionChance(fighter.speed, monster.speed)) {
+          const second = strike(fighter, true, round, null);
+          hits.push(second);
+          monsterHp = Math.max(0, monsterHp - second.damage);
+          if (monsterHp <= 0) return true;
+        }
+        continue;
+      }
+      // 功法路径：流云可连续追击（最多 3 次）；鬼影第 1 回合的第一次追击必定发生（仍取一次随机数，保持取用顺序一致）。
+      const mods = technique.tower;
+      const maxStrikes = mods.maxStrikesPerAction ?? 2;
+      const extraTag =
+        mods.extraChanceMax !== undefined || mods.round1GuaranteedExtra || mods.extraChanceBonus > 0
+          ? technique.tag
+          : null;
+      const baseChance = towerExtraActionChance(fighter.speed, monster.speed);
+      const chance = towerExtraActionChance(
+        fighter.speed,
+        monster.speed,
+        mods.extraChanceMax ?? TOWER_EXTRA_ACTION_MAX,
+        mods.extraChanceBonus,
+      );
+      let done = 1;
+      while (done < maxStrikes) {
+        const roll = input.random();
+        const guaranteed = done === 1 && mods.round1GuaranteedExtra && round === 1;
+        if (!guaranteed && roll >= chance) break;
+        // 第一次追击若在无功法时也会发生，不算功法的额外伤害；之后的连续追击都是功法带来的。
+        const fromTechnique = done > 1 || !(roll < baseChance);
+        const second = strike(fighter, true, round, extraTag !== null && fromTechnique ? extraTag : null);
         hits.push(second);
         monsterHp = Math.max(0, monsterHp - second.damage);
         if (monsterHp <= 0) return true;
+        done += 1;
       }
     }
     return false;
@@ -400,52 +597,90 @@ export function simulateTowerBattle(input: {
   /** 妖物出手：返回伤害。 */
   const monsterActs = (): number => {
     const fluctuation = between(input.random, TOWER_MONSTER_FLUCTUATION);
-    const damage = Math.floor(monsterAttack * fluctuation * towerDefenseFactor(avgDefense) * (1 - avgReduction));
+    const damage = Math.floor(
+      monsterAttack * fluctuation * towerDefenseFactor(avgDefense) * (1 - avgReduction) * monsterDamageMultiplier,
+    );
     teamHp = Math.max(0, teamHp - damage);
     return damage;
+  };
+
+  /** 血身：回合结束时，每名持有者为队伍回复自身最大血量 × 4% × S（不超过队伍血量上限）。 */
+  const healRound = (): TowerHeal[] => {
+    const heals: TowerHeal[] = [];
+    for (const fighter of input.fighters) {
+      const technique = fighter.technique;
+      if (technique === undefined || technique.tower.healRatio <= 0) continue;
+      const before = teamHp;
+      teamHp = Math.min(teamMaxHp, teamHp + Math.floor(towerFighterHp(fighter) * technique.tower.healRatio));
+      const amount = teamHp - before;
+      if (amount <= 0) continue;
+      const entry = summaryOf(fighter, technique);
+      entry.triggers += 1;
+      entry.healed += amount;
+      heals.push({ discipleId: fighter.id, name: fighter.name, amount });
+    }
+    return heals;
+  };
+
+  const finish = (result: Omit<TowerBattleResult, 'techniqueSummary'>): TowerBattleResult => {
+    const entries = [...summary.values()].filter(
+      (item) => item.triggers > 0 || item.healed > 0 || item.hpBonus > 0,
+    );
+    return entries.length > 0 ? { ...result, techniqueSummary: entries } : result;
   };
 
   for (let round = 1; round <= TOWER_MAX_ROUNDS; round += 1) {
     const hits: TowerHit[] = [];
     let poisonDamage = 0;
     let monsterDamage = 0;
-    const record = (): void => {
-      rounds.push({ round, teamFirst, poisonDamage, hits, monsterDamage, monsterHp, teamHp });
+    const record = (heals?: TowerHeal[]): void => {
+      const row: TowerRound = { round, teamFirst, poisonDamage, hits, monsterDamage, monsterHp, teamHp };
+      if (heals !== undefined && heals.length > 0) row.heals = heals;
+      rounds.push(row);
     };
 
     if (affix?.id === 'poison') {
-      poisonDamage = Math.min(teamHp, Math.floor(teamMaxHp * TOWER_POISON_RATE));
+      const poisonFull = Math.floor(teamMaxHp * TOWER_POISON_RATE);
+      // 百毒不侵：持有者免除自己那一份（没有百毒时与原来一样）。
+      const poisonShare = immuneCount === 0 ? poisonFull : Math.floor((poisonFull * (count - immuneCount)) / count);
+      poisonDamage = Math.min(teamHp, poisonShare);
+      if (immuneCount > 0 && poisonFull > 0) {
+        for (const fighter of input.fighters) {
+          const technique = fighter.technique;
+          if (technique !== undefined && technique.tower.poisonImmune) summaryOf(fighter, technique).triggers += 1;
+        }
+      }
       teamHp -= poisonDamage;
       if (teamHp <= 0) {
         record();
-        return { won: false, failReason: 'wiped', rounds, monsterMaxHp, teamMaxHp, vigor, teamFirst };
+        return finish({ won: false, failReason: 'wiped', rounds, monsterMaxHp, teamMaxHp, vigor, teamFirst });
       }
     }
 
     if (teamFirst) {
-      if (teamActs(hits)) {
+      if (teamActs(hits, round)) {
         record();
-        return { won: true, failReason: null, rounds, monsterMaxHp, teamMaxHp, vigor, teamFirst };
+        return finish({ won: true, failReason: null, rounds, monsterMaxHp, teamMaxHp, vigor, teamFirst });
       }
       monsterDamage = monsterActs();
       if (teamHp <= 0) {
         record();
-        return { won: false, failReason: 'wiped', rounds, monsterMaxHp, teamMaxHp, vigor, teamFirst };
+        return finish({ won: false, failReason: 'wiped', rounds, monsterMaxHp, teamMaxHp, vigor, teamFirst });
       }
     } else {
       monsterDamage = monsterActs();
       if (teamHp <= 0) {
         record();
-        return { won: false, failReason: 'wiped', rounds, monsterMaxHp, teamMaxHp, vigor, teamFirst };
+        return finish({ won: false, failReason: 'wiped', rounds, monsterMaxHp, teamMaxHp, vigor, teamFirst });
       }
-      if (teamActs(hits)) {
+      if (teamActs(hits, round)) {
         record();
-        return { won: true, failReason: null, rounds, monsterMaxHp, teamMaxHp, vigor, teamFirst };
+        return finish({ won: true, failReason: null, rounds, monsterMaxHp, teamMaxHp, vigor, teamFirst });
       }
     }
-    record();
+    record(healRound());
   }
-  return { won: false, failReason: 'timeout', rounds, monsterMaxHp, teamMaxHp, vigor, teamFirst };
+  return finish({ won: false, failReason: 'timeout', rounds, monsterMaxHp, teamMaxHp, vigor, teamFirst });
 }
 
 /* ---------- 奖励 ---------- */

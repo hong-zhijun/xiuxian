@@ -131,6 +131,7 @@ import type {
   SectStewardRow,
   DiscipleJourneyRow,
   WorldSiteRow,
+  SectTechniqueRow,
 } from './repository';
 import { findWorldSite, parseGarrison, worldSiteFullName } from './world';
 import {
@@ -166,6 +167,8 @@ import {
 import { cultivationRatePerHour, resourceRates, type DiscipleState, type SettleResult } from './settle';
 import type { MarketOrderKind } from './market';
 import type { WorldBossPhase } from './worldBoss';
+import type { TowerTechniqueSummary } from './tower';
+import { TECHNIQUES, techniqueNameOf, techniqueProficiencyBp } from './techniques';
 /**
  * 接口返回的视图类型（前端只读这些字段，不需要再读配置）。
  *
@@ -319,6 +322,14 @@ export interface DiscipleView {
    * 0014 历练状态：none / active / ready + 名额与不可出发原因（全部服务端算好）。
    */
   journey: DiscipleJourneyView;
+  /**
+   * 0066 功法：主修功法 id（null = 没有主修）与展示名（「无」）；参悟等级取宗门的收录状态；
+   * 熟练度（基点，0~10000）读时现算 = 主修时基点 + 已过时长 / 48 小时。
+   */
+  techniqueId: string | null;
+  techniqueName: string;
+  techniqueLevel: number;
+  techniqueProficiency: number;
 }
 
 export interface BuildingView {
@@ -1532,9 +1543,13 @@ export interface WorldBossAttackResultView {
   nextStage: number | null;
   /** 本次每名弟子的判定结果（正常 / 受伤 / 重伤）。 */
   members: WorldBossMemberOutcomeView[];
+  /** 功法加成（整数百分比，如 18 = 「功法加成 +18%」）：出战弟子的功法伤害增益合计；没有功法为 0。 */
+  techniqueBonusPercent: number;
 }
 
 export interface SectStateView {
+  /** 0066 功法：宗门已收录的功法（弟子「更换主修」的候选）。 */
+  learnedTechniques: { id: string; name: string; level: number }[];
   sect: {
     id: string;
     name: string;
@@ -2005,6 +2020,8 @@ export interface SectStateInput {
   stewards: readonly SectStewardRow[];
   /** 0051 山河舆图：本宗占着的灵地（用来标出坐镇弟子；其他接口默认空）。 */
   worldSites?: readonly WorldSiteRow[];
+  /** 0066 功法：本宗的收录 / 参悟行（用来给弟子显示主修功法的等级）。 */
+  techniques?: readonly SectTechniqueRow[];
 }
 
 export function buildSectStateView(input: SectStateInput): SectStateView {
@@ -2097,6 +2114,7 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
     }
   }
 
+  const techniqueLevels = new Map((input.techniques ?? []).map((row) => [row.technique_id, Number(row.level)]));
   const discipleViews: DiscipleView[] = disciples.map((disciple) => {
     const realm = findRealm(disciple.realm_id);
     const stage = findStage(disciple.realm_id, disciple.stage);
@@ -2201,6 +2219,14 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
       stewardHandoverUntil:
         handoverUntil !== null && handoverUntil > now ? new Date(handoverUntil).toISOString() : null,
       combatBlockedReason,
+      techniqueId: disciple.technique_id,
+      techniqueName: techniqueNameOf(disciple.technique_id),
+      techniqueLevel: disciple.technique_id === null ? 0 : (techniqueLevels.get(disciple.technique_id) ?? 0),
+      techniqueProficiency: techniqueProficiencyBp({
+        base: Number(disciple.technique_prof_base),
+        since: disciple.technique_since === null ? null : Number(disciple.technique_since),
+        now,
+      }),
       garrisonSiteName,
       cultivationPillGain: pillGain,
       greatCultivationPillGain: greatPillGain,
@@ -2465,7 +2491,16 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
     stones: gamblingLockedReason === null ? buildStoneView(Number(sect.level)) : null,
   };
 
+  // 0066 功法：宗门已收录的功法（弟子「更换主修」的候选；只列等级 ≥ 1 的）。
+  const learnedTechniques = TECHNIQUES.flatMap((def) => {
+    const row = (input.techniques ?? []).find((item) => item.technique_id === def.id);
+    return row !== undefined && Number(row.level) >= 1
+      ? [{ id: def.id, name: def.name, level: Number(row.level) }]
+      : [];
+  });
+
   return {
+    learnedTechniques,
     sect: {
       id: sect.id,
       name: sect.name,
@@ -3059,6 +3094,8 @@ export interface TowerHitView {
   crit: boolean;
   /** 身法追击。 */
   extra: boolean;
+  /** 本次出手触发的功法标签（如 ['剑气']）；没有触发时没有这个字段。 */
+  tags?: string[];
 }
 
 export interface TowerRoundView {
@@ -3069,6 +3106,8 @@ export interface TowerRoundView {
   monsterDamage: number;
   monsterHp: number;
   teamHp: number;
+  /** 血身：本回合结束时的回血记录（没有回血时没有这个字段）。 */
+  heals?: { discipleId: string; name: string; amount: number }[];
 }
 
 /** 挑战回执：逐回合战报 + 实际到账的通关奖励（败时为空对象）。 */
@@ -3097,6 +3136,8 @@ export interface TowerChallengeResultView {
   } | null;
   members: { discipleId: string; name: string; power: number }[];
   message: string;
+  /** 功法结算摘要：每名触发过标志效果的弟子一条（没有功法触发时为空数组）。 */
+  techniqueSummary: TowerTechniqueSummary[];
 }
 
 /** 扫荡回执：实际到账（截断到容量后）。 */
@@ -3104,6 +3145,63 @@ export interface TowerSweepResultView {
   maxFloor: number;
   reward: Record<string, number>;
   message: string;
+}
+
+/* ---------- 0066 功法（docs/功法开发计划.md） ---------- */
+
+/** 藏经阁里的一门功法（GET /game/techniques）。残卷与灵石为最小单位。 */
+export interface TechniqueCatalogView {
+  id: string;
+  name: string;
+  school: string;
+  schoolName: string;
+  tier: string;
+  tierName: string;
+  /** 战报标签（如「青锋」）。 */
+  tag: string;
+  towerGain: string;
+  cost: string;
+  bossGain: string;
+  /** 本宗是否已收录（参悟等级 ≥ 1）。 */
+  learned: boolean;
+  /** 参悟等级（0 = 未收录）。 */
+  level: number;
+  /** 本宗持有的残卷数。 */
+  scrolls: number;
+  /** 收录所需残卷数与还差的张数（已收录为 0）。 */
+  learnScrolls: number;
+  learnRemaining: number;
+  /** 下一级所需残卷与灵石（最小单位）；未收录或已满级为 null。 */
+  upgradeScrolls: number | null;
+  upgradeStone: number | null;
+  /** 残卷的展示名（如「青锋剑诀残卷」）。 */
+  scrollName: string;
+  /** 参悟系数 1 + 0.08 × (等级 − 1)（未收录按 1 显示）。 */
+  levelFactor: number;
+  /** 主修这门功法的弟子数。 */
+  disciplesUsing: number;
+}
+
+/** 藏经阁面板。 */
+export interface TechniqueLibraryView {
+  /** 宗门建有藏经阁（≥ 1 级）才开放收录与参悟。 */
+  unlocked: boolean;
+  scriptureLevel: number;
+  maxLevel: number;
+  schools: { id: string; name: string }[];
+  items: TechniqueCatalogView[];
+}
+
+/** 镇妖塔胜率预估（POST /game/tower/preview）：不扣次数、不写库。 */
+export interface TowerPreviewView {
+  /** 预估的层数（= 最高层 + 1）。 */
+  floor: number;
+  /** 模拟场数。 */
+  samples: number;
+  /** 胜率（0~100，整数）。 */
+  winRate: number;
+  /** 平均回合数（一位小数）。 */
+  avgRounds: number;
 }
 
 /* ---------- 0040 拍卖行 ---------- */

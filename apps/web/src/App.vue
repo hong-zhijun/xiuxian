@@ -25,6 +25,7 @@ import {
   renameDisciple,
   renameSect,
   setDiscipleNote,
+  setDiscipleTechnique,
   setDiscipleAvatarFrame,
   setDiscipleAvatarImage,
   clearDiscipleAvatarImage,
@@ -852,6 +853,23 @@ function onDismissSteward(office: string): void {
   );
 }
 
+/** 0066 功法：设置 / 更换 / 卸下主修（只能选已收录的；服务端校验，失败由 runAction 提示）。 */
+function onSetTechnique(discipleId: string, techniqueId: string | null): void {
+  void runAction(
+    () => setDiscipleTechnique(discipleId, techniqueId),
+    (data) => {
+      const disciple = data.state.disciples.find((item) => item.id === discipleId);
+      return {
+        title: '主修已更新',
+        message:
+          disciple === undefined || disciple.techniqueId === null
+            ? `${disciple?.name ?? '弟子'}已卸下主修功法。`
+            : `${disciple.name}主修「${disciple.techniqueName}」，熟练度从 ${String(Math.floor(disciple.techniqueProficiency / 100))}% 起算。`,
+      };
+    },
+  );
+}
+
 /** 0013 保存私有备注：内容规则由服务端裁决，成功与否则由返回的 state 决定提示文案。 */
 function onSaveNote(discipleId: string, note: string): void {
   void runAction(
@@ -1145,6 +1163,7 @@ onUnmounted(() => {
       @appoint-steward="onAppointSteward"
       @dismiss-steward="onDismissSteward"
       @save-note="onSaveNote"
+      @set-technique="onSetTechnique"
       @set-avatar-frame="onSetAvatarFrame"
       @set-avatar-image="onSetAvatarImage"
       @clear-avatar-image="onClearAvatarImage"

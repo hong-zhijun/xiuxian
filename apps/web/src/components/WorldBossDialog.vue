@@ -66,6 +66,8 @@ const lastAttack = ref<{
   crit: boolean;
   lastHit: boolean;
   nextStage: number | null;
+  /** 0066 功法加成（整数百分比；0 = 没有功法加成）。 */
+  techniqueBonusPercent: number;
 } | null>(null);
 
 /** 被击中：`hitKey` 每次 +1 让抖动的 CSS 动画重新播放，飘字 0.9 秒后消失。 */
@@ -329,10 +331,12 @@ async function submit(): Promise<boolean> {
       crit: data.result.crit,
       lastHit: data.result.lastHit,
       nextStage: data.result.nextStage,
+      techniqueBonusPercent: data.result.techniqueBonusPercent,
     };
     selected.value = [];
 
     const parts = [`造成 ${formatDamage(data.result.actualDamage)} 伤害`];
+    if (data.result.techniqueBonusPercent > 0) parts.push(`功法加成 +${String(data.result.techniqueBonusPercent)}%`);
     if (data.result.crit) parts.push('暴击');
     if (data.result.frenzy) parts.push('力竭 ×1.5');
     if (data.result.lastHit) parts.push('最后一击');
@@ -588,6 +592,7 @@ const RULES_TEXT = `讨伐 · 玩法说明
       <div v-if="lastAttack !== null" class="boss-outcome">
         <p class="boss-outcome-line">
           本次出手：{{ formatDamage(lastAttack.actualDamage) }} 伤害
+          <span v-if="lastAttack.techniqueBonusPercent > 0">· 功法加成 +{{ lastAttack.techniqueBonusPercent }}%</span>
           <span v-if="lastAttack.crit">· 暴击</span>
           <span v-if="lastAttack.lastHit">· 最后一击</span>
           <span v-if="lastAttack.nextStage !== null">· 第 {{ lastAttack.nextStage }} 关已降临</span>
@@ -609,6 +614,7 @@ const RULES_TEXT = `讨伐 · 玩法说明
       <DisciplePicker
         v-model:selected="selected"
         :disciples="state.disciples"
+        show-technique
         :min="1"
         :max="10"
         :busy="submitting || busy === true"
