@@ -1261,7 +1261,7 @@ function refineGear(item: EquipmentItemView | null): void {
           </p>
         </section>
 
-        <!-- 天赋与悟道：一行两张卡片（窄屏单列）。悟道值的分配在弹窗里做。 -->
+        <!-- 天赋、功法与悟道：一行三张卡片（中等宽度两列、窄屏单列）。悟道值的分配在弹窗里做。 -->
         <div class="overview-cards">
           <section class="overview-card" aria-labelledby="disciple-talent-title">
             <div class="overview-card-head">
@@ -1286,6 +1286,25 @@ function refineGear(item: EquipmentItemView | null): void {
             <strong class="overview-card-value">{{ disciple.talentName }}</strong>
             <!-- 当前境界下的天赋加成（服务端按境界算好），境界提升后自动变强。 -->
             <p v-if="disciple.talentEffect !== ''" class="overview-card-note">{{ disciple.talentEffect }}</p>
+          </section>
+
+          <section class="overview-card" aria-labelledby="disciple-overview-technique-title">
+            <div class="overview-card-head">
+              <h3 id="disciple-overview-technique-title" class="overview-card-title">功法</h3>
+              <button
+                class="upgrade-sim-button overview-card-action"
+                type="button"
+                :disabled="busy || state.learnedTechniques.length === 0"
+                :title="state.learnedTechniques.length === 0 ? '藏经阁尚未收录功法' : undefined"
+                @click="openTechniquePicker"
+              >
+                {{ disciple.techniqueId === null ? '设为主修' : '更换' }}
+              </button>
+            </div>
+            <strong class="overview-card-value">{{ disciple.techniqueId === null ? '未修习' : disciple.techniqueName }}</strong>
+            <p v-if="disciple.techniqueId !== null" class="overview-card-note">
+              {{ disciple.techniqueLevel }} 级 · 熟练度 {{ techniquePercent }}%
+            </p>
           </section>
 
           <!--
@@ -2242,7 +2261,7 @@ function refineGear(item: EquipmentItemView | null): void {
 /* 概览：天赋 / 悟道两张卡片，一行两列。 */
 .overview-cards {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
   gap: 10px;
 }
 
@@ -2309,7 +2328,7 @@ function refineGear(item: EquipmentItemView | null): void {
   gap: 10px;
 }
 
-@media (max-width: 560px) {
+@media (max-width: 420px) {
   .overview-cards {
     grid-template-columns: minmax(0, 1fr);
   }
