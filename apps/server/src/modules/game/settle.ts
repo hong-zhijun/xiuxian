@@ -4,7 +4,7 @@ import {
   MISSION_HALL_BUILDING_ID,
   missionHallSpiritStoneBonusBp,
   SCRIPTURE_LIBRARY_BUILDING_ID,
-  SCRIPTURE_LIBRARY_CULTIVATION_BONUS_BP_PER_LEVEL,
+  scriptureLibraryCultivationBonusBp,
   SPIRITUAL_ARRAY_BUILDING_ID,
   SPIRITUAL_ARRAY_ENERGY_BONUS_BP_PER_LEVEL,
   effectiveCapacity,
@@ -343,8 +343,8 @@ export function cultivationRatePerHour(
   const bonusBp = Math.min(rawBonusBp, config.cultivation.maxTotalBonusBp);
   const coefficientBp = config.cultivation.aptitudeCoefficientBaseBp + bonusBp;
   const baseRate = Math.floor((config.cultivation.baseRatePerHour * coefficientBp) / 10_000);
-  // 藏经阁加成：每级 +10%
-  const libraryBonusBp = scriptureLibraryLevel * SCRIPTURE_LIBRARY_CULTIVATION_BONUS_BP_PER_LEVEL;
+  // 藏经阁加成：1～5 级每级 +10%，6～10 级每级 +20%
+  const libraryBonusBp = scriptureLibraryCultivationBonusBp(scriptureLibraryLevel);
   const result = Math.floor((baseRate * (10_000 + libraryBonusBp)) / 10_000);
   // 天赋重构：悟道在藏经阁加成之后再 ×(1 + 加成)，加成随境界提高。
   const talentBp = talentBonusBp(disciple.talent, disciple.realmId, 'cultivation');

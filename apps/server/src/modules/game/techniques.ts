@@ -220,6 +220,45 @@ export function techniqueUpgradeCost(tier: TechniqueTier, level: number): { scro
   };
 }
 
+/* ---------- 功法商店（藏经阁「商店」标签页，docs/藏经阁扩建与功法商店计划.md） ---------- */
+
+/** 功法商店出售的品阶（天阶不卖）。 */
+export type TechniqueShopTier = Exclude<TechniqueTier, 'tian'>;
+export const TECHNIQUE_SHOP_TIERS: readonly TechniqueShopTier[] = ['xuan', 'di'];
+/** 每张残卷的单价（最小单位灵石）。 */
+export const TECHNIQUE_SHOP_PRICE: Readonly<Record<TechniqueShopTier, number>> = { xuan: 60_000, di: 180_000 };
+
+/** 每日限量：下标 = 藏经阁等级（0～10），同品阶的各门功法共用额度。 */
+const TECHNIQUE_SHOP_QUOTAS: readonly Readonly<Record<TechniqueShopTier, number>>[] = [
+  { xuan: 0, di: 0 },
+  { xuan: 2, di: 0 },
+  { xuan: 2, di: 0 },
+  { xuan: 3, di: 1 },
+  { xuan: 3, di: 1 },
+  { xuan: 4, di: 1 },
+  { xuan: 4, di: 2 },
+  { xuan: 5, di: 2 },
+  { xuan: 5, di: 3 },
+  { xuan: 6, di: 3 },
+  { xuan: 6, di: 4 },
+];
+
+/** 藏经阁等级下，该品阶每日可买的张数（等级取整并夹在 0～10）。 */
+export function techniqueShopQuota(scriptureLevel: number, tier: TechniqueShopTier): number {
+  const level = Math.min(TECHNIQUE_SHOP_QUOTAS.length - 1, Math.max(0, Math.floor(scriptureLevel)));
+  return TECHNIQUE_SHOP_QUOTAS[level]![tier];
+}
+
+/** 藏经阁几级起开放该品阶（额度首次大于 0 的等级）。 */
+export function techniqueShopOpenLevel(tier: TechniqueShopTier): number {
+  return TECHNIQUE_SHOP_QUOTAS.findIndex((row) => row[tier] > 0);
+}
+
+/** 是否为功法商店出售的品阶（天阶返回 false）。 */
+export function isTechniqueShopTier(tier: TechniqueTier): tier is TechniqueShopTier {
+  return (TECHNIQUE_SHOP_TIERS as readonly TechniqueTier[]).includes(tier);
+}
+
 /* ---------- 战斗修正（纯数据 + 纯函数） ---------- */
 
 /**

@@ -59,6 +59,7 @@ import {
   towerChallengeRequestSchema,
   towerPreviewRequestSchema,
   techniqueRequestSchema,
+  techniqueShopBuyRequestSchema,
   setDiscipleTechniqueRequestSchema,
   setArenaLineupSchema,
   auctionListRequestSchema,
@@ -117,6 +118,7 @@ import {
   getTechniqueLibrary,
   learnTechnique,
   upgradeTechnique,
+  buyTechniqueScrolls,
   setDiscipleTechnique,
   getArena,
   setArenaLineup,
@@ -835,6 +837,14 @@ export function createGameRoutes(): Hono<AppEnv> {
     const userId = requireUserId(c);
     const body = await parseStrictJson(techniqueRequestSchema, c);
     const result = await upgradeTechnique(getDb(c.env), userId, body.techniqueId, Date.now());
+    return respondOk(c, { state: result.state, library: result.library, result: result.result });
+  });
+
+  // 0069 功法商店：购买玄阶 / 地阶残卷（扣灵石，计入当天该品阶的额度；天阶不卖）。
+  routes.post('/game/techniques/shop/buy', async (c) => {
+    const userId = requireUserId(c);
+    const body = await parseStrictJson(techniqueShopBuyRequestSchema, c);
+    const result = await buyTechniqueScrolls(getDb(c.env), userId, body, Date.now());
     return respondOk(c, { state: result.state, library: result.library, result: result.result });
   });
 

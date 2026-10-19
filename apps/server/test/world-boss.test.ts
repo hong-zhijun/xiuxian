@@ -672,8 +672,9 @@ describe('世界 Boss 二期：出手', () => {
     await addBattles(berserkFixture.sectId, berserkMember, 3, berserkNow);
     await addBattles(ironcladFixture.sectId, ironcladMember, 3, ironcladNow);
     // 体魄固定在 50：狂暴档 30% × 2 = 60%，铁甲档只有 30%（弟子体魄是随机的，必须钉住）。
-    await env.DB.prepare('UPDATE disciples SET physique = 50 WHERE id = ?').bind(berserkMember).run();
-    await env.DB.prepare('UPDATE disciples SET physique = 50 WHERE id = ?').bind(ironcladMember).run();
+    // 天赋也是建宗时随机抽的，铁骨会按减免压低重伤率，同样钉成无天赋（none），避免偶发失败。
+    await env.DB.prepare("UPDATE disciples SET physique = 50, talent = 'none' WHERE id = ?").bind(berserkMember).run();
+    await env.DB.prepare("UPDATE disciples SET physique = 50, talent = 'none' WHERE id = ?").bind(ironcladMember).run();
 
     // 0.5 < 0.6（狂暴 30%×2）→ 重伤
     vi.spyOn(Math, 'random').mockReturnValue(0.5);

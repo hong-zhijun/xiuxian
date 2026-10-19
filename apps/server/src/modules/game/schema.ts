@@ -444,6 +444,12 @@ export const techniqueRequestSchema = z.strictObject({
   techniqueId: z.string().min(1).max(32),
 });
 
+/** 0069 功法商店：购买残卷（只认功法 id 与张数；品阶、额度与灵石由 service 校验，天阶不卖）。 */
+export const techniqueShopBuyRequestSchema = z.strictObject({
+  techniqueId: z.string().min(1).max(32),
+  quantity: z.number().int().min(1).max(20),
+});
+
 /** 0066 功法：设置 / 更换 / 卸下弟子主修（techniqueId 为 null 即卸下；只能选已收录的，由 service 校验）。 */
 export const setDiscipleTechniqueRequestSchema = z.strictObject({
   discipleId: z.string().min(1).max(64),

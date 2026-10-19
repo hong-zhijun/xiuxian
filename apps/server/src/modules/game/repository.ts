@@ -3616,6 +3616,14 @@ export class TechniqueRepository extends ParamRepository {
       params: [sectId],
     });
   }
+
+  /** 0069 功法商店：本宗某天各品阶的已购张数（没有行的品阶不返回，调用方按 0 处理）。 */
+  async findShopDaily(sectId: string, dateKey: string): Promise<{ tier: string; bought: number }[]> {
+    return this.all<{ tier: string; bought: number }>({
+      sql: 'SELECT tier, bought FROM technique_shop_daily WHERE sect_id = ? AND date_key = ?',
+      params: [sectId, dateKey],
+    });
+  }
 }
 
 /** 收录 / 参悟：写回本宗某功法的绝对值（level / scrolls）；没有行就建一行。 */
@@ -3673,6 +3681,37 @@ export function updateDiscipleTechniqueStatement(input: {
   return {
     sql: 'UPDATE disciples SET technique_id = ?, technique_prof_base = ?, technique_since = ? WHERE id = ?',
     params: [input.techniqueId, input.profBase, input.since, input.discipleId],
+  };
+}
+
+/* ---------- 0069 功法商店（docs/藏经阁扩建与功法商店计划.md） ---------- */
+
+/** 购买残卷：当天该品阶的已购张数累加（没有行就建一行）。 */
+export function addTechniqueShopBoughtStatement(
+  sectId: string,
+  dateKey: string,
+  tier: string,
+  delta: number,
+): ParameterizedQuery {
+  return {
+    sql: `INSERT INTO technique_shop_daily (sect_id, date_key, tier, bought) VALUES (?, ?, ?, ?)
+          ON CONFLICT (sect_id, date_key, tier) DO UPDATE SET bought = technique_shop_daily.bought + excluded.bought`,
+    params: [sectId, dateKey, tier, delta],
+  };
+}
+
+/**
+ * 功法商店并发守卫：当天该品阶的已购张数仍是读快照时的值（没有行按 0），否则整批回滚（双击只成功一次）。
+ */
+export function techniqueShopGuardStatement(
+  guardId: string,
+  input: { sectId: string; dateKey: string; tier: string; bought: number },
+): ParameterizedQuery {
+  return {
+    sql: `INSERT INTO mutation_guards (command_id, valid)
+          SELECT ?, CASE WHEN COALESCE((SELECT bought FROM technique_shop_daily WHERE sect_id = ? AND date_key = ? AND tier = ?), 0) = ?
+                         THEN 1 ELSE 0 END`,
+    params: [guardId, input.sectId, input.dateKey, input.tier, input.bought],
   };
 }
 

@@ -2659,12 +2659,36 @@ export interface TechniqueCatalogView {
   disciplesUsing: number;
 }
 
+/** 功法商店的一个品阶（玄 / 地）今日状态。灵石为最小单位。 */
+export interface TechniqueShopTierView {
+  tier: 'xuan' | 'di';
+  tierName: string;
+  price: number;
+  quota: number;
+  bought: number;
+  remaining: number;
+  /** 藏经阁几级起开放该品阶（额度为 0 时显示「藏经阁 N 级开放」）。 */
+  openLevel: number;
+}
+
+/** 功法商店（藏经阁「商店」标签页）。 */
+export interface TechniqueShopView {
+  unlocked: boolean;
+  scriptureLevel: number;
+  /** 今天（UTC+8）。 */
+  dateKey: string;
+  tiers: TechniqueShopTierView[];
+  /** 下一级藏经阁的额度提示；已满级为 null。 */
+  nextLevelHint: string | null;
+}
+
 export interface TechniqueLibraryView {
   unlocked: boolean;
   scriptureLevel: number;
   maxLevel: number;
   schools: { id: string; name: string }[];
   items: TechniqueCatalogView[];
+  shop: TechniqueShopView;
 }
 
 /** 镇妖塔胜率预估：胜率为 0~100 的整数。 */
@@ -2698,6 +2722,17 @@ export async function upgradeTechnique(techniqueId: string): Promise<{
   return apiRequest<{ state: SectStateView; library: TechniqueLibraryView; result: { message: string } }>(
     '/api/v1/game/techniques/upgrade',
     { method: 'POST', body: { techniqueId } },
+  );
+}
+
+/** 功法商店购买残卷（只限玄 / 地阶；扣灵石，计入当天该品阶额度）。 */
+export async function buyTechniqueScrolls(
+  techniqueId: string,
+  quantity: number,
+): Promise<{ state: SectStateView; library: TechniqueLibraryView; result: { message: string } }> {
+  return apiRequest<{ state: SectStateView; library: TechniqueLibraryView; result: { message: string } }>(
+    '/api/v1/game/techniques/shop/buy',
+    { method: 'POST', body: { techniqueId, quantity } },
   );
 }
 

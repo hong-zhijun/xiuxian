@@ -483,8 +483,43 @@ export function effectiveCapacity(baseCapacity: string, multiplier: number): num
 /** 藏经阁建筑 id（修炼加速来源）。 */
 export const SCRIPTURE_LIBRARY_BUILDING_ID = 'scriptureLibrary';
 
-/** 藏经阁每级给修炼速度的加成（基点，1000 = 10%）。 */
+/** 藏经阁 1～5 级每级给修炼速度的加成（基点，1000 = 10%）。 */
 export const SCRIPTURE_LIBRARY_CULTIVATION_BONUS_BP_PER_LEVEL = 1000;
+
+/** 藏经阁 6～10 级每级的修炼加成（基点，2000 = +20%；藏经阁扩建，上限由 5 提到 10）。 */
+export const SCRIPTURE_LIBRARY_HIGH_CULTIVATION_BONUS_BP_PER_LEVEL = 2000;
+
+/** 藏经阁按「前段每级 +10%」计的最后一级。 */
+const SCRIPTURE_LIBRARY_LOW_MAX_LEVEL = 5;
+
+/** 藏经阁 L 级给修炼速度的累计加成（基点）：前 5 级每级 +10%，6～10 级每级 +20%（10 级共 +150%）。 */
+export function scriptureLibraryCultivationBonusBp(level: number): number {
+  const lv = Math.max(0, Math.floor(level));
+  const low = Math.min(lv, SCRIPTURE_LIBRARY_LOW_MAX_LEVEL);
+  const high = Math.max(0, lv - SCRIPTURE_LIBRARY_LOW_MAX_LEVEL);
+  return low * SCRIPTURE_LIBRARY_CULTIVATION_BONUS_BP_PER_LEVEL + high * SCRIPTURE_LIBRARY_HIGH_CULTIVATION_BONUS_BP_PER_LEVEL;
+}
+
+/**
+ * 藏经阁 6～10 级（藏经阁扩建，上限由 5 提到 10）：分档表 —— 宗门等级门槛 + 消耗（最小单位），
+ * 与灵矿、聚灵阵同一做法；1～5 级仍按配置的线性升级消耗。
+ */
+export const SCRIPTURE_LIBRARY_HIGH_UPGRADES: readonly {
+  level: number;
+  sectLevel: number;
+  cost: Readonly<Record<string, string>>;
+}[] = [
+  { level: 6, sectLevel: 6, cost: { spiritStone: '1500000', herb: '600000' } },
+  { level: 7, sectLevel: 7, cost: { spiritStone: '2500000', herb: '1000000' } },
+  { level: 8, sectLevel: 8, cost: { spiritStone: '4000000', herb: '1600000' } },
+  { level: 9, sectLevel: 9, cost: { spiritStone: '6000000', herb: '2400000', xuantie: '10000' } },
+  { level: 10, sectLevel: 10, cost: { spiritStone: '9000000', herb: '3600000', xuantie: '20000' } },
+];
+
+/** 藏经阁从 currentLevel 升一级的分档条件；1～5 级（走线性消耗）或已满级返回 null。 */
+export function scriptureLibraryUpgradeFrom(currentLevel: number) {
+  return SCRIPTURE_LIBRARY_HIGH_UPGRADES.find((item) => item.level === currentLevel + 1) ?? null;
+}
 
 /** 灵矿（原任务堂）建筑 id：灵石基础产出的加成来源（V5.1 改动二）。 */
 export const MISSION_HALL_BUILDING_ID = 'missionHall';
