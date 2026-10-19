@@ -52,9 +52,9 @@ import UpgradeSimulatorDialog from './UpgradeSimulatorDialog.vue';
  * 弟子详情（弹窗内容）：固定紧凑头部 + 五个 Tab（概览 / 修行 / 装备 / 历练 / 档案）。
  *
  * - 概览：六轴雷达图 + 当前属性（带装备加成 `(+n)`）与综合评分 + 简短修为摘要（雷达图必须在首 Tab）。
- * - 修行：修为、伤势、岗位、破境（胜算 / 消耗 / 原因）与丹药入口。
+ * - 修行：修为与破境入口（胜算 / 消耗在破境弹窗里）、主修功法、岗位与丹药入口。
  * - 装备：三个装备格（兵器 / 护甲 / 法器）；点格子从背包里挑同部位的装备穿上，已穿的可卸下。
- * - 修行：修为、伤势、岗位、破境（胜算 / 消耗 / 原因）与丹药入口。
+ * - 修行：修为与破境入口（胜算 / 消耗在破境弹窗里）、主修功法、岗位与丹药入口。
  * - 历练：出发预览、在外倒计时、领取归队收获，以及**此弟子**的近期历练记录。
  * - 档案：头像框选取、私有备注、驱逐与二次确认。
  *
@@ -232,9 +232,16 @@ watch(
 );
 /** 熟练度百分比（服务端给的是基点，0~10000）。 */
 const techniquePercent = computed(() => Math.floor(props.disciple.techniqueProficiency / 100));
+/** 「更换」点开才显示下拉框；确定或取消后收起。 */
+const editingTechnique = ref(false);
 function saveTechnique(): void {
   if (props.busy) return;
   emit('setTechnique', props.disciple.id, techniqueDraft.value === '' ? null : techniqueDraft.value);
+  editingTechnique.value = false;
+}
+function cancelTechnique(): void {
+  techniqueDraft.value = props.disciple.techniqueId ?? '';
+  editingTechnique.value = false;
 }
 
 function saveNote(): void {
@@ -454,6 +461,13 @@ function allocateDaoInsight(): void {
 }
 
 /* ---------- 破境：判定与胜算/消耗全部来自服务端 ---------- */
+
+/** 破境弹窗：胜算 / 消耗 / 拦截原因都在弹窗里看，确认后才发起突破。 */
+const showBreakthrough = ref(false);
+function confirmBreakthrough(): void {
+  showBreakthrough.value = false;
+  requestBreakthrough();
+}
 
 function requestBreakthrough(): void {
   if (props.busy) return;
@@ -1399,26 +1413,34 @@ function refineGear(item: EquipmentItemView | null): void {
         :aria-labelledby="tabButtonId('training')"
         tabindex="0"
       >
-        <section class="disciple-detail-section" aria-labelledby="disciple-realm-title">
-          <h3 id="disciple-realm-title" class="disciple-detail-title">境界与修为</h3>
-          <p class="disciple-detail-realm">
-            <span class="realm-tag">{{ disciple.stageName }}</span>
-            <span>{{ disciple.realmName }}</span>
-          </p>
+        <section class="disciple-detail-section" aria-label="修为">
           <div class="disciple-detail-progress">
             <span>{{ progress.text }}</span>
             <span>{{ progress.percent }}%</span>
           </div>
-          <div
-            class="disciple-cultivation-track"
-            role="progressbar"
-            aria-label="修为进境"
-            aria-valuemin="0"
-            aria-valuemax="100"
-            :aria-valuenow="progress.percent"
-            :aria-valuetext="progress.text"
-          >
-            <span :style="{ width: `${progress.percent}%` }" />
+          <div class="disciple-realm-row">
+            <div
+              class="disciple-cultivation-track"
+              role="progressbar"
+              aria-label="修为进境"
+              aria-valuemin="0"
+              aria-valuemax="100"
+              :aria-valuenow="progress.percent"
+              :aria-valuetext="progress.text"
+            >
+              <span :style="{ width: `${progress.percent}%` }" />
+            </div>
+            <span class="realm-tag">{{ disciple.stageName }}</span>
+            <!-- 胜算 / 消耗 / 拦截原因都放进破境弹窗，点了再看。 -->
+            <button
+              class="action-button primary-action disciple-break-button"
+              :class="{ 'is-disabled': !disciple.canBreakthrough || journey.status === 'active' || severeInjured }"
+              type="button"
+              :disabled="busy"
+              @click="showBreakthrough = true"
+            >
+              <span>破境</span>
+            </button>
           </div>
           <p class="disciple-detail-hint">
             {{
@@ -1427,6 +1449,56 @@ function refineGear(item: EquipmentItemView | null): void {
                 : `静修 +${disciple.cultivationRatePerHour}/时`
             }}
           </p>
+        </section>
+
+        <section class="disciple-detail-section disciple-technique" aria-labelledby="disciple-technique-title">
+          <h3 id="disciple-technique-title" class="disciple-detail-title">主修功法</h3>
+          <div class="disciple-technique-head">
+            <p class="disciple-technique-line">
+              <strong>{{ disciple.techniqueName }}</strong>
+              <span v-if="disciple.techniqueId !== null">
+                · {{ disciple.techniqueLevel }} 级 · 熟练度 {{ techniquePercent }}%
+              </span>
+            </p>
+            <button
+              v-if="!editingTechnique"
+              class="quiet-button"
+              type="button"
+              :disabled="busy || state.learnedTechniques.length === 0"
+              :title="state.learnedTechniques.length === 0 ? '藏经阁尚未收录功法' : undefined"
+              @click="editingTechnique = true"
+            >
+              {{ disciple.techniqueId === null ? '设为主修' : '更换' }}
+            </button>
+          </div>
+          <div
+            v-if="disciple.techniqueId !== null"
+            class="disciple-technique-bar"
+            role="progressbar"
+            aria-label="功法熟练度"
+            :aria-valuenow="techniquePercent"
+            aria-valuemin="0"
+            aria-valuemax="100"
+          >
+            <span :style="{ width: `${String(techniquePercent)}%` }" />
+          </div>
+          <div v-if="editingTechnique" class="disciple-technique-row">
+            <select v-model="techniqueDraft" class="disciple-input" aria-label="选择主修功法" :disabled="busy">
+              <option value="">无（卸下主修）</option>
+              <option v-for="item in state.learnedTechniques" :key="item.id" :value="item.id">
+                {{ item.name }}（{{ item.level }} 级）
+              </option>
+            </select>
+            <button
+              class="action-button disciple-technique-save"
+              type="button"
+              :disabled="busy || techniqueDraft === (disciple.techniqueId ?? '')"
+              @click="saveTechnique"
+            >
+              确定
+            </button>
+            <button class="quiet-button" type="button" :disabled="busy" @click="cancelTechnique">取消</button>
+          </div>
         </section>
 
         <section class="disciple-detail-section" aria-labelledby="disciple-job-title">
@@ -1439,42 +1511,6 @@ function refineGear(item: EquipmentItemView | null): void {
             @change="emit('assign', disciple.id, $event)"
           />
           <p v-if="transferBlockHint" class="blocked-hint">{{ transferBlockHint }}</p>
-        </section>
-
-        <section class="disciple-detail-section" aria-labelledby="disciple-injury-title">
-          <h3 id="disciple-injury-title" class="disciple-detail-title">伤势</h3>
-          <p v-if="severeLabel !== null" class="disciple-detail-injury">{{ severeLabel }}</p>
-          <p v-else-if="injured" class="disciple-detail-injury">
-            疗伤中 · 预计 {{ formatTime(disciple.injuredUntil) }} 复原
-          </p>
-          <p v-else class="disciple-detail-hint">无恙，可以出战、探索与破境。</p>
-        </section>
-
-        <section class="disciple-detail-section" aria-labelledby="disciple-break-title">
-          <h3 id="disciple-break-title" class="disciple-detail-title">破境</h3>
-          <dl class="disciple-facts">
-            <div>
-              <dt>破境胜算</dt>
-              <dd>{{ formatBp(disciple.breakthroughChanceBp) }}</dd>
-            </div>
-            <div>
-              <dt>灵气消耗</dt>
-              <dd>{{ formatAmount(disciple.breakthroughCost) }} {{ energyName }}</dd>
-            </div>
-          </dl>
-          <p v-if="disciple.blockedReason" class="blocked-hint">{{ disciple.blockedReason }}</p>
-          <!-- 在外时即便服务端还没把 canBreakthrough 打成 false，也一律挡住破境。 -->
-          <p v-if="actionBlockHint" class="blocked-hint">{{ actionBlockHint }}</p>
-          <button
-            class="action-button primary-action disciple-break-button"
-            :class="{ 'is-disabled': !disciple.canBreakthrough || journey.status === 'active' || severeInjured }"
-            type="button"
-            :disabled="busy || journey.status === 'active' || severeInjured"
-            :aria-disabled="!disciple.canBreakthrough || journey.status === 'active' || severeInjured"
-            @click="requestBreakthrough"
-          >
-            <span>破境</span>
-          </button>
         </section>
 
         <section class="disciple-detail-section" aria-labelledby="disciple-pill-title">
@@ -1926,55 +1962,6 @@ function refineGear(item: EquipmentItemView | null): void {
           </p>
         </section>
 
-        <section class="disciple-detail-section disciple-technique" aria-labelledby="disciple-technique-title">
-          <h3 id="disciple-technique-title" class="disciple-detail-title">主修功法</h3>
-          <p class="disciple-technique-line">
-            <strong>{{ disciple.techniqueName }}</strong>
-            <span v-if="disciple.techniqueId !== null">
-              · {{ disciple.techniqueLevel }} 级 · 熟练度 {{ techniquePercent }}%
-            </span>
-          </p>
-          <div
-            v-if="disciple.techniqueId !== null"
-            class="disciple-technique-bar"
-            role="progressbar"
-            aria-label="功法熟练度"
-            :aria-valuenow="techniquePercent"
-            aria-valuemin="0"
-            aria-valuemax="100"
-          >
-            <span :style="{ width: `${String(techniquePercent)}%` }" />
-          </div>
-          <div class="disciple-technique-row">
-            <select
-              v-model="techniqueDraft"
-              class="disciple-input"
-              aria-label="选择主修功法"
-              :disabled="busy || state.learnedTechniques.length === 0"
-            >
-              <option value="">无（卸下主修）</option>
-              <option v-for="item in state.learnedTechniques" :key="item.id" :value="item.id">
-                {{ item.name }}（{{ item.level }} 级）
-              </option>
-            </select>
-            <button
-              class="action-button"
-              type="button"
-              :disabled="busy || techniqueDraft === (disciple.techniqueId ?? '')"
-              @click="saveTechnique"
-            >
-              {{ disciple.techniqueId === null ? '设为主修' : '更换' }}
-            </button>
-          </div>
-          <p class="disciple-note-meta">
-            {{
-              state.learnedTechniques.length === 0
-                ? '藏经阁尚未收录功法，收录后可在此设为主修。'
-                : '换功法时熟练度减半后重新攀升；卸下则清零。在外历练与重伤中也可更换。'
-            }}
-          </p>
-        </section>
-
         <section class="disciple-detail-section" aria-labelledby="disciple-rename-title">
           <h3 id="disciple-rename-title" class="disciple-detail-title">改名</h3>
           <div class="disciple-note-row">
@@ -2131,6 +2118,37 @@ function refineGear(item: EquipmentItemView | null): void {
     </ModalShell>
 
     <!-- 二级弹窗：该部位的背包装备，点选即穿戴（Esc / 点遮罩只关这一层）。 -->
+    <!-- 破境：胜算与消耗点开才看，确认后才真正突破。 -->
+    <ModalShell v-if="showBreakthrough" narrow :label="`破境 · ${disciple.name}`" @close="showBreakthrough = false">
+      <section class="disciple-break-dialog" aria-labelledby="disciple-break-title">
+        <h3 id="disciple-break-title" class="disciple-detail-title">破境 · {{ disciple.name }}（{{ disciple.stageName }}）</h3>
+        <dl class="disciple-facts">
+          <div>
+            <dt>破境胜算</dt>
+            <dd>{{ formatBp(disciple.breakthroughChanceBp) }}</dd>
+          </div>
+          <div>
+            <dt>灵气消耗</dt>
+            <dd>{{ formatAmount(disciple.breakthroughCost) }} {{ energyName }}</dd>
+          </div>
+        </dl>
+        <p v-if="disciple.blockedReason" class="blocked-hint">{{ disciple.blockedReason }}</p>
+        <!-- 在外时即便服务端还没把 canBreakthrough 打成 false，也一律挡住破境。 -->
+        <p v-if="actionBlockHint" class="blocked-hint">{{ actionBlockHint }}</p>
+        <div class="disciple-break-actions">
+          <button class="quiet-button" type="button" @click="showBreakthrough = false">取消</button>
+          <button
+            class="action-button primary-action disciple-break-confirm"
+            type="button"
+            :disabled="busy || !disciple.canBreakthrough || journey.status === 'active' || severeInjured"
+            @click="confirmBreakthrough"
+          >
+            确认破境
+          </button>
+        </div>
+      </section>
+    </ModalShell>
+
     <ModalShell
       v-if="gearPickerSlot !== null"
       narrow
@@ -2217,9 +2235,60 @@ function refineGear(item: EquipmentItemView | null): void {
   padding: 4px 10px;
   font-size: 11px;
 }
+.disciple-technique-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
 .disciple-technique-line {
-  margin: 0 0 6px;
+  margin: 0;
   font-size: 14px;
+}
+
+.disciple-technique-save {
+  min-height: 34px;
+  padding: 6px 14px;
+  font-size: 13px;
+}
+
+/* 修为条 + 小境界 + 破境按钮同一行；窄屏时按钮换到条下方。 */
+.disciple-realm-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+}
+
+.disciple-realm-row .disciple-cultivation-track {
+  flex: 1 1 160px;
+  min-width: 0;
+}
+
+.disciple-realm-row .disciple-break-button {
+  width: auto;
+  min-height: 32px;
+  padding: 5px 16px;
+  font-size: 13px;
+}
+
+.disciple-break-dialog {
+  display: grid;
+  gap: 10px;
+}
+
+.disciple-break-actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+}
+
+.disciple-break-confirm {
+  min-height: 36px;
+  padding: 6px 18px;
 }
 
 .disciple-technique-bar {
