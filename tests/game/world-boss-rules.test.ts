@@ -372,7 +372,8 @@ describe('世界 Boss 三期：功勋与功勋兑换（计划 2.3、2.4）', () 
 
   it('功勋兑换价目表：六项 4 / 2 / 60 / 25 / 70 / 400，按个数兑换的单项上限 100', () => {
     expect(BOSS_MERIT_RESOURCE_ID).toBe('bossMerit');
-    expect(WORLD_BOSS_MERIT_SHOP.map((item) => item.id)).toEqual([
+    const base = WORLD_BOSS_MERIT_SHOP.filter((item) => item.category !== 'technique');
+    expect(base.map((item) => item.id)).toEqual([
       'xuantie',
       'shenmu',
       'talentPill',
@@ -380,7 +381,7 @@ describe('世界 Boss 三期：功勋与功勋兑换（计划 2.3、2.4）', () 
       'treasure',
       'immortal',
     ]);
-    expect(WORLD_BOSS_MERIT_SHOP.map((item) => item.name)).toEqual([
+    expect(base.map((item) => item.name)).toEqual([
       '玄铁',
       '神木',
       '洗髓丹',
@@ -388,8 +389,8 @@ describe('世界 Boss 三期：功勋与功勋兑换（计划 2.3、2.4）', () 
       '宝品装备',
       '仙品装备',
     ]);
-    expect(WORLD_BOSS_MERIT_SHOP.map((item) => item.cost)).toEqual([4, 2, 60, 25, 70, 400]);
-    expect(WORLD_BOSS_MERIT_SHOP.map((item) => item.category)).toEqual([
+    expect(base.map((item) => item.cost)).toEqual([4, 2, 60, 25, 70, 400]);
+    expect(base.map((item) => item.category)).toEqual([
       'resource',
       'resource',
       'pill',
@@ -397,7 +398,7 @@ describe('世界 Boss 三期：功勋与功勋兑换（计划 2.3、2.4）', () 
       'equipment',
       'equipment',
     ]);
-    expect(WORLD_BOSS_MERIT_SHOP.map((item) => item.quality)).toEqual([
+    expect(base.map((item) => item.quality)).toEqual([
       null,
       null,
       null,
@@ -410,5 +411,14 @@ describe('世界 Boss 三期：功勋与功勋兑换（计划 2.3、2.4）', () 
     expect(WORLD_BOSS_MERIT_XUANTIE_MAX).toBe(100);
     expect(findMeritShopItem('xuantie')).toMatchObject({ name: '玄铁', cost: 4, quality: null });
     expect(findMeritShopItem('xxx')).toBeUndefined();
+  });
+
+  it('功法残卷：每门功法一项，按品阶 4 / 10 / 30 功勋一张', () => {
+    const scrolls = WORLD_BOSS_MERIT_SHOP.filter((item) => item.category === 'technique');
+    expect(scrolls).toHaveLength(12);
+    expect(findMeritShopItem('techniqueScroll:qingfeng')).toMatchObject({ techniqueId: 'qingfeng', cost: 4, quality: null });
+    expect(findMeritShopItem('techniqueScroll:taiyi')).toMatchObject({ techniqueId: 'taiyi', cost: 10 });
+    expect(findMeritShopItem('techniqueScroll:pojia')).toMatchObject({ techniqueId: 'pojia', cost: 30 });
+    expect(findMeritShopItem('xuantie')).toMatchObject({ techniqueId: null });
   });
 });

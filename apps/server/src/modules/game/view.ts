@@ -632,6 +632,8 @@ export interface MeritShopView {
     resourceId: string | null;
     /** 丹药类（天赋重构：洗髓丹）兑换得到的丹药 id；其它类为 null。 */
     pillId: string | null;
+    /** 0066 功法类：兑换得到哪门功法的残卷；其它类为 null。 */
+    techniqueId: string | null;
     color: string | null;
   }[];
   slots: { id: string; name: string; mainAttrChoices: { id: string; name: string }[] }[];
@@ -1550,6 +1552,8 @@ export interface WorldBossAttackResultView {
 export interface SectStateView {
   /** 0066 功法：宗门已收录的功法（弟子「更换主修」的候选）。 */
   learnedTechniques: { id: string; name: string; level: number }[];
+  /** 0066 功法：各功法持有的残卷数（只列 > 0 的；功勋兑换显示「现有」用）。 */
+  techniqueScrolls: Record<string, number>;
   sect: {
     id: string;
     name: string;
@@ -2499,8 +2503,14 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
       : [];
   });
 
+  const techniqueScrolls: Record<string, number> = {};
+  for (const row of input.techniques ?? []) {
+    if (Number(row.scrolls) > 0) techniqueScrolls[row.technique_id] = Number(row.scrolls);
+  }
+
   return {
     learnedTechniques,
+    techniqueScrolls,
     sect: {
       id: sect.id,
       name: sect.name,
@@ -3159,6 +3169,8 @@ export interface TechniqueCatalogView {
   tierName: string;
   /** 战报标签（如「青锋」）。 */
   tag: string;
+  /** 一句话简介。 */
+  summary: string;
   towerGain: string;
   cost: string;
   bossGain: string;

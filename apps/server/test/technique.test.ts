@@ -244,3 +244,28 @@ describe('功法 · 商人残卷交付', () => {
     expect(hub.auction.merchant.present).toBe(true);
   });
 });
+
+describe('功勋兑换功法残卷', () => {
+  it('按品阶扣功勋，残卷进 sect_techniques；不需要藏经阁', async () => {
+    const sect = await makeSect('technique-merit');
+    await env.DB.prepare("UPDATE resource_balances SET balance = 200000 WHERE sect_id = ? AND resource_id = 'bossMerit'")
+      .bind(sect.sectId)
+      .run();
+    const result = await sect.api.post('/api/v1/game/world-boss/exchange', { itemId: 'techniqueScroll:taiyi', quantity: 3 });
+    expect(result.status).toBe(200);
+    const data = dataOf(result) as Record<string, any>;
+    expect(data.outcome.scroll).toEqual({ techniqueId: 'taiyi', name: '太乙剑诀残卷（地阶）', quantity: 3 });
+    expect(data.state.techniqueScrolls.taiyi).toBe(3);
+    const row = await env.DB.prepare("SELECT scrolls FROM sect_techniques WHERE sect_id = ? AND technique_id = 'taiyi'")
+      .bind(sect.sectId)
+      .first<{ scrolls: number }>();
+    expect(row?.scrolls).toBe(3);
+    const merit = await env.DB.prepare("SELECT balance FROM resource_balances WHERE sect_id = ? AND resource_id = 'bossMerit'")
+      .bind(sect.sectId)
+      .first<{ balance: number }>();
+    expect(Number(merit?.balance)).toBe(170000);
+
+    const unknown = await sect.api.post('/api/v1/game/world-boss/exchange', { itemId: 'techniqueScroll:nope', quantity: 1 });
+    expect(errorOf(unknown).code).toBe('VALIDATION_ERROR');
+  });
+});

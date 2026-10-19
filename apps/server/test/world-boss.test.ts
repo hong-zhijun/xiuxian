@@ -364,8 +364,11 @@ describe('世界 Boss 二期：面板', () => {
       { id: 'resource', name: '资源' },
       { id: 'pill', name: '丹药' },
       { id: 'equipment', name: '装备' },
+      { id: 'technique', name: '功法' },
     ]);
-    expect(shop.items.map((item: { id: string }) => item.id)).toEqual([
+    // 0066 功法残卷按功法生成（见 world-boss-rules 测试），这里只核对固定的六项。
+    const baseItems = shop.items.filter((item: { category: string }) => item.category !== 'technique');
+    expect(baseItems.map((item: { id: string }) => item.id)).toEqual([
       'xuantie',
       'shenmu',
       'talentPill',
@@ -373,8 +376,8 @@ describe('世界 Boss 二期：面板', () => {
       'treasure',
       'immortal',
     ]);
-    expect(shop.items.map((item: { cost: number }) => item.cost)).toEqual([4, 2, 60, 25, 70, 400]);
-    expect(shop.items.map((item: { category: string }) => item.category)).toEqual([
+    expect(baseItems.map((item: { cost: number }) => item.cost)).toEqual([4, 2, 60, 25, 70, 400]);
+    expect(baseItems.map((item: { category: string }) => item.category)).toEqual([
       'resource',
       'resource',
       'pill',
@@ -1190,6 +1193,7 @@ describe('世界 Boss 三期：功勋兑换（计划 2.4）', () => {
       resource: { resourceId: 'xuantie', name: '玄铁', amount: 3_000 },
       pill: null,
       equipment: null,
+      scroll: null,
     });
     expect(await balanceOf(fixture.sectId, BOSS_MERIT_RESOURCE_ID)).toBe(88_000);
     expect(await balanceOf(fixture.sectId, 'xuantie')).toBe(3_000);

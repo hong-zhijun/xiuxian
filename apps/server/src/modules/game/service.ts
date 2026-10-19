@@ -10183,6 +10183,7 @@ export function getMeritShop(): MeritShopView {
       quality: item.quality,
       resourceId: item.resourceId,
       pillId: item.pillId,
+      techniqueId: item.techniqueId,
       color: item.quality === null ? null : qualityColorOf(item.quality),
     })),
     slots: equipmentSlotViews(),
@@ -10203,6 +10204,8 @@ export interface BossMeritExchangeOutcome {
   pill: { pillId: string; name: string; quantity: number } | null;
   /** 兑换到的装备；兑换玄铁时为 null。 */
   equipment: { id: string; name: string; quality: string; slot: string; slotName: string } | null;
+  /** 0066 兑换到的功法残卷（张）；不是残卷时为 null。 */
+  scroll: { techniqueId: string; name: string; quantity: number } | null;
 }
 
 /**
@@ -10241,6 +10244,25 @@ export async function exchangeBossMerit(
       );
     }
     draft.requireResource(BOSS_MERIT_RESOURCE_ID, costMinUnits * quantity);
+    // 0066 功法残卷：按张数进 sect_techniques.scrolls（与 Boss 掉落同一条 upsert；不需要藏经阁）。
+    if (item.techniqueId !== null) {
+      const before = techniqueRowOf(draft, item.techniqueId);
+      draft.addStatement(addTechniqueScrollsStatement(draft.sect.id, item.techniqueId, quantity));
+      await draft.commit();
+      draft.setTechnique({ ...before, scrolls: Number(before.scrolls) + quantity });
+      return {
+        state: draft.view(),
+        outcome: {
+          itemId: item.id,
+          cost: costMinUnits * quantity,
+          xuantie: 0,
+          resource: null,
+          pill: null,
+          equipment: null,
+          scroll: { techniqueId: item.techniqueId, name: item.name, quantity },
+        },
+      };
+    }
     // 天赋重构：丹药类（洗髓丹）直接进丹库，与炼制入库同一条 upsert。
     if (item.pillId !== null) {
       draft.addPill(item.pillId, quantity);
@@ -10254,6 +10276,7 @@ export async function exchangeBossMerit(
           resource: null,
           pill: { pillId: item.pillId, name: item.name, quantity },
           equipment: null,
+          scroll: null,
         },
       };
     }
@@ -10271,6 +10294,7 @@ export async function exchangeBossMerit(
         resource: { resourceId, name: item.name, amount },
         pill: null,
         equipment: null,
+        scroll: null,
       },
     };
   }
@@ -10326,6 +10350,7 @@ export async function exchangeBossMerit(
         slot: generated.slot,
         slotName: slotNameOf(generated.slot),
       },
+      scroll: null,
     },
   };
 }
@@ -11258,6 +11283,7 @@ function techniqueLibraryViewOf(draft: SectDraft): TechniqueLibraryView {
       tier: def.tier,
       tierName: TECHNIQUE_TIER_NAMES[def.tier],
       tag: def.tag,
+      summary: def.summary,
       towerGain: def.towerGain,
       cost: def.cost,
       bossGain: def.bossGain,

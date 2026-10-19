@@ -19,6 +19,15 @@ export const MAX_ENTRIES = 5;
 
 export const CHANGELOG: readonly ChangelogEntry[] = [
   {
+    id: '2026-10-19-technique-merit',
+    time: '2026-10-19 18:00',
+    title: '功法 · 功勋兑换与入口调整',
+    items: [
+      '功勋兑换新增「功法」分类，每门功法的残卷都可自选兑换：玄阶 4、地阶 10、天阶 30 功勋一张。',
+      '功法入口移到「市集」一行；功法页先列出名称、简介与收集进度，点开功法再看效果、收录与参悟。',
+    ],
+  },
+  {
     id: '2026-10-19-technique-gift',
     time: '2026-10-19 12:05',
     title: '功法上线贺礼',

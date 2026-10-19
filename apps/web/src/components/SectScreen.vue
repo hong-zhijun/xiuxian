@@ -1879,7 +1879,7 @@ function signedPct(value: number): string {
 type HubCardId =
   | 'daily' | 'alchemy' | 'forge' | 'refine' | 'steward' | 'defense'
   | 'boss' | 'arena' | 'tower' | 'explore' | 'world'
-  | 'shop' | 'gambling' | 'auction' | 'market' | 'merit';
+  | 'shop' | 'gambling' | 'auction' | 'market' | 'merit' | 'techniques';
 
 interface HubCard {
   id: HubCardId;
@@ -2025,6 +2025,14 @@ const hubGroups = computed<{ label: string; cards: HubCard[] }[]>(() => {
                   : '看行情 · 低买高卖',
         },
         { id: 'merit', name: '功勋', glyph: '勋', status: `可用 ${formatAmount(merit?.balance ?? '0')} 功勋` },
+        {
+          id: 'techniques',
+          name: '功法',
+          glyph: '功',
+          status: props.state.buildings.some((building) => building.defId === 'scriptureLibrary' && building.level >= 1)
+            ? `已收录 ${String(props.state.learnedTechniques.length)} 门`
+            : '建成藏经阁后开放',
+        },
       ],
     },
   ];
@@ -2054,6 +2062,7 @@ function openHubCard(id: HubCardId): void {
     auction: 'auction',
     market: 'market',
     merit: 'merit',
+    techniques: 'techniques',
   };
   openPanel.value = panels[id];
 }
@@ -2637,17 +2646,6 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
                 <svg v-if="building.level < building.maxLevel" viewBox="0 0 18 18" aria-hidden="true">
                   <path d="m5 11 4-4 4 4" />
                 </svg>
-              </button>
-              <!-- 0066 功法：藏经阁的入口（收录 / 参悟在弹窗里）。 -->
-              <button
-                v-if="building.defId === 'scriptureLibrary'"
-                class="quiet-button technique-entry"
-                type="button"
-                :disabled="busy"
-                aria-label="打开功法藏经阁"
-                @click="openPanel = 'techniques'"
-              >
-                功法
               </button>
             </li>
           </ul>

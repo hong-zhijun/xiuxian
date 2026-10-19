@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from 'vue';
 
 import type { SectStateView, TechniqueCatalogView, TechniqueLibraryView } from '../api/game';
+import ModalShell from './ModalShell.vue';
 import { fetchTechniques, learnTechnique, upgradeTechnique } from '../api/game';
 import { formatAmount } from '../utils/format';
 
@@ -26,6 +27,14 @@ const pendingId = ref<string | null>(null);
 const errorText = ref('');
 
 const maxLevel = computed(() => library.value?.maxLevel ?? 10);
+/** 点开详情的功法 id（详情跟着 library 刷新，收录 / 参悟后直接显示新状态）。 */
+const selectedId = ref<string | null>(null);
+const selected = computed(() => library.value?.items.find((item) => item.id === selectedId.value) ?? null);
+
+/** 列表里的收集状态：已收录看参悟等级，未收录看残卷进度。 */
+function progressText(item: TechniqueCatalogView): string {
+  return item.learned ? `参悟 ${String(item.level)} 级` : `残卷 ${String(item.scrolls)} / ${String(item.learnScrolls)}`;
+}
 
 /** 按流派分组（服务端下发的流派顺序）。 */
 const groups = computed(() => {
@@ -79,7 +88,7 @@ onMounted(() => {
 <template>
   <div class="technique-dialog">
     <p class="technique-intro">
-      功法归宗门：收录与参悟只做一次，修习的弟子共享等级。参悟系数每级 +8%，熟练度满 48 小时（以主修为准）。
+      功法归宗门：收录与参悟只做一次，修习的弟子共享等级。点开功法查看效果与参悟。
     </p>
     <p v-if="library && !library.unlocked" class="technique-lock" role="status">
       宗门建有藏经阁（1 级）后，才能收录与参悟功法。
@@ -89,59 +98,79 @@ onMounted(() => {
     <section v-for="group in groups" :key="group.id" class="technique-group">
       <h3 class="technique-group-title">{{ group.name }}</h3>
       <ul class="technique-list">
-        <li
-          v-for="item in group.items"
-          :key="item.id"
-          class="technique-card"
-          :class="{ 'is-learned': item.learned }"
-        >
-          <div class="technique-head">
-            <strong>{{ item.name }}</strong>
-            <span class="technique-tier">{{ item.tierName }}</span>
-            <span v-if="item.learned" class="technique-level">{{ item.level }} / {{ maxLevel }} 级</span>
-            <span v-else class="technique-level is-unlearned">未收录</span>
-          </div>
-          <p class="technique-line"><b>镇妖塔</b>{{ item.towerGain }}</p>
-          <p class="technique-line"><b>世界 Boss</b>{{ item.bossGain }}</p>
-          <p class="technique-line is-cost"><b>代价</b>{{ item.cost }}</p>
-          <p class="technique-line is-quiet">
-            {{ item.scrollName }} {{ item.scrolls }} 张
-            <template v-if="!item.learned">
-              · 收录需 {{ item.learnScrolls }} 张，还差 {{ item.learnRemaining }} 张
-            </template>
-            <template v-else-if="item.upgradeScrolls !== null">
-              · 参悟到 {{ item.level + 1 }} 级需残卷 {{ item.upgradeScrolls }} 张、灵石 {{ stoneText(item.upgradeStone) }}
-            </template>
-            <template v-else> · 已满级</template>
-          </p>
-          <p v-if="item.learned" class="technique-line is-quiet">
-            主修弟子 {{ item.disciplesUsing }} 名 · 参悟系数 ×{{ item.levelFactor.toFixed(2) }}
-          </p>
-          <div class="technique-actions">
-            <button
-              v-if="!item.learned"
-              class="action-button technique-button"
-              type="button"
-              :disabled="busy === true || pendingId !== null || !library?.unlocked || item.learnRemaining > 0"
-              @click="act(item, 'learn')"
-            >
-              {{ item.learnRemaining > 0 ? '残卷不足' : '收录' }}
-            </button>
-            <button
-              v-else-if="item.upgradeScrolls !== null"
-              class="action-button technique-button"
-              type="button"
-              :disabled="busy === true || pendingId !== null || !library?.unlocked"
-              @click="act(item, 'upgrade')"
-            >
-              参悟至 {{ item.level + 1 }} 级
-            </button>
-          </div>
+        <li v-for="item in group.items" :key="item.id">
+          <button
+            class="technique-row"
+            :class="{ 'is-learned': item.learned, 'is-ready': !item.learned && item.learnRemaining === 0 }"
+            type="button"
+            @click="selectedId = item.id"
+          >
+            <span class="technique-row-head">
+              <strong>{{ item.name }}</strong>
+              <span class="technique-tier">{{ item.tierName }}</span>
+            </span>
+            <span class="technique-summary">{{ item.summary }}</span>
+            <span class="technique-progress">{{ progressText(item) }}</span>
+          </button>
         </li>
       </ul>
     </section>
 
     <p v-if="errorText" class="technique-error" role="alert">{{ errorText }}</p>
+
+    <ModalShell v-if="selected" narrow :loading="pendingId !== null" :label="selected.name" @close="selectedId = null">
+      <div class="technique-detail">
+        <header class="technique-detail-head">
+          <h2>{{ selected.name }}</h2>
+          <span class="technique-tier">{{ selected.tierName }} · {{ selected.schoolName }}</span>
+        </header>
+        <p class="technique-summary">{{ selected.summary }}</p>
+        <dl class="technique-facts">
+          <dt>镇妖塔</dt>
+          <dd>{{ selected.towerGain }}</dd>
+          <dt>世界 Boss</dt>
+          <dd>{{ selected.bossGain }}</dd>
+          <dt>代价</dt>
+          <dd class="technique-cost">{{ selected.cost }}</dd>
+          <dt>参悟</dt>
+          <dd>
+            <template v-if="selected.learned">
+              {{ selected.level }} / {{ maxLevel }} 级 · 系数 ×{{ selected.levelFactor.toFixed(2) }} · 主修弟子 {{ selected.disciplesUsing }} 名
+            </template>
+            <template v-else>未收录</template>
+          </dd>
+          <dt>残卷</dt>
+          <dd>
+            现有 {{ selected.scrolls }} 张
+            <template v-if="!selected.learned"> · 收录需 {{ selected.learnScrolls }} 张</template>
+            <template v-else-if="selected.upgradeScrolls !== null">
+              · 参悟到 {{ selected.level + 1 }} 级需 {{ selected.upgradeScrolls }} 张、灵石 {{ stoneText(selected.upgradeStone) }}
+            </template>
+            <template v-else> · 已满级</template>
+          </dd>
+        </dl>
+        <div class="technique-actions">
+          <button
+            v-if="!selected.learned"
+            class="action-button primary-action technique-button"
+            type="button"
+            :disabled="busy === true || pendingId !== null || !library?.unlocked || selected.learnRemaining > 0"
+            @click="act(selected, 'learn')"
+          >
+            {{ selected.learnRemaining > 0 ? `还差 ${selected.learnRemaining} 张残卷` : '收录' }}
+          </button>
+          <button
+            v-else-if="selected.upgradeScrolls !== null"
+            class="action-button primary-action technique-button"
+            type="button"
+            :disabled="busy === true || pendingId !== null || !library?.unlocked"
+            @click="act(selected, 'upgrade')"
+          >
+            参悟至 {{ selected.level + 1 }} 级
+          </button>
+        </div>
+      </div>
+    </ModalShell>
   </div>
 </template>
 
@@ -167,66 +196,110 @@ onMounted(() => {
 
 .technique-group-title {
   margin: 0 0 8px;
-  font-size: 15px;
+  font-size: 14px;
+  color: var(--gold);
 }
 
 .technique-list {
   display: grid;
-  gap: 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
-.technique-card {
+.technique-row {
   display: grid;
-  gap: 6px;
-  padding: 10px 12px;
+  width: 100%;
+  gap: 3px;
+  padding: 9px 11px;
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: 8px;
   background: var(--surface);
+  color: var(--ink-text);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 160ms ease, background-color 160ms ease;
 }
 
-.technique-card.is-learned {
-  border-color: var(--jade-dark, var(--jade));
+.technique-row:hover {
+  border-color: var(--line-strong);
+  background: var(--surface-strong);
 }
 
-.technique-head {
+.technique-row.is-learned {
+  border-color: var(--jade-dark);
+}
+
+.technique-row-head {
   display: flex;
-  flex-wrap: wrap;
   align-items: baseline;
   gap: 8px;
 }
 
-.technique-tier,
-.technique-level {
+.technique-tier {
   font-size: 12px;
   color: var(--gold);
 }
 
-.technique-level.is-unlearned {
+.technique-summary {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.technique-progress {
+  font-size: 12px;
   color: var(--faint);
 }
 
-.technique-line {
-  margin: 0;
-  font-size: 13px;
-  line-height: 1.55;
-  overflow-wrap: anywhere;
+.technique-row.is-learned .technique-progress {
+  color: var(--jade);
 }
 
-.technique-line b {
-  margin-right: 6px;
-  font-weight: 600;
-}
-
-.technique-line.is-cost {
+.technique-row.is-ready .technique-progress {
   color: var(--gold);
 }
 
-.technique-line.is-quiet {
+.technique-detail {
+  display: grid;
+  gap: 10px;
+}
+
+.technique-detail-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 10px;
+  padding-right: 32px;
+}
+
+.technique-detail-head h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.technique-facts {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px 12px;
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.technique-facts dt {
   color: var(--muted);
-  font-size: 12px;
+  white-space: nowrap;
+}
+
+.technique-facts dd {
+  margin: 0;
+}
+
+.technique-facts dd.technique-cost {
+  color: var(--red-bright);
 }
 
 .technique-actions {
@@ -235,22 +308,20 @@ onMounted(() => {
 }
 
 .technique-button {
-  min-width: 132px;
+  min-height: 34px;
+  padding: 6px 16px;
+  font-size: 13px;
 }
 
 .technique-error {
   margin: 0;
-  color: var(--red-bright, var(--red));
+  color: var(--red-bright);
   font-size: 13px;
 }
 
-@media (max-width: 480px) {
-  .technique-card {
-    padding: 10px;
-  }
-
-  .technique-button {
-    width: 100%;
+@media (max-width: 560px) {
+  .technique-list {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 </style>

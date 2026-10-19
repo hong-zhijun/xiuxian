@@ -69,6 +69,8 @@ export interface TechniqueDef {
   tier: TechniqueTier;
   /** 战报标签（【青锋】）。 */
   tag: string;
+  /** 一句话简介（藏经阁列表用，≤ 16 字）。 */
+  summary: string;
   /** 镇妖塔增益文案（展示用，数值与 techniqueModifiersOf 同步）。 */
   towerGain: string;
   /** 代价文案（始终按基础值生效）；无代价为「无」。 */
@@ -79,62 +81,62 @@ export interface TechniqueDef {
 
 export const TECHNIQUES: readonly TechniqueDef[] = [
   {
-    id: 'qingfeng', name: '青锋剑诀', school: 'sword', tier: 'xuan', tag: '青锋',
+    id: 'qingfeng', name: '青锋剑诀', school: 'sword', tier: 'xuan', tag: '青锋', summary: '首击爆发的入门剑诀',
     towerGain: '【青锋】本场第一次出手伤害 ×1.5；攻击修正比上限 +0.5',
     cost: '无', bossGain: '伤害 +6%',
   },
   {
-    id: 'taiyi', name: '太乙剑诀', school: 'sword', tier: 'di', tag: '剑气',
+    id: 'taiyi', name: '太乙剑诀', school: 'sword', tier: 'di', tag: '剑气', summary: '剑气纵横，高攻薄血',
     towerGain: '【剑气】每次出手 25% 概率额外造成 50% 伤害；攻击修正比上限 +1.2',
     cost: '血量 −10%', bossGain: '伤害 +15%',
   },
   {
-    id: 'pojia', name: '一剑破甲', school: 'sword', tier: 'tian', tag: '破甲',
+    id: 'pojia', name: '一剑破甲', school: 'sword', tier: 'tian', tag: '破甲', summary: '一剑定胜负的开场斩',
     towerGain: '【破甲】本场第一次出手必定暴击且伤害 ×3',
     cost: '之后出手伤害 −10%', bossGain: '伤害 +20%',
   },
   {
-    id: 'jingang', name: '金刚不坏体', school: 'body', tier: 'xuan', tag: '金刚',
+    id: 'jingang', name: '金刚不坏体', school: 'body', tier: 'xuan', tag: '金刚', summary: '以体魄铸就铜皮铁骨',
     towerGain: '【金刚】血量公式中体魄权重 ×1.4，开场显示血量提升',
     cost: '伤害 −10%', bossGain: '普通受伤概率 ×0.6',
   },
   {
-    id: 'xueshen', name: '不灭血身', school: 'body', tier: 'di', tag: '血身',
+    id: 'xueshen', name: '不灭血身', school: 'body', tier: 'di', tag: '血身', summary: '越战越稳的回血功法',
     towerGain: '【血身】每回合结束为队伍回复自身最大血量的 4%',
     cost: '伤害 −8%', bossGain: '普通受伤 ×0.7、重伤 ×0.7',
   },
   {
-    id: 'baidu', name: '百毒不侵', school: 'body', tier: 'xuan', tag: '百毒不侵',
+    id: 'baidu', name: '百毒不侵', school: 'body', tier: 'xuan', tag: '百毒不侵', summary: '百毒难侵，剧毒层克星',
     towerGain: '【百毒不侵】剧毒按队伍血量扣血时，扣除本弟子那一份；血量 +5%',
     cost: '无', bossGain: '普通受伤 ×0.8',
   },
   {
-    id: 'liuyun', name: '流云身法', school: 'agile', tier: 'di', tag: '流云',
+    id: 'liuyun', name: '流云身法', school: 'agile', tier: 'di', tag: '流云', summary: '身法连击，追击不断',
     towerGain: '【流云】追击概率上限 30% → 50%，追击可以继续追击（每次出手最多连续 3 次）',
     cost: '妖物对队伍伤害 +（10% ÷ 出战人数）', bossGain: '伤害 +12%',
   },
   {
-    id: 'guiying', name: '鬼影步', school: 'agile', tier: 'xuan', tag: '鬼影',
+    id: 'guiying', name: '鬼影步', school: 'agile', tier: 'xuan', tag: '鬼影', summary: '首回合必定追击',
     towerGain: '【鬼影】第 1 回合必定追击；追击概率 +10%（仍受上限约束）',
     cost: '无', bossGain: '伤害 +8%',
   },
   {
-    id: 'tianji', name: '天机诀', school: 'crit', tier: 'di', tag: '天机',
+    id: 'tianji', name: '天机诀', school: 'crit', tier: 'di', tag: '天机', summary: '暴击翻倍，看天吃饭',
     towerGain: '【天机】暴击率 ×2',
     cost: '未暴击伤害 ×0.9', bossGain: '暴击率 ×2',
   },
   {
-    id: 'pojun', name: '破军诀', school: 'crit', tier: 'xuan', tag: '破军',
+    id: 'pojun', name: '破军诀', school: 'crit', tier: 'xuan', tag: '破军', summary: '暴击伤害大幅提升',
     towerGain: '【破军】暴击伤害倍率 +1.0',
     cost: '无', bossGain: '暴击伤害倍率 +0.6',
   },
   {
-    id: 'jiuzhuan', name: '九转心经', school: 'late', tier: 'tian', tag: '九转',
+    id: 'jiuzhuan', name: '九转心经', school: 'late', tier: 'tian', tag: '九转', summary: '越打越强的后劲心经',
     towerGain: '【九转】第 n 回合伤害 ×(1 + 0.10 × (n − 1))',
     cost: '第 1 回合伤害 −20%', bossGain: '伤害 +15%',
   },
   {
-    id: 'beishui', name: '背水诀', school: 'late', tier: 'di', tag: '背水',
+    id: 'beishui', name: '背水诀', school: 'late', tier: 'di', tag: '背水', summary: '残血反扑，绝境翻盘',
     towerGain: '【背水】队伍血量低于 35% 时伤害 +60%',
     cost: '血量 −10%', bossGain: '伤害 +12%',
   },

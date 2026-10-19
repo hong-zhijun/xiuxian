@@ -419,7 +419,11 @@ export const worldBossAutoRequestSchema = z.strictObject({
  * 世界 Boss 三期：功勋兑换。合法性（部位 / 主属性 / 数量组合）由 service 校验，这里只做类型与长度。
  */
 export const worldBossExchangeRequestSchema = z.strictObject({
-  itemId: z.enum(['xuantie', 'shenmu', 'talentPill', 'spirit', 'treasure', 'immortal']),
+  // 0066 功法残卷的 id 是「techniqueScroll:功法 id」，是否存在由 service 的 findMeritShopItem 裁决。
+  itemId: z.union([
+    z.enum(['xuantie', 'shenmu', 'talentPill', 'spirit', 'treasure', 'immortal']),
+    z.string().regex(/^techniqueScroll:[a-z]{1,24}$/),
+  ]),
   quantity: z.number().int().min(1).max(100).optional(),
   slot: z.string().min(1).max(16).optional(),
   mainAttr: z.string().min(1).max(16).optional(),
