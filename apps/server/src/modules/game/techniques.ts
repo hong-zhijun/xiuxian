@@ -492,5 +492,3 @@ export function bossScrollGrantOf(input: {
 
 /* ---------- 残卷来源：云游商人 ---------- */
 
-/** 商人残卷只出玄阶与地阶。 */
-export const MERCHANT_SCROLL_TIERS: readonly TechniqueTier[] = ['xuan', 'di'];

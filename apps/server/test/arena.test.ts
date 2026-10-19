@@ -92,7 +92,7 @@ describe('宗门大比（0053）', () => {
     expect(locked.canRegister).toBe(false);
     expect(locked.allEntries.individual.map((entry) => entry.sectId)).not.toContain(low.sectId);
 
-    // 报名窗口内：三个宗门都是「自动参赛」，团队赛有战力上限。
+    // 报名窗口内：三个宗门都是「自动参赛」；宗门战暂不限制总战力（teamPowerCap 为 null）。
     const before = await getArena(env.DB, strong.userId, MON_1030);
     expect(before.unlocked).toBe(true);
     expect(before.canRegister).toBe(true);
@@ -100,12 +100,10 @@ describe('宗门大比（0053）', () => {
     expect(before.settleInMs).toBeGreaterThan(0);
     expect(before.allEntries.individual).toHaveLength(3);
     expect(before.allEntries.individual.every((entry) => entry.auto)).toBe(true);
-    expect(before.teamPowerCap).toBeGreaterThan(0);
+    expect(before.teamPowerCap).toBeNull();
 
-    // 最强宗门硬把前 5 人报成团队赛：超过战力上限，被拒。
-    await expect(setArenaLineup(env.DB, strong.userId, 'team', strong.discipleIds.slice(0, 5), MON_1030)).rejects.toMatchObject({
-      code: 'INVALID_STATUS',
-    });
+    // 最强宗门把前 5 人报成团队赛：不再受战力上限限制，照常生效。
+    await setArenaLineup(env.DB, strong.userId, 'team', strong.discipleIds.slice(0, 5), MON_1030);
     // 中等宗门：个人赛报两人、团队赛报一人，手动报名生效。
     const individualView = await setArenaLineup(env.DB, mid.userId, 'individual', mid.discipleIds.slice(0, 2), MON_1030);
     expect(individualView.myIndividualEntry?.auto).toBe(false);

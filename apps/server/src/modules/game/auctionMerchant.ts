@@ -1,6 +1,6 @@
 import { auctionMinPrice, type AuctionEquipmentSnapshot } from './auction';
 import { generateEquipment, resolveMainAttr, type EquipmentQuality, type EquipmentSlot } from './equipment';
-import { MERCHANT_SCROLL_TIERS, scrollItemIdOf, TECHNIQUES } from './techniques';
+import { scrollItemIdOf, TECHNIQUES, type TechniqueTier } from './techniques';
 
 export const MERCHANT_NAME = '云游商人';
 export const MERCHANT_STAY_MS = 6 * 3_600_000;
@@ -65,17 +65,26 @@ export function generateMerchantGoods(random: () => number): MerchantGoods[] {
 }
 
 /**
- * 功法残卷货品（docs/功法开发计划.md 第 5 节）：只出玄阶、地阶，每组 2～5 张；
- * 起拍 / 一口价为「每张」价目（玄阶 20k～30k / 40k～60k，地阶 60k～90k / 120k～180k，最小单位），
- * 整单按张数乘。沿用 kind: 'resource' 的拍卖 / 一口价流程，交付时进 sect_techniques.scrolls。
+ * 功法残卷货品（docs/功法开发计划.md 第 5 节）：玄阶 55%、地阶 35%、天阶 10%（偶尔出货）；
+ * 玄阶 / 地阶每组 2～5 张，天阶每组 1～3 张。
+ * 起拍 / 一口价为「每张」价目（最小单位）：玄阶 20k～30k / 40k～60k，地阶 60k～90k / 120k～180k，
+ * 天阶 180k～270k / 360k～540k；整单按张数乘。沿用 kind: 'resource' 的拍卖 / 一口价流程，交付时进 sect_techniques.scrolls。
  */
+const MERCHANT_SCROLL_PRICES: Readonly<Record<TechniqueTier, { quantity: [number, number]; start: [number, number]; buyout: [number, number] }>> = {
+  xuan: { quantity: [2, 5], start: [20, 30], buyout: [40, 60] },
+  di: { quantity: [2, 5], start: [60, 90], buyout: [120, 180] },
+  tian: { quantity: [1, 3], start: [180, 270], buyout: [360, 540] },
+};
+
 function techniqueScrollGood(random: () => number): MerchantGoods {
-  const tier = random() < 0.6 ? MERCHANT_SCROLL_TIERS[0]! : MERCHANT_SCROLL_TIERS[1]!;
+  const roll = random();
+  const tier: TechniqueTier = roll < 0.55 ? 'xuan' : roll < 0.9 ? 'di' : 'tian';
   const pool = TECHNIQUES.filter((item) => item.tier === tier);
   const technique = pool[Math.min(pool.length - 1, Math.max(0, Math.floor(random() * pool.length)))]!;
-  const quantity = integer(2, 5, random);
-  const perStart = tier === 'xuan' ? integer(20, 30, random) : integer(60, 90, random);
-  const perBuyout = tier === 'xuan' ? integer(40, 60, random) : integer(120, 180, random);
+  const price = MERCHANT_SCROLL_PRICES[tier];
+  const quantity = integer(price.quantity[0], price.quantity[1], random);
+  const perStart = integer(price.start[0], price.start[1], random);
+  const perBuyout = integer(price.buyout[0], price.buyout[1], random);
   return {
     kind: 'resource',
     itemId: scrollItemIdOf(technique.id),

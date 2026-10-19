@@ -14484,7 +14484,6 @@ function arenaLineupOf(
   sect: ArenaRosterSect,
   kind: 'individual' | 'team',
   manual: readonly string[] | null,
-  teamPowerCap: number,
 ): { ids: string[]; auto: boolean } {
   const candidates = arenaCandidatesOf(sect);
   if (kind === 'individual') {
@@ -14493,7 +14492,8 @@ function arenaLineupOf(
       : { ids: adjustTeamLineup(candidates, manual, Number.POSITIVE_INFINITY), auto: false };
   }
   const base = manual ?? autoSelectLineup(candidates, ARENA_MAX_ENTRY);
-  return { ids: adjustTeamLineup(candidates, base, teamPowerCap), auto: manual === null };
+  // 宗门战暂不限制总战力（赛季行里的 team_power_cap 仍照常算定、存档，只是不再用来裁剪阵容）。
+  return { ids: adjustTeamLineup(candidates, base, Number.POSITIVE_INFINITY), auto: manual === null };
 }
 
 /** 前 5 名弟子的总战力（上限按宗门实力算，不随伤势浮动）。 */
@@ -14507,13 +14507,6 @@ function arenaTopPowerOf(disciples: readonly DiscipleRow[]): number {
 
 function arenaTeamCapFrom(roster: readonly ArenaRosterSect[]): number {
   return calculateTeamPowerCap(roster.map((sect) => arenaTopPowerOf(sect.disciples)));
-}
-
-/** 团队赛战力上限（只读）：本赛季已建则用存下的值，否则按当前宗门现算。 */
-async function arenaTeamCapOf(db: D1Database, roster: readonly ArenaRosterSect[], now: number): Promise<number> {
-  const stored = await new ArenaRepository(db).seasonRow(arenaSeasonId(now));
-  if (stored === null || stored.team_power_cap === null) return arenaTeamCapFrom(roster);
-  return Number(stored.team_power_cap);
 }
 
 /** 赛季行：没有就按当前宗门算定上限建一行（周一 0 点后第一次运行时建；赛季内不再变）。 */
@@ -14625,7 +14618,7 @@ function arenaRewardEventStatement(
  */
 async function settleArenaDay(db: D1Database, now: number, dateKey: string): Promise<void> {
   const roster = await loadArenaRoster(db, now);
-  const cap = await ensureArenaSeason(db, now, roster);
+  await ensureArenaSeason(db, now, roster);
   const entries = await new ArenaRepository(db).entriesOf(dateKey);
   const manualOf = (sectId: string, kind: 'individual' | 'team'): string[] | null => {
     const row = entries.find((entry) => entry.sect_id === sectId && entry.kind === kind);
@@ -14638,10 +14631,10 @@ async function settleArenaDay(db: D1Database, now: number, dateKey: string): Pro
   const seasonId = arenaSeasonId(now);
 
   const individualPlans = roster
-    .map((sect) => ({ sect, ...arenaLineupOf(sect, 'individual', manualOf(sect.id, 'individual'), cap) }))
+    .map((sect) => ({ sect, ...arenaLineupOf(sect, 'individual', manualOf(sect.id, 'individual')) }))
     .filter((plan) => plan.ids.length > 0);
   const teamPlans = roster
-    .map((sect) => ({ sect, ...arenaLineupOf(sect, 'team', manualOf(sect.id, 'team'), cap) }))
+    .map((sect) => ({ sect, ...arenaLineupOf(sect, 'team', manualOf(sect.id, 'team')) }))
     .filter((plan) => plan.ids.length > 0);
   if (individualPlans.length === 0 && teamPlans.length === 0) return;
 
@@ -15078,10 +15071,9 @@ export async function getArena(db: D1Database, userId: string, now: number): Pro
   const dateKey = dateKeyUtc8(now);
   const seasonId = arenaSeasonId(now);
   const hour = arenaHourOf(now);
-  const [latest, entries, teamPowerCap, seasonIndividuals, seasonTeams] = await Promise.all([
+  const [latest, entries, seasonIndividuals, seasonTeams] = await Promise.all([
     repo.latestSettledDateKey(),
     repo.entriesOf(dateKey),
-    arenaTeamCapOf(db, roster, now),
     repo.seasonIndividualRanking(seasonId, ARENA_RANKING_SIZE),
     repo.seasonTeamRanking(seasonId, ARENA_RANKING_SIZE),
   ]);
@@ -15119,7 +15111,7 @@ export async function getArena(db: D1Database, userId: string, now: number): Pro
     if (storedTeam !== undefined) {
       teamEntries.push(entryViewOf(sectRoster, arenaIdsOf(storedTeam.lineup), storedTeam.auto === 1));
     } else if (!settled) {
-      const ids = adjustTeamLineup(candidates, autoSelectLineup(candidates, ARENA_MAX_ENTRY), teamPowerCap);
+      const ids = adjustTeamLineup(candidates, autoSelectLineup(candidates, ARENA_MAX_ENTRY), Number.POSITIVE_INFINITY);
       if (ids.length > 0) teamEntries.push(entryViewOf(sectRoster, ids, true));
     }
   }
@@ -15194,7 +15186,8 @@ export async function getArena(db: D1Database, userId: string, now: number): Pro
     settled,
     canRegister: unlocked && hour < ARENA_SETTLE_HOUR && !settled,
     settleInMs: settled ? null : Math.max(0, settleAt - now),
-    teamPowerCap,
+    // 宗门战暂不限制总战力：前端看到 null 就不显示上限。
+    teamPowerCap: null,
     seasonId,
     dateKey: latest,
     myIndividualEntry: individualEntries.find((entry) => entry.sectId === sect.id) ?? null,
@@ -15257,16 +15250,6 @@ export async function setArenaLineup(
     const reason = mine.blockedReasonOf.get(member.id);
     if (reason !== undefined) {
       throw new AppError('INVALID_STATUS', `${member.name}：${reason}，无法呈报出战`);
-    }
-  }
-  if (kind === 'team') {
-    const cap = await ensureArenaSeason(db, now, roster);
-    const total = members.reduce((sum, member) => sum + gearedCombatPower(member), 0);
-    if (total > cap) {
-      throw new AppError('INVALID_STATUS', `出战战力 ${String(total)} 超过本赛季上限 ${String(cap)}，请调换弟子`, {
-        total,
-        cap,
-      });
     }
   }
   await repo.saveLineup({ sectId: sect.id, kind, lineup: discipleIds, auto: false, dateKey, now });

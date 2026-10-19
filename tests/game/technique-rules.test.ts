@@ -212,7 +212,7 @@ describe('功法 · 残卷来源', () => {
     expect(Object.values(top).reduce((sum, count) => sum + count, 0)).toBe(1);
   });
 
-  it('云游商人残卷：替换 1～2 单材料，单数不变，材料仍有玄铁和神木，残卷只出玄 / 地阶', () => {
+  it('云游商人残卷：替换 1～2 单材料，单数不变，材料仍有玄铁和神木，残卷玄 / 地 / 天阶都可能出', () => {
     const random = seeded(31);
     for (let visit = 0; visit < 60; visit += 1) {
       const base = generateMerchantGoods(random);
@@ -225,9 +225,9 @@ describe('功法 · 残卷来源', () => {
       expect(goods.some((item) => item.itemId === 'shenmu')).toBe(true);
       for (const scroll of scrolls) {
         const technique = findTechnique(techniqueIdOfScrollItem(scroll.itemId)!)!;
-        expect(['xuan', 'di']).toContain(technique.tier);
-        expect(scroll.quantity).toBeGreaterThanOrEqual(2);
-        expect(scroll.quantity).toBeLessThanOrEqual(5);
+        expect(['xuan', 'di', 'tian']).toContain(technique.tier);
+        expect(scroll.quantity).toBeGreaterThanOrEqual(technique.tier === 'tian' ? 1 : 2);
+        expect(scroll.quantity).toBeLessThanOrEqual(technique.tier === 'tian' ? 3 : 5);
         expect(scroll.startPrice % 1000).toBe(0);
         expect(scroll.buyoutPrice).toBeGreaterThan(scroll.startPrice);
       }
