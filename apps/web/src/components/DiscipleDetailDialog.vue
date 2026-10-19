@@ -1171,7 +1171,7 @@ function refineGear(item: EquipmentItemView | null): void {
         :aria-labelledby="tabButtonId('overview')"
         tabindex="0"
       >
-        <section class="disciple-detail-section" aria-labelledby="disciple-attr-title">
+        <section class="disciple-detail-section" aria-label="当前属性">
           <!-- 综合评分（服务端按当前六项属性等权现算）与战力同一张卡片；提升模拟放在战力右侧。 -->
           <div class="disciple-score is-combined">
             <div class="disciple-score-item">
@@ -1197,23 +1197,23 @@ function refineGear(item: EquipmentItemView | null): void {
             </li>
           </ul>
 
-          <h3 id="disciple-attr-title" class="disciple-detail-title">当前属性</h3>
-
           <!--
             雷达图与精确数值并排（窄屏自动单列）：六轴都按服务端原值绘制（基础属性，最高 100），
             装备加成只在右侧数值列表里以 `(+n)` 标出，不参与绘图比例尺。
           -->
-          <DiscipleRadarChart
-            :name="disciple.name"
-            :aptitude="disciple.aptitude"
-            :attack="disciple.attack"
-            :defense="disciple.defense"
-            :speed="disciple.speed"
-            :luck="disciple.luck"
-            :physique="disciple.physique"
-            :gear="disciple.gear"
-            :help="ATTRIBUTE_HELP"
-          />
+          <div class="overview-box">
+            <DiscipleRadarChart
+              :name="disciple.name"
+              :aptitude="disciple.aptitude"
+              :attack="disciple.attack"
+              :defense="disciple.defense"
+              :speed="disciple.speed"
+              :luck="disciple.luck"
+              :physique="disciple.physique"
+              :gear="disciple.gear"
+              :help="ATTRIBUTE_HELP"
+            />
+          </div>
 
           <div v-if="stewardTag" class="disciple-stats">
             <span class="stat-tag stat-steward">{{ stewardTag }}</span>
@@ -2193,16 +2193,30 @@ function refineGear(item: EquipmentItemView | null): void {
 
 /* 概览：当前装备（名称 + 祭炼等级，品质色区分品阶）。 */
 .overview-gear {
-  display: grid;
-  gap: 4px;
-  margin: 10px 0 12px;
-  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 20px;
+  margin: 10px 0;
+  padding: 9px 12px;
+  border: 1px solid rgba(202, 169, 106, 0.22);
+  border-radius: 3px;
+  background: rgba(202, 169, 106, 0.05);
   list-style: none;
+}
+
+/* 雷达图 + 属性条的外框（与评分、装备、天赋 / 悟道卡片同一套边框）。 */
+.overview-box {
+  margin-bottom: 10px;
+  padding: 10px 12px;
+  border: 1px solid rgba(202, 169, 106, 0.22);
+  border-radius: 3px;
+  background: rgba(202, 169, 106, 0.05);
 }
 
 .overview-gear-item {
   display: flex;
   min-width: 0;
+  max-width: 100%;
   align-items: baseline;
   gap: 8px;
   font-size: 13px;
