@@ -118,7 +118,7 @@ describe('随机游商', () => {
     const alice = await buyer();
     const bob = await buyer();
     await processAuctionMerchant(env.DB, NOW, () => 0);
-    const lot = (await repo.listActive(NOW, 200)).find((item) => item.kind === 'resource')!;
+    const lot = (await repo.listActive(NOW, 200)).find((item) => item.kind === 'resource' && !item.item_id.startsWith('techniqueScroll:'))!;
     const price = Number(lot.start_price) / 1000;
     await expect(cancelAuction(env.DB, alice.userId, { lotId: lot.id }, NOW)).rejects.toThrow('拍卖单不存在');
     await bidAuction(env.DB, alice.userId, { lotId: lot.id, price }, NOW);
@@ -147,7 +147,7 @@ describe('随机游商', () => {
     ]);
     expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
     expect(await balance(alice.sectId) + await balance(bob.sectId)).toBe(20_000_000 - Number(lot.buyout_price));
-    const other = lots.find((item) => item.kind === 'resource')!;
+    const other = lots.find((item) => item.kind === 'resource' && !item.item_id.startsWith('techniqueScroll:'))!;
     await env.DB.prepare("UPDATE resource_balances SET balance = ? WHERE sect_id = ? AND resource_id = 'spiritStone'")
       .bind(other.buyout_price, alice.sectId).run();
     await bidAuction(env.DB, alice.userId, { lotId: other.id, price: Number(other.start_price) / 1000 }, NOW);

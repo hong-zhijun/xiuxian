@@ -477,6 +477,15 @@ describe('出发资格：境界、伤势、名额、留守、守擂', () => {
     await startOk(fixture, goldenCore, 'gathering', 21_600);
   });
 
+  it('12 / 24 小时档能真实出发并落库（0068 放宽了表上的时长约束）', async () => {
+    const fixture = await makeSect('long-duration');
+    const twelve = fixture.discipleIds[0]!;
+    await startOk(fixture, twelve, 'daoSeeking', 43_200);
+    const day = await seedDisciple(fixture.sectId, { name: '长行客', realmId: 'goldenCore', stage: 1 });
+    await startOk(fixture, day, 'gathering', 86_400);
+    expect(await journeyCount(fixture.sectId)).toBe(2);
+  });
+
   it('受伤未愈不能出发，伤好之后可以', async () => {
     const fixture = await makeSect('injury');
     const discipleId = fixture.discipleIds[0]!;
