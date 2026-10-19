@@ -143,6 +143,7 @@ import {
   spiritualArrayUpgradeFrom,
   missionHallUpgradeFrom,
   MISSION_HALL_BUILDING_ID,
+  scriptureLibraryUpgradeFrom,
   assignmentLimitOf,
   breakthroughEnergyCost,
   dateKeyUtc8,
@@ -593,9 +594,12 @@ import {
   TECHNIQUES,
   TECHNIQUE_MAX_LEVEL,
   TECHNIQUE_SCHOOLS,
+  TECHNIQUE_SHOP_PRICE,
+  TECHNIQUE_SHOP_TIERS,
   TECHNIQUE_TIER_NAMES,
   bossScrollGrantOf,
   findTechnique,
+  isTechniqueShopTier,
   techniqueIdOfScrollItem,
   techniqueKeptProficiencyBp,
   techniqueLearnScrolls,
@@ -603,19 +607,28 @@ import {
   techniqueModifiersOf,
   techniqueNameOf,
   techniqueProficiencyBp,
+  techniqueShopOpenLevel,
+  techniqueShopQuota,
   techniqueUpgradeCost,
   type TechniqueBossMods,
   type TechniqueModifiers,
 } from './techniques';
 import {
   addTechniqueScrollsStatement,
+  addTechniqueShopBoughtStatement,
   techniqueGuardStatement,
+  techniqueShopGuardStatement,
   TechniqueRepository,
   updateDiscipleTechniqueStatement,
   upsertSectTechniqueStatement,
   type SectTechniqueRow,
 } from './repository';
-import type { TechniqueLibraryView, TowerPreviewView, TechniqueCatalogView } from './view';
+import type {
+  TechniqueLibraryView,
+  TechniqueShopView,
+  TowerPreviewView,
+  TechniqueCatalogView,
+} from './view';
 import {
   simulateTowerBattle,
   towerClearEquipment,
@@ -2887,7 +2900,7 @@ export async function upgradeBuilding(
     });
   }
 
-  // 装备二期：炼器坊走分档表（宗门等级门槛 + 玄铁）；聚灵阵、灵矿 6～10 级同理；其余建筑沿用线性升级消耗。
+  // 装备二期：炼器坊走分档表（宗门等级门槛 + 玄铁）；聚灵阵、灵矿、藏经阁 6～10 级同理；其余建筑沿用线性升级消耗。
   const workshopStep =
     defId === FORGE_WORKSHOP_ID
       ? forgeWorkshopUpgradeFrom(building.level)
@@ -2895,7 +2908,9 @@ export async function upgradeBuilding(
         ? spiritualArrayUpgradeFrom(building.level)
         : defId === MISSION_HALL_BUILDING_ID
           ? missionHallUpgradeFrom(building.level)
-          : null;
+          : defId === SCRIPTURE_LIBRARY_BUILDING_ID
+            ? scriptureLibraryUpgradeFrom(building.level)
+            : null;
   if (workshopStep !== null && Number(draft.sect.level) < workshopStep.sectLevel) {
     throw new AppError(
       'INVALID_STATUS',
@@ -11201,11 +11216,15 @@ export async function previewTower(
   };
 }
 
-/** 藏经阁开放条件：宗门建有藏经阁（≥ 1 级）。 */
+/** 本宗藏经阁的当前等级（没有建筑行为 0）。 */
+function scriptureLevelOf(draft: SectDraft): number {
+  return Number(draft.buildings.find((building) => building.def_id === SCRIPTURE_LIBRARY_BUILDING_ID)?.level ?? 0);
+}
+
+/** 藏经阁开放条件：宗门建有藏经阁（≥ 1 级）。收录、参悟与功法商店购买都走这里。 */
 function requireScriptureLibrary(draft: SectDraft): void {
-  const level = draft.buildings.find((building) => building.def_id === SCRIPTURE_LIBRARY_BUILDING_ID)?.level ?? 0;
-  if (Number(level) < 1) {
-    throw new AppError('INVALID_STATUS', '宗门建有藏经阁后才能收录与参悟功法');
+  if (scriptureLevelOf(draft) < 1) {
+    throw new AppError('INVALID_STATUS', '宗门建有藏经阁后才能收录、参悟与购买功法');
   }
 }
 
@@ -11263,11 +11282,15 @@ async function commitTechniqueChange(
   draft.setTechnique(after);
 }
 
-/** 藏经阁面板（只读）：全部功法、本宗收录 / 参悟 / 残卷状态与下一级消耗。 */
-function techniqueLibraryViewOf(draft: SectDraft): TechniqueLibraryView {
-  const scriptureLevel = Number(
-    draft.buildings.find((building) => building.def_id === SCRIPTURE_LIBRARY_BUILDING_ID)?.level ?? 0,
-  );
+/**
+ * 藏经阁面板（只读）：全部功法、本宗收录 / 参悟 / 残卷状态与下一级消耗，以及功法商店的今日额度。
+ * shopRows 是今天（UTC+8）各品阶的已购张数（没有行的品阶按 0）。
+ */
+function techniqueLibraryViewOf(
+  draft: SectDraft,
+  shopRows: readonly { tier: string; bought: number }[],
+): TechniqueLibraryView {
+  const scriptureLevel = scriptureLevelOf(draft);
   const items: TechniqueCatalogView[] = TECHNIQUES.map((def) => {
     const row = techniqueRowOf(draft, def.id);
     const level = Number(row.level);
@@ -11305,7 +11328,58 @@ function techniqueLibraryViewOf(draft: SectDraft): TechniqueLibraryView {
     maxLevel: TECHNIQUE_MAX_LEVEL,
     schools: TECHNIQUE_SCHOOLS.map((item) => ({ id: item.id, name: item.name })),
     items,
+    shop: techniqueShopViewOf(draft, scriptureLevel, shopRows),
   };
+}
+
+/**
+ * 功法商店视图：玄 / 地两个品阶今天（UTC+8）的额度、已购与剩余，以及下一级藏经阁的额度提示（满级为 null）。
+ * 额度按当前藏经阁等级现算；同品阶的各门功法共用。
+ */
+function techniqueShopViewOf(
+  draft: SectDraft,
+  scriptureLevel: number,
+  shopRows: readonly { tier: string; bought: number }[],
+): TechniqueShopView {
+  const maxLevel = draft.config.buildings.find((item) => item.id === SCRIPTURE_LIBRARY_BUILDING_ID)?.maxLevel ?? 0;
+  const tiers = TECHNIQUE_SHOP_TIERS.map((tier) => {
+    const quota = techniqueShopQuota(scriptureLevel, tier);
+    const bought = Number(shopRows.find((row) => row.tier === tier)?.bought ?? 0);
+    return {
+      tier,
+      tierName: TECHNIQUE_TIER_NAMES[tier],
+      price: TECHNIQUE_SHOP_PRICE[tier],
+      quota,
+      bought,
+      remaining: Math.max(0, quota - bought),
+      openLevel: techniqueShopOpenLevel(tier),
+    };
+  });
+  // 提示「额度真正变多」的那一级（如 1 级时提示 3 级，2 级与 1 级额度相同）；额度为 0 的品阶不写。
+  let nextLevelHint: string | null = null;
+  for (let level = scriptureLevel + 1; level <= maxLevel; level += 1) {
+    if (TECHNIQUE_SHOP_TIERS.every((tier) => techniqueShopQuota(level, tier) <= techniqueShopQuota(scriptureLevel, tier))) {
+      continue;
+    }
+    const parts = TECHNIQUE_SHOP_TIERS.filter((tier) => techniqueShopQuota(level, tier) > 0).map(
+      (tier) => `${TECHNIQUE_TIER_NAMES[tier]}每日 ${String(techniqueShopQuota(level, tier))} 张`,
+    );
+    nextLevelHint = `藏经阁 ${String(level)} 级：${parts.join('、')}`;
+    break;
+  }
+  return {
+    unlocked: scriptureLevel >= 1,
+    scriptureLevel,
+    dateKey: dateKeyUtc8(draft.now),
+    tiers,
+    nextLevelHint,
+  };
+}
+
+/** 藏经阁面板的完整视图：读一次今天（UTC+8）功法商店的已购计数，再拼视图。 */
+async function techniqueLibraryFor(db: D1Database, draft: SectDraft): Promise<TechniqueLibraryView> {
+  const shopRows = await new TechniqueRepository(db).findShopDaily(draft.sect.id, dateKeyUtc8(draft.now));
+  return techniqueLibraryViewOf(draft, shopRows);
 }
 
 /** GET /game/techniques：藏经阁面板（只读，不写库）。 */
@@ -11315,7 +11389,7 @@ export async function getTechniqueLibrary(
   now: number,
 ): Promise<{ library: TechniqueLibraryView }> {
   const draft = await draftFor(db, userId, now);
-  return { library: techniqueLibraryViewOf(draft) };
+  return { library: await techniqueLibraryFor(db, draft) };
 }
 
 /**
@@ -11343,7 +11417,7 @@ export async function learnTechnique(
   await commitTechniqueChange(draft, before, { ...before, level: 1, scrolls: owned - cost });
   return {
     state: draft.view(),
-    library: techniqueLibraryViewOf(draft),
+    library: await techniqueLibraryFor(db, draft),
     result: { message: `收录${def.name}，参悟等级 1` },
   };
 }
@@ -11381,8 +11455,69 @@ export async function upgradeTechnique(
   await commitTechniqueChange(draft, before, { ...before, level: level + 1, scrolls: owned - cost.scrolls });
   return {
     state: draft.view(),
-    library: techniqueLibraryViewOf(draft),
+    library: await techniqueLibraryFor(db, draft),
     result: { message: `${def.name}参悟至 ${String(level + 1)} 级` },
+  };
+}
+
+/**
+ * 功法商店购买（POST /game/techniques/shop/buy）：扣灵石，残卷进 sect_techniques.scrolls，计入当天该品阶的已购数。
+ * 校验：藏经阁已建 → 功法存在 → 非天阶 → 当天该品阶剩余额度够 → 灵石够（requireResource 报 INSUFFICIENT_RESOURCE）。
+ * 额度按藏经阁等级现算（techniqueShopQuota，同品阶共用），每天 0 点（UTC+8）重置；只做一次 `draft.commit()`，
+ * 并发守卫是当天该品阶的已购数（techniqueShopGuardStatement），双击只有一次能成功。
+ */
+export async function buyTechniqueScrolls(
+  db: D1Database,
+  userId: string,
+  input: { techniqueId: string; quantity: number },
+  now: number,
+): Promise<{ state: SectStateView; library: TechniqueLibraryView; result: { message: string } }> {
+  const draft = await draftFor(db, userId, now);
+  requireScriptureLibrary(draft);
+  const def = requireTechniqueDef(input.techniqueId);
+  if (!isTechniqueShopTier(def.tier)) {
+    throw new AppError('INVALID_STATUS', '天阶残卷不在功法商店出售');
+  }
+  const tier = def.tier;
+  const tierName = TECHNIQUE_TIER_NAMES[tier];
+  const dateKey = dateKeyUtc8(now);
+  const shopRows = await new TechniqueRepository(db).findShopDaily(draft.sect.id, dateKey);
+  const bought = Number(shopRows.find((row) => row.tier === tier)?.bought ?? 0);
+  const quota = techniqueShopQuota(scriptureLevelOf(draft), tier);
+  if (quota === 0) {
+    throw new AppError('INVALID_STATUS', `藏经阁 ${String(techniqueShopOpenLevel(tier))} 级起才出售${tierName}残卷`);
+  }
+  const remaining = Math.max(0, quota - bought);
+  if (input.quantity > remaining) {
+    throw new AppError(
+      'INVALID_STATUS',
+      remaining === 0 ? `今日${tierName}残卷已售罄，明日再来` : `今日${tierName}残卷还可购买 ${String(remaining)} 张`,
+    );
+  }
+
+  const total = TECHNIQUE_SHOP_PRICE[tier] * input.quantity;
+  draft.requireResource('spiritStone', total);
+  const before = techniqueRowOf(draft, def.id);
+  draft.addStatement(addTechniqueScrollsStatement(draft.sect.id, def.id, input.quantity));
+  draft.addStatement(addTechniqueShopBoughtStatement(draft.sect.id, dateKey, tier, input.quantity));
+  const guardId = `${crypto.randomUUID()}:technique-shop`;
+  await draft.commit({
+    extraGuards: [
+      {
+        id: guardId,
+        statement: techniqueShopGuardStatement(guardId, { sectId: draft.sect.id, dateKey, tier, bought }),
+      },
+    ],
+  });
+  draft.setTechnique({ ...before, scrolls: Number(before.scrolls) + input.quantity });
+  const nextRows = [
+    ...shopRows.filter((row) => row.tier !== tier),
+    { tier, bought: bought + input.quantity },
+  ];
+  return {
+    state: draft.view(),
+    library: techniqueLibraryViewOf(draft, nextRows),
+    result: { message: `购得${def.name}残卷 ×${String(input.quantity)}，花费 ${displayAmount(total)} 灵石` },
   };
 }
 

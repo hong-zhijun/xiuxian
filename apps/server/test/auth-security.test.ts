@@ -1,5 +1,5 @@
 import { applyD1Migrations, env } from 'cloudflare:test';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { createApp } from '../src/app';
 import { SessionRepository, UserRepository } from '../src/modules/auth/repository';
@@ -157,20 +157,26 @@ describe('A05 限频与日志', () => {
   it('任一账号的失败会累积到来源 IP 维度（换账号也挡）', async () => {
     const ip = '203.0.113.31';
     const attacker = clientWithIp(ip, { REGISTRATION_ENABLED: 'false', INVITE_CODES: '' });
+    // 限频是按分钟对齐的固定窗口：把时钟钉在窗口中间，避免 6 次请求跨过分钟边界被拆进两个窗口（偶发放行）。
+    const windowMs = 60_000;
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(Math.floor(Date.now() / windowMs) * windowMs + windowMs / 2);
+    try {
+      for (let index = 0; index < 5; index += 1) {
+        const result = await attacker.post('/api/v1/auth/login', {
+          account: `nonexistent-${index}`,
+          password: 'wrong-password-1',
+        });
+        expect(result.status).toBe(401);
+      }
 
-    for (let index = 0; index < 5; index += 1) {
-      const result = await attacker.post('/api/v1/auth/login', {
-        account: `nonexistent-${index}`,
+      const blocked = await attacker.post('/api/v1/auth/login', {
+        account: 'another-nonexistent',
         password: 'wrong-password-1',
       });
-      expect(result.status).toBe(401);
+      expect(blocked.status).toBe(429);
+    } finally {
+      nowSpy.mockRestore();
     }
-
-    const blocked = await attacker.post('/api/v1/auth/login', {
-      account: 'another-nonexistent',
-      password: 'wrong-password-1',
-    });
-    expect(blocked.status).toBe(429);
   });
 
   it('成功登录会清零失败计数（正常用户不会被自己的失败卡住）', async () => {

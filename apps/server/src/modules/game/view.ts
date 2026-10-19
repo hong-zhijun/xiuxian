@@ -57,6 +57,7 @@ import {
   spiritualArrayUpgradeFrom,
   missionHallUpgradeFrom,
   MISSION_HALL_BUILDING_ID,
+  scriptureLibraryUpgradeFrom,
   IDLE_ASSIGNMENT,
   SPIRITUAL_ARRAY_BUILDING_ID,
   SCRIPTURE_LIBRARY_BUILDING_ID,
@@ -2331,7 +2332,7 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
       };
     }
 
-    // 装备二期：炼器坊走分档表（宗门等级门槛 + 玄铁）；聚灵阵、灵矿 6～10 级同理。
+    // 装备二期：炼器坊走分档表（宗门等级门槛 + 玄铁）；聚灵阵、灵矿、藏经阁 6～10 级同理。
     const workshopStep =
       building.def_id === FORGE_WORKSHOP_ID
         ? forgeWorkshopUpgradeFrom(building.level)
@@ -2339,7 +2340,9 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
           ? spiritualArrayUpgradeFrom(building.level)
           : building.def_id === MISSION_HALL_BUILDING_ID
             ? missionHallUpgradeFrom(building.level)
-            : null;
+            : building.def_id === SCRIPTURE_LIBRARY_BUILDING_ID
+              ? scriptureLibraryUpgradeFrom(building.level)
+              : null;
     const cost = workshopStep !== null ? { ...workshopStep.cost } : upgradeCost(definition.upgradeCostPerLevel, building.level);
     if (workshopStep !== null && Number(sect.level) < workshopStep.sectLevel) {
       return {
@@ -3203,6 +3206,34 @@ export interface TechniqueCatalogView {
   disciplesUsing: number;
 }
 
+/** 功法商店某个品阶（玄 / 地）的今日额度。灵石为最小单位。 */
+export interface TechniqueShopTierView {
+  tier: 'xuan' | 'di';
+  tierName: string;
+  /** 每张残卷的单价（最小单位灵石）。 */
+  price: number;
+  /** 今日额度（按当前藏经阁等级；同品阶的各门功法共用）。 */
+  quota: number;
+  /** 今日已购张数。 */
+  bought: number;
+  /** 今日还能买的张数（不低于 0）。 */
+  remaining: number;
+  /** 藏经阁几级起开放该品阶（额度首次大于 0）。 */
+  openLevel: number;
+}
+
+/** 功法商店（藏经阁「商店」标签页）：今天（UTC+8）各品阶的额度与已购张数。 */
+export interface TechniqueShopView {
+  /** 藏经阁 ≥ 1 级才开放。 */
+  unlocked: boolean;
+  scriptureLevel: number;
+  /** 今天（UTC+8）。 */
+  dateKey: string;
+  tiers: TechniqueShopTierView[];
+  /** 下一级藏经阁的额度提示（如「藏经阁 6 级：玄阶每日 4 张、地阶每日 2 张」）；已满级为 null。 */
+  nextLevelHint: string | null;
+}
+
 /** 藏经阁面板。 */
 export interface TechniqueLibraryView {
   /** 宗门建有藏经阁（≥ 1 级）才开放收录与参悟。 */
@@ -3211,6 +3242,8 @@ export interface TechniqueLibraryView {
   maxLevel: number;
   schools: { id: string; name: string }[];
   items: TechniqueCatalogView[];
+  /** 功法商店：收录 / 参悟 / 购买的返回都带最新的商店状态，前端只认这一份 library。 */
+  shop: TechniqueShopView;
 }
 
 /** 镇妖塔胜率预估（POST /game/tower/preview）：不扣次数、不写库。 */
