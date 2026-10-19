@@ -51,7 +51,7 @@ import UpgradeSimulatorDialog from './UpgradeSimulatorDialog.vue';
 /**
  * 弟子详情（弹窗内容）：固定紧凑头部 + 五个 Tab（概览 / 修行 / 装备 / 历练 / 档案）。
  *
- * - 概览：六轴雷达图 + 当前属性（带装备加成 `(+n)`）与综合评分 + 简短修为摘要（雷达图必须在首 Tab）。
+ * - 概览：综合评分与战力、当前装备、六轴雷达图 + 当前属性（带装备加成 `(+n)`）、天赋与悟道卡片（雷达图必须在首 Tab）。
  * - 修行：修为与破境入口（胜算 / 消耗在破境弹窗里）、主修功法、岗位与丹药入口。
  * - 装备：三个装备格（兵器 / 护甲 / 法器）；点格子从背包里挑同部位的装备穿上，已穿的可卸下。
  * - 修行：修为与破境入口（胜算 / 消耗在破境弹窗里）、主修功法、岗位与丹药入口。
@@ -453,9 +453,12 @@ watch(daoPointsMax, (max) => {
 
 const showDaoInsightHelp = ref(false);
 
+/** 悟道值分配弹窗（点「分配悟道值」才打开；提交后收起）。 */
+const showDaoAllocate = ref(false);
 function allocateDaoInsight(): void {
   if (props.busy || !daoAllocatable.value || !daoPointsValid.value) return;
   emit('allocateDaoInsight', props.disciple.id, daoAttribute.value, daoPoints.value);
+  showDaoAllocate.value = false;
 }
 
 /* ---------- 破境：判定与胜算/消耗全部来自服务端 ---------- */
@@ -1124,7 +1127,6 @@ function refineGear(item: EquipmentItemView | null): void {
         />
       </div>
       <div class="disciple-detail-headline">
-        <p class="eyebrow">门人详情</p>
         <h2 class="disciple-detail-name" :title="disciple.name">{{ disciple.name }}</h2>
         <p class="disciple-detail-headline-meta">
           <span class="realm-tag">{{ disciple.stageName }}</span>
@@ -1138,7 +1140,6 @@ function refineGear(item: EquipmentItemView | null): void {
           <span class="disciple-status" :class="{ 'is-severeInjured': severeInjured }">{{ headerStatusLabel }}</span>
         </p>
       </div>
-      <span class="disciple-detail-headline-frame">{{ avatarFrameOption(disciple.avatarFrameId).label }}</span>
     </header>
 
     <div class="disciple-tabs" role="tablist" aria-label="弟子详情分区">
@@ -1171,14 +1172,32 @@ function refineGear(item: EquipmentItemView | null): void {
         tabindex="0"
       >
         <section class="disciple-detail-section" aria-labelledby="disciple-attr-title">
-          <h3 id="disciple-attr-title" class="disciple-detail-title">当前属性</h3>
-
-          <!-- 综合评分是服务端按「当前」六项属性等权现算的展示值，前端不复制公式、不做二次取整。 -->
-          <div class="disciple-score">
-            <span class="disciple-score-label">综合评分 <HelpTip label="综合评分说明" :text="SCORE_HELP" /></span>
-            <strong class="disciple-score-value">{{ disciple.attributeScore.toFixed(1) }}</strong>
-            <span class="disciple-score-note">当前六项属性的等权平均，随淬体等属性变化更新；不含境界、修为、天赋与战力。</span>
+          <!-- 综合评分（服务端按当前六项属性等权现算）与战力同一张卡片；提升模拟放在战力右侧。 -->
+          <div class="disciple-score is-combined">
+            <div class="disciple-score-item">
+              <span class="disciple-score-label">综合评分 <HelpTip label="综合评分说明" :text="SCORE_HELP" /></span>
+              <strong class="disciple-score-value">{{ disciple.attributeScore.toFixed(1) }}</strong>
+            </div>
+            <div class="disciple-score-item">
+              <span class="disciple-score-label">战力 <HelpTip label="战力说明" :text="POWER_HELP" /></span>
+              <strong class="disciple-score-value">{{ disciple.combatPower }}</strong>
+              <button class="upgrade-sim-button" type="button" @click="showUpgradeSimulator = true">提升模拟</button>
+            </div>
           </div>
+
+          <!-- 当前装备：只列名称与祭炼等级，品阶用品质色区分（与背包、装备页同一套颜色）。 -->
+          <ul class="overview-gear" aria-label="当前装备">
+            <li v-for="slot in gearSlots" :key="slot.id" class="overview-gear-item">
+              <span class="overview-gear-slot">{{ slot.name }}</span>
+              <template v-if="slot.worn !== null">
+                <strong class="overview-gear-name" :style="{ color: slot.worn.color }">{{ slot.worn.name }}</strong>
+                <RefineTag :level="slot.worn.refineLevel" />
+              </template>
+              <span v-else class="overview-gear-empty">未装备</span>
+            </li>
+          </ul>
+
+          <h3 id="disciple-attr-title" class="disciple-detail-title">当前属性</h3>
 
           <!--
             雷达图与精确数值并排（窄屏自动单列）：六轴都按服务端原值绘制（基础属性，最高 100），
@@ -1196,32 +1215,8 @@ function refineGear(item: EquipmentItemView | null): void {
             :help="ATTRIBUTE_HELP"
           />
 
-          <div class="disciple-stats">
-            <span class="stat-tag stat-talent">天赋 {{ disciple.talentName }}</span>
-            <!-- 当前境界下的天赋加成（服务端按境界算好），境界提升后自动变强。 -->
-            <span v-if="disciple.talentEffect !== ''" class="stat-tag stat-talent-effect">
-              {{ disciple.talentEffect }}
-            </span>
-            <!-- 与页面其它「?」同一个样式（help-tip-button），点开是天赋一览表而不是气泡。 -->
-            <button
-              class="help-tip-button talent-help-button"
-              type="button"
-              aria-label="查看全部天赋及作用"
-              @click="showTalentCatalog = true"
-            >?</button>
-            <button
-              class="quiet-button talent-reroll-button"
-              :class="{ 'is-pending': disciple.talentCandidate !== null }"
-              type="button"
-              :disabled="busy"
-              @click="showTalentReroll = true"
-            >
-              {{ disciple.talentCandidate === null ? '更换' : '待选择' }}
-            </button>
-            <span v-if="stewardTag" class="stat-tag stat-steward">{{ stewardTag }}</span>
-            <span class="stat-tag stat-power">战力 {{ disciple.combatPower }}</span>
-            <HelpTip label="战力说明" :text="POWER_HELP" />
-            <button class="upgrade-sim-button" type="button" @click="showUpgradeSimulator = true">提升模拟</button>
+          <div v-if="stewardTag" class="disciple-stats">
+            <span class="stat-tag stat-steward">{{ stewardTag }}</span>
           </div>
 
           <TalentRerollDialog
@@ -1266,19 +1261,65 @@ function refineGear(item: EquipmentItemView | null): void {
           </p>
         </section>
 
-        <!--
-          0019 悟道值：赌坊赢来的点数在这里分配到六项属性之一。
-          上限（总分配上限 = daoInsightUsed + daoInsightRemaining，属性 100）与最终裁决都在服务端，
-          这里只是把「本次最多能分多少」算出来给玩家看，不复制服务端的加点公式。
-        -->
-        <section class="disciple-detail-section" aria-labelledby="disciple-dao-insight-title">
-          <div class="dao-insight-heading">
-            <h3 id="disciple-dao-insight-title" class="disciple-detail-title">悟道值</h3>
-            <button class="quiet-button dao-insight-help" type="button" @click="showDaoInsightHelp = true">?</button>
-          </div>
-          <p class="disciple-detail-hint">当前可用 {{ disciple.daoInsight }} 点</p>
+        <!-- 天赋与悟道：一行两张卡片（窄屏单列）。悟道值的分配在弹窗里做。 -->
+        <div class="overview-cards">
+          <section class="overview-card" aria-labelledby="disciple-talent-title">
+            <div class="overview-card-head">
+              <h3 id="disciple-talent-title" class="overview-card-title">天赋</h3>
+              <!-- 与页面其它「?」同一个样式（help-tip-button），点开是天赋一览表而不是气泡。 -->
+              <button
+                class="help-tip-button"
+                type="button"
+                aria-label="查看全部天赋及作用"
+                @click="showTalentCatalog = true"
+              >?</button>
+              <button
+                class="upgrade-sim-button overview-card-action"
+                :class="{ 'is-pending': disciple.talentCandidate !== null }"
+                type="button"
+                :disabled="busy"
+                @click="showTalentReroll = true"
+              >
+                {{ disciple.talentCandidate === null ? '更换' : '待选择' }}
+              </button>
+            </div>
+            <strong class="overview-card-value">{{ disciple.talentName }}</strong>
+            <!-- 当前境界下的天赋加成（服务端按境界算好），境界提升后自动变强。 -->
+            <p v-if="disciple.talentEffect !== ''" class="overview-card-note">{{ disciple.talentEffect }}</p>
+          </section>
 
-          <template v-if="daoAllocatable">
+          <!--
+            0019 悟道值：赌坊赢来的点数分配到六项属性之一。
+            上限（总分配上限 = daoInsightUsed + daoInsightRemaining，属性 100）与最终裁决都在服务端。
+          -->
+          <section class="overview-card" aria-labelledby="disciple-dao-insight-title">
+            <div class="overview-card-head">
+              <h3 id="disciple-dao-insight-title" class="overview-card-title">悟道</h3>
+              <button class="help-tip-button" type="button" aria-label="悟道值说明" @click="showDaoInsightHelp = true">?</button>
+              <button
+                v-if="daoAllocatable"
+                class="upgrade-sim-button overview-card-action"
+                type="button"
+                :disabled="busy"
+                @click="showDaoAllocate = true"
+              >
+                分配悟道值
+              </button>
+            </div>
+            <p class="overview-dao-line">
+              <span>已用 <strong class="overview-card-value">{{ disciple.daoInsightUsed }}</strong></span>
+              <span>未用 <strong class="overview-card-value" :class="{ 'is-gold': disciple.daoInsight > 0 }">{{ disciple.daoInsight }}</strong></span>
+            </p>
+            <p class="overview-card-note">累计上限 {{ daoInsightCap }} 点</p>
+            <p v-if="!daoAllocatable && disciple.daoInsight > 0 && daoBlockedReason !== null" class="overview-card-note">
+              {{ daoBlockedReason }}
+            </p>
+          </section>
+        </div>
+
+        <ModalShell v-if="showDaoAllocate && daoAllocatable" narrow :label="`分配悟道值 · ${disciple.name}`" @close="showDaoAllocate = false">
+          <section class="dao-allocate" aria-labelledby="dao-allocate-title">
+            <h3 id="dao-allocate-title" class="disciple-detail-title">分配悟道值 · 可用 {{ disciple.daoInsight }} 点</h3>
             <ul class="journey-directions" role="radiogroup" aria-label="加点属性">
               <li v-for="option in DAO_ATTRIBUTE_OPTIONS" :key="option.value" class="journey-direction">
                 <button
@@ -1321,10 +1362,10 @@ function refineGear(item: EquipmentItemView | null): void {
             <p class="disciple-note-meta" role="status">
               本次可分配 1 ~ {{ daoPointsMax }} 点
             </p>
-          </template>
-          <p v-else-if="daoBlockedReason !== null" class="disciple-note-meta">{{ daoBlockedReason }}</p>
+          </section>
+        </ModalShell>
 
-          <ModalShell v-if="showDaoInsightHelp" narrow label="悟道值说明" @close="showDaoInsightHelp = false">
+        <ModalShell v-if="showDaoInsightHelp" narrow label="悟道值说明" @close="showDaoInsightHelp = false">
             <section class="dao-insight-help-card" aria-labelledby="dao-insight-help-title">
               <h2 id="dao-insight-help-title" class="disciple-detail-title">悟道值说明</h2>
               <p class="disciple-detail-hint">已分配 {{ disciple.daoInsightUsed }}/{{ daoInsightCap }} · 剩余可分配额度 {{ disciple.daoInsightRemaining }} 点</p>
@@ -1336,27 +1377,7 @@ function refineGear(item: EquipmentItemView | null): void {
                 <span>知道了</span>
               </button>
             </section>
-          </ModalShell>
-        </section>
-
-        <section class="disciple-detail-section" aria-labelledby="disciple-overview-cultivation">
-          <h3 id="disciple-overview-cultivation" class="disciple-detail-title">修为摘要</h3>
-          <p class="disciple-detail-realm">
-            <span class="realm-tag">{{ disciple.stageName }}</span>
-            <span>{{ disciple.realmName }}</span>
-          </p>
-          <div class="disciple-detail-progress">
-            <span>修为 {{ progress.text }}</span>
-            <span>{{ progress.percent }}%</span>
-          </div>
-          <p class="disciple-detail-hint">
-            {{
-              progress.capped
-                ? '已达当前版本上限：修为不再增长，满环也不代表可以破境。'
-                : `静修 +${disciple.cultivationRatePerHour}/时`
-            }}
-          </p>
-        </section>
+        </ModalShell>
       </div>
 
       <!-- ---------- 修行 ---------- -->
@@ -2159,6 +2180,127 @@ function refineGear(item: EquipmentItemView | null): void {
 </template>
 
 <style scoped>
+/* 概览：综合评分与战力同一张卡片，两项并排（窄屏换行）。 */
+.disciple-score.is-combined {
+  gap: 8px 32px;
+}
+
+.disciple-score-item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+/* 概览：当前装备（名称 + 祭炼等级，品质色区分品阶）。 */
+.overview-gear {
+  display: grid;
+  gap: 4px;
+  margin: 10px 0 12px;
+  padding: 0;
+  list-style: none;
+}
+
+.overview-gear-item {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.overview-gear-slot {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.overview-gear-name {
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.overview-gear-empty {
+  color: var(--faint);
+}
+
+/* 概览：天赋 / 悟道两张卡片，一行两列。 */
+.overview-cards {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.overview-card {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid rgba(202, 169, 106, 0.22);
+  border-radius: 3px;
+  background: rgba(202, 169, 106, 0.05);
+}
+
+.overview-card-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.overview-card-title {
+  margin: 0;
+  color: #93a99e;
+  font-size: 12px;
+  font-weight: 400;
+  letter-spacing: 0.08em;
+}
+
+.overview-card-action {
+  margin-left: auto;
+}
+
+.overview-card-value {
+  color: var(--gold-bright);
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.overview-card-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.overview-dao-line {
+  display: flex;
+  gap: 18px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.overview-dao-line .overview-card-value {
+  color: var(--ink-text);
+}
+
+.overview-dao-line .overview-card-value.is-gold {
+  color: var(--gold-bright);
+}
+
+.dao-allocate {
+  display: grid;
+  gap: 10px;
+}
+
+@media (max-width: 560px) {
+  .overview-cards {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 /* 战力标签旁的「提升模拟」：与天赋「更换」同一套小按钮样式。 */
 .upgrade-sim-button {
   align-self: center;
