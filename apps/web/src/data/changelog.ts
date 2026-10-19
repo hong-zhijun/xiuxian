@@ -19,6 +19,15 @@ export const MAX_ENTRIES = 5;
 
 export const CHANGELOG: readonly ChangelogEntry[] = [
   {
+    id: '2026-10-19-market-expansion',
+    time: '2026-10-19 16:00',
+    title: '灵股 · 新增四支标的',
+    items: [
+      '灵股新增万法阁、御兽盟、探秘司、玄符局四支股票，覆盖功法、灵兽、秘境、符箓板块，市场共 10 支股票。',
+      '灵股行情弹窗加宽，股票列表在宽屏下更易同时查看名称、价格与涨跌。',
+    ],
+  },
+  {
     id: '2026-10-19-arena-technique',
     time: '2026-10-19 23:30',
     title: '宗门大比 · 功法生效',

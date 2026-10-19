@@ -2884,7 +2884,7 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
   </ModalShell>
 
   <!-- 0043 灵股：面板打开期间每分钟（按服务端下一跳时刻）自动刷新一次，关掉即停。 -->
-  <ModalShell v-if="openPanel === 'market'" :loading="busy" label="灵股行情" @close="openPanel = null">
+  <ModalShell v-if="openPanel === 'market'" :loading="busy" label="灵股行情" wide @close="openPanel = null">
     <MarketDialog
       :state="state"
       :busy="busy"
