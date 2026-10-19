@@ -63,7 +63,16 @@ describe('灵股', () => {
     const panel = await getMarket(env.DB, sect.userId, NOW);
     const view = panel.market.stocks.find((item) => item.id === 'tiangong')!;
     expect(view.price).toBe(stockPriceAt(SEED, stock, marketMinuteOf(NOW)));
-    expect(panel.market.stocks).toHaveLength(6);
+    expect(panel.market.stocks).toHaveLength(10);
+    expect(panel.market.stocks.slice(0, 6).map((item) => item.id)).toEqual([
+      'tiangong',
+      'baicao',
+      'lingkuang',
+      'zhenyao',
+      'yunlai',
+      'juling',
+    ]);
+    expect(panel.market.stocks.slice(6).map((item) => item.id)).toEqual(['wanfa', 'yushou', 'tanmi', 'xuanfu']);
     expect(panel.market.tradesLeft).toBe(MARKET_DAILY_TRADES);
 
     const chart = await getMarketChart(env.DB, 'tiangong', '1h', NOW);

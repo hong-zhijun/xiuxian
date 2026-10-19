@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   CHART_RANGES,
+  MARKET_STOCK_EXPANSION_MINUTE,
   STOCKS,
   marketFee,
   marketIndexAt,
@@ -59,6 +60,33 @@ describe('灵股 · 价格模型', () => {
     const value = marketIndexAt(seed, start);
     expect(value).toBeGreaterThan(500);
     expect(value).toBeLessThan(2000);
+  });
+
+  it('扩容后保留旧通道并启用四支新股', () => {
+    expect(STOCKS).toHaveLength(10);
+    expect(STOCKS.map((stock) => stock.channel)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    expect(STOCKS.slice(6)).toMatchObject([
+      { id: 'wanfa', name: '万法阁', code: 'WFG', sector: '功法', basePrice: 50, volatility: 0.3 },
+      { id: 'yushou', name: '御兽盟', code: 'YSM', sector: '灵兽', basePrice: 36, volatility: 0.38 },
+      { id: 'tanmi', name: '探秘司', code: 'TMS', sector: '秘境', basePrice: 44, volatility: 0.36 },
+      { id: 'xuanfu', name: '玄符局', code: 'XFJ', sector: '符箓', basePrice: 28, volatility: 0.28 },
+    ]);
+    for (const stock of STOCKS.slice(6)) expect(stock.description.length).toBeGreaterThan(10);
+    const legacyMinute = MARKET_STOCK_EXPANSION_MINUTE - 1;
+    const newMinute = MARKET_STOCK_EXPANSION_MINUTE;
+    const legacyStocks = STOCKS.slice(0, 6);
+    const legacyLogSum = legacyStocks.reduce(
+      (sum, stock) => sum + Math.log(stockPriceAt(seed, stock, legacyMinute) / (stock.basePrice * 1000)),
+      0,
+    );
+    const expectedLegacyIndex = Math.round(Math.exp(legacyLogSum / legacyStocks.length) * 1000 * 100) / 100;
+    expect(marketIndexAt(seed, legacyMinute)).toBe(expectedLegacyIndex);
+    expect(legacyStocks.every((stock) => stockPriceAt(seed, stock, legacyMinute) > 0)).toBe(true);
+    expect(STOCKS.slice(6).every((stock) => stockPriceAt(seed, stock, newMinute) > 0)).toBe(true);
+    const legacyNews = newsBetween(seed, start, MARKET_STOCK_EXPANSION_MINUTE - 1);
+    expect(legacyNews.every((news) => news.stockId === null || legacyStocks.some((stock) => stock.id === news.stockId))).toBe(true);
+    const newNews = newsBetween(seed, newMinute, newMinute + 3 * 24 * 60);
+    expect(newNews.some((news) => news.stockId !== null && STOCKS.slice(6).some((stock) => stock.id === news.stockId))).toBe(true);
   });
 });
 

@@ -538,7 +538,7 @@ watch(selectedId, () => {
 
 const RULES_TEXT = `灵股 · 规则
 
-开放：宗门 3 级。6 支股票与 1 个综合指数（指数只看不交易），行情每 1 分钟一跳。
+开放：宗门 3 级。10 支股票与 1 个综合指数（指数只看不交易），行情每 1 分钟一跳。
 坐庄：系统坐庄，按服务端此刻的价格与你成交，不需要等别人挂单；现货可买入、卖出，另有逐仓 5 倍保证金合约可做多、做空。
 价格：每支股票围着自己的基准价上下波动，长期不会涨上天或跌到零；镇妖司波动最大，云来商号最稳。
 消息：坊间会不定时传出利好 / 利空消息，消息公布后几个小时内相关股票会慢慢走出一波行情，
@@ -1050,19 +1050,25 @@ onUnmounted(() => {
 
 .market-stocks {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 6px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
+.market-stocks > li {
+  min-width: 0;
+}
+
 .market-stock {
   display: grid;
   width: 100%;
+  min-width: 0;
+  min-height: 60px;
   grid-template-columns: minmax(0, 1fr) auto;
-  gap: 2px 8px;
-  padding: 6px 8px;
+  gap: 3px 10px;
+  padding: 8px 10px;
   border: 1px solid var(--line, rgba(202, 169, 106, 0.2));
   border-radius: 3px;
   background: rgba(255, 255, 255, 0.014);
@@ -1084,23 +1090,26 @@ onUnmounted(() => {
 }
 
 .market-stock-name strong {
-  overflow: hidden;
   color: var(--gold-bright, #ead19a);
   font-size: 13px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
 }
 
 .market-stock-name small {
   color: #7d9186;
   font-size: 11px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
 }
 
 .market-stock-price {
-  align-self: center;
+  align-self: start;
   font-size: 14px;
   font-weight: 600;
+  line-height: 1.35;
   text-align: right;
+  white-space: nowrap;
 }
 
 .market-stock-change {
@@ -1189,7 +1198,7 @@ onUnmounted(() => {
   touch-action: pan-y;
   cursor: crosshair;
   width: 100%;
-  height: 200px;
+  height: 220px;
   border: 1px solid rgba(202, 169, 106, 0.12);
   border-radius: 3px;
   background: rgba(4, 12, 10, 0.5);
@@ -1442,14 +1451,30 @@ onUnmounted(() => {
   font-size: 11px;
 }
 
-/* 窄屏：股票两列；头部换行。 */
-@media (max-width: 520px) {
+/* 响应式股票网格：宽屏四列，中屏三列，手机两列，极窄屏单列。 */
+@media (max-width: 900px) {
+  .market-stocks {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 620px) {
   .market-stocks {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .market-chart svg {
-    height: 160px;
+    height: 180px;
+  }
+}
+
+@media (max-width: 380px) {
+  .market-stocks {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .market-stock {
+    min-height: 54px;
   }
 }
 </style>

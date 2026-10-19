@@ -34,20 +34,37 @@ export interface StockDef {
   code: string;
   sector: string;
   description: string;
+  /** 稳定的价格噪声通道；一经上线不可复用或调整。 */
+  channel: number;
   /** 基准价（展示单位灵石）：价格长期围着它波动。 */
   basePrice: number;
   /** 波动幅度（对数价格的缩放）。 */
   volatility: number;
 }
 
+/**
+ * 灵股扩充正式生效的 UTC 分钟（2026-10-19 08:00 UTC，即 UTC+8 16:00）。
+ * 生效前的消息分配与综合指数只使用首批六支，保证历史行情可复算。
+ */
+export const MARKET_STOCK_EXPANSION_MINUTE = 29_873_280;
+const LEGACY_STOCK_COUNT = 6;
+
 export const STOCKS: readonly StockDef[] = [
-  { id: 'tiangong', name: '天工坊', code: 'TGF', sector: '炼器', description: '天下兵甲半出其炉，接朝廷与各大宗门的炼器订单。', basePrice: 48, volatility: 0.26 },
-  { id: 'baicao', name: '百草堂', code: 'BCT', sector: '药材', description: '灵药种植与收购的老字号，药材行情的风向标。', basePrice: 22, volatility: 0.22 },
-  { id: 'lingkuang', name: '灵矿商会', code: 'LKS', sector: '矿石', description: '把持北境数座灵矿，矿石产量看天也看人。', basePrice: 35, volatility: 0.28 },
-  { id: 'zhenyao', name: '镇妖司', code: 'ZYS', sector: '战斗', description: '承接斩妖除魔的悬赏，妖潮一来便是大起大落。', basePrice: 60, volatility: 0.4 },
-  { id: 'yunlai', name: '云来商号', code: 'YLS', sector: '贸易', description: '坊市里最大的商号，生意稳当，涨跌都慢。', basePrice: 15, volatility: 0.15 },
-  { id: 'juling', name: '聚灵阁', code: 'JLG', sector: '灵气', description: '经营聚灵阵法与灵气储运，修士人人离不开。', basePrice: 80, volatility: 0.3 },
+  { id: 'tiangong', name: '天工坊', code: 'TGF', sector: '炼器', description: '天下兵甲半出其炉，接朝廷与各大宗门的炼器订单。', channel: 1, basePrice: 48, volatility: 0.26 },
+  { id: 'baicao', name: '百草堂', code: 'BCT', sector: '药材', description: '灵药种植与收购的老字号，药材行情的风向标。', channel: 2, basePrice: 22, volatility: 0.22 },
+  { id: 'lingkuang', name: '灵矿商会', code: 'LKS', sector: '矿石', description: '把持北境数座灵矿，矿石产量看天也看人。', channel: 3, basePrice: 35, volatility: 0.28 },
+  { id: 'zhenyao', name: '镇妖司', code: 'ZYS', sector: '战斗', description: '承接斩妖除魔的悬赏，妖潮一来便是大起大落。', channel: 4, basePrice: 60, volatility: 0.4 },
+  { id: 'yunlai', name: '云来商号', code: 'YLS', sector: '贸易', description: '坊市里最大的商号，生意稳当，涨跌都慢。', channel: 5, basePrice: 15, volatility: 0.15 },
+  { id: 'juling', name: '聚灵阁', code: 'JLG', sector: '灵气', description: '经营聚灵阵法与灵气储运，修士人人离不开。', channel: 6, basePrice: 80, volatility: 0.3 },
+  { id: 'wanfa', name: '万法阁', code: 'WFG', sector: '功法', description: '汇聚诸宗功法典籍，负责真传抄录、功法交易与修炼心得鉴定。', channel: 7, basePrice: 50, volatility: 0.3 },
+  { id: 'yushou', name: '御兽盟', code: 'YSM', sector: '灵兽', description: '联络各地灵兽坊与驭兽师，经营灵兽培育、寄养和契约交易。', channel: 8, basePrice: 36, volatility: 0.38 },
+  { id: 'tanmi', name: '探秘司', code: 'TMS', sector: '秘境', description: '探查新现秘境并评估其中机缘，为修士提供可靠的入境情报。', channel: 9, basePrice: 44, volatility: 0.36 },
+  { id: 'xuanfu', name: '玄符局', code: 'XFJ', sector: '符箓', description: '承制护身、传讯与镇邪符箓，凭精工符法服务诸宗修士。', channel: 10, basePrice: 28, volatility: 0.28 },
 ];
+
+function stocksAvailableAt(minute: number): readonly StockDef[] {
+  return minute < MARKET_STOCK_EXPANSION_MINUTE ? STOCKS.slice(0, LEGACY_STOCK_COUNT) : STOCKS;
+}
 
 export function findStock(stockId: string): StockDef | undefined {
   return STOCKS.find((stock) => stock.id === stockId);
@@ -163,6 +180,22 @@ const NEWS_TEMPLATES: Readonly<Record<string, { up: readonly string[]; down: rea
     up: ['天地灵潮将至，聚灵阵订单爆满', '聚灵阁新阵法可让灵气产出翻倍', '突破之风盛行，灵气紧俏'],
     down: ['灵潮退去，聚灵阵乏人问津', '聚灵阁一处阵眼崩毁', '有宗门自研聚灵阵，聚灵阁订单流失'],
   },
+  wanfa: {
+    up: ['万法阁发现失传道统，真传功法争相求购', '万法阁与名门联办论道会，功法订单暴增', '万法阁新刻功法玉简通过仙盟鉴定'],
+    down: ['万法阁抄录库遭虫蛀，部分功法玉简损毁', '一宗门指称万法阁功法有误，交易暂缓', '新发现的功法集市分流万法阁客源'],
+  },
+  yushou: {
+    up: ['御兽盟驯服一批稀有灵兽，契约名额一位难求', '御兽盟发现上古灵兽血脉，培育订单激增', '仙盟举办御兽大典，灵兽交易全面升温'],
+    down: ['御兽盟灵兽疫病传闻扩散，寄养订单骤减', '一批灵兽契约失效，御兽盟赔付压力陡增', '各地灵兽坊集中出栏，灵兽价格承压'],
+  },
+  tanmi: {
+    up: ['探秘司确认一处大型秘境即将开启，入境情报热销', '探秘司绘出新秘境完整舆图，机缘评估订单涌入', '秘境深处发现上古传承，探秘司声誉大涨'],
+    down: ['探秘司发布的秘境路线被证实有误，委托纷纷退订', '一处秘境提前闭合，探秘司勘探队损失惨重', '多支队伍自行探秘，情报服务需求暂时回落'],
+  },
+  xuanfu: {
+    up: ['玄符局接下仙盟护山符箓大单，库存即将售罄', '玄符局改良传讯符，诸宗争相采购', '妖患频发，护身与镇邪符箓需求激增'],
+    down: ['玄符局符材仓库失火，近期交付能力受限', '低价符箓流入坊市，玄符局订单被分走', '玄符局一批符箓灵力不足，退货风波发酵'],
+  },
   market: {
     up: ['仙盟颁布新令，坊市交易大活跃', '诸宗大比将至，各行各业都有生意', '天降祥瑞，坊间人心振奋'],
     down: ['妖潮迫近，坊间人心惶惶', '仙盟清查各大商号账目', '数位大能闭关，坊市一片冷清'],
@@ -172,15 +205,16 @@ const NEWS_TEMPLATES: Readonly<Record<string, { up: readonly string[]; down: rea
 /** 第 slot 段的消息（没有返回 null）；确定性。 */
 export function newsOfSlot(seed: number, slot: number): MarketNews | null {
   if (hash01(seed, 7001, slot) >= NEWS_CHANCE) return null;
+  const minute = slot * NEWS_SLOT_MINUTES + Math.floor(hash01(seed, 7007, slot) * (NEWS_SLOT_MINUTES - 30));
+  const stocks = stocksAvailableAt(minute);
   const stockRoll = hash01(seed, 7002, slot);
-  // 15% 是全市场消息，其余均分给 6 支股票。
-  const stock = stockRoll < 0.15 ? null : STOCKS[Math.min(STOCKS.length - 1, Math.floor(((stockRoll - 0.15) / 0.85) * STOCKS.length))]!;
+  // 15% 是全市场消息，其余均分给当前时点可交易的股票；生效前固定为旧六支。
+  const stock = stockRoll < 0.15 ? null : stocks[Math.min(stocks.length - 1, Math.floor(((stockRoll - 0.15) / 0.85) * stocks.length))]!;
   const direction: 1 | -1 = hash01(seed, 7003, slot) < 0.5 ? 1 : -1;
   const strength = 0.06 + hash01(seed, 7004, slot) * 0.12;
   const truthful = hash01(seed, 7005, slot) < NEWS_TRUTH_CHANCE;
   // 谣言：一半不应验，一半小幅反向。
   const effect = truthful ? direction * strength : hash01(seed, 7006, slot) < 0.5 ? 0 : -direction * strength * 0.3;
-  const minute = slot * NEWS_SLOT_MINUTES + Math.floor(hash01(seed, 7007, slot) * (NEWS_SLOT_MINUTES - 30));
   const rampMinutes = 2 * HOUR + Math.floor(hash01(seed, 7008, slot) * 2 * HOUR);
   const templates = NEWS_TEMPLATES[stock?.id ?? 'market']!;
   const pool = direction > 0 ? templates.up : templates.down;
@@ -234,7 +268,7 @@ export function marketMinuteOf(ms: number): number {
 
 /** 某支股票在某分钟的价格（最小单位，至少 1）。 */
 export function stockPriceAt(seed: number, stock: StockDef, minute: number): number {
-  const channel = STOCKS.indexOf(stock) + 1;
+  const channel = stock.channel;
   const own = layeredNoise(seed, channel, minute);
   const marketWide = layeredNoise(seed, 99, minute);
   const jitter = (hash01(seed, channel, 5000, minute) * 2 - 1) * TICK_JITTER;
@@ -248,9 +282,10 @@ export function stockPriceAt(seed: number, stock: StockDef, minute: number): num
 
 /** 综合指数：各股相对基准价的几何平均 × 1000（展示用，不交易）。 */
 export function marketIndexAt(seed: number, minute: number): number {
+  const stocks = stocksAvailableAt(minute);
   let sum = 0;
-  for (const stock of STOCKS) sum += Math.log(stockPriceAt(seed, stock, minute) / (stock.basePrice * 1000));
-  return Math.round(Math.exp(sum / STOCKS.length) * 1000 * 100) / 100;
+  for (const stock of stocks) sum += Math.log(stockPriceAt(seed, stock, minute) / (stock.basePrice * 1000));
+  return Math.round(Math.exp(sum / stocks.length) * 1000 * 100) / 100;
 }
 
 /* ---------- K 线 ---------- */
