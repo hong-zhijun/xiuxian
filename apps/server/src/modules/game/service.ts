@@ -14410,18 +14410,27 @@ interface ArenaRosterSect {
   level: number;
   disciples: DiscipleRow[];
   blockedReasonOf: ReadonlyMap<string, string>;
+  /** 0066 功法：本宗已收录功法的参悟等级（technique_id → level）。 */
+  techniqueLevels: ReadonlyMap<string, number>;
 }
 
 /** 全服宗门等级达标者的名册（只读；在外 / 执事 / 坐镇 / 重伤 / 疗伤的弟子记下原因）。 */
 async function loadArenaRoster(db: D1Database, now: number): Promise<ArenaRosterSect[]> {
   const repo = new ArenaRepository(db);
-  const [sects, disciples, journeys, stewardIds, garrisonTexts] = await Promise.all([
+  const [sects, disciples, journeys, stewardIds, garrisonTexts, techniqueRows] = await Promise.all([
     repo.sectsAtLeast(ARENA_UNLOCK_SECT_LEVEL),
     repo.disciplesOfSectsAtLeast(ARENA_UNLOCK_SECT_LEVEL),
     repo.openJourneys(),
     repo.stewardDiscipleIds(),
     repo.garrisonTexts(),
+    repo.learnedTechniquesOfSectsAtLeast(ARENA_UNLOCK_SECT_LEVEL),
   ]);
+  const techniqueLevelsBySect = new Map<string, Map<string, number>>();
+  for (const row of techniqueRows) {
+    const levels = techniqueLevelsBySect.get(row.sect_id) ?? new Map<string, number>();
+    levels.set(row.technique_id, Number(row.level));
+    techniqueLevelsBySect.set(row.sect_id, levels);
+  }
   const awayIds = journeyAwayIds(journeys, now);
   const stewardSet = new Set(stewardIds);
   const garrisonSet = new Set(garrisonTexts.flatMap((text) => parseGarrison(text)));
@@ -14447,27 +14456,52 @@ async function loadArenaRoster(db: D1Database, now: number): Promise<ArenaRoster
       });
       if (reason !== null) blockedReasonOf.set(disciple.id, reason);
     }
-    return { id: sect.id, name: sect.name, level: Number(sect.level), disciples: members, blockedReasonOf };
+    return {
+      id: sect.id,
+      name: sect.name,
+      level: Number(sect.level),
+      disciples: members,
+      blockedReasonOf,
+      techniqueLevels: techniqueLevelsBySect.get(sect.id) ?? new Map<string, number>(),
+    };
   });
 }
 
-/** 弟子的战力（计入装备）与战斗属性：配对模拟与榜单共用。 */
-function arenaFighterOf(disciple: DiscipleRow): { power: number; fighter: ArenaFighter } {
+/**
+ * 弟子的战力（计入装备）与战斗属性：配对模拟与榜单共用。
+ * 0066 功法：传入本宗收录等级时按「此刻」的熟练度现算主修功法的修正；没收录 / 没主修就不带（走原有路径）。
+ */
+function arenaFighterOf(
+  disciple: DiscipleRow,
+  techniqueLevels?: ReadonlyMap<string, number>,
+  now?: number,
+): { power: number; fighter: ArenaFighter } {
   const attrs = battleAttrsOf(disciple);
   const power = gearedCombatPower(disciple);
-  return {
+  const fighter: ArenaFighter = {
+    id: disciple.id,
+    name: disciple.name,
     power,
-    fighter: {
-      id: disciple.id,
-      name: disciple.name,
-      power,
-      attack: attrs.attack,
-      defense: attrs.defense,
-      speed: attrs.speed,
-      luck: attrs.luck,
-      physique: attrs.physique,
-    },
+    attack: attrs.attack,
+    defense: attrs.defense,
+    speed: attrs.speed,
+    luck: attrs.luck,
+    physique: attrs.physique,
   };
+  const level = disciple.technique_id === null ? undefined : techniqueLevels?.get(disciple.technique_id);
+  if (level !== undefined && now !== undefined) {
+    const technique = techniqueModifiersOf({
+      techniqueId: disciple.technique_id,
+      level,
+      proficiencyBp: techniqueProficiencyBp({
+        base: Number(disciple.technique_prof_base),
+        since: disciple.technique_since === null ? null : Number(disciple.technique_since),
+        now,
+      }),
+    });
+    if (technique !== null) fighter.technique = technique;
+  }
+  return { power, fighter };
 }
 
 /** 选人候选：战力（计入装备）与此刻能否出战。 */
@@ -14656,7 +14690,7 @@ async function settleArenaDay(db: D1Database, now: number, dateKey: string): Pro
   const individualEntrants = individualPlans.flatMap((plan) =>
     plan.ids.map((id) => {
       const disciple = disciplesById.get(id)!;
-      return { sect: plan.sect, disciple, ...arenaFighterOf(disciple) };
+      return { sect: plan.sect, disciple, ...arenaFighterOf(disciple, plan.sect.techniqueLevels, now) };
     }),
   );
   type ArenaStat = { points: number; wins: number; losses: number; damage: number };
@@ -14776,7 +14810,7 @@ async function settleArenaDay(db: D1Database, now: number, dateKey: string): Pro
   const teamEntries = teamPlans.map((plan) => {
     const members = plan.ids.map((id) => {
       const disciple = disciplesById.get(id)!;
-      return { disciple, ...arenaFighterOf(disciple) };
+      return { disciple, ...arenaFighterOf(disciple, plan.sect.techniqueLevels, now) };
     });
     return { sect: plan.sect, members, power: members.reduce((sum, member) => sum + member.power, 0) };
   });

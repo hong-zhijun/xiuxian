@@ -2736,6 +2736,8 @@ export interface ArenaDuelHitView {
   damage: number;
   crit: boolean;
   extra: boolean;
+  /** 0066 功法标志效果标签（如 ['剑气']）。 */
+  tags?: string[];
 }
 
 export interface ArenaDuelRoundView {
@@ -2745,6 +2747,8 @@ export interface ArenaDuelRoundView {
   /** 回合结束时的剩余血量（与 fighterAMaxHp 同一口径）。 */
   fighterAHp: number;
   fighterBHp: number;
+  /** 0066 功法（血身）：回合结束时的回血。 */
+  heals?: { fighterId: string; name: string; amount: number }[];
 }
 
 /** 一场 1v1 的详情（团队赛车轮战每场都有）。 */

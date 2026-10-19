@@ -4939,6 +4939,15 @@ export class ArenaRepository extends ParamRepository {
   }
 
   /** 所有灵地的坐镇名单原文（坐镇判定用；JSON 数组文本）。 */
+  /** 0066 功法：参赛宗门已收录（等级 ≥ 1）的功法与参悟等级，配对模拟时现算每名弟子的功法修正。 */
+  async learnedTechniquesOfSectsAtLeast(minLevel: number): Promise<{ sect_id: string; technique_id: string; level: number }[]> {
+    return this.all<{ sect_id: string; technique_id: string; level: number }>({
+      sql: `SELECT sect_id, technique_id, level FROM sect_techniques
+            WHERE level >= 1 AND sect_id IN (SELECT id FROM sects WHERE level >= ?)`,
+      params: [minLevel],
+    });
+  }
+
   async garrisonTexts(): Promise<string[]> {
     const rows = await this.all<{ garrison: string }>({
       sql: 'SELECT garrison FROM world_sites WHERE garrison IS NOT NULL',

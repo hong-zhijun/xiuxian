@@ -304,6 +304,17 @@ export interface TechniqueModifiers {
   scale: number;
   tower: TechniqueTowerMods;
   boss: TechniqueBossMods;
+  arena: TechniqueArenaMods;
+}
+
+/**
+ * 宗门大比（1v1 单挑，最多 10 回合）的修正：以镇妖塔那一份为底，再按单挑节奏单独调参
+ * （回血、回合叠加、首击在单挑里收益更大，追击 / 暴击流更依赖属性差，见 arenaOverrides）。
+ * 大比没有剧毒与妖物：百毒不侵换成「受到伤害 −6%×S」。
+ */
+export interface TechniqueArenaMods extends TechniqueTowerMods {
+  /** 受到伤害倍率（中性 1；百毒 1 − 0.06S）。 */
+  damageTakenMultiplier: number;
 }
 
 function neutralTowerMods(): TechniqueTowerMods {
@@ -430,7 +441,48 @@ export function techniqueModifiersOf(input: {
     default:
       return null;
   }
-  return { id: def.id, name: def.name, tag: def.tag, scale: s, tower, boss };
+  const arena: TechniqueArenaMods = { ...tower, damageTakenMultiplier: 1 };
+  arenaOverrides(def.id, s, arena);
+  return { id: def.id, name: def.name, tag: def.tag, scale: s, tower, boss, arena };
+}
+
+/**
+ * 大比单挑的单独调参（只改 arena 那一份，不影响镇妖塔）：按同战力同属性的单挑循环赛（scripts/technique）
+ * 把各功法的胜率收拢到 40%～60% 一带。
+ */
+function arenaOverrides(id: string, s: number, arena: TechniqueArenaMods): void {
+  switch (id) {
+    case 'qingfeng':
+      arena.firstStrikeMultiplier = 1 + 0.8 * s;
+      break;
+    case 'taiyi':
+      arena.hpMultiplier = 1;
+      break;
+    case 'pojia':
+      arena.firstStrikeCritMultiplier = 1 + 1.5 * s;
+      break;
+    case 'xueshen':
+      arena.healRatio = 0.025 * s;
+      break;
+    case 'baidu':
+      arena.damageTakenMultiplier = 1 - 0.06 * s;
+      break;
+    case 'liuyun':
+      arena.extraChanceBonus = 0.1 * s;
+      break;
+    case 'tianji':
+      arena.critRateMultiplier = 1 + 2 * s;
+      arena.nonCritMultiplier = 1;
+      break;
+    case 'guiying':
+      arena.extraChanceBonus = 0.05 * s;
+      break;
+    case 'jiuzhuan':
+      arena.roundGrowth = 0.05 * s;
+      break;
+    default:
+      break;
+  }
 }
 
 /* ---------- 残卷来源：世界 Boss 掉落 ---------- */

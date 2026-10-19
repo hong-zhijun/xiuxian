@@ -12,6 +12,7 @@
  */
 
 import { dateKeyUtc8 } from './constants';
+import type { TechniqueModifiers } from './techniques';
 
 /* ---------- 参赛与时间 ---------- */
 
@@ -209,6 +210,8 @@ export interface ArenaFighter {
   speed: number;
   luck: number;
   physique: number;
+  /** 主修功法的战斗修正（techniques.ts）；没有主修为 undefined，走原有路径、结果与接入功法前完全一致。 */
+  technique?: TechniqueModifiers;
 }
 
 export interface ArenaHit {
@@ -218,6 +221,15 @@ export interface ArenaHit {
   crit: boolean;
   /** 身法追击（同一次出手后的第二击）。 */
   extra: boolean;
+  /** 本次出手触发的功法标志效果（如 ['剑气']）；没有触发时不带这个字段。 */
+  tags?: string[];
+}
+
+/** 血身：回合结束时的回血记录。 */
+export interface ArenaHeal {
+  fighterId: string;
+  name: string;
+  amount: number;
 }
 
 export interface ArenaRound {
@@ -228,6 +240,8 @@ export interface ArenaRound {
   /** 回合结束时的剩余血量（已 × DAMAGE_SCALE）。 */
   fighterAHp: number;
   fighterBHp: number;
+  /** 血身：本回合结束时的回血；没有回血时不带这个字段。 */
+  heals?: ArenaHeal[];
 }
 
 export interface ArenaDuelResult {
@@ -247,11 +261,27 @@ export interface ArenaDuelResult {
   fighterBDamage: number;
 }
 
-/** 弟子血量 = 4.5 × 战力 ×（0.5 + 体魄 / 100）（已 × DAMAGE_SCALE）。 */
-export function arenaFighterHp(power: number, physique: number): number {
+/**
+ * 弟子血量 = 4.5 × 战力 ×（0.5 + 体魄 / 100）（已 × DAMAGE_SCALE）。
+ * 功法：金刚改体魄权重、太乙 / 百毒 / 背水改血量倍率（与镇妖塔同一份修正）；没有功法时与原公式完全一致。
+ */
+export function arenaFighterHp(power: number, physique: number, technique?: TechniqueModifiers): number {
+  if (technique === undefined) {
+    return Math.max(
+      1,
+      Math.floor(ARENA_HP_FACTOR * Math.max(0, power) * (0.5 + Math.max(0, physique) / 100) * ARENA_DAMAGE_SCALE),
+    );
+  }
+  const mods = technique.arena;
   return Math.max(
     1,
-    Math.floor(ARENA_HP_FACTOR * Math.max(0, power) * (0.5 + Math.max(0, physique) / 100) * ARENA_DAMAGE_SCALE),
+    Math.floor(
+      ARENA_HP_FACTOR *
+        Math.max(0, power) *
+        (0.5 + (mods.physiqueWeight * Math.max(0, physique)) / 100) *
+        ARENA_DAMAGE_SCALE *
+        mods.hpMultiplier,
+    ),
   );
 }
 
@@ -270,9 +300,9 @@ export function arenaExtraActionChance(mySpeed: number, opponentSpeed: number): 
   return Math.min(ARENA_EXTRA_ACTION_MAX, Math.max(0, (mySpeed - opponentSpeed) * ARENA_EXTRA_ACTION_PER_POINT));
 }
 
-/** 攻击修正：0.75 + 0.25 × min(2, 攻击 / 50)。 */
-export function arenaAttackFactor(attack: number): number {
-  const ratio = Math.min(ARENA_ATTACK_RATIO_CAP, Math.max(0, attack) / ARENA_BASE_ATTR);
+/** 攻击修正：0.75 + 0.25 × min(上限, 攻击 / 50)；上限默认 2（青锋 / 太乙的功法加成另算）。 */
+export function arenaAttackFactor(attack: number, cap: number = ARENA_ATTACK_RATIO_CAP): number {
+  const ratio = Math.min(cap, Math.max(0, attack) / ARENA_BASE_ATTR);
   return 0.75 + 0.25 * ratio;
 }
 
@@ -322,22 +352,82 @@ export function simulateArenaDuel(input: {
   random: () => number;
 }): ArenaDuelResult {
   const { fighterA, fighterB, random } = input;
-  const maxHpA = arenaFighterHp(fighterA.power, fighterA.physique);
-  const maxHpB = arenaFighterHp(fighterB.power, fighterB.physique);
+  const maxHpA = arenaFighterHp(fighterA.power, fighterA.physique, fighterA.technique);
+  const maxHpB = arenaFighterHp(fighterB.power, fighterB.physique, fighterB.technique);
   let hpA = clampHp(input.startHpA ?? maxHpA, maxHpA);
   let hpB = clampHp(input.startHpB ?? maxHpB, maxHpB);
   let damageA = 0;
   let damageB = 0;
   const rounds: ArenaRound[] = [];
+  /** 本场各自的出手次数（功法「本场第一次出手」用；车轮战每场单挑重新计）。 */
+  const strikeCounts = new Map<string, number>();
 
-  /** 一次出手；返回 true 表示对方倒下。 */
-  const strike = (attacker: ArenaFighter, defender: ArenaFighter, attackerIsA: boolean, extra: boolean, hits: ArenaHit[]): boolean => {
+  /**
+   * 一次出手；返回 true 表示对方倒下。
+   * 双方都没有功法时走原公式（随机数取用顺序不变）；有功法时在同一顺序后，只有太乙才多取一次「剑气」判定。
+   */
+  const strike = (
+    attacker: ArenaFighter,
+    defender: ArenaFighter,
+    attackerIsA: boolean,
+    extra: boolean,
+    hits: ArenaHit[],
+    round: number,
+    chainTag: string | null,
+  ): boolean => {
+    const technique = attacker.technique;
+    const mods = technique?.arena;
+    const index = strikeCounts.get(attacker.id) ?? 0;
+    strikeCounts.set(attacker.id, index + 1);
     const fluctuation = between(random, ARENA_FLUCTUATION);
-    const crit = random() < arenaCritRate(attacker.luck);
-    const raw =
-      attacker.power * arenaAttackFactor(attacker.attack) * fluctuation * (crit ? ARENA_CRIT_MULTIPLIER : 1);
-    const damage = Math.floor(raw * arenaDefenseFactor(defender.defense) * ARENA_DAMAGE_SCALE);
-    hits.push({ fighterId: attacker.id, name: attacker.name, damage, crit, extra });
+    let damage: number;
+    let crit: boolean;
+    const tags: string[] = [];
+    if (mods === undefined && defender.technique === undefined) {
+      crit = random() < arenaCritRate(attacker.luck);
+      const raw =
+        attacker.power * arenaAttackFactor(attacker.attack) * fluctuation * (crit ? ARENA_CRIT_MULTIPLIER : 1);
+      damage = Math.floor(raw * arenaDefenseFactor(defender.defense) * ARENA_DAMAGE_SCALE);
+    } else {
+      const roll = random();
+      const naturalRate = arenaCritRate(attacker.luck);
+      const rate = mods === undefined ? naturalRate : Math.min(1, naturalRate * mods.critRateMultiplier);
+      const forcedCrit = mods !== undefined && index === 0 ? mods.firstStrikeCritMultiplier : null;
+      crit = forcedCrit !== null || roll < rate;
+      const myHp = attackerIsA ? hpA : hpB;
+      const myMax = attackerIsA ? maxHpA : maxHpB;
+      const lowHp = mods !== undefined && mods.lowHpThreshold > 0 && myHp < myMax * mods.lowHpThreshold;
+      let multiplier = crit ? (forcedCrit ?? ARENA_CRIT_MULTIPLIER) + (mods?.critMultiplierBonus ?? 0) : 1;
+      if (mods !== undefined) {
+        multiplier *= index === 0 ? mods.firstStrikeMultiplier : mods.laterStrikeMultiplier;
+        multiplier *= mods.strikeMultiplier;
+        if (!crit) multiplier *= mods.nonCritMultiplier;
+        multiplier *= round === 1 ? mods.round1Multiplier : 1 + mods.roundGrowth * (round - 1);
+        if (lowHp) multiplier *= mods.lowHpMultiplier;
+      }
+      const cap = ARENA_ATTACK_RATIO_CAP + (mods?.attackCapBonus ?? 0);
+      const raw = attacker.power * arenaAttackFactor(attacker.attack, cap) * fluctuation * multiplier;
+      const taken = defender.technique?.arena.damageTakenMultiplier ?? 1;
+      damage = Math.floor(raw * arenaDefenseFactor(defender.defense) * ARENA_DAMAGE_SCALE * taken);
+      if (technique !== undefined && mods !== undefined) {
+        const signature =
+          (index === 0 && (mods.firstStrikeMultiplier !== 1 || forcedCrit !== null)) ||
+          (crit && roll >= naturalRate) ||
+          (crit && mods.critMultiplierBonus !== 0) ||
+          (round >= 2 && mods.roundGrowth !== 0) ||
+          lowHp;
+        if (signature) tags.push(technique.tag);
+        // 剑气：每次出手 25% 概率额外造成 50% × S 的伤害。
+        if (mods.procChance > 0 && random() < mods.procChance) {
+          damage += Math.floor(damage * mods.procRatio);
+          if (!tags.includes(technique.tag)) tags.push(technique.tag);
+        }
+        if (chainTag !== null && !tags.includes(chainTag)) tags.push(chainTag);
+      }
+    }
+    const hit: ArenaHit = { fighterId: attacker.id, name: attacker.name, damage, crit, extra };
+    if (tags.length > 0) hit.tags = tags;
+    hits.push(hit);
     if (attackerIsA) {
       damageA += damage;
       hpB = Math.max(0, hpB - damage);
@@ -348,30 +438,66 @@ export function simulateArenaDuel(input: {
     return hpA <= 0;
   };
 
-  /** 一方的一个出手回合：先一击，未倒下则按追击概率再一击。 */
-  const turn = (attackerIsA: boolean, hits: ArenaHit[]): boolean => {
+  /**
+   * 一方的一个出手回合：先一击，未倒下则按追击概率再一击（追击不再追击）。
+   * 功法：流云提高追击上限、可连续追击（每次出手最多 3 击）；鬼影第 1 回合必定追击、追击概率加成。
+   */
+  const turn = (attackerIsA: boolean, hits: ArenaHit[], round: number): boolean => {
     const attacker = attackerIsA ? fighterA : fighterB;
     const defender = attackerIsA ? fighterB : fighterA;
-    if (strike(attacker, defender, attackerIsA, false, hits)) return true;
-    if (random() < arenaExtraActionChance(attacker.speed, defender.speed)) {
-      return strike(attacker, defender, attackerIsA, true, hits);
+    if (strike(attacker, defender, attackerIsA, false, hits, round, null)) return true;
+    const mods = attacker.technique?.arena;
+    if (mods === undefined) {
+      if (random() < arenaExtraActionChance(attacker.speed, defender.speed)) {
+        return strike(attacker, defender, attackerIsA, true, hits, round, null);
+      }
+      return false;
+    }
+    const max = mods.extraChanceMax ?? ARENA_EXTRA_ACTION_MAX;
+    const maxStrikes = mods.maxStrikesPerAction ?? 2;
+    for (let done = 1; done < maxStrikes; done += 1) {
+      const guaranteed = done === 1 && round === 1 && mods.round1GuaranteedExtra;
+      const chance = Math.min(
+        max,
+        Math.max(0, (attacker.speed - defender.speed) * ARENA_EXTRA_ACTION_PER_POINT) + mods.extraChanceBonus,
+      );
+      if (!guaranteed && !(random() < chance)) return false;
+      const chainTag = guaranteed || done >= 2 ? (attacker.technique?.tag ?? null) : null;
+      if (strike(attacker, defender, attackerIsA, true, hits, round, chainTag)) return true;
     }
     return false;
+  };
+
+  /** 血身：回合结束时活着的一方按自身最大血量回血。 */
+  const healOf = (fighter: ArenaFighter, isA: boolean): ArenaHeal | null => {
+    const ratio = fighter.technique?.arena.healRatio ?? 0;
+    if (ratio <= 0) return null;
+    const hp = isA ? hpA : hpB;
+    const max = isA ? maxHpA : maxHpB;
+    if (hp <= 0 || hp >= max) return null;
+    const amount = Math.min(max - hp, Math.floor(max * ratio));
+    if (amount <= 0) return null;
+    if (isA) hpA += amount;
+    else hpB += amount;
+    return { fighterId: fighter.id, name: fighter.name, amount };
   };
 
   for (let round = 1; round <= ARENA_MAX_ROUNDS; round += 1) {
     const aFirst = fighterA.speed >= fighterB.speed;
     const hits: ArenaHit[] = [];
-    if (!turn(aFirst, hits)) {
-      turn(!aFirst, hits);
+    if (!turn(aFirst, hits, round)) {
+      turn(!aFirst, hits, round);
     }
-    rounds.push({
+    const heals = [healOf(fighterA, true), healOf(fighterB, false)].filter((item): item is ArenaHeal => item !== null);
+    const record: ArenaRound = {
       round,
       firstId: aFirst ? fighterA.id : fighterB.id,
       hits,
       fighterAHp: hpA,
       fighterBHp: hpB,
-    });
+    };
+    if (heals.length > 0) record.heals = heals;
+    rounds.push(record);
     if (hpA <= 0 || hpB <= 0) break;
   }
 

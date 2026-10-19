@@ -275,10 +275,14 @@ function duelWinnerName(duel: ArenaDuelView): string {
 function roundText(round: ArenaDuelRoundView, duel: ArenaDuelView): string {
   const first = round.firstId === duel.fighterA.id ? duel.fighterA.name : duel.fighterB.name;
   const hits = round.hits
-    .map((hit) => `${hit.name}${hit.extra ? '（身法追击）' : ''} ${formatNumber(hit.damage)}${hit.crit ? '（破绽一击）' : ''}`)
+    .map((hit) => {
+      const tags = (hit.tags ?? []).map((tag) => `【${tag}】`).join('');
+      return `${hit.name}${tags}${hit.extra ? '（身法追击）' : ''} ${formatNumber(hit.damage)}${hit.crit ? '（破绽一击）' : ''}`;
+    })
     .join('、');
+  const heals = (round.heals ?? []).map((heal) => `${heal.name}【血身】回血 ${formatNumber(heal.amount)}`).join('、');
   const left = `${String(hpPercent(round.fighterAHp, duel.fighterAMaxHp))}% / ${String(hpPercent(round.fighterBHp, duel.fighterBMaxHp))}%`;
-  return `第 ${String(round.round)} 招 · ${first}先手 · ${hits} · 剩余 ${left}`;
+  return `第 ${String(round.round)} 招 · ${first}先手 · ${hits}${heals === '' ? '' : ` · ${heals}`} · 剩余 ${left}`;
 }
 
 /* ---------- 榜单 ---------- */

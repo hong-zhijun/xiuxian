@@ -3712,9 +3712,11 @@ export interface ArenaDuelView {
   rounds: Array<{
     round: number;
     firstId: string;
-    hits: Array<{ fighterId: string; name: string; damage: number; crit: boolean; extra: boolean }>;
+    hits: Array<{ fighterId: string; name: string; damage: number; crit: boolean; extra: boolean; tags?: string[] }>;
     fighterAHp: number;
     fighterBHp: number;
+    /** 0066 功法（血身）：回合结束时的回血。 */
+    heals?: Array<{ fighterId: string; name: string; amount: number }>;
   }>;
 }
 
