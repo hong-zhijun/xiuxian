@@ -101,6 +101,20 @@ export interface DiscipleRow {
   steward_handover_until: number | null;
   /** 0035 已服用培元丹次数（上限 APTITUDE_PILL_MAX_USES，见 alchemy.ts）。 */
   aptitude_pill_count: number;
+  /** 0066 功法：主修功法 id；null = 没有主修。 */
+  technique_id: string | null;
+  /** 0066 功法：主修时的熟练度基点（换功法减半后的值；0~10000）。 */
+  technique_prof_base: number;
+  /** 0066 功法：主修时刻（UTC 毫秒）；null = 没有主修。熟练度 = base + (now − since) / 48h。 */
+  technique_since: number | null;
+}
+
+/** 0066 功法：宗门级收录 / 参悟进度（level = 0 未收录，scrolls 为持有残卷数）。 */
+export interface SectTechniqueRow {
+  sect_id: string;
+  technique_id: string;
+  level: number;
+  scrolls: number;
 }
 
 /** 0034 执事堂：每宗门每个职位一行；disciple_id 为 null = 空缺（行保留，用来记当天是否已任命）。 */
@@ -270,7 +284,8 @@ export class DiscipleRepository extends ParamRepository {
                    gear_attack, gear_defense, gear_speed, gear_luck, gear_physique, gear_power_bp,
                    realm_id, stage, cultivation, cultivation_remainder,
                    assignment, injured_until, severe_injured_until, body_tempering_count, note, avatar_frame_id, avatar_hash, dao_insight, dao_insight_used,
-                   talent_reroll_count, talent_candidate, steward_handover_until, aptitude_pill_count, created_at
+                   talent_reroll_count, talent_candidate, steward_handover_until, aptitude_pill_count,
+                   technique_id, technique_prof_base, technique_since, created_at
             FROM disciples WHERE sect_id = ? ORDER BY created_at ASC, id ASC`,
       params: [sectId],
     });
@@ -282,7 +297,8 @@ export class DiscipleRepository extends ParamRepository {
                    gear_attack, gear_defense, gear_speed, gear_luck, gear_physique, gear_power_bp,
                    realm_id, stage, cultivation, cultivation_remainder,
                    assignment, injured_until, severe_injured_until, body_tempering_count, note, avatar_frame_id, avatar_hash, dao_insight, dao_insight_used,
-                   talent_reroll_count, talent_candidate, steward_handover_until, aptitude_pill_count, created_at
+                   talent_reroll_count, talent_candidate, steward_handover_until, aptitude_pill_count,
+                   technique_id, technique_prof_base, technique_since, created_at
             FROM disciples WHERE id = ?`,
       params: [discipleId],
     });
@@ -1611,13 +1627,15 @@ export interface DiscipleJourneyRow {
   created_at: number;
   /** 0036 历练额外奖励（受控 JSON：机遇 / 悟道 / 淬炼，见 journey.ts 的 JourneyBonus）；旧记录为 '{}'。 */
   bonus_detail: string;
+  /** 0061 紧急召回时刻；NULL = 正常归队。 */
+  recalled_at: number | null;
 }
 
 /** 历练表的完整列清单（避免 SELECT * 与将来加列时的静默漂移）。 */
 const JOURNEY_COLUMNS = `id, sect_id, disciple_id, disciple_name, direction, duration_seconds,
        original_assignment, started_at, ends_at, completed_at, claimed_at,
        reward_cultivation, reward_resources, extra_harvest, injured, injury_chance_bp,
-       cultivation_awarded, created_at, bonus_detail`;
+       cultivation_awarded, created_at, bonus_detail, recalled_at`;
 
 export class DiscipleJourneyRepository extends ParamRepository {
   /**
@@ -1710,6 +1728,27 @@ export function insertDiscipleJourneyStatement(row: {
       row.now,
       row.bonusDetail,
     ],
+  };
+}
+
+/**
+ * 0061 紧急召回：把仍在外的记录一次收口 —— 返程 / 完成 / 领取都记为召回时刻，奖励快照清零。
+ * 条件里要求「未完成、未领取、尚未到期」：并发下最多生效一次，到期后的记录不会被误召回。
+ * endsAt 由调用方保证 > started_at（表上的 CHECK）。
+ */
+export function recallDiscipleJourneyStatement(
+  journeyId: string,
+  sectId: string,
+  endsAt: number,
+  now: number,
+): ParameterizedQuery {
+  return {
+    sql: `UPDATE disciple_journeys
+             SET ends_at = ?, completed_at = ?, claimed_at = ?, recalled_at = ?,
+                 cultivation_awarded = 0, reward_cultivation = 0, reward_resources = '{}',
+                 extra_harvest = 0, injured = 0, bonus_detail = '{}'
+           WHERE id = ? AND sect_id = ? AND completed_at IS NULL AND claimed_at IS NULL AND ends_at > ?`,
+    params: [endsAt, now, now, now, journeyId, sectId, now],
   };
 }
 
@@ -2714,6 +2753,18 @@ export interface DiscipleBattleCountRow {
   times: string | null;
 }
 
+/** 世界 Boss 自动讨伐的持久化开关与调度状态。 */
+export interface WorldBossAutoSettingRow {
+  sect_id: string;
+  enabled: number;
+  lock_until: number;
+  next_run_at: number;
+  last_run_at: number | null;
+  last_result: string | null;
+  pause_reason: string | null;
+  updated_at: number;
+}
+
 export class WorldBossRepository extends ParamRepository {
   async findById(bossId: string): Promise<WorldBossRow | null> {
     return this.one<WorldBossRow>({
@@ -2814,7 +2865,7 @@ export class WorldBossRepository extends ParamRepository {
     return row?.created_at === null || row?.created_at === undefined ? null : Number(row.created_at);
   }
 
-  /** 该宗门自 since 起的出手次数（每日出手上限用；走 (sect_id, created_at DESC) 索引）。 */
+  /** 该宗门自 since 起的出手次数（面板统计；走 (sect_id, created_at DESC) 索引）。 */
   async countHitsBySectSince(sectId: string, since: number): Promise<number> {
     const row = await this.one<{ total: number }>({
       sql: 'SELECT COUNT(*) AS total FROM world_boss_hits WHERE sect_id = ? AND created_at >= ?',
@@ -2927,6 +2978,90 @@ export class WorldBossRepository extends ParamRepository {
   /** 单条写入（出现 / 逃走 / 半血标记 / 最后一击标记 / 清理疲劳）：与 ChatMessageRepository 同一处理。 */
   override async execute(query: ParameterizedQuery): Promise<D1Result> {
     return super.execute(query);
+  }
+}
+
+/**
+ * 世界 Boss 自动讨伐调度表的读写。
+ * 租约更新使用条件 UPDATE，多个 Cron / Node 定时器同时唤醒时只有一个能拿到执行权。
+ */
+export class WorldBossAutoRepository extends ParamRepository {
+  async findBySectId(sectId: string): Promise<WorldBossAutoSettingRow | null> {
+    return this.one<WorldBossAutoSettingRow>({
+      sql: 'SELECT sect_id, enabled, lock_until, next_run_at, last_run_at, last_result, pause_reason, updated_at FROM world_boss_auto_settings WHERE sect_id = ?',
+      params: [sectId],
+    });
+  }
+
+  async findDue(now: number): Promise<{ sect_id: string; user_id: string; setting: WorldBossAutoSettingRow }[]> {
+    const rows = await this.all<WorldBossAutoSettingRow & { user_id: string }>({
+      sql: `SELECT s.user_id, a.sect_id, a.enabled, a.lock_until, a.next_run_at,
+                   a.last_run_at, a.last_result, a.pause_reason, a.updated_at
+              FROM world_boss_auto_settings a
+              JOIN sects s ON s.id = a.sect_id
+             WHERE a.enabled = 1 AND a.next_run_at <= ? AND a.lock_until < ?
+             ORDER BY a.next_run_at ASC, a.sect_id ASC`,
+      params: [now, now],
+    });
+    return rows.map((row) => ({
+      sect_id: row.sect_id,
+      user_id: row.user_id,
+      setting: row,
+    }));
+  }
+
+  async setEnabled(sectId: string, enabled: boolean, now: number): Promise<void> {
+    await this.execute({
+      sql: `INSERT INTO world_boss_auto_settings
+              (sect_id, enabled, lock_until, next_run_at, last_run_at, last_result, pause_reason, updated_at)
+            VALUES (?, ?, 0, ?, NULL, NULL, NULL, ?)
+            ON CONFLICT (sect_id) DO UPDATE SET
+              enabled = excluded.enabled,
+              lock_until = 0,
+              next_run_at = excluded.next_run_at,
+              pause_reason = NULL,
+              updated_at = excluded.updated_at`,
+      params: [sectId, enabled ? 1 : 0, enabled ? now : 0, now],
+    });
+  }
+
+  async acquireLease(sectId: string, now: number, leaseUntil: number): Promise<boolean> {
+    const result = await this.execute({
+      sql: `UPDATE world_boss_auto_settings
+               SET lock_until = ?, updated_at = ?
+             WHERE sect_id = ? AND enabled = 1 AND lock_until < ? AND next_run_at <= ?`,
+      params: [leaseUntil, now, sectId, now, now],
+    });
+    return Number(result.meta.changes) === 1;
+  }
+
+  async finishRun(input: {
+    sectId: string;
+    leaseUntil: number;
+    now: number;
+    nextRunAt: number;
+    result: string;
+    pauseReason: string | null;
+  }): Promise<void> {
+    await this.execute({
+      sql: `UPDATE world_boss_auto_settings
+               SET lock_until = 0,
+                   next_run_at = ?,
+                   last_run_at = ?,
+                   last_result = ?,
+                   pause_reason = ?,
+                   updated_at = ?
+             WHERE sect_id = ? AND lock_until = ?`,
+      params: [
+        input.nextRunAt,
+        input.now,
+        input.result,
+        input.pauseReason,
+        input.now,
+        input.sectId,
+        input.leaseUntil,
+      ],
+    });
   }
 }
 
@@ -3215,6 +3350,19 @@ export function updateEquipmentRefineStatement(input: {
   };
 }
 
+/** 洗练：覆盖副属性的种类与数值（祭炼加成已由调用方加回 subValue）。 */
+export function updateEquipmentSubStatement(input: {
+  equipmentId: string;
+  sectId: string;
+  subAttr: string;
+  subValue: number;
+}): ParameterizedQuery {
+  return {
+    sql: 'UPDATE equipment SET sub_attr = ?, sub_value = ? WHERE id = ? AND sect_id = ?',
+    params: [input.subAttr, input.subValue, input.equipmentId, input.sectId],
+  };
+}
+
 /** 0044 隐藏补偿：写某宗门某一重的连续失败次数（绝对值，upsert）。 */
 export function upsertRefineFailsStatement(
   sectId: string,
@@ -3455,6 +3603,76 @@ export function sectTowerGuardStatement(guardId: string, sectId: string, version
     sql: `INSERT INTO mutation_guards (command_id, valid)
           SELECT ?, CASE WHEN COALESCE((SELECT version FROM sect_towers WHERE sect_id = ?), 0) = ? THEN 1 ELSE 0 END`,
     params: [guardId, sectId, version],
+  };
+}
+
+/* ---------- 0066 功法（docs/功法开发计划.md） ---------- */
+
+export class TechniqueRepository extends ParamRepository {
+  /** 本宗功法行（未收录但持有残卷的也有行）。 */
+  async findBySectId(sectId: string): Promise<SectTechniqueRow[]> {
+    return this.all<SectTechniqueRow>({
+      sql: 'SELECT sect_id, technique_id, level, scrolls FROM sect_techniques WHERE sect_id = ?',
+      params: [sectId],
+    });
+  }
+}
+
+/** 收录 / 参悟：写回本宗某功法的绝对值（level / scrolls）；没有行就建一行。 */
+export function upsertSectTechniqueStatement(input: {
+  sectId: string;
+  techniqueId: string;
+  level: number;
+  scrolls: number;
+}): ParameterizedQuery {
+  return {
+    sql: `INSERT INTO sect_techniques (sect_id, technique_id, level, scrolls) VALUES (?, ?, ?, ?)
+          ON CONFLICT (sect_id, technique_id) DO UPDATE SET level = excluded.level, scrolls = excluded.scrolls`,
+    params: [input.sectId, input.techniqueId, input.level, input.scrolls],
+  };
+}
+
+/** 残卷入账（拍卖 / 云游商人 / 世界 Boss 掉落）：在原有数量上加 delta，没有行就建一行。 */
+export function addTechniqueScrollsStatement(sectId: string, techniqueId: string, delta: number): ParameterizedQuery {
+  return {
+    sql: `INSERT INTO sect_techniques (sect_id, technique_id, level, scrolls) VALUES (?, ?, 0, ?)
+          ON CONFLICT (sect_id, technique_id) DO UPDATE SET scrolls = sect_techniques.scrolls + excluded.scrolls`,
+    params: [sectId, techniqueId, delta],
+  };
+}
+
+/** 功法命令的并发守卫：本宗这门功法的等级与残卷数仍是读快照时的值，否则整批回滚。 */
+export function techniqueGuardStatement(
+  guardId: string,
+  input: { sectId: string; techniqueId: string; level: number; scrolls: number },
+): ParameterizedQuery {
+  return {
+    sql: `INSERT INTO mutation_guards (command_id, valid)
+          SELECT ?, CASE WHEN COALESCE((SELECT level FROM sect_techniques WHERE sect_id = ? AND technique_id = ?), 0) = ?
+                          AND COALESCE((SELECT scrolls FROM sect_techniques WHERE sect_id = ? AND technique_id = ?), 0) = ?
+                         THEN 1 ELSE 0 END`,
+    params: [
+      guardId,
+      input.sectId,
+      input.techniqueId,
+      input.level,
+      input.sectId,
+      input.techniqueId,
+      input.scrolls,
+    ],
+  };
+}
+
+/** 弟子主修写回：功法 id（null = 卸下，熟练度与时刻一并清空）、熟练度基点、主修时刻。 */
+export function updateDiscipleTechniqueStatement(input: {
+  discipleId: string;
+  techniqueId: string | null;
+  profBase: number;
+  since: number | null;
+}): ParameterizedQuery {
+  return {
+    sql: 'UPDATE disciples SET technique_id = ?, technique_prof_base = ?, technique_since = ? WHERE id = ?',
+    params: [input.techniqueId, input.profBase, input.since, input.discipleId],
   };
 }
 
@@ -3993,7 +4211,7 @@ export interface StockOrderRow {
   updated_at: number;
 }
 
-/** 0061：逐仓保证金仓位。 */
+/** 0063：逐仓保证金仓位。 */
 export interface StockMarginPositionRow {
   sect_id: string;
   stock_id: string;
@@ -4009,7 +4227,7 @@ export interface StockMarginPositionRow {
   updated_at: number;
 }
 
-/** 0061：保证金开仓 / 平仓 / 强平流水。 */
+/** 0063：保证金开仓 / 平仓 / 强平流水。 */
 export interface StockMarginTradeRow {
   id: string;
   sect_id: string;
@@ -4131,7 +4349,7 @@ export class MarketRepository extends ParamRepository {
     return rows.map((row) => Number(row.created_at));
   }
 
-  /** 0061：本宗当前的保证金仓位。 */
+  /** 0063：本宗当前的保证金仓位。 */
   async marginPositionsOf(sectId: string): Promise<StockMarginPositionRow[]> {
     return this.all<StockMarginPositionRow>({
       sql: 'SELECT * FROM stock_margin_positions WHERE sect_id = ?',
@@ -4139,7 +4357,7 @@ export class MarketRepository extends ParamRepository {
     });
   }
 
-  /** 0061：全服当前保证金仓位，定时任务按股票和方向扫描。 */
+  /** 0063：全服当前保证金仓位，定时任务按股票和方向扫描。 */
   async allMarginPositions(limit: number): Promise<StockMarginPositionRow[]> {
     return this.all<StockMarginPositionRow>({
       sql: 'SELECT * FROM stock_margin_positions ORDER BY updated_at ASC LIMIT ?',
@@ -4162,7 +4380,7 @@ export class MarketRepository extends ParamRepository {
     return Number(row?.cnt ?? 0);
   }
 
-  /** 0061：[from, to) 之间合约成交时刻。 */
+  /** 0063：[from, to) 之间合约成交时刻。 */
   async marginTradeTimesBetween(sectId: string, from: number, to: number): Promise<number[]> {
     const rows = await this.all<{ created_at: number }>({
       sql: 'SELECT created_at FROM stock_margin_trades WHERE sect_id = ? AND created_at >= ? AND created_at < ?',
@@ -4243,7 +4461,7 @@ export function stockHoldingGuardStatement(
   };
 }
 
-/* ---------- 0061 灵股保证金合约 ---------- */
+/* ---------- 0063 灵股保证金合约 ---------- */
 
 export function upsertStockMarginPositionStatement(input: {
   sectId: string;
@@ -4694,7 +4912,8 @@ export class ArenaRepository extends ParamRepository {
                    gear_attack, gear_defense, gear_speed, gear_luck, gear_physique, gear_power_bp,
                    realm_id, stage, cultivation, cultivation_remainder,
                    assignment, injured_until, severe_injured_until, body_tempering_count, note, avatar_frame_id, avatar_hash, dao_insight, dao_insight_used,
-                   talent_reroll_count, talent_candidate, steward_handover_until, aptitude_pill_count, created_at
+                   talent_reroll_count, talent_candidate, steward_handover_until, aptitude_pill_count,
+                   technique_id, technique_prof_base, technique_since, created_at
             FROM disciples
             WHERE sect_id IN (SELECT id FROM sects WHERE level >= ?)
             ORDER BY created_at ASC, id ASC`,
@@ -4720,6 +4939,15 @@ export class ArenaRepository extends ParamRepository {
   }
 
   /** 所有灵地的坐镇名单原文（坐镇判定用；JSON 数组文本）。 */
+  /** 0066 功法：参赛宗门已收录（等级 ≥ 1）的功法与参悟等级，配对模拟时现算每名弟子的功法修正。 */
+  async learnedTechniquesOfSectsAtLeast(minLevel: number): Promise<{ sect_id: string; technique_id: string; level: number }[]> {
+    return this.all<{ sect_id: string; technique_id: string; level: number }>({
+      sql: `SELECT sect_id, technique_id, level FROM sect_techniques
+            WHERE level >= 1 AND sect_id IN (SELECT id FROM sects WHERE level >= ?)`,
+      params: [minLevel],
+    });
+  }
+
   async garrisonTexts(): Promise<string[]> {
     const rows = await this.all<{ garrison: string }>({
       sql: 'SELECT garrison FROM world_sites WHERE garrison IS NOT NULL',

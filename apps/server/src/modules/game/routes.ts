@@ -16,6 +16,7 @@ import {
   challengeRequestSchema,
   chooseRealmExploreSchema,
   claimJourneyRequestSchema,
+  recallJourneyRequestSchema,
   craftPillRequestSchema,
   createSectRequestSchema,
   daoDebateRequestSchema,
@@ -28,6 +29,7 @@ import {
   journeyPreviewQuerySchema,
   recruitRequestSchema,
   refineEquipmentRequestSchema,
+  rerollEquipmentRequestSchema,
   renameDiscipleRequestSchema,
   renameSectRequestSchema,
   salvageEquipmentRequestSchema,
@@ -52,8 +54,12 @@ import {
   usePillRequestSchema,
   wheelSpinRequestSchema,
   worldBossAttackRequestSchema,
+  worldBossAutoRequestSchema,
   worldBossExchangeRequestSchema,
   towerChallengeRequestSchema,
+  towerPreviewRequestSchema,
+  techniqueRequestSchema,
+  setDiscipleTechniqueRequestSchema,
   setArenaLineupSchema,
   auctionListRequestSchema,
   auctionBidRequestSchema,
@@ -79,6 +85,7 @@ import {
   challengeSect,
   chooseRealmExplore,
   claimJourney,
+  recallJourney,
   craftPill,
   createSect,
   daoDebate,
@@ -101,10 +108,16 @@ import {
   chooseTalent,
   dismissSteward,
   attackWorldBoss,
+  setWorldBossAuto,
   exchangeBossMerit,
   getTower,
   challengeTower,
   sweepTower,
+  previewTower,
+  getTechniqueLibrary,
+  learnTechnique,
+  upgradeTechnique,
+  setDiscipleTechnique,
   getArena,
   setArenaLineup,
   getDailyTasks,
@@ -131,7 +144,6 @@ import {
   getRaceHistory,
   getRaceState,
   getWorldBoss,
-  worldBossDailyAttackLimit,
   placeRaceBet,
   listChallengeHistory,
   listLeaderboard,
@@ -141,6 +153,7 @@ import {
   previewRecruit,
   recruitDisciple,
   refineEquipment,
+  rerollEquipment,
   refreshRecruit,
   renameDisciple,
   renameSect,
@@ -442,6 +455,14 @@ export function createGameRoutes(): Hono<AppEnv> {
     return respondOk(c, { state: result.state, outcome: result.outcome });
   });
 
+  // 洗练（结算 → 解锁 / 归属 / 在外校验 → 扣材料 + 重洗副属性，一次受保护 batch）。
+  routes.post('/game/reroll-equipment', async (c) => {
+    const userId = requireUserId(c);
+    const body = await parseStrictJson(rerollEquipmentRequestSchema, c);
+    const result = await rerollEquipment(getDb(c.env), userId, body.equipmentId, body.mode, Date.now());
+    return respondOk(c, { state: result.state, outcome: result.outcome });
+  });
+
   // 0013：保存弟子私有备注（结算 → 归属校验 → 归一化 → 单列写回，一次受保护 batch）。
   routes.post('/game/set-disciple-note', async (c) => {
     const userId = requireUserId(c);
@@ -563,6 +584,14 @@ export function createGameRoutes(): Hono<AppEnv> {
     const userId = requireUserId(c);
     const body = await parseStrictJson(claimJourneyRequestSchema, c);
     const result = await claimJourney(getDb(c.env), userId, body.journeyId, Date.now());
+    return respondOk(c, { state: result.state, outcome: result.outcome });
+  });
+
+  // 0061：紧急召回（结算 → 只能召回仍在外的 → 记录收口、收获作废，一次受保护 batch）。
+  routes.post('/game/recall-journey', async (c) => {
+    const userId = requireUserId(c);
+    const body = await parseStrictJson(recallJourneyRequestSchema, c);
+    const result = await recallJourney(getDb(c.env), userId, body.journeyId, Date.now());
     return respondOk(c, { state: result.state, outcome: result.outcome });
   });
 
@@ -707,22 +736,24 @@ export function createGameRoutes(): Hono<AppEnv> {
   // 0025 世界 Boss（讨伐）：面板数据（今天的 Boss、今日伤害榜、出手记录、史上最强一击）。
   routes.get('/game/world-boss', async (c) => {
     const userId = requireUserId(c);
-    const result = await getWorldBoss(getDb(c.env), userId, Date.now(), worldBossDailyAttackLimit(c.env));
+    const result = await getWorldBoss(getDb(c.env), userId, Date.now());
     return respondOk(c, { state: result.state, boss: result.boss });
   });
 
-  // 0025 世界 Boss（讨伐）：出手（1~3 名弟子；每宗每日 3 次，参与奖出手时立即发）。
+  // 0025 世界 Boss（讨伐）：出手（1~10 名弟子；受 3 秒冷却与疲劳 / 伤势规则约束）。
   routes.post('/game/world-boss/attack', async (c) => {
     const userId = requireUserId(c);
     const body = await parseStrictJson(worldBossAttackRequestSchema, c);
-    const result = await attackWorldBoss(
-      getDb(c.env),
-      userId,
-      body,
-      Date.now(),
-      worldBossDailyAttackLimit(c.env),
-    );
+    const result = await attackWorldBoss(getDb(c.env), userId, body, Date.now());
     return respondOk(c, { state: result.state, result: result.result, boss: result.boss });
+  });
+
+  // 自动讨伐：只保存宗门开关，实际疗伤 / 选人 / 出手由服务端定时任务执行。
+  routes.post('/game/world-boss/auto', async (c) => {
+    const userId = requireUserId(c);
+    const body = await parseStrictJson(worldBossAutoRequestSchema, c);
+    const result = await setWorldBossAuto(getDb(c.env), userId, body.enabled, Date.now());
+    return respondOk(c, { state: result.state, boss: result.boss });
   });
 
   // 0034 执事堂：任命 / 卸任（结算 → 职位与天赋 / 每日一次 / 在外 / 守擂校验 → 一次受保护 batch）。
@@ -774,6 +805,51 @@ export function createGameRoutes(): Hono<AppEnv> {
     const userId = requireUserId(c);
     const result = await sweepTower(getDb(c.env), userId, Date.now());
     return respondOk(c, { state: result.state, tower: result.tower, result: result.result });
+  });
+
+  // 0066 镇妖塔胜率预估：服务端模拟 50 次，返回胜率与平均回合数（不扣次数、不写库）。
+  routes.post('/game/tower/preview', async (c) => {
+    const userId = requireUserId(c);
+    const body = await parseStrictJson(towerPreviewRequestSchema, c);
+    const result = await previewTower(getDb(c.env), userId, body, Date.now());
+    return respondOk(c, { preview: result.preview });
+  });
+
+  // 0066 功法：藏经阁面板（全部功法 + 本宗收录 / 参悟 / 残卷状态；只读）。
+  routes.get('/game/techniques', async (c) => {
+    const userId = requireUserId(c);
+    const result = await getTechniqueLibrary(getDb(c.env), userId, Date.now());
+    return respondOk(c, { library: result.library });
+  });
+
+  // 0066 功法：收录（扣残卷，宗门需建有藏经阁）。
+  routes.post('/game/techniques/learn', async (c) => {
+    const userId = requireUserId(c);
+    const body = await parseStrictJson(techniqueRequestSchema, c);
+    const result = await learnTechnique(getDb(c.env), userId, body.techniqueId, Date.now());
+    return respondOk(c, { state: result.state, library: result.library, result: result.result });
+  });
+
+  // 0066 功法：参悟升级（扣残卷 + 灵石）。
+  routes.post('/game/techniques/upgrade', async (c) => {
+    const userId = requireUserId(c);
+    const body = await parseStrictJson(techniqueRequestSchema, c);
+    const result = await upgradeTechnique(getDb(c.env), userId, body.techniqueId, Date.now());
+    return respondOk(c, { state: result.state, library: result.library, result: result.result });
+  });
+
+  // 0066 功法：设置 / 更换 / 卸下弟子主修（任何时候都能换，在外 / 重伤中也可以）。
+  routes.post('/game/disciples/technique', async (c) => {
+    const userId = requireUserId(c);
+    const body = await parseStrictJson(setDiscipleTechniqueRequestSchema, c);
+    const state = await setDiscipleTechnique(
+      getDb(c.env),
+      userId,
+      body.discipleId,
+      body.techniqueId,
+      Date.now(),
+    );
+    return respondOk(c, { state });
   });
 
   // 0053 宗门大比：面板（名册 / 今日报名或自动参赛 / 最近一次战报与日榜 / 赛季榜；只读）。
@@ -847,7 +923,7 @@ export function createGameRoutes(): Hono<AppEnv> {
     return respondOk(c, { state: result.state, market: result.market, result: result.result });
   });
 
-  // 0061 灵股保证金：开多 / 开空 / 平仓，服务端按当前分钟价格结算。
+  // 0063 灵股保证金：开多 / 开空 / 平仓，服务端按当前分钟价格结算。
   routes.post('/game/market/margin', async (c) => {
     const userId = requireUserId(c);
     const body = await parseStrictJson(marketMarginRequestSchema, c);

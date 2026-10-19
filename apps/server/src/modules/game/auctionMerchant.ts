@@ -1,5 +1,6 @@
 import { auctionMinPrice, type AuctionEquipmentSnapshot } from './auction';
 import { generateEquipment, resolveMainAttr, type EquipmentQuality, type EquipmentSlot } from './equipment';
+import { scrollItemIdOf, TECHNIQUES, type TechniqueTier } from './techniques';
 
 export const MERCHANT_NAME = '云游商人';
 export const MERCHANT_STAY_MS = 6 * 3_600_000;
@@ -61,4 +62,51 @@ export function generateMerchantGoods(random: () => number): MerchantGoods[] {
       quantity, equipmentJson: null, startPrice, buyoutPrice: quantity * integer(50, 75, random) * 1000 });
   }
   return goods;
+}
+
+/**
+ * 功法残卷货品（docs/功法开发计划.md 第 5 节）：玄阶 55%、地阶 35%、天阶 10%（偶尔出货）；
+ * 玄阶 / 地阶每组 2～5 张，天阶每组 1～3 张。
+ * 起拍 / 一口价为「每张」价目（最小单位）：玄阶 20k～30k / 40k～60k，地阶 60k～90k / 120k～180k，
+ * 天阶 180k～270k / 360k～540k；整单按张数乘。沿用 kind: 'resource' 的拍卖 / 一口价流程，交付时进 sect_techniques.scrolls。
+ */
+const MERCHANT_SCROLL_PRICES: Readonly<Record<TechniqueTier, { quantity: [number, number]; start: [number, number]; buyout: [number, number] }>> = {
+  xuan: { quantity: [2, 5], start: [20, 30], buyout: [40, 60] },
+  di: { quantity: [2, 5], start: [60, 90], buyout: [120, 180] },
+  tian: { quantity: [1, 3], start: [180, 270], buyout: [360, 540] },
+};
+
+function techniqueScrollGood(random: () => number): MerchantGoods {
+  const roll = random();
+  const tier: TechniqueTier = roll < 0.55 ? 'xuan' : roll < 0.9 ? 'di' : 'tian';
+  const pool = TECHNIQUES.filter((item) => item.tier === tier);
+  const technique = pool[Math.min(pool.length - 1, Math.max(0, Math.floor(random() * pool.length)))]!;
+  const price = MERCHANT_SCROLL_PRICES[tier];
+  const quantity = integer(price.quantity[0], price.quantity[1], random);
+  const perStart = integer(price.start[0], price.start[1], random);
+  const perBuyout = integer(price.buyout[0], price.buyout[1], random);
+  return {
+    kind: 'resource',
+    itemId: scrollItemIdOf(technique.id),
+    itemName: `${technique.name}残卷`,
+    quantity,
+    equipmentJson: null,
+    startPrice: quantity * perStart * 1000,
+    buyoutPrice: quantity * perBuyout * 1000,
+  };
+}
+
+/**
+ * 每次到访的残卷：从材料单里换掉 1～2 单（从末尾算起，保底的玄铁与神木两单不动）。
+ * 换而不加：商人每次的上架单数仍是 8～12 单（拍卖行的库存与公告口径不变）。
+ */
+export function withTechniqueScrolls(goods: readonly MerchantGoods[], random: () => number): MerchantGoods[] {
+  const materialIndexes = goods.flatMap((item, index) => (item.kind === 'resource' ? [index] : []));
+  const replaceable = materialIndexes.slice(2);
+  const groups = Math.min(replaceable.length, 1 + Math.floor(random() * 2));
+  const result = [...goods];
+  for (let group = 0; group < groups; group += 1) {
+    result[replaceable[replaceable.length - 1 - group]!] = techniqueScrollGood(random);
+  }
+  return result;
 }

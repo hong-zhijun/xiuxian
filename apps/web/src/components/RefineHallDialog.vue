@@ -98,7 +98,7 @@ function nextText(item: EquipmentItemView): string {
 
     <template v-else>
       <p class="refine-hall-rules">
-        一次冲一重，最高十二重；失败只耗材料，不降重、不损坏装备。五重、十二重副属性提升，九重起通灵，每重战力 +1%。
+        一次冲一重，最高十二重；失败只耗材料，不降重、不损坏装备。五重、十二重副属性提升，九重起通灵，每重战力 +1%。祭炼弹窗里还可「洗练」重洗副属性（祭炼加成保留）。
       </p>
 
       <div class="refine-hall-tabs" role="tablist" aria-label="装备来源">

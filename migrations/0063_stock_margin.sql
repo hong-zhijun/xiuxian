@@ -1,4 +1,4 @@
--- Migration number: 0061  Name: stock_margin
+-- Migration number: 0063  Name: stock_margin
 --
 -- 灵股保证金合约：逐仓、一向持仓、固定 5 倍杠杆。
 -- 与 0043 现货持仓 / 0049 现货挂单分表，避免改变既有现货语义。

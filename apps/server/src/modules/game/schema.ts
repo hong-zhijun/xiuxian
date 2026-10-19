@@ -174,6 +174,12 @@ export const refineEquipmentRequestSchema = z.strictObject({
   equipmentId: z.string().min(1).max(64),
 });
 
+/** 洗练：装备 id + 模式（attr = 种类与数值一起洗，value = 锁定种类只洗数值）。 */
+export const rerollEquipmentRequestSchema = z.strictObject({
+  equipmentId: z.string().min(1).max(64),
+  mode: z.enum(['attr', 'value']),
+});
+
 /**
  * 0013 弟子私有备注：只做「类型 + 宽松长度上限」的第一道防线，
  * 真正的规则（trim / 单行纯文本 / 无控制字符 / ≤60 个 Unicode 字符）在
@@ -214,7 +220,7 @@ export const journeyPreviewQuerySchema = z.strictObject({
 
 /**
  * 0014 出发：方向与时长只做「类型 + 宽松长度」的第一道防线，
- * 真正的白名单（daoSeeking/gathering × 7200/21600）在 journey.ts 里判定。
+ * 真正的白名单（daoSeeking/gathering × 2/6/12/24 小时）在 journey.ts 里判定。
  */
 export const startJourneyRequestSchema = z.strictObject({
   discipleId: z.string().min(1).max(64),
@@ -224,6 +230,11 @@ export const startJourneyRequestSchema = z.strictObject({
 
 /** 0014 领取：只带历练记录 id；归属与状态由 service 判定（跨宗 id 一律 NOT_FOUND）。 */
 export const claimJourneyRequestSchema = z.strictObject({
+  journeyId: z.string().min(1).max(64),
+});
+
+/** 0061 紧急召回：只带历练记录 id（只能召回本宗仍在外的记录）。 */
+export const recallJourneyRequestSchema = z.strictObject({
   journeyId: z.string().min(1).max(64),
 });
 
@@ -392,18 +403,27 @@ export const raceBetRequestSchema = z.strictObject({
 });
 
 /**
- * 0025 世界 Boss 讨伐出手：只做「类型 + 人数」的第一道防线（1~3 个）。
- * 去重、时段、每日次数与弟子资格（本宗 / 不在历练与疗伤中）全部在 service 里判定。
+ * 0025 世界 Boss 讨伐出手：只做「类型 + 人数」的第一道防线（1~10 个）。
+ * 去重、时段与弟子资格（本宗 / 不在历练与疗伤中）全部在 service 里判定。
  */
 export const worldBossAttackRequestSchema = z.strictObject({
   discipleIds: z.array(z.string().min(1).max(64)).min(1).max(10),
+});
+
+/** 世界 Boss 自动讨伐开关；实际调度由服务端定时任务执行，退出页面后仍然生效。 */
+export const worldBossAutoRequestSchema = z.strictObject({
+  enabled: z.boolean(),
 });
 
 /**
  * 世界 Boss 三期：功勋兑换。合法性（部位 / 主属性 / 数量组合）由 service 校验，这里只做类型与长度。
  */
 export const worldBossExchangeRequestSchema = z.strictObject({
-  itemId: z.enum(['xuantie', 'shenmu', 'talentPill', 'spirit', 'treasure', 'immortal']),
+  // 0066 功法残卷的 id 是「techniqueScroll:功法 id」，是否存在由 service 的 findMeritShopItem 裁决。
+  itemId: z.union([
+    z.enum(['xuantie', 'shenmu', 'talentPill', 'spirit', 'treasure', 'immortal']),
+    z.string().regex(/^techniqueScroll:[a-z]{1,24}$/),
+  ]),
   quantity: z.number().int().min(1).max(100).optional(),
   slot: z.string().min(1).max(16).optional(),
   mainAttr: z.string().min(1).max(16).optional(),
@@ -412,6 +432,22 @@ export const worldBossExchangeRequestSchema = z.strictObject({
 /** 0039 镇妖塔：挑战（固定 5 人；是否不重复、能否出战由 service 校验）。 */
 export const towerChallengeRequestSchema = z.strictObject({
   discipleIds: z.array(z.string().min(1).max(64)).length(5),
+});
+
+/** 0066 镇妖塔胜率预估：入参同挑战（固定 5 人；不扣次数、不写库）。 */
+export const towerPreviewRequestSchema = z.strictObject({
+  discipleIds: z.array(z.string().min(1).max(64)).length(5),
+});
+
+/** 0066 功法：收录 / 参悟只带功法 id（是否已收录、残卷与灵石是否足够由 service 校验）。 */
+export const techniqueRequestSchema = z.strictObject({
+  techniqueId: z.string().min(1).max(32),
+});
+
+/** 0066 功法：设置 / 更换 / 卸下弟子主修（techniqueId 为 null 即卸下；只能选已收录的，由 service 校验）。 */
+export const setDiscipleTechniqueRequestSchema = z.strictObject({
+  discipleId: z.string().min(1).max(64),
+  techniqueId: z.string().min(1).max(32).nullable(),
 });
 
 /** 0048 宗门日课：领取哪个任务（只认任务池里的 id；是否在今天的列表里、是否完成由 service 校验）。 */
@@ -480,7 +516,7 @@ export const marketTradeRequestSchema = z.strictObject({
   shares: z.number().int().min(1).max(100_000),
 });
 
-/** 0061 灵股保证金：开多 / 开空 / 平仓。金额按服务端当前价结算。 */
+/** 0063 灵股保证金：开多 / 开空 / 平仓。金额按服务端当前价结算。 */
 export const marketMarginRequestSchema = z.strictObject({
   stockId: z.string().min(1).max(32),
   action: z.enum(['open', 'close']),

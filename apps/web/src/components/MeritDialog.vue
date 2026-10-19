@@ -42,7 +42,10 @@ function balanceOf(resourceId: string): number {
 }
 
 /** 按个数兑换的条目的「现有」：丹药看丹库库存（颗），资源看余额（展示单位）。 */
-function ownedText(item: { id: string; resourceId: string | null; pillId: string | null }): string {
+function ownedText(item: { id: string; resourceId: string | null; pillId: string | null; techniqueId: string | null }): string {
+  if (item.techniqueId !== null) {
+    return `${String(props.state.techniqueScrolls[item.techniqueId] ?? 0)} 张`;
+  }
   if (item.pillId !== null) {
     const owned = props.state.alchemy.recipes.find((recipe) => recipe.id === item.pillId)?.owned ?? 0;
     return `${String(owned)} 颗`;
@@ -87,8 +90,8 @@ function onTabKeydown(event: KeyboardEvent, current: string): void {
 
 /* ---------- 资源 / 丹药：按个数兑换（两个标签页共用同一个面板，列出当前标签页的条目） ---------- */
 
-/** 按个数兑换的分类。 */
-const QUANTITY_TABS = ['resource', 'pill'];
+/** 按个数兑换的分类（0066 功法残卷按张数，同一个面板）。 */
+const QUANTITY_TABS = ['resource', 'pill', 'technique'];
 const isQuantityTab = computed(() => QUANTITY_TABS.includes(tab.value));
 const resourceItems = computed(() => shop.value?.items.filter((item) => item.category === tab.value) ?? []);
 const resourceId = ref('');
@@ -164,7 +167,10 @@ async function submit(input: Parameters<typeof exchangeBossMerit>[0]): Promise<v
     const equipment = data.outcome.equipment;
     const pill = data.outcome.pill;
     const resource = data.outcome.resource;
-    if (pill !== null) {
+    const scroll = data.outcome.scroll;
+    if (scroll !== null) {
+      emit('notify', 'success', '兑换成功', `${scroll.name} +${String(scroll.quantity)} 张，可到功法页收录或参悟。`);
+    } else if (pill !== null) {
       emit('notify', 'success', '兑换成功', `${pill.name} +${String(pill.quantity)}，已收入丹库。`);
     } else if (resource !== null) {
       emit('notify', 'success', '兑换成功', `${resource.name} +${formatAmount(resource.amount)}`);
@@ -251,7 +257,7 @@ function submitEquipment(): void {
             @click="resourceId = item.id"
           >
             <strong>{{ item.name }}</strong>
-            <small>{{ item.cost }} 功勋 / 个 · 现有 {{ ownedText(item) }}</small>
+            <small>{{ item.cost }} 功勋 / {{ item.techniqueId === null ? '个' : '张' }} · 现有 {{ ownedText(item) }}</small>
           </button>
         </div>
 
@@ -300,7 +306,7 @@ function submitEquipment(): void {
           :disabled="busy || submitting || resourceBlocked !== null"
           @click="submitResource"
         >
-          <span>{{ submitting ? '兑换中…' : `兑换 ${quantity > 0 ? quantity : ''} 个${resourceItem?.name ?? ''}` }}</span>
+          <span>{{ submitting ? '兑换中…' : `兑换 ${quantity > 0 ? quantity : ''} ${resourceItem?.techniqueId ? '张' : '个'}${resourceItem?.name ?? ''}` }}</span>
         </button>
       </div>
 

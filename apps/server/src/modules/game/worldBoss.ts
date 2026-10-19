@@ -1,5 +1,6 @@
 import { bossDropDescription, type EquipmentQuality } from './equipment';
 import { ARENA_COMBAT_BONUS_BP_PER_LEVEL } from './realms';
+import { TECHNIQUES, TECHNIQUE_TIER_NAMES, scrollItemIdOf, type TechniqueTier } from './techniques';
 
 /**
  * 世界 Boss（讨伐）二期纯规则（docs/世界Boss二期开发计划.md 2.2~2.9）。
@@ -66,20 +67,6 @@ export const WORLD_BOSS_FLED_POOL_FACTOR = 0.5;
 
 /** 同一宗门的出手冷却（不限次数之后的唯一节奏约束）。 */
 export const WORLD_BOSS_COOLDOWN_MS = 3_000;
-
-/**
- * 每个宗门每天最多出手几次（防协议脚本全天刷）：默认 120，比最肝的真人玩家略多。
- * 线上由环境变量 WORLD_BOSS_DAILY_ATTACK_LIMIT 覆盖（改 .env 后重启即可，不用改代码）；
- * 0 = 不限次数。「一天」按 UTC+8 自然日算（讨伐只在 08:00–24:00 开放）。
- */
-export const WORLD_BOSS_DAILY_ATTACK_LIMIT_DEFAULT = 120;
-
-/** 解析每日出手上限：非负整数原样用（0 = 不限）；没配、写错时用默认值。 */
-export function parseDailyAttackLimit(raw: string | undefined): number {
-  if (raw === undefined || raw.trim() === '') return WORLD_BOSS_DAILY_ATTACK_LIMIT_DEFAULT;
-  const value = Number(raw.trim());
-  return Number.isInteger(value) && value >= 0 ? value : WORLD_BOSS_DAILY_ATTACK_LIMIT_DEFAULT;
-}
 
 /** 疲劳统计窗口：最近 60 分钟内已出战讨伐的次数。 */
 export const WORLD_BOSS_FATIGUE_WINDOW_MS = 60 * 60 * 1000;
@@ -397,6 +384,10 @@ export function rollDamage(input: {
   critRateMultiplier?: number;
   /** 天赋重构 · 会心：Σ(会心弟子的贡献 × 会心加成)，只在暴击时加进伤害基数；缺省 0。 */
   critBonusBase?: number;
+  /** 功法 · 暴击伤害倍率加成（破军：出战弟子的平均值）；缺省 0。 */
+  critMultiplierBonus?: number;
+  /** 功法 · 未暴击伤害倍率（天机 0.85 的出战弟子平均值）；缺省 1。 */
+  nonCritMultiplier?: number;
   random: () => number;
 }): { damage: number; crit: boolean } {
   const fluctuation =
@@ -409,8 +400,9 @@ export function rollDamage(input: {
   const crit = input.random() < critRate;
   const partyBase = Math.max(0, input.partyBase);
   const base = crit
-    ? partyBase * WORLD_BOSS_CRIT_MULTIPLIER + Math.max(0, input.critBonusBase ?? 0)
-    : partyBase;
+    ? partyBase * (WORLD_BOSS_CRIT_MULTIPLIER + (input.critMultiplierBonus ?? 0)) +
+      Math.max(0, input.critBonusBase ?? 0)
+    : partyBase * (input.nonCritMultiplier ?? 1);
   const damage = Math.floor(
     base *
       arenaCombatMultiplier(input.arenaLevel) *
@@ -473,15 +465,21 @@ export function rollOutcome(input: {
   berserk: boolean;
   /** 铁骨减免（基点）；缺省 0。 */
   injuryReductionBp?: number;
+  /** 功法：普通受伤 / 重伤概率倍率（血身、金刚、百毒）；缺省 1。 */
+  normalInjuryMultiplier?: number;
+  severeInjuryMultiplier?: number;
   random: () => number;
 }): { severe: boolean; injured: boolean } {
   const keep = 1 - Math.min(10_000, Math.max(0, input.injuryReductionBp ?? 0)) / 10_000;
+  const severeMultiplier = input.severeInjuryMultiplier ?? 1;
+  const normalMultiplier = input.normalInjuryMultiplier ?? 1;
   const severeBase = severeInjuryChance(input.fatigueCount, input.physique, input.berserk);
-  const severeRate = severeBase >= 1 ? 1 : severeBase * keep;
+  const severeRate = severeBase >= 1 ? Math.min(1, severeMultiplier) : severeBase * keep * severeMultiplier;
   if (input.random() < severeRate) {
     return { severe: true, injured: false };
   }
-  const injured = input.random() < normalInjuryChance(input.physique, input.berserk) * keep;
+  const injured =
+    input.random() < normalInjuryChance(input.physique, input.berserk) * keep * normalMultiplier;
   return { severe: false, injured };
 }
 
@@ -621,20 +619,24 @@ export function worldBossMeritFor(input: {
   return input.repelled ? Math.max(1, Math.floor(base / 2)) : base;
 }
 
-export type BossMeritShopItemId = 'xuantie' | 'shenmu' | 'talentPill' | 'spirit' | 'treasure' | 'immortal';
+export type BossMeritShopItemId = 'xuantie' | 'shenmu' | 'talentPill' | 'spirit' | 'treasure' | 'immortal' | `techniqueScroll:${string}`;
 
 /** 功勋兑换的分类（弹窗里一类一个标签页；以后开放新的兑换物，在这里加分类、在价目表里加条目即可）。 */
-export type MeritShopCategory = 'resource' | 'pill' | 'equipment';
+export type MeritShopCategory = 'resource' | 'pill' | 'equipment' | 'technique';
 export const MERIT_SHOP_CATEGORIES: readonly { id: MeritShopCategory; name: string }[] = [
   { id: 'resource', name: '资源' },
   { id: 'pill', name: '丹药' },
   { id: 'equipment', name: '装备' },
+  { id: 'technique', name: '功法' },
 ];
+
+/** 功法残卷的功勋单价（每张，展示单位）。 */
+export const MERIT_SCROLL_COST: Readonly<Record<TechniqueTier, number>> = { xuan: 4, di: 10, tian: 30 };
 
 /**
  * 功勋兑换价目表（唯一一份，前端只渲染）：cost 是展示单位，扣款时 × 1000。
  * resource 类给 resourceId 对应的资源、pill 类给 pillId 对应的丹药（都按个数兑换）；
- * equipment 类给一件 quality 品质的装备（自选部位）。
+ * equipment 类给一件 quality 品质的装备（自选部位）；technique 类给 techniqueId 那门功法的残卷（按张数兑换）。
  */
 export const WORLD_BOSS_MERIT_SHOP: readonly {
   id: BossMeritShopItemId;
@@ -646,16 +648,29 @@ export const WORLD_BOSS_MERIT_SHOP: readonly {
   resourceId: string | null;
   /** pill 类：兑换得到的丹药 id；其它类为 null。 */
   pillId: string | null;
+  /** technique 类：兑换得到哪门功法的残卷（按张数兑换）；其它类为 null。 */
+  techniqueId: string | null;
 }[] = [
-  { id: 'xuantie', name: '玄铁', cost: 4, category: 'resource', quality: null, resourceId: 'xuantie', pillId: null },
+  { id: 'xuantie', name: '玄铁', cost: 4, category: 'resource', quality: null, resourceId: 'xuantie', pillId: null, techniqueId: null },
   // 神木：炼丹专用材料，目前只能在这里兑换；价格是玄铁的一半。
-  { id: 'shenmu', name: '神木', cost: 2, category: 'resource', quality: null, resourceId: 'shenmu', pillId: null },
+  { id: 'shenmu', name: '神木', cost: 2, category: 'resource', quality: null, resourceId: 'shenmu', pillId: null, techniqueId: null },
   // 天赋重构：洗髓丹（也可炼制）；功勋多了一个去处。
-  { id: 'talentPill', name: '洗髓丹', cost: 60, category: 'pill', quality: null, resourceId: null, pillId: 'talentPill' },
-  { id: 'spirit', name: '灵品装备', cost: 25, category: 'equipment', quality: 'spirit', resourceId: null, pillId: null },
-  { id: 'treasure', name: '宝品装备', cost: 70, category: 'equipment', quality: 'treasure', resourceId: null, pillId: null },
+  { id: 'talentPill', name: '洗髓丹', cost: 60, category: 'pill', quality: null, resourceId: null, pillId: 'talentPill', techniqueId: null },
+  { id: 'spirit', name: '灵品装备', cost: 25, category: 'equipment', quality: 'spirit', resourceId: null, pillId: null, techniqueId: null },
+  { id: 'treasure', name: '宝品装备', cost: 70, category: 'equipment', quality: 'treasure', resourceId: null, pillId: null, techniqueId: null },
   // 原 200：满勤约两天一件，仙品太多；提到 400。
-  { id: 'immortal', name: '仙品装备', cost: 400, category: 'equipment', quality: 'immortal', resourceId: null, pillId: null },
+  { id: 'immortal', name: '仙品装备', cost: 400, category: 'equipment', quality: 'immortal', resourceId: null, pillId: null, techniqueId: null },
+  // 0066 功法：每门功法的残卷都能自选兑换，按品阶定价（玄阶与玄铁同价）；新功法自动出现在这里。
+  ...TECHNIQUES.map((def) => ({
+    id: scrollItemIdOf(def.id) as BossMeritShopItemId,
+    name: `${def.name}残卷（${TECHNIQUE_TIER_NAMES[def.tier]}）`,
+    cost: MERIT_SCROLL_COST[def.tier],
+    category: 'technique' as const,
+    quality: null,
+    resourceId: null,
+    pillId: null,
+    techniqueId: def.id,
+  })),
 ];
 
 /** 一次最多兑换多少个（玄铁、丹药等按个数兑换的项共用）。 */

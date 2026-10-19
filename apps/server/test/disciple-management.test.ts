@@ -1090,6 +1090,10 @@ describe('0018 迁移：disciples 重建后结构与约束完好', () => {
       'aptitude_pill_count',
       // 0038 自定义头像哈希。
       'avatar_hash',
+      // 0066 功法：主修 id / 熟练度基点 / 主修时刻（新增列，见 0066_techniques.sql）。
+      'technique_id',
+      'technique_prof_base',
+      'technique_since',
     ]);
   });
 
@@ -1155,6 +1159,10 @@ describe('0018 迁移：disciples 重建后结构与约束完好', () => {
       'aptitude_pill_count|INTEGER|1|0',
       // 0038 自定义头像哈希：可空（NULL = 没有）、无 DEFAULT。
       'avatar_hash|TEXT|0|',
+      // 0066 功法：主修 id 可空；熟练度基点 NOT NULL DEFAULT 0；主修时刻可空。
+      'technique_id|TEXT|0|',
+      'technique_prof_base|INTEGER|1|0',
+      'technique_since|INTEGER|0|',
     ]);
   });
 

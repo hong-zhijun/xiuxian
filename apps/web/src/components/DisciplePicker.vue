@@ -29,6 +29,8 @@ const props = withDefaults(
     blockInjured?: boolean;
     /** 在外历练的弟子是否禁选（服务端 requireNotAway 会拒绝，默认禁）。 */
     blockAway?: boolean;
+    /** 0066 功法：卡片上显示主修功法名（镇妖塔 / 讨伐选人用）。 */
+    showTechnique?: boolean;
     /** 执事 / 交接期的弟子是否禁选（出战入口默认禁；论道传 false）。 */
     blockSteward?: boolean;
     /** 初始排序：realm = 大境界从高到低（默认）；power = 战力；luck = 幸运值。 */
@@ -61,6 +63,7 @@ const props = withDefaults(
     min: 1,
     max: 3,
     blockInjured: true,
+    showTechnique: false,
     blockAway: true,
     blockSteward: true,
     sort: 'realm',
@@ -575,6 +578,9 @@ onUnmounted(() => {
           <span class="dp-meta">
             <span>{{ disciple.stageName }}</span>
             <span>战力 {{ disciple.combatPower }}</span>
+            <span v-if="showTechnique && disciple.techniqueId !== null" class="dp-technique">
+              {{ disciple.techniqueName }}
+            </span>
           </span>
           <span class="dp-status-slot">
             <span
@@ -712,4 +718,8 @@ onUnmounted(() => {
 .dp-popover-attrs li {
   white-space: nowrap;
 }
+.dp-technique {
+  color: var(--gold);
+}
+
 </style>

@@ -72,6 +72,11 @@ export interface DiscipleView {
   /** 天赋重构：洗髓丹已服 / 剩余次数。 */
   talentRerollUses: number;
   talentRerollRemaining: number;
+  /** 0066 功法：主修功法 id / 名称（「无」）/ 参悟等级 / 熟练度基点（0~10000，读时现算）。 */
+  techniqueId: string | null;
+  techniqueName: string;
+  techniqueLevel: number;
+  techniqueProficiency: number;
   /** 天赋重构：洗髓丹洗出、待二选一的候选天赋；null = 没有。 */
   talentCandidate: { id: string; name: string; effect: string } | null;
   /** 天赋重构：所任执事职位 id；不是执事为 null。 */
@@ -197,6 +202,10 @@ export interface RenameView {
 }
 
 export interface SectStateView {
+  /** 0066 功法：宗门已收录的功法（弟子「更换主修」的候选）。 */
+  learnedTechniques: { id: string; name: string; level: number; tierName: string; schoolName: string; summary: string }[];
+  /** 0066 功法：各功法持有的残卷数（只列 > 0 的）。 */
+  techniqueScrolls: Record<string, number>;
   sect: {
     id: string;
     name: string;
@@ -1225,6 +1234,8 @@ export type JourneyStatusView = 'none' | 'active' | 'ready';
 
 /** 历练结果（只在到期后公开；未领取时 claimedAt 为 null）。 */
 export interface JourneyOutcomeView {
+  /** 0061 是否被紧急召回（召回的记录收获全部作废、不会受伤）。 */
+  recalled: boolean;
   /** 返程实际入账的修为（受返程门槛封顶；最高阶段为 0）。 */
   cultivationAwarded: number;
   /** 出发时快照的计划修为（含额外收获，未按门槛截断）。 */
@@ -1379,6 +1390,26 @@ export async function claimJourney(
 ): Promise<{ state: SectStateView; outcome: JourneyClaimOutcomeView }> {
   return apiRequest<{ state: SectStateView; outcome: JourneyClaimOutcomeView }>(
     '/api/v1/game/claim-journey',
+    { method: 'POST', body: { journeyId } },
+  );
+}
+
+/** 0061 紧急召回回执（POST /game/recall-journey 的 outcome）：召回的历练一无所获。 */
+export interface JourneyRecallOutcomeView {
+  journeyId: string;
+  discipleId: string;
+  discipleName: string;
+  direction: JourneyDirection;
+  directionName: string;
+  message: string;
+}
+
+/** 0061 紧急召回：在外弟子立刻归队，本趟收获全部作废、不会受伤，免费。 */
+export async function recallJourney(
+  journeyId: string,
+): Promise<{ state: SectStateView; outcome: JourneyRecallOutcomeView }> {
+  return apiRequest<{ state: SectStateView; outcome: JourneyRecallOutcomeView }>(
+    '/api/v1/game/recall-journey',
     { method: 'POST', body: { journeyId } },
   );
 }
@@ -2013,12 +2044,16 @@ export interface WorldBossView {
   fatigue: Record<string, number>;
   /** 最近 60 分钟内每次出战讨伐的时间（毫秒，升序），用于「冒进冷却」倒计时。 */
   fatigueTimes: Record<string, number[]>;
-  /** 此刻能否出手：Boss 在讨伐中 + 开放时段 + 今日出手次数没用满。 */
+  /** 此刻能否出手：Boss 在讨伐中 + 开放时段。 */
   attackable: boolean;
   /** 本宗门今天已出手次数。 */
   attacksToday: number;
-  /** 每日出手上限（0 = 不限；由服务端配置）。 */
-  dailyAttackLimit: number;
+  /** 是否已打开服务端自动讨伐。 */
+  autoEnabled: boolean;
+  /** 自动讨伐最近一次暂停原因；正常运行或尚未暂停时为 null。 */
+  autoPauseReason: string | null;
+  /** 自动讨伐最近一次调度时间。 */
+  autoLastRunAt: number | null;
   ranks: WorldBossRankView[];
   hits: WorldBossHitView[];
   topHit: WorldBossHitView | null;
@@ -2068,6 +2103,8 @@ export interface WorldBossAttackResultView {
   nextStage: number | null;
   /** 本次每名弟子的判定结果（正常 / 受伤 / 重伤）。 */
   members: WorldBossMemberOutcomeView[];
+  /** 功法加成（整数百分比；没有功法为 0）。 */
+  techniqueBonusPercent: number;
 }
 
 export async function fetchWorldBoss(): Promise<{ state: SectStateView; boss: WorldBossView }> {
@@ -2084,6 +2121,16 @@ export async function attackWorldBoss(discipleIds: string[]): Promise<{
     result: WorldBossAttackResultView;
     boss: WorldBossView;
   }>('/api/v1/game/world-boss/attack', { method: 'POST', body: { discipleIds } });
+}
+
+export async function setWorldBossAuto(enabled: boolean): Promise<{
+  state: SectStateView;
+  boss: WorldBossView;
+}> {
+  return apiRequest<{ state: SectStateView; boss: WorldBossView }>('/api/v1/game/world-boss/auto', {
+    method: 'POST',
+    body: { enabled },
+  });
 }
 
 /**
@@ -2105,6 +2152,8 @@ export interface MeritShopView {
     resourceId: string | null;
     /** 丹药类（洗髓丹）兑换得到的丹药 id；其它类为 null。 */
     pillId: string | null;
+    /** 0066 功法类：兑换得到哪门功法的残卷；其它类为 null。 */
+    techniqueId: string | null;
     color: string | null;
   }[];
   slots: EquipmentSlotView[];
@@ -2141,6 +2190,8 @@ export interface BossMeritExchangeOutcome {
   pill: { pillId: string; name: string; quantity: number } | null;
   /** 兑换到的装备；兑换玄铁时为 null。 */
   equipment: { id: string; name: string; quality: string; slot: string; slotName: string } | null;
+  /** 0066 兑换到的功法残卷（张）；不是残卷时为 null。 */
+  scroll: { techniqueId: string; name: string; quantity: number } | null;
 }
 
 /**
@@ -2206,6 +2257,18 @@ export interface EquipmentItemView {
       powerBonusGainBp: number;
     } | null;
   };
+  /**
+   * 洗练预览（全部由服务端算好；品质不认识时为 null）：副属性拆成基础 + 祭炼，
+   * 洗练只重洗基础部分（subMin~subMax），祭炼部分原样保留。
+   */
+  reroll: {
+    subBase: number;
+    subRefine: number;
+    subMin: number;
+    subMax: number;
+    /** 两种模式各自的单次消耗（最小单位字符串）。 */
+    cost: Record<RerollMode, Record<string, string>>;
+  } | null;
   /** 穿在谁身上；null = 在背包里（背包 = 本宗未穿戴的装备）。 */
   discipleId: string | null;
   discipleName: string | null;
@@ -2336,6 +2399,20 @@ export interface RefineEquipmentOutcome {
   cost: Record<string, string>;
 }
 
+/** 洗练模式：attr = 种类与数值一起洗，value = 锁定种类只洗数值。两种都直接覆盖。 */
+export type RerollMode = 'attr' | 'value';
+
+/** 洗练回执（POST /game/reroll-equipment 的 outcome）；数值都含祭炼加成。 */
+export interface RerollEquipmentOutcome {
+  equipmentId: string;
+  name: string;
+  mode: RerollMode;
+  from: { subAttr: string; subAttrName: string; subValue: number };
+  to: { subAttr: string; subAttrName: string; subValue: number };
+  /** 本次实际扣掉的材料（最小单位字符串）。 */
+  cost: Record<string, string>;
+}
+
 /** 0028 读取装备面板（GET /game/equipment）：只读，不结算；装备明细不放进 /game/sync。 */
 export async function fetchEquipment(): Promise<{
   state: SectStateView;
@@ -2404,6 +2481,17 @@ export async function refineEquipment(
   );
 }
 
+/** 洗练（POST /game/reroll-equipment）：重洗副属性的基础部分，结果以服务端为准、直接覆盖。 */
+export async function rerollEquipment(
+  equipmentId: string,
+  mode: RerollMode,
+): Promise<{ state: SectStateView; outcome: RerollEquipmentOutcome }> {
+  return apiRequest<{ state: SectStateView; outcome: RerollEquipmentOutcome }>(
+    '/api/v1/game/reroll-equipment',
+    { method: 'POST', body: { equipmentId, mode } },
+  );
+}
+
 /* ---------- 0039 镇妖塔 ---------- */
 
 export interface TowerAffixView {
@@ -2467,6 +2555,8 @@ export interface TowerHitView {
   damage: number;
   crit: boolean;
   extra: boolean;
+  /** 本次出手触发的功法标签（如 ['剑气']）。 */
+  tags?: string[];
 }
 
 export interface TowerRoundView {
@@ -2477,6 +2567,8 @@ export interface TowerRoundView {
   monsterDamage: number;
   monsterHp: number;
   teamHp: number;
+  /** 血身：本回合结束的回血记录。 */
+  heals?: { discipleId: string; name: string; amount: number }[];
 }
 
 export interface TowerChallengeResultView {
@@ -2495,6 +2587,8 @@ export interface TowerChallengeResultView {
   equipment: { id: string; name: string; quality: string; qualityName: string; slot: string; slotName: string } | null;
   members: { discipleId: string; name: string; power: number }[];
   message: string;
+  /** 功法结算摘要：每名触发过标志效果的弟子一条。 */
+  techniqueSummary: TechniqueSummaryView[];
 }
 
 export interface TowerSweepResultView {
@@ -2525,6 +2619,106 @@ export async function sweepTower(): Promise<{ state: SectStateView; tower: Tower
   );
 }
 
+/* ---------- 0066 功法（藏经阁 / 主修 / 镇妖塔胜率预估） ---------- */
+
+/** 结算摘要的一行（镇妖塔）：bonusDamage 只统计标志效果额外带来的伤害（不含代价）。 */
+export interface TechniqueSummaryView {
+  discipleId: string;
+  name: string;
+  techniqueId: string;
+  techniqueName: string;
+  triggers: number;
+  bonusDamage: number;
+  healed: number;
+  hpBonus: number;
+}
+
+/** 藏经阁里的一门功法。残卷与灵石为最小单位。 */
+export interface TechniqueCatalogView {
+  id: string;
+  name: string;
+  school: string;
+  schoolName: string;
+  tier: string;
+  tierName: string;
+  tag: string;
+  /** 一句话简介。 */
+  summary: string;
+  towerGain: string;
+  cost: string;
+  bossGain: string;
+  learned: boolean;
+  level: number;
+  scrolls: number;
+  learnScrolls: number;
+  learnRemaining: number;
+  upgradeScrolls: number | null;
+  upgradeStone: number | null;
+  scrollName: string;
+  levelFactor: number;
+  disciplesUsing: number;
+}
+
+export interface TechniqueLibraryView {
+  unlocked: boolean;
+  scriptureLevel: number;
+  maxLevel: number;
+  schools: { id: string; name: string }[];
+  items: TechniqueCatalogView[];
+}
+
+/** 镇妖塔胜率预估：胜率为 0~100 的整数。 */
+export interface TowerPreviewView {
+  floor: number;
+  samples: number;
+  winRate: number;
+  avgRounds: number;
+}
+
+export async function fetchTechniques(): Promise<{ library: TechniqueLibraryView }> {
+  return apiRequest<{ library: TechniqueLibraryView }>('/api/v1/game/techniques');
+}
+
+export async function learnTechnique(techniqueId: string): Promise<{
+  state: SectStateView;
+  library: TechniqueLibraryView;
+  result: { message: string };
+}> {
+  return apiRequest<{ state: SectStateView; library: TechniqueLibraryView; result: { message: string } }>(
+    '/api/v1/game/techniques/learn',
+    { method: 'POST', body: { techniqueId } },
+  );
+}
+
+export async function upgradeTechnique(techniqueId: string): Promise<{
+  state: SectStateView;
+  library: TechniqueLibraryView;
+  result: { message: string };
+}> {
+  return apiRequest<{ state: SectStateView; library: TechniqueLibraryView; result: { message: string } }>(
+    '/api/v1/game/techniques/upgrade',
+    { method: 'POST', body: { techniqueId } },
+  );
+}
+
+/** 设置 / 更换 / 卸下主修（techniqueId 为 null 即卸下）。 */
+export async function setDiscipleTechnique(discipleId: string, techniqueId: string | null): Promise<SectStateView> {
+  const data = await apiRequest<{ state: SectStateView }>('/api/v1/game/disciples/technique', {
+    method: 'POST',
+    body: { discipleId, techniqueId },
+  });
+  return data.state;
+}
+
+/** 镇妖塔胜率预估（服务端模拟 50 场，不扣次数、不写库）。 */
+export async function previewTower(discipleIds: string[]): Promise<TowerPreviewView> {
+  const data = await apiRequest<{ preview: TowerPreviewView }>('/api/v1/game/tower/preview', {
+    method: 'POST',
+    body: { discipleIds },
+  });
+  return data.preview;
+}
+
 /* ---------- 0053 宗门大比（斗法台 / 宗门战；每日 12:00 结算，周日收官） ---------- */
 
 /** 名册上的一名弟子（战力计入装备）。 */
@@ -2542,6 +2736,8 @@ export interface ArenaDuelHitView {
   damage: number;
   crit: boolean;
   extra: boolean;
+  /** 0066 功法标志效果标签（如 ['剑气']）。 */
+  tags?: string[];
 }
 
 export interface ArenaDuelRoundView {
@@ -2551,6 +2747,8 @@ export interface ArenaDuelRoundView {
   /** 回合结束时的剩余血量（与 fighterAMaxHp 同一口径）。 */
   fighterAHp: number;
   fighterBHp: number;
+  /** 0066 功法（血身）：回合结束时的回血。 */
+  heals?: { fighterId: string; name: string; amount: number }[];
 }
 
 /** 一场 1v1 的详情（团队赛车轮战每场都有）。 */

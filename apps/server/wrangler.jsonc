@@ -28,8 +28,6 @@
     // 前端据此显示「探索」按钮；"false" 时只保留原有的「速通」。OPENROUTER_API_KEY 是
     // secret（wrangler secret put 注入），不写进这里。
     "REALM_EXPLORE_ENABLED": "true",
-    // 讨伐每日出手上限（0 = 不限），防协议脚本全天刷。
-    "WORLD_BOSS_DAILY_ATTACK_LIMIT": "120"
   },
   // 单服单库：所有资产相关数据放在同一个 D1 数据库（见 02 第 3 节）。
   // database_id 使用全零 UUID 哨兵值，明确表示“尚未接远程库”；远程 id 必须在取得授权后填写。
@@ -43,9 +41,9 @@
       "migrations_dir": "../../migrations"
     }
   ],
-  // 灵兽竞逐结算：每 10 分钟触发 scheduled()，选冠军 + 发奖
+  // 定时任务每分钟触发：灵兽竞逐、世界 Boss 自动讨伐、拍卖与各类结算按各自到期时间处理
   "triggers": {
-    "crons": ["*/10 * * * *"]
+    "crons": ["* * * * *"]
   },
   // 前端静态资源：Worker 同时服务 API 和前端，同域无 CORS 问题
   "assets": {

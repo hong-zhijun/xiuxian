@@ -89,8 +89,8 @@ describe('历练方向、时长与数值基线', () => {
       'daoSeeking',
       'gathering',
     ]);
-    expect(JOURNEY_DURATIONS_SECONDS).toEqual([7_200, 21_600]);
-    expect(JOURNEY_PLANS).toHaveLength(4);
+    expect(JOURNEY_DURATIONS_SECONDS).toEqual([7_200, 21_600, 43_200, 86_400]);
+    expect(JOURNEY_PLANS).toHaveLength(8);
   });
 
   it('数值表与计划 2.2 的测试基线一致（最小单位）', () => {

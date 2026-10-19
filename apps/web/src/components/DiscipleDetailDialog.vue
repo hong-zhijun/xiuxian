@@ -51,11 +51,10 @@ import UpgradeSimulatorDialog from './UpgradeSimulatorDialog.vue';
 /**
  * 弟子详情（弹窗内容）：固定紧凑头部 + 五个 Tab（概览 / 修行 / 装备 / 历练 / 档案）。
  *
- * - 概览：六轴雷达图 + 当前属性（带装备加成 `(+n)`）与综合评分 + 简短修为摘要（雷达图必须在首 Tab）。
- * - 修行：修为、伤势、岗位、破境（胜算 / 消耗 / 原因）与丹药入口。
+ * - 概览：综合评分与战力、当前装备、六轴雷达图 + 当前属性（带装备加成 `(+n)`）、天赋与悟道卡片（雷达图必须在首 Tab）。
+ * - 修行：修为与破境入口（胜算 / 消耗在破境弹窗里）、主修功法、岗位与丹药入口。
  * - 装备：三个装备格（兵器 / 护甲 / 法器）；点格子从背包里挑同部位的装备穿上，已穿的可卸下。
- * - 修行：修为、伤势、岗位、破境（胜算 / 消耗 / 原因）与丹药入口。
- * - 历练：出发预览、在外倒计时、领取归队收获，以及**此弟子**的近期历练记录。
+ * - 修行：修为与破境入口（胜算 / 消耗在破境弹窗里）、主修功法、岗位与丹药入口。
  * - 档案：头像框选取、私有备注、驱逐与二次确认。
  *
  * 组件只拿 `discipleId` 对应的最新对象（由 SectScreen 每次渲染从 `state.disciples` 里取），
@@ -96,6 +95,8 @@ const emit = defineEmits<{
   /** 天赋重构：洗髓丹二选一（accept = true 换成新天赋，false 保留原天赋）。 */
   chooseTalent: [discipleId: string, accept: boolean];
   saveNote: [discipleId: string, note: string];
+  /** 0066 功法：设置 / 更换 / 卸下主修（techniqueId 为 null 即卸下；只能选已收录的，服务端校验）。 */
+  setTechnique: [discipleId: string, techniqueId: string | null];
   /** 0017 保存头像框样式（frameId 只可能是白名单里的固定 id）。 */
   setAvatarFrame: [discipleId: string, frameId: AvatarFrameId];
   /** 0038 上传自定义头像（image 已在浏览器里裁剪压缩好）。 */
@@ -111,6 +112,8 @@ const emit = defineEmits<{
   requestJourneyPreview: [discipleId: string];
   startJourney: [discipleId: string, direction: JourneyDirection, durationSeconds: number];
   claimJourney: [journeyId: string];
+  /** 0061 紧急召回：在外弟子立刻归队（收获作废）。组件内二次确认后才 emit。 */
+  recallJourney: [journeyId: string];
   /** 0028 穿戴：把背包里的这件装备穿给本弟子（该部位原有的那件自动回背包）。 */
   equip: [equipmentId: string, discipleId: string];
   /** 0028 卸下：本弟子身上的这件装备回背包（背包满时服务端会拒绝）。 */
@@ -147,7 +150,6 @@ const TABS = [
   { id: 'overview', label: '概览' },
   { id: 'training', label: '修行' },
   { id: 'gear', label: '装备' },
-  { id: 'journey', label: '历练' },
   { id: 'archive', label: '档案' },
 ] as const;
 
@@ -216,6 +218,28 @@ watch(serverNote, (next) => {
 
 function onNoteInput(event: Event): void {
   noteDraft.value = (event.target as HTMLInputElement).value;
+}
+
+/** 0066 功法：主修下拉的草稿（空串 = 无 / 卸下）；切换弟子或服务端回填后同步。 */
+const techniqueDraft = ref(props.disciple.techniqueId ?? '');
+watch(
+  () => props.disciple.techniqueId,
+  (value) => {
+    techniqueDraft.value = value ?? '';
+  },
+);
+/** 熟练度百分比（服务端给的是基点，0~10000）。 */
+const techniquePercent = computed(() => Math.floor(props.disciple.techniqueProficiency / 100));
+/** 「更换」弹出功法选择弹窗；选中后确认才提交。 */
+const showTechniquePicker = ref(false);
+function openTechniquePicker(): void {
+  techniqueDraft.value = props.disciple.techniqueId ?? '';
+  showTechniquePicker.value = true;
+}
+function saveTechnique(): void {
+  if (props.busy) return;
+  emit('setTechnique', props.disciple.id, techniqueDraft.value === '' ? null : techniqueDraft.value);
+  showTechniquePicker.value = false;
 }
 
 function saveNote(): void {
@@ -334,11 +358,12 @@ watch(
     avatarCropFile.value = null;
   },
 );
-// 切到别的弟子时不把上一位的裁剪弹窗带过去。
+// 切到别的弟子时不把上一位的裁剪弹窗、召回确认带过去。
 watch(
   () => props.disciple.id,
   () => {
     avatarCropFile.value = null;
+    confirmingRecall.value = false;
   },
 );
 
@@ -428,12 +453,22 @@ watch(daoPointsMax, (max) => {
 
 const showDaoInsightHelp = ref(false);
 
+/** 悟道值分配弹窗（点「分配悟道值」才打开；提交后收起）。 */
+const showDaoAllocate = ref(false);
 function allocateDaoInsight(): void {
   if (props.busy || !daoAllocatable.value || !daoPointsValid.value) return;
   emit('allocateDaoInsight', props.disciple.id, daoAttribute.value, daoPoints.value);
+  showDaoAllocate.value = false;
 }
 
 /* ---------- 破境：判定与胜算/消耗全部来自服务端 ---------- */
+
+/** 破境弹窗：胜算 / 消耗 / 拦截原因都在弹窗里看，确认后才发起突破。 */
+const showBreakthrough = ref(false);
+function confirmBreakthrough(): void {
+  showBreakthrough.value = false;
+  requestBreakthrough();
+}
 
 function requestBreakthrough(): void {
   if (props.busy) return;
@@ -523,6 +558,20 @@ const activeDurationSeconds = computed<number | null>(
   () => activeDuration.value?.durationSeconds ?? null,
 );
 
+/** 历练弹窗：打开时拉一次预览；出发后（不再是 none）自动收起。 */
+const showJourneyPlanner = ref(false);
+function openJourneyPlanner(): void {
+  if (props.busy || !journeyStartable.value) return;
+  showJourneyPlanner.value = true;
+  requestPreview();
+}
+watch(
+  () => journey.value.status,
+  (status) => {
+    if (status !== 'none') showJourneyPlanner.value = false;
+  },
+);
+
 function requestPreview(): void {
   if (props.busy || props.journeyPreviewLoading) return;
   emit('requestJourneyPreview', props.disciple.id);
@@ -546,6 +595,29 @@ function confirmStart(): void {
   const duration = activeDuration.value;
   if (direction === null || duration === null) return;
   emit('startJourney', props.disciple.id, direction.direction, duration.durationSeconds);
+}
+
+/* ---------- 0061 紧急召回：在外时二次确认后才 emit ---------- */
+const confirmingRecall = ref(false);
+
+// 归队 / 召回成功后（不再在外）收起确认。
+watch(
+  () => journey.value.status,
+  (status) => {
+    if (status !== 'active') confirmingRecall.value = false;
+  },
+);
+
+function askRecall(): void {
+  if (props.busy || journey.value.status !== 'active') return;
+  confirmingRecall.value = true;
+}
+
+function confirmRecall(): void {
+  if (props.busy) return;
+  const journeyId = journey.value.journeyId;
+  if (journeyId === null) return;
+  emit('recallJourney', journeyId);
 }
 
 function requestClaim(): void {
@@ -636,60 +708,6 @@ const expelBlockedHint = computed<string | null>(() => {
 });
 
 /** 最近记录：结果文字在这里拼好，模板只渲染。 */
-interface JournalEntry {
-  id: string;
-  discipleName: string;
-  directionName: string;
-  durationText: string;
-  status: JourneyRecordView['status'];
-  statusLabel: string;
-  resultLines: string[];
-}
-
-const RECORD_STATUS_LABELS: Record<JourneyRecordView['status'], string> = {
-  active: '在外中',
-  ready: '待领取',
-  claimed: '已领取',
-};
-
-/** 结果摘要：受伤与额外收获都必须有文字，不能只靠 Toast（计划 5）。 */
-function recordResultLines(record: JourneyRecordView): string[] {
-  const recordOutcome = record.outcome;
-  if (recordOutcome === null) {
-    return [`预计 ${formatTime(record.endsAt)} 归队，结果到期后可见。`];
-  }
-  const lines = [
-    recordOutcome.cultivationAwarded > 0 ? `修为 +${recordOutcome.cultivationAwarded}` : '修为无增益',
-  ];
-  for (const entry of resourceLines(recordOutcome.resources)) {
-    lines.push(`${entry.name} +${entry.amount}`);
-  }
-  if (recordOutcome.extraHarvest) lines.push('额外收获');
-  // 额外奖励：机遇已体现在修为里；淬炼 / 悟道在领取时入账（已满则不得，见领取回执）。
-  if (recordOutcome.fortune) lines.push('偶得机遇');
-  if (recordOutcome.attributeName !== null) lines.push(`淬炼 · ${recordOutcome.attributeName} +1`);
-  if (recordOutcome.insight) lines.push('悟道 · 悟道值 +1');
-  if (recordOutcome.injured) lines.push('途中受伤');
-  return lines;
-}
-
-/**
- * **此弟子**的近期记录：`state.journey.recent` 是宗门最近 10 条（不是个人完整履历），
- * 这里按 `discipleId` 过滤后展示，绝不冒称完整历史，也不为此新增历史接口。
- */
-const journal = computed<JournalEntry[]>(() =>
-  props.journeyRecent
-    .filter((record) => record.discipleId === props.disciple.id)
-    .map((record) => ({
-      id: record.id,
-      discipleName: record.discipleName,
-      directionName: record.directionName,
-      durationText: durationHours(record.durationSeconds),
-      status: record.status,
-      statusLabel: RECORD_STATUS_LABELS[record.status],
-      resultLines: recordResultLines(record),
-    })),
-);
 
 /* ---------- 丹药：详情只保留入口，点击后打开选择弹窗 ---------- */
 
@@ -1109,7 +1127,6 @@ function refineGear(item: EquipmentItemView | null): void {
         />
       </div>
       <div class="disciple-detail-headline">
-        <p class="eyebrow">门人详情</p>
         <h2 class="disciple-detail-name" :title="disciple.name">{{ disciple.name }}</h2>
         <p class="disciple-detail-headline-meta">
           <span class="realm-tag">{{ disciple.stageName }}</span>
@@ -1123,7 +1140,6 @@ function refineGear(item: EquipmentItemView | null): void {
           <span class="disciple-status" :class="{ 'is-severeInjured': severeInjured }">{{ headerStatusLabel }}</span>
         </p>
       </div>
-      <span class="disciple-detail-headline-frame">{{ avatarFrameOption(disciple.avatarFrameId).label }}</span>
     </header>
 
     <div class="disciple-tabs" role="tablist" aria-label="弟子详情分区">
@@ -1155,58 +1171,52 @@ function refineGear(item: EquipmentItemView | null): void {
         :aria-labelledby="tabButtonId('overview')"
         tabindex="0"
       >
-        <section class="disciple-detail-section" aria-labelledby="disciple-attr-title">
-          <h3 id="disciple-attr-title" class="disciple-detail-title">当前属性</h3>
-
-          <!-- 综合评分是服务端按「当前」六项属性等权现算的展示值，前端不复制公式、不做二次取整。 -->
-          <div class="disciple-score">
-            <span class="disciple-score-label">综合评分 <HelpTip label="综合评分说明" :text="SCORE_HELP" /></span>
-            <strong class="disciple-score-value">{{ disciple.attributeScore.toFixed(1) }}</strong>
-            <span class="disciple-score-note">当前六项属性的等权平均，随淬体等属性变化更新；不含境界、修为、天赋与战力。</span>
+        <section class="disciple-detail-section" aria-label="当前属性">
+          <!-- 综合评分（服务端按当前六项属性等权现算）与战力同一张卡片；提升模拟放在战力右侧。 -->
+          <div class="disciple-score is-combined">
+            <div class="disciple-score-item">
+              <span class="disciple-score-label">综合评分 <HelpTip label="综合评分说明" :text="SCORE_HELP" /></span>
+              <strong class="disciple-score-value">{{ disciple.attributeScore.toFixed(1) }}</strong>
+            </div>
+            <div class="disciple-score-item">
+              <span class="disciple-score-label">战力 <HelpTip label="战力说明" :text="POWER_HELP" /></span>
+              <strong class="disciple-score-value">{{ disciple.combatPower }}</strong>
+              <button class="upgrade-sim-button" type="button" @click="showUpgradeSimulator = true">提升模拟</button>
+            </div>
           </div>
+
+          <!-- 当前装备：只列名称与祭炼等级，品阶用品质色区分（与背包、装备页同一套颜色）。 -->
+          <ul class="overview-gear" aria-label="当前装备">
+            <li v-for="slot in gearSlots" :key="slot.id" class="overview-gear-item">
+              <span class="overview-gear-slot">{{ slot.name }}</span>
+              <template v-if="slot.worn !== null">
+                <strong class="overview-gear-name" :style="{ color: slot.worn.color }">{{ slot.worn.name }}</strong>
+                <RefineTag :level="slot.worn.refineLevel" />
+              </template>
+              <span v-else class="overview-gear-empty">未装备</span>
+            </li>
+          </ul>
 
           <!--
             雷达图与精确数值并排（窄屏自动单列）：六轴都按服务端原值绘制（基础属性，最高 100），
             装备加成只在右侧数值列表里以 `(+n)` 标出，不参与绘图比例尺。
           -->
-          <DiscipleRadarChart
-            :name="disciple.name"
-            :aptitude="disciple.aptitude"
-            :attack="disciple.attack"
-            :defense="disciple.defense"
-            :speed="disciple.speed"
-            :luck="disciple.luck"
-            :physique="disciple.physique"
-            :gear="disciple.gear"
-            :help="ATTRIBUTE_HELP"
-          />
+          <div class="overview-box">
+            <DiscipleRadarChart
+              :name="disciple.name"
+              :aptitude="disciple.aptitude"
+              :attack="disciple.attack"
+              :defense="disciple.defense"
+              :speed="disciple.speed"
+              :luck="disciple.luck"
+              :physique="disciple.physique"
+              :gear="disciple.gear"
+              :help="ATTRIBUTE_HELP"
+            />
+          </div>
 
-          <div class="disciple-stats">
-            <span class="stat-tag stat-talent">天赋 {{ disciple.talentName }}</span>
-            <!-- 当前境界下的天赋加成（服务端按境界算好），境界提升后自动变强。 -->
-            <span v-if="disciple.talentEffect !== ''" class="stat-tag stat-talent-effect">
-              {{ disciple.talentEffect }}
-            </span>
-            <!-- 与页面其它「?」同一个样式（help-tip-button），点开是天赋一览表而不是气泡。 -->
-            <button
-              class="help-tip-button talent-help-button"
-              type="button"
-              aria-label="查看全部天赋及作用"
-              @click="showTalentCatalog = true"
-            >?</button>
-            <button
-              class="quiet-button talent-reroll-button"
-              :class="{ 'is-pending': disciple.talentCandidate !== null }"
-              type="button"
-              :disabled="busy"
-              @click="showTalentReroll = true"
-            >
-              {{ disciple.talentCandidate === null ? '更换' : '待选择' }}
-            </button>
-            <span v-if="stewardTag" class="stat-tag stat-steward">{{ stewardTag }}</span>
-            <span class="stat-tag stat-power">战力 {{ disciple.combatPower }}</span>
-            <HelpTip label="战力说明" :text="POWER_HELP" />
-            <button class="upgrade-sim-button" type="button" @click="showUpgradeSimulator = true">提升模拟</button>
+          <div v-if="stewardTag" class="disciple-stats">
+            <span class="stat-tag stat-steward">{{ stewardTag }}</span>
           </div>
 
           <TalentRerollDialog
@@ -1251,19 +1261,84 @@ function refineGear(item: EquipmentItemView | null): void {
           </p>
         </section>
 
-        <!--
-          0019 悟道值：赌坊赢来的点数在这里分配到六项属性之一。
-          上限（总分配上限 = daoInsightUsed + daoInsightRemaining，属性 100）与最终裁决都在服务端，
-          这里只是把「本次最多能分多少」算出来给玩家看，不复制服务端的加点公式。
-        -->
-        <section class="disciple-detail-section" aria-labelledby="disciple-dao-insight-title">
-          <div class="dao-insight-heading">
-            <h3 id="disciple-dao-insight-title" class="disciple-detail-title">悟道值</h3>
-            <button class="quiet-button dao-insight-help" type="button" @click="showDaoInsightHelp = true">?</button>
-          </div>
-          <p class="disciple-detail-hint">当前可用 {{ disciple.daoInsight }} 点</p>
+        <!-- 天赋、功法与悟道：一行三张卡片（中等宽度两列、窄屏单列）。悟道值的分配在弹窗里做。 -->
+        <div class="overview-cards">
+          <section class="overview-card" aria-labelledby="disciple-talent-title">
+            <div class="overview-card-head">
+              <h3 id="disciple-talent-title" class="overview-card-title">天赋</h3>
+              <!-- 与页面其它「?」同一个样式（help-tip-button），点开是天赋一览表而不是气泡。 -->
+              <button
+                class="help-tip-button"
+                type="button"
+                aria-label="查看全部天赋及作用"
+                @click="showTalentCatalog = true"
+              >?</button>
+              <button
+                class="upgrade-sim-button overview-card-action"
+                :class="{ 'is-pending': disciple.talentCandidate !== null }"
+                type="button"
+                :disabled="busy"
+                @click="showTalentReroll = true"
+              >
+                {{ disciple.talentCandidate === null ? '更换' : '待选择' }}
+              </button>
+            </div>
+            <strong class="overview-card-value">{{ disciple.talentName }}</strong>
+            <!-- 当前境界下的天赋加成（服务端按境界算好），境界提升后自动变强。 -->
+            <p v-if="disciple.talentEffect !== ''" class="overview-card-note">{{ disciple.talentEffect }}</p>
+          </section>
 
-          <template v-if="daoAllocatable">
+          <section class="overview-card" aria-labelledby="disciple-overview-technique-title">
+            <div class="overview-card-head">
+              <h3 id="disciple-overview-technique-title" class="overview-card-title">功法</h3>
+              <button
+                class="upgrade-sim-button overview-card-action"
+                type="button"
+                :disabled="busy || state.learnedTechniques.length === 0"
+                :title="state.learnedTechniques.length === 0 ? '藏经阁尚未收录功法' : undefined"
+                @click="openTechniquePicker"
+              >
+                {{ disciple.techniqueId === null ? '设为主修' : '更换' }}
+              </button>
+            </div>
+            <strong class="overview-card-value">{{ disciple.techniqueId === null ? '未修习' : disciple.techniqueName }}</strong>
+            <p v-if="disciple.techniqueId !== null" class="overview-card-note">
+              {{ disciple.techniqueLevel }} 级 · 熟练度 {{ techniquePercent }}%
+            </p>
+          </section>
+
+          <!--
+            0019 悟道值：赌坊赢来的点数分配到六项属性之一。
+            上限（总分配上限 = daoInsightUsed + daoInsightRemaining，属性 100）与最终裁决都在服务端。
+          -->
+          <section class="overview-card" aria-labelledby="disciple-dao-insight-title">
+            <div class="overview-card-head">
+              <h3 id="disciple-dao-insight-title" class="overview-card-title">悟道</h3>
+              <button class="help-tip-button" type="button" aria-label="悟道值说明" @click="showDaoInsightHelp = true">?</button>
+              <button
+                v-if="daoAllocatable"
+                class="upgrade-sim-button overview-card-action"
+                type="button"
+                :disabled="busy"
+                @click="showDaoAllocate = true"
+              >
+                分配悟道值
+              </button>
+            </div>
+            <p class="overview-dao-line">
+              <span>已用 <strong class="overview-card-value">{{ disciple.daoInsightUsed }}</strong></span>
+              <span>未用 <strong class="overview-card-value" :class="{ 'is-gold': disciple.daoInsight > 0 }">{{ disciple.daoInsight }}</strong></span>
+            </p>
+            <p class="overview-card-note">累计上限 {{ daoInsightCap }} 点</p>
+            <p v-if="!daoAllocatable && disciple.daoInsight > 0 && daoBlockedReason !== null" class="overview-card-note">
+              {{ daoBlockedReason }}
+            </p>
+          </section>
+        </div>
+
+        <ModalShell v-if="showDaoAllocate && daoAllocatable" narrow :label="`分配悟道值 · ${disciple.name}`" @close="showDaoAllocate = false">
+          <section class="dao-allocate" aria-labelledby="dao-allocate-title">
+            <h3 id="dao-allocate-title" class="disciple-detail-title">分配悟道值 · 可用 {{ disciple.daoInsight }} 点</h3>
             <ul class="journey-directions" role="radiogroup" aria-label="加点属性">
               <li v-for="option in DAO_ATTRIBUTE_OPTIONS" :key="option.value" class="journey-direction">
                 <button
@@ -1306,10 +1381,10 @@ function refineGear(item: EquipmentItemView | null): void {
             <p class="disciple-note-meta" role="status">
               本次可分配 1 ~ {{ daoPointsMax }} 点
             </p>
-          </template>
-          <p v-else-if="daoBlockedReason !== null" class="disciple-note-meta">{{ daoBlockedReason }}</p>
+          </section>
+        </ModalShell>
 
-          <ModalShell v-if="showDaoInsightHelp" narrow label="悟道值说明" @close="showDaoInsightHelp = false">
+        <ModalShell v-if="showDaoInsightHelp" narrow label="悟道值说明" @close="showDaoInsightHelp = false">
             <section class="dao-insight-help-card" aria-labelledby="dao-insight-help-title">
               <h2 id="dao-insight-help-title" class="disciple-detail-title">悟道值说明</h2>
               <p class="disciple-detail-hint">已分配 {{ disciple.daoInsightUsed }}/{{ daoInsightCap }} · 剩余可分配额度 {{ disciple.daoInsightRemaining }} 点</p>
@@ -1321,27 +1396,7 @@ function refineGear(item: EquipmentItemView | null): void {
                 <span>知道了</span>
               </button>
             </section>
-          </ModalShell>
-        </section>
-
-        <section class="disciple-detail-section" aria-labelledby="disciple-overview-cultivation">
-          <h3 id="disciple-overview-cultivation" class="disciple-detail-title">修为摘要</h3>
-          <p class="disciple-detail-realm">
-            <span class="realm-tag">{{ disciple.stageName }}</span>
-            <span>{{ disciple.realmName }}</span>
-          </p>
-          <div class="disciple-detail-progress">
-            <span>修为 {{ progress.text }}</span>
-            <span>{{ progress.percent }}%</span>
-          </div>
-          <p class="disciple-detail-hint">
-            {{
-              progress.capped
-                ? '已达当前版本上限：修为不再增长，满环也不代表可以破境。'
-                : `静修 +${disciple.cultivationRatePerHour}/时`
-            }}
-          </p>
-        </section>
+        </ModalShell>
       </div>
 
       <!-- ---------- 修行 ---------- -->
@@ -1353,26 +1408,34 @@ function refineGear(item: EquipmentItemView | null): void {
         :aria-labelledby="tabButtonId('training')"
         tabindex="0"
       >
-        <section class="disciple-detail-section" aria-labelledby="disciple-realm-title">
-          <h3 id="disciple-realm-title" class="disciple-detail-title">境界与修为</h3>
-          <p class="disciple-detail-realm">
-            <span class="realm-tag">{{ disciple.stageName }}</span>
-            <span>{{ disciple.realmName }}</span>
-          </p>
+        <section class="disciple-detail-section" aria-label="修为">
           <div class="disciple-detail-progress">
             <span>{{ progress.text }}</span>
             <span>{{ progress.percent }}%</span>
           </div>
-          <div
-            class="disciple-cultivation-track"
-            role="progressbar"
-            aria-label="修为进境"
-            aria-valuemin="0"
-            aria-valuemax="100"
-            :aria-valuenow="progress.percent"
-            :aria-valuetext="progress.text"
-          >
-            <span :style="{ width: `${progress.percent}%` }" />
+          <div class="disciple-realm-row">
+            <div
+              class="disciple-cultivation-track"
+              role="progressbar"
+              aria-label="修为进境"
+              aria-valuemin="0"
+              aria-valuemax="100"
+              :aria-valuenow="progress.percent"
+              :aria-valuetext="progress.text"
+            >
+              <span :style="{ width: `${progress.percent}%` }" />
+            </div>
+            <span class="realm-tag">{{ disciple.stageName }}</span>
+            <!-- 胜算 / 消耗 / 拦截原因都放进破境弹窗，点了再看。 -->
+            <button
+              class="action-button primary-action disciple-break-button"
+              :class="{ 'is-disabled': !disciple.canBreakthrough || journey.status === 'active' || severeInjured }"
+              type="button"
+              :disabled="busy"
+              @click="showBreakthrough = true"
+            >
+              <span>破境</span>
+            </button>
           </div>
           <p class="disciple-detail-hint">
             {{
@@ -1381,6 +1444,38 @@ function refineGear(item: EquipmentItemView | null): void {
                 : `静修 +${disciple.cultivationRatePerHour}/时`
             }}
           </p>
+        </section>
+
+        <section class="disciple-detail-section disciple-technique" aria-labelledby="disciple-technique-title">
+          <h3 id="disciple-technique-title" class="disciple-detail-title">主修功法</h3>
+          <div class="disciple-technique-head">
+            <p class="disciple-technique-line">
+              <strong>{{ disciple.techniqueName }}</strong>
+              <span v-if="disciple.techniqueId !== null">
+                · {{ disciple.techniqueLevel }} 级 · 熟练度 {{ techniquePercent }}%
+              </span>
+            </p>
+            <button
+              class="quiet-button"
+              type="button"
+              :disabled="busy || state.learnedTechniques.length === 0"
+              :title="state.learnedTechniques.length === 0 ? '藏经阁尚未收录功法' : undefined"
+              @click="openTechniquePicker"
+            >
+              {{ disciple.techniqueId === null ? '设为主修' : '更换' }}
+            </button>
+          </div>
+          <div
+            v-if="disciple.techniqueId !== null"
+            class="disciple-technique-bar"
+            role="progressbar"
+            aria-label="功法熟练度"
+            :aria-valuenow="techniquePercent"
+            aria-valuemin="0"
+            aria-valuemax="100"
+          >
+            <span :style="{ width: `${String(techniquePercent)}%` }" />
+          </div>
         </section>
 
         <section class="disciple-detail-section" aria-labelledby="disciple-job-title">
@@ -1395,40 +1490,113 @@ function refineGear(item: EquipmentItemView | null): void {
           <p v-if="transferBlockHint" class="blocked-hint">{{ transferBlockHint }}</p>
         </section>
 
-        <section class="disciple-detail-section" aria-labelledby="disciple-injury-title">
-          <h3 id="disciple-injury-title" class="disciple-detail-title">伤势</h3>
-          <p v-if="severeLabel !== null" class="disciple-detail-injury">{{ severeLabel }}</p>
-          <p v-else-if="injured" class="disciple-detail-injury">
-            疗伤中 · 预计 {{ formatTime(disciple.injuredUntil) }} 复原
+        <section class="disciple-detail-section disciple-journey" aria-labelledby="disciple-journey-title">
+          <h3 id="disciple-journey-title" class="disciple-detail-title">历练</h3>
+          <p class="disciple-journey-quota">
+            在外 <strong>{{ state.journey.activeCount }}</strong>/{{ state.journey.maxConcurrent }} 人 · 至少留守
+            {{ state.journey.minAtHome }} 人
           </p>
-          <p v-else class="disciple-detail-hint">无恙，可以出战、探索与破境。</p>
-        </section>
 
-        <section class="disciple-detail-section" aria-labelledby="disciple-break-title">
-          <h3 id="disciple-break-title" class="disciple-detail-title">破境</h3>
-          <dl class="disciple-facts">
-            <div>
-              <dt>破境胜算</dt>
-              <dd>{{ formatBp(disciple.breakthroughChanceBp) }}</dd>
+          <template v-if="journey.status === 'none'">
+            <!-- 不可出发时只显示原因：重伤卧床优先，其余用服务端的原因（筑基门槛 / 疗伤中 / 名额已满 / 在守擂阵容中）。 -->
+            <p v-if="!journeyStartable" class="blocked-hint">{{ severeHint ?? (journey.blockedReason ?? '当前不可出发') }}</p>
+            <button
+              class="action-button primary-action disciple-journey-launch"
+              type="button"
+              :disabled="busy || !journeyStartable"
+              @click="openJourneyPlanner"
+            >
+              <span>派遣历练</span>
+            </button>
+          </template>
+
+          <div v-if="journey.status === 'active'" class="journey-away">
+            <p class="journey-state-line">
+              <span class="realm-tag">{{ journey.directionName ?? '历练' }}</span>
+              <span class="journey-state-badge">在外历练中</span>
+              <span class="journey-duration">{{ durationHours(journey.durationSeconds) }}</span>
+            </p>
+            <dl class="disciple-facts">
+              <div>
+                <dt>预计归队</dt>
+                <dd>{{ formatTime(journey.endsAt) }}</dd>
+              </div>
+              <div>
+                <dt>剩余时间</dt>
+                <dd class="journey-countdown">{{ countdownText }}</dd>
+              </div>
+            </dl>
+            <p class="disciple-detail-hint">
+              原岗位「{{ journey.originalAssignmentName ?? '闲置' }}」仍为他保留；在外期间该岗位收益与静修暂停。
+            </p>
+            <button
+              v-if="!confirmingRecall"
+              class="action-button disciple-journey-start"
+              type="button"
+              :disabled="busy"
+              @click="askRecall"
+            >
+              <span>紧急召回</span>
+            </button>
+            <div v-else class="disciple-expel-confirm" role="group" aria-labelledby="disciple-recall-confirm-title">
+              <p id="disciple-recall-confirm-title" class="disciple-expel-question">
+                确认召回「{{ disciple.name }}」？
+              </p>
+              <ul class="disciple-expel-warnings">
+                <li>他会立刻归队，本次历练的修为、资源与额外奖励全部作废。</li>
+                <li>召回不消耗资源，也不会受伤；之后可以马上再次出发。</li>
+              </ul>
+              <div class="disciple-expel-actions">
+                <button class="action-button" type="button" :disabled="busy" @click="confirmingRecall = false">取消</button>
+                <button class="action-button primary-action" type="button" :disabled="busy" @click="confirmRecall">
+                  {{ busy ? '召回中…' : '确认召回' }}
+                </button>
+              </div>
             </div>
-            <div>
-              <dt>灵气消耗</dt>
-              <dd>{{ formatAmount(disciple.breakthroughCost) }} {{ energyName }}</dd>
-            </div>
-          </dl>
-          <p v-if="disciple.blockedReason" class="blocked-hint">{{ disciple.blockedReason }}</p>
-          <!-- 在外时即便服务端还没把 canBreakthrough 打成 false，也一律挡住破境。 -->
-          <p v-if="actionBlockHint" class="blocked-hint">{{ actionBlockHint }}</p>
-          <button
-            class="action-button primary-action disciple-break-button"
-            :class="{ 'is-disabled': !disciple.canBreakthrough || journey.status === 'active' || severeInjured }"
-            type="button"
-            :disabled="busy || journey.status === 'active' || severeInjured"
-            :aria-disabled="!disciple.canBreakthrough || journey.status === 'active' || severeInjured"
-            @click="requestBreakthrough"
-          >
-            <span>破境</span>
-          </button>
+          </div>
+
+          <div v-if="journey.status === 'ready'" class="journey-ready">
+            <p class="journey-state-line">
+              <span class="realm-tag">{{ journey.directionName ?? '历练' }}</span>
+              <span class="journey-state-badge is-ready">已归队 · 待领取</span>
+              <span class="journey-duration">{{ durationHours(journey.durationSeconds) }}</span>
+            </p>
+
+            <template v-if="outcome !== null">
+              <dl class="disciple-facts">
+                <div>
+                  <dt>实际入账修为</dt>
+                  <dd>+{{ outcome.cultivationAwarded }}</dd>
+                </div>
+                <div>
+                  <dt>出发时计划</dt>
+                  <dd>{{ outcome.cultivationPlanned }}</dd>
+                </div>
+              </dl>
+              <ul v-if="outcomeLines.length > 0" class="journey-reward-list">
+                <li v-for="line in outcomeLines" :key="line.id">
+                  <span class="journey-tag">{{ line.name }}</span>
+                  <strong>+{{ line.amount }}</strong>
+                </li>
+              </ul>
+              <p v-else class="disciple-detail-hint">本次没有资源奖励。</p>
+              <p v-if="outcome.extraHarvest" class="journey-flag is-extra">额外收获：修为与各项资源按保底值再加五成。</p>
+              <p v-if="outcome.injured" class="journey-flag is-risk">
+                途中受伤 ·
+                {{ outcomeHealed ? '已痊愈' : `预计 ${formatTime(outcome.injuredUntil)} 复原` }}
+              </p>
+            </template>
+
+            <button
+              class="action-button primary-action disciple-journey-start"
+              type="button"
+              :disabled="busy"
+              @click="requestClaim"
+            >
+              <span>{{ busy ? '领取中…' : '领取历练收获' }}</span>
+            </button>
+            <p class="disciple-detail-hint">领取前不能再次派他历练，也不能被驱逐；资源在领取时一次性入账。</p>
+          </div>
         </section>
 
         <section class="disciple-detail-section" aria-labelledby="disciple-pill-title">
@@ -1528,220 +1696,6 @@ function refineGear(item: EquipmentItemView | null): void {
               点格子从背包里挑一件同部位的装备穿上；换下来的那件自动回背包（穿在身上的不占背包）。
             </p>
           </template>
-        </section>
-      </div>
-
-      <!-- ---------- 历练 ---------- -->
-      <div
-        v-show="activeTab === 'journey'"
-        :id="tabPanelId('journey')"
-        class="disciple-tab-panel"
-        role="tabpanel"
-        :aria-labelledby="tabButtonId('journey')"
-        tabindex="0"
-      >
-        <section class="disciple-detail-section disciple-journey" aria-labelledby="disciple-journey-title">
-          <h3 id="disciple-journey-title" class="disciple-detail-title">历练</h3>
-          <p class="disciple-journey-quota">
-            在外 <strong>{{ state.journey.activeCount }}</strong>/{{ state.journey.maxConcurrent }} 人 · 至少留守
-            {{ state.journey.minAtHome }} 人
-          </p>
-
-          <template v-if="journey.status === 'none'">
-            <!-- 不可出发时只显示原因：重伤卧床优先，其余用服务端的原因（筑基门槛 / 疗伤中 / 名额已满 / 在守擂阵容中）。 -->
-            <template v-if="!journeyStartable">
-              <p class="blocked-hint">{{ severeHint ?? (journey.blockedReason ?? '当前不可出发') }}</p>
-              <button class="action-button primary-action disciple-journey-start" type="button" disabled>
-                <span>确认出发</span>
-              </button>
-            </template>
-
-            <button
-              v-if="journeyStartable && planner === null && !journeyPreviewLoading"
-              class="action-button primary-action disciple-journey-launch"
-              type="button"
-              :disabled="busy"
-              @click="requestPreview"
-            >
-              <span>查看历练预览</span>
-            </button>
-
-            <LoadingState
-              v-if="journeyPreviewLoading"
-              compact
-              label="正在推演历练"
-              detail="正在计算各方向的奖励、修为与风险。"
-            />
-
-            <div v-if="journeyStartable && planner !== null" class="disciple-journey-planner">
-              <p class="disciple-detail-hint">
-                {{ planner.discipleName }} 可出发 · 宗门在外 {{ planner.activeCount }}/{{ planner.maxConcurrent }} 人
-              </p>
-
-              <ul class="journey-directions" role="radiogroup" aria-label="历练方向">
-                <li
-                  v-for="(item, index) in planner.directions"
-                  :key="item.direction"
-                  class="journey-direction"
-                  :style="journeyOrderStyle(index)"
-                >
-                  <button
-                    class="journey-direction-button"
-                    :class="{
-                      'is-selected': activeDirectionId === item.direction,
-                      'is-blocked': !item.available,
-                    }"
-                    type="button"
-                    role="radio"
-                    :disabled="busy || !item.available"
-                    :aria-checked="activeDirectionId === item.direction"
-                    @click="selectDirection(item)"
-                  >
-                    <strong>{{ item.name }}</strong>
-                    <small>{{ item.description }}</small>
-                  </button>
-                  <p v-if="!item.available" class="blocked-hint">{{ item.blockedReason ?? '当前不可选' }}</p>
-                </li>
-              </ul>
-
-              <ul v-if="activeDurations.length > 0" class="journey-durations" role="radiogroup" aria-label="历练时长">
-                <li
-                  v-for="(option, index) in activeDurations"
-                  :key="option.durationSeconds"
-                  :style="journeyOrderStyle(index)"
-                >
-                  <button
-                    class="journey-duration-chip"
-                    :class="{ 'is-selected': activeDurationSeconds === option.durationSeconds }"
-                    type="button"
-                    role="radio"
-                    :disabled="busy"
-                    :aria-checked="activeDurationSeconds === option.durationSeconds"
-                    @click="selectDuration(option)"
-                  >
-                    <span class="journey-duration-head">
-                      <strong>{{ option.durationLabel }}</strong>
-                      <em>{{ cultivationText(option) }}</em>
-                    </span>
-                    <span class="journey-duration-tags">
-                      <span v-for="line in resourceLines(option.resources)" :key="line.id" class="journey-tag">
-                        {{ line.name }} +{{ line.amount }}
-                      </span>
-                      <span class="journey-tag is-extra">额外收获 {{ formatBp(option.extraChanceBp) }}</span>
-                      <span class="journey-tag is-extra" title="保底修为再加一份">机遇 {{ formatBp(option.fortuneChanceBp) }}</span>
-                      <span class="journey-tag is-extra" title="悟道值 +1">悟道 {{ formatBp(option.insightChanceBp) }}</span>
-                      <span class="journey-tag is-extra" title="随机一项属性 +1">淬炼 {{ formatBp(option.attributeChanceBp) }}</span>
-                      <span class="journey-tag is-risk">实际受伤 {{ formatBp(option.injuryChanceBp) }}</span>
-                    </span>
-                    <span class="journey-return">预计 {{ formatTime(option.endsAt) }} 归队</span>
-                  </button>
-                </li>
-              </ul>
-
-              <p v-if="planner.blockedReason" class="blocked-hint">{{ planner.blockedReason }}</p>
-              <button
-                class="action-button primary-action disciple-journey-start"
-                type="button"
-                :disabled="busy || activeDurationSeconds === null"
-                @click="confirmStart"
-              >
-                <span>确认出发</span>
-              </button>
-              <p class="disciple-detail-hint">
-                数值为服务端预览（不含随机结果）；出发后原岗位收益与静修暂停，到期按服务端时间归队。
-              </p>
-            </div>
-          </template>
-
-          <div v-if="journey.status === 'active'" class="journey-away">
-            <p class="journey-state-line">
-              <span class="realm-tag">{{ journey.directionName ?? '历练' }}</span>
-              <span class="journey-state-badge">在外历练中</span>
-              <span class="journey-duration">{{ durationHours(journey.durationSeconds) }}</span>
-            </p>
-            <dl class="disciple-facts">
-              <div>
-                <dt>预计归队</dt>
-                <dd>{{ formatTime(journey.endsAt) }}</dd>
-              </div>
-              <div>
-                <dt>剩余时间</dt>
-                <dd class="journey-countdown">{{ countdownText }}</dd>
-              </div>
-            </dl>
-            <p class="disciple-detail-hint">
-              原岗位「{{ journey.originalAssignmentName ?? '闲置' }}」仍为他保留；在外期间该岗位收益与静修暂停。
-            </p>
-            <button class="action-button primary-action disciple-journey-start" type="button" disabled>
-              <span>在外历练中</span>
-            </button>
-          </div>
-
-          <div v-if="journey.status === 'ready'" class="journey-ready">
-            <p class="journey-state-line">
-              <span class="realm-tag">{{ journey.directionName ?? '历练' }}</span>
-              <span class="journey-state-badge is-ready">已归队 · 待领取</span>
-              <span class="journey-duration">{{ durationHours(journey.durationSeconds) }}</span>
-            </p>
-
-            <template v-if="outcome !== null">
-              <dl class="disciple-facts">
-                <div>
-                  <dt>实际入账修为</dt>
-                  <dd>+{{ outcome.cultivationAwarded }}</dd>
-                </div>
-                <div>
-                  <dt>出发时计划</dt>
-                  <dd>{{ outcome.cultivationPlanned }}</dd>
-                </div>
-              </dl>
-              <ul v-if="outcomeLines.length > 0" class="journey-reward-list">
-                <li v-for="line in outcomeLines" :key="line.id">
-                  <span class="journey-tag">{{ line.name }}</span>
-                  <strong>+{{ line.amount }}</strong>
-                </li>
-              </ul>
-              <p v-else class="disciple-detail-hint">本次没有资源奖励。</p>
-              <p v-if="outcome.extraHarvest" class="journey-flag is-extra">额外收获：修为与各项资源按保底值再加五成。</p>
-              <p v-if="outcome.injured" class="journey-flag is-risk">
-                途中受伤 ·
-                {{ outcomeHealed ? '已痊愈' : `预计 ${formatTime(outcome.injuredUntil)} 复原` }}
-              </p>
-            </template>
-
-            <button
-              class="action-button primary-action disciple-journey-start"
-              type="button"
-              :disabled="busy"
-              @click="requestClaim"
-            >
-              <span>{{ busy ? '领取中…' : '领取历练收获' }}</span>
-            </button>
-            <p class="disciple-detail-hint">领取前不能再次派他历练，也不能被驱逐；资源在领取时一次性入账。</p>
-          </div>
-
-          <!--
-            此弟子的近期记录：数据来自 state.journey.recent（宗门最近 10 条），
-            这里按 discipleId 过滤，标题只写「此弟子的近期历练」，不冒称完整履历。
-          -->
-          <div class="journey-history">
-            <h4 class="disciple-journey-subtitle">此弟子的近期历练</h4>
-            <ul v-if="journal.length > 0" class="journey-history-list">
-              <li v-for="entry in journal" :key="entry.id" class="journey-record" :class="`is-${entry.status}`">
-                <div class="journey-record-head">
-                  <strong class="journey-record-name">{{ entry.discipleName }}</strong>
-                  <span class="journey-tag">{{ entry.directionName }}</span>
-                  <span class="journey-duration">{{ entry.durationText }}</span>
-                  <span class="journey-record-status" :class="`is-${entry.status}`">{{ entry.statusLabel }}</span>
-                </div>
-                <ul class="journey-record-result">
-                  <li v-for="(line, index) in entry.resultLines" :key="index">{{ line }}</li>
-                </ul>
-              </li>
-            </ul>
-            <p v-else class="disciple-detail-hint">他近期没有历练记录。</p>
-            <p class="disciple-detail-hint">只显示宗门最近 10 条记录中属于他的部分，不是他的完整履历。</p>
-          </div>
         </section>
       </div>
 
@@ -2015,6 +1969,182 @@ function refineGear(item: EquipmentItemView | null): void {
     </ModalShell>
 
     <!-- 二级弹窗：该部位的背包装备，点选即穿戴（Esc / 点遮罩只关这一层）。 -->
+    <!-- 主修功法：点「更换」弹出已收录的功法，选中后确认。 -->
+    <ModalShell v-if="showTechniquePicker" narrow :label="`主修功法 · ${disciple.name}`" @close="showTechniquePicker = false">
+      <section class="technique-picker" aria-labelledby="technique-picker-title">
+        <h3 id="technique-picker-title" class="disciple-detail-title">选择主修功法 · {{ disciple.name }}</h3>
+        <ul class="technique-picker-list" role="radiogroup" aria-label="主修功法">
+          <li v-for="item in state.learnedTechniques" :key="item.id">
+            <button
+              class="technique-picker-option"
+              :class="{ 'is-selected': techniqueDraft === item.id }"
+              type="button"
+              role="radio"
+              :aria-checked="techniqueDraft === item.id"
+              @click="techniqueDraft = item.id"
+            >
+              <span class="technique-picker-head">
+                <strong>{{ item.name }}</strong>
+                <span class="technique-picker-meta">{{ item.tierName }} · {{ item.schoolName }} · 参悟 {{ item.level }} 级</span>
+                <span v-if="item.id === disciple.techniqueId" class="technique-picker-current">当前</span>
+              </span>
+              <small>{{ item.summary }}</small>
+            </button>
+          </li>
+          <li v-if="disciple.techniqueId !== null">
+            <button
+              class="technique-picker-option"
+              :class="{ 'is-selected': techniqueDraft === '' }"
+              type="button"
+              role="radio"
+              :aria-checked="techniqueDraft === ''"
+              @click="techniqueDraft = ''"
+            >
+              <span class="technique-picker-head"><strong>卸下主修</strong></span>
+              <small>熟练度清零</small>
+            </button>
+          </li>
+        </ul>
+        <p v-if="disciple.techniqueId !== null && techniqueDraft !== '' && techniqueDraft !== disciple.techniqueId" class="disciple-detail-hint">
+          换功法后熟练度减半，再随时间回升。
+        </p>
+        <div class="disciple-break-actions">
+          <button class="quiet-button" type="button" @click="showTechniquePicker = false">取消</button>
+          <button
+            class="action-button primary-action disciple-break-confirm"
+            type="button"
+            :disabled="busy || techniqueDraft === (disciple.techniqueId ?? '')"
+            @click="saveTechnique"
+          >
+            确认
+          </button>
+        </div>
+      </section>
+    </ModalShell>
+
+    <!-- 历练：点「派遣历练」才拉预览，在弹窗里选方向与时长后出发。 -->
+    <ModalShell v-if="showJourneyPlanner" :label="`派遣历练 · ${disciple.name}`" @close="showJourneyPlanner = false">
+      <section class="disciple-journey" aria-labelledby="journey-planner-title">
+        <h3 id="journey-planner-title" class="disciple-detail-title">派遣历练 · {{ disciple.name }}</h3>
+        <LoadingState
+          v-if="journeyPreviewLoading"
+          compact
+          label="正在推演历练"
+          detail="正在计算各方向的奖励、修为与风险。"
+        />
+
+        <div v-if="planner !== null" class="disciple-journey-planner">
+          <p class="disciple-detail-hint">
+            {{ planner.discipleName }} 可出发 · 宗门在外 {{ planner.activeCount }}/{{ planner.maxConcurrent }} 人
+          </p>
+
+          <ul class="journey-directions" role="radiogroup" aria-label="历练方向">
+            <li
+              v-for="(item, index) in planner.directions"
+              :key="item.direction"
+              class="journey-direction"
+              :style="journeyOrderStyle(index)"
+            >
+              <button
+                class="journey-direction-button"
+                :class="{
+                  'is-selected': activeDirectionId === item.direction,
+                  'is-blocked': !item.available,
+                }"
+                type="button"
+                role="radio"
+                :disabled="busy || !item.available"
+                :aria-checked="activeDirectionId === item.direction"
+                @click="selectDirection(item)"
+              >
+                <strong>{{ item.name }}</strong>
+                <small>{{ item.description }}</small>
+              </button>
+              <p v-if="!item.available" class="blocked-hint">{{ item.blockedReason ?? '当前不可选' }}</p>
+            </li>
+          </ul>
+
+          <ul v-if="activeDurations.length > 0" class="journey-durations" role="radiogroup" aria-label="历练时长">
+            <li
+              v-for="(option, index) in activeDurations"
+              :key="option.durationSeconds"
+              :style="journeyOrderStyle(index)"
+            >
+              <button
+                class="journey-duration-chip"
+                :class="{ 'is-selected': activeDurationSeconds === option.durationSeconds }"
+                type="button"
+                role="radio"
+                :disabled="busy"
+                :aria-checked="activeDurationSeconds === option.durationSeconds"
+                @click="selectDuration(option)"
+              >
+                <span class="journey-duration-head">
+                  <strong>{{ option.durationLabel }}</strong>
+                  <em>{{ cultivationText(option) }}</em>
+                </span>
+                <span class="journey-duration-tags">
+                  <span v-for="line in resourceLines(option.resources)" :key="line.id" class="journey-tag">
+                    {{ line.name }} +{{ line.amount }}
+                  </span>
+                  <span class="journey-tag is-extra">额外收获 {{ formatBp(option.extraChanceBp) }}</span>
+                  <span class="journey-tag is-extra" title="保底修为再加一份">机遇 {{ formatBp(option.fortuneChanceBp) }}</span>
+                  <span class="journey-tag is-extra" title="悟道值 +1">悟道 {{ formatBp(option.insightChanceBp) }}</span>
+                  <span class="journey-tag is-extra" title="随机一项属性 +1">淬炼 {{ formatBp(option.attributeChanceBp) }}</span>
+                  <span class="journey-tag is-risk">实际受伤 {{ formatBp(option.injuryChanceBp) }}</span>
+                </span>
+                <span class="journey-return">预计 {{ formatTime(option.endsAt) }} 归队</span>
+              </button>
+            </li>
+          </ul>
+
+          <p v-if="planner.blockedReason" class="blocked-hint">{{ planner.blockedReason }}</p>
+          <button
+            class="action-button primary-action disciple-journey-start"
+            type="button"
+            :disabled="busy || activeDurationSeconds === null"
+            @click="confirmStart"
+          >
+            <span>确认出发</span>
+          </button>
+          <p class="disciple-detail-hint">
+            数值为服务端预览（不含随机结果）；出发后原岗位收益与静修暂停，到期按服务端时间归队。
+          </p>
+        </div>
+      </section>
+    </ModalShell>
+
+    <!-- 破境：胜算与消耗点开才看，确认后才真正突破。 -->
+    <ModalShell v-if="showBreakthrough" narrow :label="`破境 · ${disciple.name}`" @close="showBreakthrough = false">
+      <section class="disciple-break-dialog" aria-labelledby="disciple-break-title">
+        <h3 id="disciple-break-title" class="disciple-detail-title">破境 · {{ disciple.name }}（{{ disciple.stageName }}）</h3>
+        <dl class="disciple-facts">
+          <div>
+            <dt>破境胜算</dt>
+            <dd>{{ formatBp(disciple.breakthroughChanceBp) }}</dd>
+          </div>
+          <div>
+            <dt>灵气消耗</dt>
+            <dd>{{ formatAmount(disciple.breakthroughCost) }} {{ energyName }}</dd>
+          </div>
+        </dl>
+        <p v-if="disciple.blockedReason" class="blocked-hint">{{ disciple.blockedReason }}</p>
+        <!-- 在外时即便服务端还没把 canBreakthrough 打成 false，也一律挡住破境。 -->
+        <p v-if="actionBlockHint" class="blocked-hint">{{ actionBlockHint }}</p>
+        <div class="disciple-break-actions">
+          <button class="quiet-button" type="button" @click="showBreakthrough = false">取消</button>
+          <button
+            class="action-button primary-action disciple-break-confirm"
+            type="button"
+            :disabled="busy || !disciple.canBreakthrough || journey.status === 'active' || severeInjured"
+            @click="confirmBreakthrough"
+          >
+            确认破境
+          </button>
+        </div>
+      </section>
+    </ModalShell>
+
     <ModalShell
       v-if="gearPickerSlot !== null"
       narrow
@@ -2069,6 +2199,141 @@ function refineGear(item: EquipmentItemView | null): void {
 </template>
 
 <style scoped>
+/* 概览：综合评分与战力同一张卡片，两项并排（窄屏换行）。 */
+.disciple-score.is-combined {
+  gap: 8px 32px;
+}
+
+.disciple-score-item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+/* 概览：当前装备（名称 + 祭炼等级，品质色区分品阶）。 */
+.overview-gear {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 20px;
+  margin: 10px 0;
+  padding: 9px 12px;
+  border: 1px solid rgba(202, 169, 106, 0.22);
+  border-radius: 3px;
+  background: rgba(202, 169, 106, 0.05);
+  list-style: none;
+}
+
+/* 雷达图 + 属性条的外框（与评分、装备、天赋 / 悟道卡片同一套边框）。 */
+.overview-box {
+  margin-bottom: 10px;
+  padding: 10px 12px;
+  border: 1px solid rgba(202, 169, 106, 0.22);
+  border-radius: 3px;
+  background: rgba(202, 169, 106, 0.05);
+}
+
+.overview-gear-item {
+  display: flex;
+  min-width: 0;
+  max-width: 100%;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.overview-gear-slot {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.overview-gear-name {
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.overview-gear-empty {
+  color: var(--faint);
+}
+
+/* 概览：天赋 / 悟道两张卡片，一行两列。 */
+.overview-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 10px;
+}
+
+.overview-card {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid rgba(202, 169, 106, 0.22);
+  border-radius: 3px;
+  background: rgba(202, 169, 106, 0.05);
+}
+
+.overview-card-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.overview-card-title {
+  margin: 0;
+  color: #93a99e;
+  font-size: 12px;
+  font-weight: 400;
+  letter-spacing: 0.08em;
+}
+
+.overview-card-action {
+  margin-left: auto;
+}
+
+.overview-card-value {
+  color: var(--gold-bright);
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.overview-card-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.overview-dao-line {
+  display: flex;
+  gap: 18px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.overview-dao-line .overview-card-value {
+  color: var(--ink-text);
+}
+
+.overview-dao-line .overview-card-value.is-gold {
+  color: var(--gold-bright);
+}
+
+.dao-allocate {
+  display: grid;
+  gap: 10px;
+}
+
+@media (max-width: 420px) {
+  .overview-cards {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 /* 战力标签旁的「提升模拟」：与天赋「更换」同一套小按钮样式。 */
 .upgrade-sim-button {
   align-self: center;
@@ -2101,4 +2366,124 @@ function refineGear(item: EquipmentItemView | null): void {
   padding: 4px 10px;
   font-size: 11px;
 }
+.disciple-technique-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.disciple-technique-line {
+  margin: 0;
+  font-size: 14px;
+}
+
+
+/* 修为条 + 小境界 + 破境按钮同一行；窄屏时按钮换到条下方。 */
+.disciple-realm-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+}
+
+.disciple-realm-row .disciple-cultivation-track {
+  flex: 1 1 160px;
+  min-width: 0;
+}
+
+.disciple-realm-row .disciple-break-button {
+  width: auto;
+  min-height: 32px;
+  padding: 5px 16px;
+  font-size: 13px;
+}
+
+.technique-picker {
+  display: grid;
+  gap: 10px;
+}
+
+.technique-picker-list {
+  display: grid;
+  gap: 6px;
+  max-height: 60vh;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.technique-picker-option {
+  display: grid;
+  width: 100%;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--ink-text);
+  text-align: left;
+}
+
+.technique-picker-option.is-selected {
+  border-color: var(--gold);
+  background: var(--surface-strong);
+}
+
+.technique-picker-option small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.technique-picker-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+}
+
+.technique-picker-meta {
+  color: var(--gold);
+  font-size: 12px;
+}
+
+.technique-picker-current {
+  color: var(--jade);
+  font-size: 12px;
+}
+
+.disciple-break-dialog {
+  display: grid;
+  gap: 10px;
+}
+
+.disciple-break-actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+}
+
+.disciple-break-confirm {
+  min-height: 36px;
+  padding: 6px 18px;
+}
+
+.disciple-technique-bar {
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--line);
+}
+
+.disciple-technique-bar > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--jade-dark, var(--jade)), var(--jade));
+}
+
+
 </style>

@@ -164,8 +164,12 @@ const JOURNEY_FLOOR_BP: Record<string, number> = { daoSeeking: 200, gathering: 5
 const JOURNEY_TABLE_BP: Record<string, number> = {
   'daoSeeking:7200': 500,
   'daoSeeking:21600': 800,
+  'daoSeeking:43200': 1000,
+  'daoSeeking:86400': 1200,
   'gathering:7200': 1200,
   'gathering:21600': 1500,
+  'gathering:43200': 1800,
+  'gathering:86400': 2000,
 };
 
 /** 额外收获概率：1500 + (幸运 − 50) × 10。 */
@@ -874,7 +878,7 @@ describe('历练：幸运/体魄概率与出发快照不重掷', () => {
       }
     }
 
-    // 体魄三档：幸运固定 50（额外收获基线）；覆盖 2 方向 × 2 时长共 4 行。
+    // 体魄三档：幸运固定 50（额外收获基线）；覆盖 2 方向 × 4 时长共 8 行。
     for (const physique of [1, 50, 100]) {
       await setLuckPhysique(discipleId, 50, physique);
       const preview = dataOf(await fixture.preview(discipleId)) as Record<string, any>;
@@ -888,7 +892,7 @@ describe('历练：幸运/体魄概率与出发快照不重掷', () => {
           rows += 1;
         }
       }
-      expect(rows).toBe(4);
+      expect(rows).toBe(8);
     }
   });
 

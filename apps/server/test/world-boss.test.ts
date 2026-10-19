@@ -3,7 +3,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createApp } from '../src/app';
 import { SEVERE_INJURY_MS, dateKeyUtc8, dayStartMs } from '../src/modules/game/constants';
-import { attackWorldBoss, exchangeBossMerit, getWorldBoss, processWorldBoss } from '../src/modules/game/service';
+import {
+  attackWorldBoss,
+  exchangeBossMerit,
+  getWorldBoss,
+  processWorldBoss,
+  processWorldBossAuto,
+  setWorldBossAuto,
+} from '../src/modules/game/service';
 import { BOSS_XUANTIE_MIN_SHARE } from '../src/modules/game/equipment';
 import {
   BOSS_MERIT_RESOURCE_ID,
@@ -357,8 +364,11 @@ describe('世界 Boss 二期：面板', () => {
       { id: 'resource', name: '资源' },
       { id: 'pill', name: '丹药' },
       { id: 'equipment', name: '装备' },
+      { id: 'technique', name: '功法' },
     ]);
-    expect(shop.items.map((item: { id: string }) => item.id)).toEqual([
+    // 0066 功法残卷按功法生成（见 world-boss-rules 测试），这里只核对固定的六项。
+    const baseItems = shop.items.filter((item: { category: string }) => item.category !== 'technique');
+    expect(baseItems.map((item: { id: string }) => item.id)).toEqual([
       'xuantie',
       'shenmu',
       'talentPill',
@@ -366,8 +376,8 @@ describe('世界 Boss 二期：面板', () => {
       'treasure',
       'immortal',
     ]);
-    expect(shop.items.map((item: { cost: number }) => item.cost)).toEqual([4, 2, 60, 25, 70, 400]);
-    expect(shop.items.map((item: { category: string }) => item.category)).toEqual([
+    expect(baseItems.map((item: { cost: number }) => item.cost)).toEqual([4, 2, 60, 25, 70, 400]);
+    expect(baseItems.map((item: { category: string }) => item.category)).toEqual([
       'resource',
       'resource',
       'pill',
@@ -502,15 +512,79 @@ describe('世界 Boss 二期：出手', () => {
     expect(ok.boss.fatigue[discipleIds[0]!]).toBe(2);
   });
 
-  it('每日出手上限：用满后拒绝（DAILY_LIMIT），面板显示已用次数且不可出手；0 = 不限', async () => {
-    const fixture = await makeSect('daily-limit');
+  it('自动讨伐开关按宗门持久化，关闭页面后仍由服务端调度', async () => {
+    const fixture = await makeSect('auto-toggle');
+    const now = dayAt(25, 10);
+    await freezeDay(fixture.sectId, 25);
+    await insertBoss({ dayKey: dateKeyUtc8(now), now, maxHp: 100_000_000 });
+
+    const before = await getWorldBoss(env.DB, fixture.userId, now);
+    expect(before.boss.autoEnabled).toBe(false);
+
+    const enabled = await setWorldBossAuto(env.DB, fixture.userId, true, now);
+    expect(enabled.boss.autoEnabled).toBe(true);
+    const row = await env.DB.prepare(
+      'SELECT enabled, next_run_at FROM world_boss_auto_settings WHERE sect_id = ?',
+    )
+      .bind(fixture.sectId)
+      .first<{ enabled: number; next_run_at: number }>();
+    expect(row).toEqual({ enabled: 1, next_run_at: now });
+
+    const disabled = await setWorldBossAuto(env.DB, fixture.userId, false, now + 1);
+    expect(disabled.boss.autoEnabled).toBe(false);
+  });
+
+  it('自动讨伐每轮先批量治疗，治好的弟子立即进入下一次攻击', async () => {
+    const fixture = await makeSect('auto-run');
+    const now = dayAt(26, 10);
+    await freezeDay(fixture.sectId, 26);
+    await insertBoss({ dayKey: dateKeyUtc8(now), now, maxHp: 100_000_000 });
+    const injuredId = fixture.discipleIds[0]!;
+    await env.DB.prepare('UPDATE disciples SET injured_until = ? WHERE id = ?')
+      .bind(now + WORLD_BOSS_INJURY_DURATION_MS, injuredId)
+      .run();
+    await env.DB.prepare('UPDATE sects SET level = 2 WHERE id = ?').bind(fixture.sectId).run();
+    await env.DB.prepare("UPDATE buildings SET level = 2 WHERE sect_id = ? AND def_id = 'herbGarden'")
+      .bind(fixture.sectId)
+      .run();
+    await env.DB.prepare(
+      `INSERT INTO pill_inventories (id, sect_id, pill_id, quantity, updated_at)
+       VALUES (?, ?, 'healingPill', 1, ?)
+       ON CONFLICT (sect_id, pill_id) DO UPDATE SET quantity = quantity + 1, updated_at = excluded.updated_at`,
+    )
+      .bind(crypto.randomUUID(), fixture.sectId, now)
+      .run();
+    await env.DB.prepare(
+      "UPDATE resource_balances SET balance = balance + 100000 WHERE sect_id = ? AND resource_id IN ('herb', 'spiritStone')",
+    )
+      .bind(fixture.sectId)
+      .run();
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+
+    await setWorldBossAuto(env.DB, fixture.userId, true, now);
+    await processWorldBossAuto(env.DB, now, async () => {});
+    await setWorldBossAuto(env.DB, fixture.userId, false, now + 1);
+
+    const healed = await discipleRow(injuredId);
+    expect(healed.injured_until).toBeNull();
+    expect((await battleRows(fixture.sectId)).length).toBeGreaterThan(0);
+    const setting = await env.DB.prepare(
+      'SELECT last_result, pause_reason FROM world_boss_auto_settings WHERE sect_id = ?',
+    )
+      .bind(fixture.sectId)
+      .first<{ last_result: string; pause_reason: string | null }>();
+    expect(setting?.last_result).toMatch(/^attacked:/);
+    expect(setting?.pause_reason).toBeNull();
+  });
+
+  it('取消每日出手上限：只受冷却约束，面板持续允许出手', async () => {
+    const fixture = await makeSect('no-daily-limit');
     const now = dayAt(24, 10);
     await freezeDay(fixture.sectId, 24);
     vi.spyOn(Math, 'random').mockReturnValue(0.5);
     await insertBoss({ dayKey: dateKeyUtc8(now), now, maxHp: 100_000_000 });
     const discipleIds = [fixture.discipleIds[0]!];
 
-    // 上限 2：前两刀照常，第三刀（冷却已过）被拒
     await attackWorldBoss(env.DB, fixture.userId, { discipleIds }, now, 2);
     const second = await attackWorldBoss(
       env.DB,
@@ -520,26 +594,14 @@ describe('世界 Boss 二期：出手', () => {
       2,
     );
     expect(second.boss.attacksToday).toBe(2);
-    expect(second.boss.dailyAttackLimit).toBe(2);
-    expect(second.boss.attackable).toBe(false);
+    expect(second.boss.attackable).toBe(true);
 
     const later = now + WORLD_BOSS_COOLDOWN_MS * 2;
-    expect(
-      await errorCodeOf(attackWorldBoss(env.DB, fixture.userId, { discipleIds }, later, 2)),
-    ).toBe('DAILY_LIMIT');
-    expect(await errorDetailsOf(attackWorldBoss(env.DB, fixture.userId, { discipleIds }, later, 2))).toEqual({
-      attacksToday: 2,
-      dailyAttackLimit: 2,
-    });
+    const third = await attackWorldBoss(env.DB, fixture.userId, { discipleIds }, later, 2);
+    expect(third.boss.attacksToday).toBe(3);
     const panel = await getWorldBoss(env.DB, fixture.userId, later, 2);
-    expect(panel.boss.attacksToday).toBe(2);
-    expect(panel.boss.attackable).toBe(false);
-
-    // 上限调高或设为 0（不限）后立刻能继续打
-    const unlimited = await attackWorldBoss(env.DB, fixture.userId, { discipleIds }, later, 0);
-    expect(unlimited.boss.attacksToday).toBe(3);
-    expect(unlimited.boss.dailyAttackLimit).toBe(0);
-    expect(unlimited.boss.attackable).toBe(true);
+    expect(panel.boss.attacksToday).toBe(3);
+    expect(panel.boss.attackable).toBe(true);
   });
 
   it('疲劳 3 次起会重伤：这一刀不计伤害、写库、广播、之后不能再出战', async () => {
@@ -1131,6 +1193,7 @@ describe('世界 Boss 三期：功勋兑换（计划 2.4）', () => {
       resource: { resourceId: 'xuantie', name: '玄铁', amount: 3_000 },
       pill: null,
       equipment: null,
+      scroll: null,
     });
     expect(await balanceOf(fixture.sectId, BOSS_MERIT_RESOURCE_ID)).toBe(88_000);
     expect(await balanceOf(fixture.sectId, 'xuantie')).toBe(3_000);

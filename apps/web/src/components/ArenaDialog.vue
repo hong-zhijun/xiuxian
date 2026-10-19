@@ -35,7 +35,6 @@ const RULES_TEXT = `宗门大比 · 玩法说明
 斗法台：瑞士轮配对，按积分相近原则两两对决（同宗门不互打），最多 10 回合；以弱胜强得 5 分、势均力敌得 3 分、以强胜弱得 1 分，平局 1 分、负 0 分，同分看胜场与伤害。
 宗门战：瑞士轮车轮战，没有平局。赢方弟子带着剩余血量留场，输方换下一人；同样按胜负积分、同分看击杀数。
 以弱克强：战力低的一方属性最多 +50%；宗门战另按宗门总战力补偿一次，两层取较大值。
-灵力上限：宗门战总战力不能超过本纪上限（宗门 2 级及以上的宗门前 5 名弟子战力的平均值，每周一 0 点算定）。超了就自己调换弟子。
 奖励：每天按名次发灵石、矿石、功勋与修为丹，归其宗门；周日的一纪之赏（天榜、宗榜前三）另有玄铁。`;
 
 const showRules = ref(false);
@@ -276,10 +275,14 @@ function duelWinnerName(duel: ArenaDuelView): string {
 function roundText(round: ArenaDuelRoundView, duel: ArenaDuelView): string {
   const first = round.firstId === duel.fighterA.id ? duel.fighterA.name : duel.fighterB.name;
   const hits = round.hits
-    .map((hit) => `${hit.name}${hit.extra ? '（身法追击）' : ''} ${formatNumber(hit.damage)}${hit.crit ? '（破绽一击）' : ''}`)
+    .map((hit) => {
+      const tags = (hit.tags ?? []).map((tag) => `【${tag}】`).join('');
+      return `${hit.name}${tags}${hit.extra ? '（身法追击）' : ''} ${formatNumber(hit.damage)}${hit.crit ? '（破绽一击）' : ''}`;
+    })
     .join('、');
+  const heals = (round.heals ?? []).map((heal) => `${heal.name}【血身】回血 ${formatNumber(heal.amount)}`).join('、');
   const left = `${String(hpPercent(round.fighterAHp, duel.fighterAMaxHp))}% / ${String(hpPercent(round.fighterBHp, duel.fighterBMaxHp))}%`;
-  return `第 ${String(round.round)} 招 · ${first}先手 · ${hits} · 剩余 ${left}`;
+  return `第 ${String(round.round)} 招 · ${first}先手 · ${hits}${heals === '' ? '' : ` · ${heals}`} · 剩余 ${left}`;
 }
 
 /* ---------- 榜单 ---------- */
@@ -341,13 +344,12 @@ const mySectId = computed(() => props.state.sect.id);
       <section v-if="editing !== null" class="arena-editor" aria-label="呈报名册">
         <p class="arena-section-title">
           呈报{{ editing === 'individual' ? '斗法台' : '宗门战' }}名册
-          <span v-if="editing === 'team'" class="arena-cap" :class="{ 'is-over': overCap }">
+          <span v-if="editing === 'team' && activePowerCap !== null" class="arena-cap" :class="{ 'is-over': overCap }">
             已选战力 {{ formatNumber(draftPower) }} / 上限 {{ formatNumber(activePowerCap ?? 0) }}
           </span>
         </p>
         <p class="arena-editor-hint">
           {{ editing === 'individual' ? '最多 5 人，同宗门不互打，按战力与属性两两对决。' : '按出战顺序依次上场，输了换下一人，赢的人带着剩余血量留场。' }}
-          超出上限时请调换弟子。
         </p>
         <DisciplePicker
           v-model:selected="draft"

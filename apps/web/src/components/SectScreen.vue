@@ -19,6 +19,8 @@ import type {
   PublicSectView,
   RecruitOutcome,
   RecruitPreview,
+  RerollEquipmentOutcome,
+  RerollMode,
   SecretRealmView,
   SectStateView,
   ShopExchangeDirection,
@@ -42,6 +44,7 @@ import {
   fetchSecretRealms,
   forgeEquipment,
   refineEquipment,
+  rerollEquipment,
   salvageEquipment,
   shopBuy,
   shopExchange,
@@ -88,6 +91,7 @@ import SectLevelCatalogDialog from './SectLevelCatalogDialog.vue';
 import WorldBossDialog from './WorldBossDialog.vue';
 import MeritDialog from './MeritDialog.vue';
 import TowerDialog from './TowerDialog.vue';
+import TechniqueDialog from './TechniqueDialog.vue';
 import ArenaDialog from './ArenaDialog.vue';
 import AuctionDialog from './AuctionDialog.vue';
 import WorldMapDialog from './WorldMapDialog.vue';
@@ -159,6 +163,8 @@ const emit = defineEmits<{
   notify: [tone: ToastTone, title: string, message: string];
   /** 详情里保存私有备注（note 为空串 = 清空）；App.vue 绑定了这个名字。 */
   'save-note': [discipleId: string, note: string];
+  /** 0066 功法：弟子主修设置 / 更换 / 卸下（由 App.vue 调接口）。 */
+  'set-technique': [discipleId: string, techniqueId: string | null];
   /** 详情底部二次确认后的驱逐请求；App.vue 绑定了这个名字。 */
   expel: [discipleId: string];
   /**
@@ -168,6 +174,8 @@ const emit = defineEmits<{
   requestJourneyPreview: [discipleId: string];
   startJourney: [discipleId: string, direction: JourneyDirection, durationSeconds: number];
   claimJourney: [journeyId: string];
+  /** 0061 紧急召回。 */
+  recallJourney: [journeyId: string];
   /** 0017 保存头像框样式（白名单 id，见 utils/avatarFrames.ts）。 */
   setAvatarFrame: [discipleId: string, frameId: AvatarFrameId];
   /** 0038 自定义头像：上传（浏览器里已压缩好）/ 移除。 */
@@ -187,6 +195,7 @@ const emit = defineEmits<{
 /** 操作条里的弹窗开关：天机录 / 秘境探索 / 讨伐 / 江湖榜 / 守擂阵容 / 演武录 / 炼丹 / 炼器 / 赌坊 / 坊市（宗门晋升与建筑仍在右栏常驻）。 */
 const openPanel = ref<
   | 'events'
+  | 'techniques'
   | 'explore'
   | 'leaderboard'
   | 'disciple-leaderboard'
@@ -1118,6 +1127,8 @@ const refineItem = computed(
  */
 const refineResult = ref<RefineResult | null>(null);
 let refineSeq = 0;
+/** 最近一次洗练回执：交给祭炼弹窗的「洗练」页显示「上次洗练：A → B」。 */
+const rerollOutcome = ref<RerollEquipmentOutcome | null>(null);
 
 /**
  * 装备回执里的 state：与坊市同一处理 —— App.vue 上「SectScreen 自己拿到新 state」的入口只有
@@ -1254,6 +1265,33 @@ async function onRefineEquipment(equipmentId: string): Promise<void> {
     refineSeq += 1;
     refineResult.value = { seq: refineSeq, equipmentId, success: false, toLevel: 0, error: true };
     emit('notify', 'error', '祭炼未成', caught instanceof Error ? caught.message : '祭炼失败，请稍后重试。');
+  } finally {
+    equipmentSubmitting.value = false;
+  }
+}
+
+/**
+ * 洗练（POST /game/reroll-equipment）：直接覆盖副属性；弹窗保持打开，装备视图刷新后显示新值。
+ * 弹窗中途关掉了才用 toast 补一句结果。
+ */
+async function onRerollEquipment(equipmentId: string, mode: RerollMode): Promise<void> {
+  if (props.busy || equipmentSubmitting.value) return;
+  equipmentSubmitting.value = true;
+  try {
+    const { state: next, outcome } = await rerollEquipment(equipmentId, mode);
+    handOffEquipmentState(next);
+    await loadEquipment();
+    rerollOutcome.value = outcome;
+    if (refineTargetId.value !== equipmentId) {
+      emit(
+        'notify',
+        'success',
+        '洗练完成',
+        `${outcome.name}：${outcome.from.subAttrName} ${String(outcome.from.subValue)} → ${outcome.to.subAttrName} ${String(outcome.to.subValue)}`,
+      );
+    }
+  } catch (caught) {
+    emit('notify', 'error', '洗练未成', caught instanceof Error ? caught.message : '洗练失败，请稍后重试。');
   } finally {
     equipmentSubmitting.value = false;
   }
@@ -1462,6 +1500,11 @@ function onDetailSaveNote(discipleId: string, note: string): void {
   emit('save-note', discipleId, note);
 }
 
+function onDetailSetTechnique(discipleId: string, techniqueId: string | null): void {
+  if (props.busy) return;
+  emit('set-technique', discipleId, techniqueId);
+}
+
 function onDetailExpel(discipleId: string): void {
   if (props.busy) return;
   emit('expel', discipleId);
@@ -1497,6 +1540,11 @@ function onDetailStartJourney(
 function onDetailClaimJourney(journeyId: string): void {
   if (props.busy) return;
   emit('claimJourney', journeyId);
+}
+
+function onDetailRecallJourney(journeyId: string): void {
+  if (props.busy) return;
+  emit('recallJourney', journeyId);
 }
 
 function onDetailNotify(tone: ToastTone, title: string, message: string): void {
@@ -1831,7 +1879,7 @@ function signedPct(value: number): string {
 type HubCardId =
   | 'daily' | 'alchemy' | 'forge' | 'refine' | 'steward' | 'defense'
   | 'boss' | 'arena' | 'tower' | 'explore' | 'world'
-  | 'shop' | 'gambling' | 'auction' | 'market' | 'merit';
+  | 'shop' | 'gambling' | 'auction' | 'market' | 'merit' | 'techniques';
 
 interface HubCard {
   id: HubCardId;
@@ -1977,6 +2025,14 @@ const hubGroups = computed<{ label: string; cards: HubCard[] }[]>(() => {
                   : '看行情 · 低买高卖',
         },
         { id: 'merit', name: '功勋', glyph: '勋', status: `可用 ${formatAmount(merit?.balance ?? '0')} 功勋` },
+        {
+          id: 'techniques',
+          name: '功法',
+          glyph: '功',
+          status: props.state.buildings.some((building) => building.defId === 'scriptureLibrary' && building.level >= 1)
+            ? `已收录 ${String(props.state.learnedTechniques.length)} 门`
+            : '建成藏经阁后开放',
+        },
       ],
     },
   ];
@@ -2006,6 +2062,7 @@ function openHubCard(id: HubCardId): void {
     auction: 'auction',
     market: 'market',
     merit: 'merit',
+    techniques: 'techniques',
   };
   openPanel.value = panels[id];
 }
@@ -2868,6 +2925,16 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
     />
   </ModalShell>
 
+  <!-- 0066 藏经阁：收录 / 参悟功法（只在打开时与操作后请求）。 -->
+  <ModalShell v-if="openPanel === 'techniques'" :loading="busy" label="藏经阁" @close="openPanel = null">
+    <TechniqueDialog
+      :state="state"
+      :busy="busy"
+      @state-update="(s: SectStateView) => emit('recruited', s)"
+      @notify="onWorldBossNotify"
+    />
+  </ModalShell>
+
   <!-- 0053 宗门大比：只在打开时 / 呈报名册后请求，不做定时轮询。 -->
   <ModalShell v-if="openPanel === 'arena'" :loading="busy" label="宗门大比" @close="openPanel = null">
     <ArenaDialog :state="state" :busy="busy" @notify="onWorldBossNotify" />
@@ -2993,10 +3060,12 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
         @use-pill="onUsePill"
         @choose-talent="onChooseTalent"
         @save-note="onDetailSaveNote"
+        @set-technique="onDetailSetTechnique"
         @expel="onDetailExpel"
         @request-journey-preview="onDetailRequestJourneyPreview"
         @start-journey="onDetailStartJourney"
         @claim-journey="onDetailClaimJourney"
+        @recall-journey="onDetailRecallJourney"
         @notify="onDetailNotify"
         @set-avatar-frame="onDetailSetAvatarFrame"
         @set-avatar-image="onDetailSetAvatarImage"
@@ -3284,7 +3353,9 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
       :busy="busy || equipmentSubmitting"
       :result="refineResult"
       :guide="equipment!.refineGuide"
+      :reroll-outcome="rerollOutcome"
       @refine="onRefineEquipment"
+      @reroll="onRerollEquipment"
       @close="refineTargetId = null"
     />
   </main>

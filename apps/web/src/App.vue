@@ -12,6 +12,7 @@ import {
   challenge,
   chooseRealmExplore,
   claimJourney,
+  recallJourney,
   craftPill,
   daoDebate,
   expelDisciple,
@@ -24,6 +25,7 @@ import {
   renameDisciple,
   renameSect,
   setDiscipleNote,
+  setDiscipleTechnique,
   setDiscipleAvatarFrame,
   setDiscipleAvatarImage,
   clearDiscipleAvatarImage,
@@ -56,6 +58,7 @@ import type {
   HealBatchOutcome,
   InsightAllocateOutcome,
   JourneyClaimOutcomeView,
+  JourneyRecallOutcomeView,
   JourneyDirection,
   RecruitPreview,
   ResourceView,
@@ -850,6 +853,23 @@ function onDismissSteward(office: string): void {
   );
 }
 
+/** 0066 功法：设置 / 更换 / 卸下主修（只能选已收录的；服务端校验，失败由 runAction 提示）。 */
+function onSetTechnique(discipleId: string, techniqueId: string | null): void {
+  void runAction(
+    () => setDiscipleTechnique(discipleId, techniqueId),
+    (data) => {
+      const disciple = data.state.disciples.find((item) => item.id === discipleId);
+      return {
+        title: '主修已更新',
+        message:
+          disciple === undefined || disciple.techniqueId === null
+            ? `${disciple?.name ?? '弟子'}已卸下主修功法。`
+            : `${disciple.name}主修「${disciple.techniqueName}」，熟练度从 ${String(Math.floor(disciple.techniqueProficiency / 100))}% 起算。`,
+      };
+    },
+  );
+}
+
 /** 0013 保存私有备注：内容规则由服务端裁决，成功与否则由返回的 state 决定提示文案。 */
 function onSaveNote(discipleId: string, note: string): void {
   void runAction(
@@ -985,6 +1005,21 @@ function onClaimJourney(journeyId: string): void {
         tone: outcome.injured ? 'warning' : 'success',
         title: `${outcome.discipleName} 历练归来 · ${outcome.directionName}`,
         message: gained === '' ? outcome.message : `${outcome.message}（${gained}）`,
+      };
+    },
+  );
+}
+
+/** 0061 紧急召回：弟子立刻归队，本趟收获作废（文案沿用服务端 message）。 */
+function onRecallJourney(journeyId: string): void {
+  void runAction(
+    () => recallJourney(journeyId),
+    (data) => {
+      const outcome = data.outcome as JourneyRecallOutcomeView | undefined;
+      return {
+        tone: 'warning',
+        title: outcome === undefined ? '弟子已召回' : `${outcome.discipleName} 已召回`,
+        message: outcome?.message ?? '弟子已归队，本次历练没有收获。',
       };
     },
   );
@@ -1128,6 +1163,7 @@ onUnmounted(() => {
       @appoint-steward="onAppointSteward"
       @dismiss-steward="onDismissSteward"
       @save-note="onSaveNote"
+      @set-technique="onSetTechnique"
       @set-avatar-frame="onSetAvatarFrame"
       @set-avatar-image="onSetAvatarImage"
       @clear-avatar-image="onClearAvatarImage"
@@ -1136,6 +1172,7 @@ onUnmounted(() => {
       @expel="onExpelDisciple"
       @start-journey="onStartJourney"
       @claim-journey="onClaimJourney"
+      @recall-journey="onRecallJourney"
       @notify="notify"
     />
 

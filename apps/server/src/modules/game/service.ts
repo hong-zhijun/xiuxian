@@ -157,6 +157,7 @@ import {
   isSeverelyInjured,
   severeInjuryLeftText,
   SEVERE_INJURY_MS,
+  SCRIPTURE_LIBRARY_BUILDING_ID,
 } from './constants';
 import { drawEncounters, type EncounterDef } from './encounters';
 import { EVENT_HISTORY_LIMIT, RECENT_EVENTS_IN_SYNC } from './events';
@@ -223,8 +224,11 @@ import {
   refineCostUnits,
   refineMainGain,
   refineSubGain,
+  rerollCostUnits,
+  rerollSubAttr,
   resolveMainAttr,
   rollRefine,
+  type RerollMode,
   salvageOreUnits,
   slotNameOf,
   withGear,
@@ -285,6 +289,8 @@ import {
   updateResourceSettledStatement,
   updateEquipmentHolderStatement,
   updateEquipmentRefineStatement,
+  updateEquipmentSubStatement,
+  recallDiscipleJourneyStatement,
   updateSectChallengeCounterStatement,
   updateSectDefenseLineupStatement,
   updateSectLevelStatement,
@@ -361,6 +367,7 @@ import {
 } from './repository';
 import {
   WorldBossRepository,
+  WorldBossAutoRepository,
   incrementPillInventoryStatement,
   insertDiscipleBossBattleStatement,
   insertWorldBossHitStatement,
@@ -421,7 +428,13 @@ import {
   type AuctionEquipmentSnapshot,
   type AuctionKind,
 } from './auction';
-import { generateMerchantGoods, merchantGapMs, MERCHANT_NAME, MERCHANT_STAY_MS } from './auctionMerchant';
+import {
+  generateMerchantGoods,
+  merchantGapMs,
+  MERCHANT_NAME,
+  MERCHANT_STAY_MS,
+  withTechniqueScrolls,
+} from './auctionMerchant';
 import {
   deleteOldWorldSiteLogsStatement,
   insertWorldSiteLogStatement,
@@ -577,6 +590,33 @@ import type {
 } from './view';
 import { settleEconomy, resourceRates, type SettleResult } from './settle';
 import {
+  TECHNIQUES,
+  TECHNIQUE_MAX_LEVEL,
+  TECHNIQUE_SCHOOLS,
+  TECHNIQUE_TIER_NAMES,
+  bossScrollGrantOf,
+  findTechnique,
+  techniqueIdOfScrollItem,
+  techniqueKeptProficiencyBp,
+  techniqueLearnScrolls,
+  techniqueLevelFactor,
+  techniqueModifiersOf,
+  techniqueNameOf,
+  techniqueProficiencyBp,
+  techniqueUpgradeCost,
+  type TechniqueBossMods,
+  type TechniqueModifiers,
+} from './techniques';
+import {
+  addTechniqueScrollsStatement,
+  techniqueGuardStatement,
+  TechniqueRepository,
+  updateDiscipleTechniqueStatement,
+  upsertSectTechniqueStatement,
+  type SectTechniqueRow,
+} from './repository';
+import type { TechniqueLibraryView, TowerPreviewView, TechniqueCatalogView } from './view';
+import {
   simulateTowerBattle,
   towerClearEquipment,
   towerClearReward,
@@ -613,7 +653,6 @@ import {
   WORLD_BOSS_AFFIX_NONE,
   WORLD_BOSS_CLOSE_HOUR,
   WORLD_BOSS_COOLDOWN_MS,
-  WORLD_BOSS_DAILY_ATTACK_LIMIT_DEFAULT,
   WORLD_BOSS_FATIGUE_WINDOW_MS,
   WORLD_BOSS_INJURY_DURATION_MS,
   WORLD_BOSS_KILL_PILL_ID,
@@ -638,7 +677,6 @@ import {
   isFledByDamage,
   isWorldBossAttackable,
   lastHitReward,
-  parseDailyAttackLimit,
   rollAffix,
   rollDamage,
   rollOutcome,
@@ -706,6 +744,7 @@ import {
   type SparHistoryEntryView,
   type SparResultView,
   type JourneyClaimOutcomeView,
+  type JourneyRecallOutcomeView,
   type JourneyDirectionPreviewView,
   type JourneyDurationPreviewView,
   type JourneyPreviewView,
@@ -781,6 +820,8 @@ import {
 export interface SectSnapshot {
   sect: SectRow;
   disciples: DiscipleRow[];
+  /** 0066 功法：本宗的收录 / 参悟 / 残卷行（level = 0 未收录）。 */
+  techniques: SectTechniqueRow[];
   buildings: BuildingRow[];
   balances: ResourceBalanceRow[];
   /** 丹药库存（可能为空数组；没有行的 pill 视为 0）。 */
@@ -978,6 +1019,7 @@ async function loadSnapshot(
     activeExploration,
     stewards,
     worldSites,
+    techniques,
   ] = await Promise.all([
     new DiscipleRepository(db).findBySectId(sect.id),
     new BuildingRepository(db).findBySectId(sect.id),
@@ -994,6 +1036,8 @@ async function loadSnapshot(
     new StewardRepository(db).findBySectId(sect.id),
     // 0051 山河舆图：本宗占着的灵地（坐镇名单）。
     new WorldSiteRepository(db).findByHolder(sect.id),
+    // 0066 功法：本宗的收录 / 参悟 / 残卷行。
+    new TechniqueRepository(db).findBySectId(sect.id),
   ]);
   // 0019 赌坊：论道当日次数（0019 是新表新列，没有需要按日志窗口兼容核对的旧记录）。
   const debateDay = debateDayStateOf(sect, now);
@@ -1011,6 +1055,7 @@ async function loadSnapshot(
     activeExploration,
     stewards,
     worldSites,
+    techniques,
   };
 }
 
@@ -1040,6 +1085,8 @@ class SectDraft {
   stewards: SectStewardRow[];
   /** 0051 山河舆图：本宗占着的灵地（可变：开辟 / 撤回后在本层更新，随 view() 返回坐镇名）。 */
   worldSites: WorldSiteRow[];
+  /** 0066 功法：本宗收录 / 参悟行（可变：收录 / 参悟后在本层更新，随 view() 返回新等级）。 */
+  techniques: SectTechniqueRow[];
   /** 主动挑战的当日次数（可变：挑战受理后在本层更新，随 view() 返回新口径）。 */
   challengeDay: ChallengeDayState;
   /** 0019 赌坊：论道当日次数（可变：受理一次论道后在本层更新，随 view() 返回新口径）。 */
@@ -1154,6 +1201,7 @@ class SectDraft {
     this.pillInventories = base.pillInventories.map((row) => ({ ...row }));
     this.stewards = base.stewards.map((row) => ({ ...row }));
     this.worldSites = base.worldSites.map((row) => ({ ...row }));
+    this.techniques = base.techniques.map((row) => ({ ...row }));
     this.challengeDay = base.challengeDay;
     this.debateDay = base.debateDay;
 
@@ -1379,6 +1427,13 @@ class SectDraft {
     this.addStatement(upsertPillInventoryStatement(this.sect.id, pillId, row.quantity, this.now));
   }
 
+  /** 0066 功法：收录 / 参悟后更新本层的收录行（新增或替换同一门功法的行）。 */
+  setTechnique(row: SectTechniqueRow): void {
+    this.techniques = this.techniques.some((item) => item.technique_id === row.technique_id)
+      ? this.techniques.map((item) => (item.technique_id === row.technique_id ? { ...row } : item))
+      : [...this.techniques, { ...row }];
+  }
+
   view(): SectStateView {
     // 容量/上限按「当前（可能刚升级的）等级」现算：upgradeSect 之后的同一请求里返回的
     // state 就已经是新倍率/新上限，不需要等下一次 sync。
@@ -1405,6 +1460,7 @@ class SectDraft {
       auctionClaimable: this.auctionClaimable,
       stewards: this.stewards,
       worldSites: this.worldSites,
+      techniques: this.techniques,
     });
   }
 
@@ -1879,6 +1935,25 @@ class SectDraft {
     );
   }
 
+  /**
+   * 0061：紧急召回（条件更新 + 内存同步）：记录直接收口为「已领取、无收获」，
+   * 弟子立刻不再在外。ends_at 至少比出发时刻晚 1 毫秒（表上 CHECK ends_at > started_at）。
+   */
+  markJourneyRecalled(journey: DiscipleJourneyRow): void {
+    const endsAt = Math.max(this.now, Number(journey.started_at) + 1);
+    this.addStatement(recallDiscipleJourneyStatement(journey.id, this.sect.id, endsAt, this.now));
+    journey.ends_at = endsAt;
+    journey.completed_at = this.now;
+    journey.claimed_at = this.now;
+    journey.recalled_at = this.now;
+    journey.cultivation_awarded = 0;
+    journey.reward_cultivation = 0;
+    journey.reward_resources = '{}';
+    journey.extra_harvest = 0;
+    journey.injured = 0;
+    journey.bonus_detail = '{}';
+  }
+
   /** 0014：领取标记（条件更新 + 内存同步）。 */
   markJourneyClaimed(journey: DiscipleJourneyRow): void {
     journey.claimed_at = this.now;
@@ -2163,6 +2238,9 @@ export async function createSect(
       avatar_hash: null,
       // 0034 天赋重构：洗髓次数 / 候选 / 交接期都从空开始（列默认值也是这样）。
       talent_reroll_count: 0,
+      technique_id: null,
+      technique_prof_base: 0,
+      technique_since: null,
       talent_candidate: null,
       steward_handover_until: null,
       aptitude_pill_count: 0,
@@ -2265,6 +2343,7 @@ export async function createSect(
       buildings,
       balances,
       pillInventories: [],
+      techniques: [],
       challengeDay: challengeDayStateOf(
         { challenge_date_key: '', challenge_count: 0 },
         now,
@@ -2523,6 +2602,9 @@ export async function recruitDisciple(
     dao_insight_used: 0,
     // 0034 天赋重构：洗髓次数 / 候选 / 交接期都从空开始（列默认值也是这样）。
     talent_reroll_count: 0,
+    technique_id: null,
+    technique_prof_base: 0,
+    technique_since: null,
     talent_candidate: null,
     steward_handover_until: null,
     aptitude_pill_count: 0,
@@ -5986,6 +6068,99 @@ export async function refineEquipment(
   };
 }
 
+export interface RerollEquipmentOutcome {
+  equipmentId: string;
+  name: string;
+  mode: RerollMode;
+  /** 洗练前 / 后的副属性（数值含祭炼加成）。 */
+  from: { subAttr: string; subAttrName: string; subValue: number };
+  to: { subAttr: string; subAttrName: string; subValue: number };
+  /** 本次实际扣掉的材料（最小单位字符串）。 */
+  cost: Record<string, string>;
+}
+
+/**
+ * 洗练（POST /game/reroll-equipment）：重洗副属性的基础部分，祭炼拿到的副属性加成原样保留。
+ *
+ * - attr：种类（不与主属性相同，可能洗回原种类）与数值一起洗；value：锁定种类只洗数值；
+ * - 两种都直接覆盖，洗低了不回退；
+ * - 解锁与祭炼相同（宗门 2 级）；穿在在外历练 / 重伤弟子身上的不能洗；
+ * - 穿在身上的同批重算弟子 gear 列（战力立刻变）。
+ */
+export async function rerollEquipment(
+  db: D1Database,
+  userId: string,
+  equipmentId: string,
+  mode: RerollMode,
+  now: number,
+): Promise<{ state: SectStateView; outcome: RerollEquipmentOutcome }> {
+  const draft = await draftFor(db, userId, now);
+  requireForgeUnlocked(draft);
+  const { items } = await loadEquipment(db, draft.sect.id);
+  const item = items.find((row) => row.id === equipmentId);
+  if (item === undefined) {
+    throw new AppError('NOT_FOUND', '装备不存在');
+  }
+  if (!isEquipmentQuality(item.quality)) {
+    throw new AppError('INVALID_STATUS', '这件装备不能洗练');
+  }
+  const holder = item.disciple_id === null ? null : draft.discipleById(item.disciple_id);
+  if (holder !== null) {
+    requireNotAway(draft, holder, '洗练装备');
+  }
+
+  const cost = rerollCostUnits(item.quality, mode);
+  for (const [resourceId, amount] of Object.entries(cost)) {
+    draft.requireResource(resourceId, amount);
+  }
+
+  const rolled = rerollSubAttr({
+    quality: item.quality,
+    mainAttr: item.main_attr,
+    subAttr: item.sub_attr,
+    refineLevel: Number(item.refine_level ?? 0),
+    mode,
+    random: Math.random,
+  });
+  draft.addStatement(
+    updateEquipmentSubStatement({
+      equipmentId: item.id,
+      sectId: draft.sect.id,
+      subAttr: rolled.subAttr,
+      subValue: rolled.subValue,
+    }),
+  );
+  if (holder !== null) {
+    // 内存里同步改成新值（随命令返回的 state 立刻带上新战力）；库里的 SUM 排在 update 之后。
+    const nextItems = items.map((row) =>
+      row.id === item.id ? { ...row, sub_attr: rolled.subAttr, sub_value: rolled.subValue } : row,
+    );
+    applyGearRefresh(draft, holder.id, nextItems);
+  }
+
+  // 装备行进守卫：防止同一件装备同时被上架 / 卸下 / 分解；扣料已在 draft 里，同批提交。
+  if (holder === null) {
+    await draft.commit({ equipmentItems: [{ id: item.id, discipleId: null }] });
+  } else {
+    await draft.commitDisciple([{ id: holder.id }], undefined, {
+      equipmentItems: [{ id: item.id, discipleId: item.disciple_id }],
+    });
+  }
+  return {
+    state: draft.view(),
+    outcome: {
+      equipmentId: item.id,
+      name: item.name,
+      mode,
+      from: { subAttr: item.sub_attr, subAttrName: attrNameOf(item.sub_attr), subValue: Number(item.sub_value) },
+      to: { subAttr: rolled.subAttr, subAttrName: attrNameOf(rolled.subAttr), subValue: rolled.subValue },
+      cost: Object.fromEntries(
+        Object.entries(cost).map(([resourceId, units]) => [resourceId, String(units)]),
+      ),
+    },
+  };
+}
+
 /**
  * GET /game/equipment：装备面板（顺带结算并返回 state）。
  * 装备明细**不进** /game/sync（额度考虑），只有这个接口返回。
@@ -6616,6 +6791,7 @@ export async function startJourney(
     cultivation_awarded: null,
     created_at: now,
     bonus_detail: serializeJourneyBonus(bonus),
+    recalled_at: null,
   });
 
   await draft.commitJourneyStart(disciple.id, activeCount, atHomeCount);
@@ -6774,6 +6950,53 @@ export async function claimJourney(
     },
   };
 }
+/**
+ * 0061 紧急召回（POST /game/recall-journey）：在外（未到期）的弟子立刻归队。
+ *
+ * - 本趟收获全部作废（修为、资源、额外收获、机遇 / 悟道 / 淬炼都不给），也不会受伤；免费；
+ * - 只能召回仍在外的记录：已到期待领取的请直接领取；
+ * - 记录同批收口为「已领取」，所以召回后立刻可以转岗、出发或参与其他玩法；
+ * - 提交复用领取的受保护 batch：守卫复核记录仍未完成 / 未领取、奖励快照未变，并发召回 / 结算整批回滚。
+ */
+export async function recallJourney(
+  db: D1Database,
+  userId: string,
+  journeyId: string,
+  now: number,
+): Promise<{ state: SectStateView; outcome: JourneyRecallOutcomeView }> {
+  const draft = await draftFor(db, userId, now);
+
+  // 跨宗 id 一律 NOT_FOUND（与领取同一口径，不泄露他人记录）。
+  const stored = await new DiscipleJourneyRepository(db).findByIdForSect(journeyId, draft.sect.id);
+  if (stored === null) {
+    throw new AppError('NOT_FOUND', '历练记录不存在');
+  }
+  const journey = draft.openJourneyById(journeyId);
+  if (stored.claimed_at !== null || journey === undefined) {
+    throw new AppError('INVALID_STATUS', '该弟子已归队');
+  }
+  if (journeyStatusOf(journey, now) !== 'active') {
+    throw new AppError('INVALID_STATUS', '弟子已归队，请直接领取收获');
+  }
+
+  draft.markJourneyRecalled(journey);
+  await draft.commitJourneyClaim(journeyId, null);
+
+  const direction = asJourneyDirection(journey.direction);
+  const directionName = findJourneyDirection(direction).name;
+  return {
+    state: draft.view(),
+    outcome: {
+      journeyId: journey.id,
+      discipleId: journey.disciple_id,
+      discipleName: journey.disciple_name,
+      direction,
+      directionName,
+      message: `${journey.disciple_name}已被紧急召回，本次${directionName}一无所获`,
+    },
+  };
+}
+
 /* ------------------------------------------------------------------ *
  * V6：交互式秘境探索（迁移 0015）
  *
@@ -6825,11 +7048,6 @@ function readStringVar(value: unknown): string | undefined {
 /** 交互式秘境探索总开关（未显式开启时前端只显示「速通」）。 */
 export function realmExploreEnabled(env: Env): boolean {
   return readStringVar(env.REALM_EXPLORE_ENABLED) === 'true';
-}
-
-/** 讨伐每日出手上限（环境变量 WORLD_BOSS_DAILY_ATTACK_LIMIT；没配 / 写错用默认 120，0 = 不限）。 */
-export function worldBossDailyAttackLimit(env: Env): number {
-  return parseDailyAttackLimit(readStringVar(env.WORLD_BOSS_DAILY_ATTACK_LIMIT));
 }
 
 /** 把入库的遭遇 JSON 还原成视图；脏数据返回 null（不让一条坏记录卡死整个 sync）。 */
@@ -8784,8 +9002,6 @@ async function buildWorldBossView(input: {
   rewardContext?: { rates: Record<string, number>; sectLevel: number };
   /** 已经读到的关卡行（出手后传刚读回来的那一行，省一次查询）。 */
   boss?: WorldBossRow | null;
-  /** 每日出手上限（0 = 不限），由路由按环境变量传入。 */
-  dailyAttackLimit: number;
 }): Promise<WorldBossView> {
   const repo = new WorldBossRepository(input.db);
   const { now } = input;
@@ -8829,15 +9045,15 @@ async function buildWorldBossView(input: {
     boss === null ? Promise.resolve([]) : repo.sectDamageRows(boss.id);
   const hitPromise: Promise<WorldBossHitRow[]> =
     boss === null ? Promise.resolve([]) : repo.recentHitsByBoss(boss.id, WORLD_BOSS_HIT_FEED_LIMIT);
-  const [rankRows, hitRows, topRow, killedToday, bestStage, attacksToday] = await Promise.all([
+  const [rankRows, hitRows, topRow, killedToday, bestStage, attacksToday, autoSetting] = await Promise.all([
     rankPromise,
     hitPromise,
     repo.topHit(),
     repo.countKilledByDayKey(dayKey),
     repo.maxKilledStage(),
     repo.countHitsBySectSince(input.sectId, todayStart),
+    new WorldBossAutoRepository(input.db).findBySectId(input.sectId),
   ]);
-  const limitReached = input.dailyAttackLimit > 0 && attacksToday >= input.dailyAttackLimit;
 
   const ranks: WorldBossRankView[] = rankRows.map((row, index) => ({
     sectId: row.sect_id,
@@ -8884,10 +9100,13 @@ async function buildWorldBossView(input: {
     cooldownSeconds,
     fatigue,
     fatigueTimes,
-    // 今日出手次数用满了也算「此刻不能出手」（面板按钮与 state 里的角标一起灭）。
-    attackable: bossAttackable && !limitReached,
+    attackable: bossAttackable,
     attacksToday,
-    dailyAttackLimit: input.dailyAttackLimit,
+    autoEnabled: autoSetting !== null && Number(autoSetting.enabled) === 1,
+    autoPauseReason: autoSetting?.pause_reason ?? null,
+    autoLastRunAt: autoSetting?.last_run_at === null || autoSetting?.last_run_at === undefined
+      ? null
+      : Number(autoSetting.last_run_at),
     ranks,
     hits: hitRows.map(toWorldBossHitView),
     topHit: topRow === null ? null : toWorldBossHitView(topRow),
@@ -8944,7 +9163,8 @@ export async function getWorldBoss(
   db: D1Database,
   userId: string,
   now: number,
-  dailyAttackLimit: number = WORLD_BOSS_DAILY_ATTACK_LIMIT_DEFAULT,
+  /** @deprecated 旧调用方可能仍传环境上限；世界 Boss 现已取消每日出手上限，参数会被忽略。 */
+  _legacyDailyAttackLimit?: number,
 ): Promise<{ state: SectStateView; boss: WorldBossView }> {
   const draft = await draftFor(db, userId, now);
   const boss = await buildWorldBossView({
@@ -8952,11 +9172,195 @@ export async function getWorldBoss(
     sectId: draft.sect.id,
     now,
     rewardContext: worldBossRewardContext(draft.view()),
-    dailyAttackLimit,
   });
   // 面板已经算过「能不能出手」，顺手让 state 里的角标与它一致。
   draft.worldBossAttackable = boss.attackable;
   return { state: draft.view(), boss };
+}
+
+const WORLD_BOSS_AUTO_LEASE_MS = 5 * 60_000;
+const WORLD_BOSS_AUTO_RUN_BUDGET_MS = 25_000;
+const WORLD_BOSS_AUTO_RETRY_MS = 60_000;
+const WORLD_BOSS_AUTO_COOLDOWN_WAIT_MS = WORLD_BOSS_COOLDOWN_MS;
+
+/** 自动讨伐开关：写入宗门级持久化设置，开关打开后由 Cron 继续执行。 */
+export async function setWorldBossAuto(
+  db: D1Database,
+  userId: string,
+  enabled: boolean,
+  now: number,
+): Promise<{ state: SectStateView; boss: WorldBossView }> {
+  const draft = await draftFor(db, userId, now);
+  await draft.commit();
+  await new WorldBossAutoRepository(db).setEnabled(draft.sect.id, enabled, now);
+  return getWorldBoss(db, userId, now);
+}
+
+interface WorldBossAutoRunResult {
+  nextRunAt: number;
+  result: string;
+  pauseReason: string | null;
+}
+
+function activeUntil(value: string | null, now: number): boolean {
+  if (value === null) return false;
+  const until = Date.parse(value);
+  return Number.isFinite(until) && until > now;
+}
+
+function autoWorldBossParty(state: SectStateView, boss: WorldBossView, now: number): string[] {
+  const sortAttribute = boss.boss?.affix.sortAttribute ?? 'attack';
+  const score = (disciple: SectStateView['disciples'][number]): number => {
+    const value = disciple[sortAttribute] + (disciple.gear?.[sortAttribute] ?? 0);
+    return disciple.combatPower * (1 + value * 0.005);
+  };
+  return state.disciples
+    .filter(
+      (disciple) =>
+        !activeUntil(disciple.injuredUntil, now) &&
+        !activeUntil(disciple.severeInjuredUntil, now) &&
+        disciple.journey.status !== 'active' &&
+        disciple.combatBlockedReason === null &&
+        disciple.garrisonSiteName === null &&
+        (boss.fatigue[disciple.id] ?? 0) < 3,
+    )
+    .sort((left, right) => score(right) - score(left))
+    .slice(0, WORLD_BOSS_MAX_PARTY)
+    .map((disciple) => disciple.id);
+}
+
+function errorMessageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function sleepForWorldBossAuto(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+/**
+ * 单个宗门的自动讨伐循环。
+ * 每一轮都会重新读面板；有普通伤员就整批疗伤（库存不足时按现有规则自动炼制），
+ * 治疗后立即重新选人并出手。循环受 Worker 单次 Cron 预算限制，下一轮由持久化 next_run_at 接续。
+ */
+async function runWorldBossAutoForSect(
+  db: D1Database,
+  userId: string,
+  sectId: string,
+  now: number,
+  sleep: (milliseconds: number) => Promise<void> = sleepForWorldBossAuto,
+): Promise<WorldBossAutoRunResult> {
+  const autoRepo = new WorldBossAutoRepository(db);
+  let currentNow = now;
+  const deadline = now + WORLD_BOSS_AUTO_RUN_BUDGET_MS;
+  let attacks = 0;
+
+  while (currentNow <= deadline) {
+    const setting = await autoRepo.findBySectId(sectId);
+    if (setting === null || Number(setting.enabled) !== 1) {
+      return { nextRunAt: 0, result: 'disabled', pauseReason: null };
+    }
+
+    const current = await getWorldBoss(db, userId, currentNow);
+    if (!current.boss.attackable || current.boss.boss === null || current.boss.boss.status !== 'active') {
+      return {
+        nextRunAt: currentNow + WORLD_BOSS_AUTO_RETRY_MS,
+        result: attacks === 0 ? 'waiting' : `attacked:${String(attacks)}`,
+        pauseReason: current.boss.phase === 'closed' ? null : '当前没有可讨伐的妖王',
+      };
+    }
+
+    const injuredIds = current.state.disciples
+      .filter((disciple) => activeUntil(disciple.injuredUntil, currentNow))
+      .map((disciple) => disciple.id);
+    let healError: string | null = null;
+    if (injuredIds.length > 0) {
+      try {
+        await healDisciplesBatch(db, userId, injuredIds, currentNow, true);
+      } catch (error) {
+        // 受伤弟子可能正在历练，或回春丹与炼丹资源都不足；保留错误，继续尝试派健康弟子。
+        healError = errorMessageOf(error);
+      }
+    }
+
+    // 治疗好的弟子在这一轮马上进入候选，不等下一次定时任务。
+    const refreshed = await getWorldBoss(db, userId, currentNow);
+    if (!refreshed.boss.attackable || refreshed.boss.boss === null || refreshed.boss.boss.status !== 'active') {
+      return {
+        nextRunAt: currentNow + WORLD_BOSS_AUTO_RETRY_MS,
+        result: attacks === 0 ? 'waiting' : `attacked:${String(attacks)}`,
+        pauseReason: null,
+      };
+    }
+    const party = autoWorldBossParty(refreshed.state, refreshed.boss, currentNow);
+    if (party.length === 0) {
+      return {
+        nextRunAt: currentNow + WORLD_BOSS_AUTO_RETRY_MS,
+        result: attacks === 0 ? 'paused' : `attacked:${String(attacks)}`,
+        pauseReason: healError ?? '暂无可出战的弟子',
+      };
+    }
+
+    try {
+      await attackWorldBoss(db, userId, { discipleIds: party }, currentNow);
+      attacks += 1;
+    } catch (error) {
+      if (error instanceof AppError && error.code === 'COOLDOWN_ACTIVE') {
+        const remaining = Number(error.details?.remainingSeconds ?? 1);
+        return {
+          nextRunAt: currentNow + Math.max(1, remaining) * 1000,
+          result: attacks === 0 ? 'waiting' : `attacked:${String(attacks)}`,
+          pauseReason: null,
+        };
+      }
+      return {
+        nextRunAt: currentNow + WORLD_BOSS_AUTO_RETRY_MS,
+        result: attacks === 0 ? 'paused' : `attacked:${String(attacks)}`,
+        pauseReason: errorMessageOf(error),
+      };
+    }
+
+    currentNow += WORLD_BOSS_AUTO_COOLDOWN_WAIT_MS;
+    if (currentNow > deadline) break;
+    await sleep(WORLD_BOSS_AUTO_COOLDOWN_WAIT_MS);
+  }
+
+  return {
+    nextRunAt: currentNow,
+    result: `attacked:${String(attacks)}`,
+    pauseReason: null,
+  };
+}
+
+/** 定时任务入口：抢租约后执行各宗门的自动循环，关闭页面 / 退出登录不影响它。 */
+export async function processWorldBossAuto(
+  db: D1Database,
+  now: number,
+  sleep: (milliseconds: number) => Promise<void> = sleepForWorldBossAuto,
+): Promise<void> {
+  const repo = new WorldBossAutoRepository(db);
+  const due = await repo.findDue(now);
+  for (const item of due) {
+    const leaseUntil = now + WORLD_BOSS_AUTO_LEASE_MS;
+    if (!(await repo.acquireLease(item.sect_id, now, leaseUntil))) continue;
+    let run: WorldBossAutoRunResult;
+    try {
+      run = await runWorldBossAutoForSect(db, item.user_id, item.sect_id, now, sleep);
+    } catch (error) {
+      run = {
+        nextRunAt: now + WORLD_BOSS_AUTO_RETRY_MS,
+        result: 'paused',
+        pauseReason: errorMessageOf(error),
+      };
+    }
+    await repo.finishRun({
+      sectId: item.sect_id,
+      leaseUntil,
+      now,
+      nextRunAt: run.nextRunAt,
+      result: run.result,
+      pauseReason: run.pauseReason,
+    });
+  }
 }
 
 /**
@@ -9080,7 +9484,8 @@ export async function attackWorldBoss(
   userId: string,
   input: { discipleIds: readonly string[] },
   now: number,
-  dailyAttackLimit: number = WORLD_BOSS_DAILY_ATTACK_LIMIT_DEFAULT,
+  /** @deprecated 旧调用方兼容参数；现已取消每日出手上限。 */
+  _legacyDailyAttackLimit?: number,
 ): Promise<{ state: SectStateView; result: WorldBossAttackResultView; boss: WorldBossView }> {
   const draft = await draftFor(db, userId, now);
   const repo = new WorldBossRepository(db);
@@ -9107,18 +9512,6 @@ export async function attackWorldBoss(
       throw new AppError('COOLDOWN_ACTIVE', '出手太快，妖王还没缓过神', {
         remainingSeconds: Math.ceil(remainingMs / 1000),
       });
-    }
-  }
-
-  // 每日出手上限（防协议脚本全天刷；0 = 不限）：按 UTC+8 自然日数本宗门的出手记录。
-  if (dailyAttackLimit > 0) {
-    const attacksToday = await repo.countHitsBySectSince(draft.sect.id, dayStartMs(now));
-    if (attacksToday >= dailyAttackLimit) {
-      throw new AppError(
-        'DAILY_LIMIT',
-        `今日出手次数已达上限（${String(attacksToday)}/${String(dailyAttackLimit)}），明日再战`,
-        { attacksToday, dailyAttackLimit },
-      );
     }
   }
 
@@ -9154,21 +9547,39 @@ export async function attackWorldBoss(
   // 逐人判定：先判重伤，未重伤再判受伤；被判重伤的那一刀不计入队伍伤害。
   // 0028 装备：讨伐**计入装备** —— 伤害（战力 + 词缀属性加成）、暴击率用的幸运、
   // 受伤 / 重伤判定用的体魄，全部用「基础属性 + 装备加成」（计划 1.2）。
+  // 功法（docs/功法开发计划.md 第 4 节）：每名出战弟子的 Boss 修正（没有主修为 null）。
+  // 暴击类修正取出战弟子的平均值（整次攻击共用一次暴击判定）。
+  const techniqueModsById = new Map(
+    members.map((member) => [member.id, techniqueModsOf(draft, member, now)] as const),
+  );
+  const bossModsOf = (member: DiscipleRow): TechniqueBossMods | null => techniqueModsById.get(member.id)?.boss ?? null;
+  const averageOverMembers = (pick: (boss: TechniqueBossMods | null) => number): number =>
+    members.reduce((sum, member) => sum + pick(bossModsOf(member)), 0) / members.length;
+  const critRateMultiplierAvg = averageOverMembers((boss) => boss?.critRateMultiplier ?? 1);
+  const critMultiplierBonusAvg = averageOverMembers((boss) => boss?.critMultiplierBonus ?? 0);
+  const nonCritMultiplierAvg = averageOverMembers((boss) => boss?.nonCritMultiplier ?? 1);
+
   const outcomes: WorldBossMemberOutcomeView[] = [];
   const severeMembers: DiscipleRow[] = [];
   const injuredMembers: DiscipleRow[] = [];
   let partyBase = 0;
   let critBonusBase = 0;
   let luckSum = 0;
+  let gainSum = 0;
+  let gainBase = 0;
   for (const member of members) {
     const attrs = battleAttrsOf(member);
     luckSum += attrs.luck;
+    const boss = bossModsOf(member);
     const verdict = rollOutcome({
       fatigueCount: fatigueByDisciple.get(member.id) ?? 0,
       physique: attrs.physique,
       berserk,
       // 天赋重构 · 铁骨：受伤 / 重伤概率按境界减免。
       injuryReductionBp: talentBonusBp(member.talent, member.realm_id, 'ironBody'),
+      // 功法：金刚 / 血身 / 百毒的受伤、重伤概率倍率（逐人判定，按该弟子自己的功法）。
+      normalInjuryMultiplier: boss?.normalInjuryMultiplier ?? 1,
+      severeInjuryMultiplier: boss?.severeInjuryMultiplier ?? 1,
       random: Math.random,
     });
     if (verdict.severe) {
@@ -9182,7 +9593,7 @@ export async function attackWorldBoss(
     } else {
       outcomes.push({ discipleId: member.id, discipleName: member.name, outcome: 'normal' });
     }
-    const contribution = discipleContribution(
+    const baseContribution = discipleContribution(
       discipleCombatPower(
         member.realm_id,
         Number(member.stage),
@@ -9199,18 +9610,28 @@ export async function attackWorldBoss(
         speed: attrs.speed,
       },
     );
+    // 功法：伤害增益 / 伤害代价按弟子逐人乘进贡献；gainSum / gainBase 只用来算「功法加成」百分比。
+    const damageGain = boss?.damageGain ?? 1;
+    const contribution = baseContribution * damageGain * (boss?.damageCost ?? 1);
+    gainBase += baseContribution;
+    gainSum += baseContribution * damageGain;
     partyBase += contribution;
     // 天赋重构 · 会心：暴击时这名弟子的伤害额外 + 会心加成。
     critBonusBase += (contribution * talentBonusBp(member.talent, member.realm_id, 'critical')) / 10_000;
   }
 
+  const techniqueBonusPercent = gainBase > 0 ? Math.max(0, Math.round((gainSum / gainBase - 1) * 100)) : 0;
   const { damage, crit } = rollDamage({
     partyBase,
     arenaLevel,
     // 暴击率用「出战弟子」的幸运平均值（本次派出的全部成员，与计划 2.5 一致）。
     avgLuck: members.length === 0 ? 0 : luckSum / members.length,
     frenzy,
-    ...(affix?.id === 'eerie' ? { critRateMultiplier: 2 } : {}),
+    // 邪祟翻倍暴击率；天机按出战弟子平均再乘（没有功法时都是 ×1）。
+    critRateMultiplier: (affix?.id === 'eerie' ? 2 : 1) * critRateMultiplierAvg,
+    // 破军：暴击伤害倍率加成（出战弟子平均）；未暴击伤害倍率（天机 0.85 平均）。
+    critMultiplierBonus: critMultiplierBonusAvg,
+    nonCritMultiplier: nonCritMultiplierAvg,
     critBonusBase,
     random: Math.random,
   });
@@ -9337,6 +9758,7 @@ export async function attackWorldBoss(
       bossMaxHp: after === null ? Number(boss.max_hp) : Number(after.max_hp),
       nextStage,
       members: outcomes,
+      techniqueBonusPercent,
     },
     boss: await buildWorldBossView({
       db,
@@ -9344,12 +9766,11 @@ export async function attackWorldBoss(
       now,
       boss: viewBoss,
       rewardContext: worldBossRewardContext(draft.view()),
-      dailyAttackLimit,
     }),
   };
 }
 /**
- * 0027 世界 Boss：Cron 的每 10 分钟处理（出现 → 逃走 → 发奖 → 清理疲劳记录）。
+ * 0027 世界 Boss：Cron 的每分钟处理（出现 → 自动讨伐 → 逃走 → 发奖 → 清理疲劳记录）。
  *
  * Workers 不等未完成的 Promise，所以每一步都 await；各步各自兜错，
  * 前一步失败不会挡住后面的发奖。
@@ -9359,6 +9780,11 @@ export async function processWorldBoss(db: D1Database, now: number): Promise<voi
     await spawnWorldBoss(db, now);
   } catch (error) {
     console.warn(`world_boss_spawn_failed now=${String(now)} error=${String(error)}`);
+  }
+  try {
+    await processWorldBossAuto(db, now);
+  } catch (error) {
+    console.warn(`world_boss_auto_failed now=${String(now)} error=${String(error)}`);
   }
   try {
     await fleeExpiredWorldBosses(db, now);
@@ -9665,6 +10091,20 @@ async function rewardWorldBoss(
         bossDrops.push({ sectId, name: generated.name, quality: generated.quality });
         rewardLedger.get(sectId)?.items.push(generated.name);
       }
+      // 功法残卷（docs/功法开发计划.md 第 5 节）：击杀才掉，每个参与宗门按本关伤害占比判定；
+      // 放在装备掉落之后取随机数，不影响装备的取用顺序。伤害第一另 +1 张。
+      participants.forEach(([sectId, info], index) => {
+        const grant = bossScrollGrantOf({
+          stage,
+          damageShare: totalDamage > 0 ? info.damage / totalDamage : 0,
+          rank: index + 1,
+          random: Math.random,
+        });
+        for (const [techniqueId, count] of Object.entries(grant)) {
+          statements.push(addTechniqueScrollsStatement(sectId, techniqueId, count));
+          rewardLedger.get(sectId)?.items.push(`${techniqueNameOf(techniqueId)}残卷 ×${String(count)}`);
+        }
+      });
     }
   }
 
@@ -9743,6 +10183,7 @@ export function getMeritShop(): MeritShopView {
       quality: item.quality,
       resourceId: item.resourceId,
       pillId: item.pillId,
+      techniqueId: item.techniqueId,
       color: item.quality === null ? null : qualityColorOf(item.quality),
     })),
     slots: equipmentSlotViews(),
@@ -9763,6 +10204,8 @@ export interface BossMeritExchangeOutcome {
   pill: { pillId: string; name: string; quantity: number } | null;
   /** 兑换到的装备；兑换玄铁时为 null。 */
   equipment: { id: string; name: string; quality: string; slot: string; slotName: string } | null;
+  /** 0066 兑换到的功法残卷（张）；不是残卷时为 null。 */
+  scroll: { techniqueId: string; name: string; quantity: number } | null;
 }
 
 /**
@@ -9801,6 +10244,25 @@ export async function exchangeBossMerit(
       );
     }
     draft.requireResource(BOSS_MERIT_RESOURCE_ID, costMinUnits * quantity);
+    // 0066 功法残卷：按张数进 sect_techniques.scrolls（与 Boss 掉落同一条 upsert；不需要藏经阁）。
+    if (item.techniqueId !== null) {
+      const before = techniqueRowOf(draft, item.techniqueId);
+      draft.addStatement(addTechniqueScrollsStatement(draft.sect.id, item.techniqueId, quantity));
+      await draft.commit();
+      draft.setTechnique({ ...before, scrolls: Number(before.scrolls) + quantity });
+      return {
+        state: draft.view(),
+        outcome: {
+          itemId: item.id,
+          cost: costMinUnits * quantity,
+          xuantie: 0,
+          resource: null,
+          pill: null,
+          equipment: null,
+          scroll: { techniqueId: item.techniqueId, name: item.name, quantity },
+        },
+      };
+    }
     // 天赋重构：丹药类（洗髓丹）直接进丹库，与炼制入库同一条 upsert。
     if (item.pillId !== null) {
       draft.addPill(item.pillId, quantity);
@@ -9814,6 +10276,7 @@ export async function exchangeBossMerit(
           resource: null,
           pill: { pillId: item.pillId, name: item.name, quantity },
           equipment: null,
+          scroll: null,
         },
       };
     }
@@ -9831,6 +10294,7 @@ export async function exchangeBossMerit(
         resource: { resourceId, name: item.name, amount },
         pill: null,
         equipment: null,
+        scroll: null,
       },
     };
   }
@@ -9886,6 +10350,7 @@ export async function exchangeBossMerit(
         slot: generated.slot,
         slotName: slotNameOf(generated.slot),
       },
+      scroll: null,
     },
   };
 }
@@ -10474,21 +10939,7 @@ export async function challengeTower(
   }
 
   // 0028 装备 + 天赋重构：战力计入装备与战意，属性用「基础 + 装备」；会心 / 铁骨按境界取加成。
-  const fighters: TowerFighter[] = members.map((member) => {
-    const attrs = battleAttrsOf(member);
-    return {
-      id: member.id,
-      name: member.name,
-      power: gearedCombatPower(member),
-      attack: attrs.attack,
-      defense: attrs.defense,
-      speed: attrs.speed,
-      luck: attrs.luck,
-      physique: attrs.physique,
-      critBonusBp: talentBonusBp(member.talent, member.realm_id, 'critical'),
-      damageReductionBp: talentBonusBp(member.talent, member.realm_id, 'ironBody'),
-    };
-  });
+  const fighters: TowerFighter[] = members.map((member) => towerFighterOf(draft, member, now));
   const floor = (row === null ? 0 : Number(row.max_floor)) + 1;
   // 首通发装备的层：背包满了不许开打（不然打赢了装备没地方放），先提示清理背包。
   const equipmentQuality = towerClearEquipment(floor);
@@ -10606,6 +11057,7 @@ export async function challengeTower(
         power: fighter.power,
       })),
       message,
+      techniqueSummary: battle.techniqueSummary ?? [],
     },
   };
 }
@@ -10658,6 +11110,331 @@ export async function sweepTower(
       message: `扫荡镇妖塔（最高第 ${String(maxFloor)} 层）：获得 ${towerRewardText(draft, credited)}`,
     },
   };
+}
+
+/* ------------------------------------------------------------------ *
+ * 0066 功法（docs/功法开发计划.md）
+ *
+ * 规则与数值都在 techniques.ts（纯函数）；这里只做：读宗门收录与弟子主修 → 校验 → 写库。
+ * 功法归宗门：收录 / 参悟只做一次，修习的弟子共享等级；每名弟子一个主修槽，熟练度读时现算。
+ * 收录 / 参悟的并发守卫：sect_techniques 的等级与残卷数仍是读快照时的值（techniqueGuardStatement）。
+ * ------------------------------------------------------------------ */
+
+/** 镇妖塔胜率预估的模拟场数。 */
+const TOWER_PREVIEW_SAMPLES = 50;
+
+/** 弟子的功法修正（没有主修为 null）：等级取宗门的收录状态（至少按 1 级算），熟练度读时现算。 */
+function techniqueModsOf(draft: SectDraft, disciple: DiscipleRow, now: number): TechniqueModifiers | null {
+  if (disciple.technique_id === null) return null;
+  const level = Number(techniqueRowOf(draft, disciple.technique_id).level);
+  return techniqueModifiersOf({
+    techniqueId: disciple.technique_id,
+    level: Math.max(1, level),
+    proficiencyBp: techniqueProficiencyBp({
+      base: Number(disciple.technique_prof_base),
+      since: disciple.technique_since === null ? null : Number(disciple.technique_since),
+      now,
+    }),
+  });
+}
+
+/** 镇妖塔的出战弟子战斗数据（战力 / 属性计入装备与战意，会心 / 铁骨按境界，主修功法的修正按宗门收录与熟练度现算）。 */
+function towerFighterOf(draft: SectDraft, member: DiscipleRow, now: number): TowerFighter {
+  const attrs = battleAttrsOf(member);
+  const technique = techniqueModsOf(draft, member, now);
+  return {
+    id: member.id,
+    name: member.name,
+    power: gearedCombatPower(member),
+    attack: attrs.attack,
+    defense: attrs.defense,
+    speed: attrs.speed,
+    luck: attrs.luck,
+    physique: attrs.physique,
+    critBonusBp: talentBonusBp(member.talent, member.realm_id, 'critical'),
+    damageReductionBp: talentBonusBp(member.talent, member.realm_id, 'ironBody'),
+    ...(technique === null ? {} : { technique }),
+  };
+}
+
+/**
+ * 镇妖塔胜率预估（POST /game/tower/preview）：入参同挑战（固定 5 人，同样的出战校验），
+ * 服务端按当前层与当前队伍模拟 50 场，返回胜率与平均回合数。不扣次数、不写库。
+ */
+export async function previewTower(
+  db: D1Database,
+  userId: string,
+  input: { discipleIds: readonly string[] },
+  now: number,
+): Promise<{ preview: TowerPreviewView }> {
+  const draft = await draftFor(db, userId, now);
+  requireTowerUnlocked(draft);
+  const row = await new TowerRepository(db).findBySectId(draft.sect.id);
+  const floor = (row === null ? 0 : Number(row.max_floor)) + 1;
+  const discipleIds = [...new Set(input.discipleIds)];
+  if (discipleIds.length !== TOWER_PARTY_SIZE) {
+    throw new AppError('VALIDATION_ERROR', `镇妖塔每次需派 ${String(TOWER_PARTY_SIZE)} 名不同的弟子`);
+  }
+  const members = discipleIds.map((discipleId) => draft.discipleById(discipleId));
+  for (const member of members) {
+    requireCanFight(draft, member, '闯塔');
+    if (member.injured_until !== null && Number(member.injured_until) > now) {
+      throw new AppError('INVALID_STATUS', `${member.name}正在疗伤，无法闯塔`);
+    }
+  }
+  const fighters = members.map((member) => towerFighterOf(draft, member, now));
+  const arenaLevel = draft.buildings.find((building) => building.def_id === ARENA_BUILDING_ID)?.level ?? 0;
+  let wins = 0;
+  let rounds = 0;
+  for (let index = 0; index < TOWER_PREVIEW_SAMPLES; index += 1) {
+    const battle = simulateTowerBattle({ floor, fighters, arenaLevel, random: Math.random });
+    if (battle.won) wins += 1;
+    rounds += battle.rounds.length;
+  }
+  return {
+    preview: {
+      floor,
+      samples: TOWER_PREVIEW_SAMPLES,
+      winRate: Math.round((wins * 100) / TOWER_PREVIEW_SAMPLES),
+      avgRounds: Math.round((rounds * 10) / TOWER_PREVIEW_SAMPLES) / 10,
+    },
+  };
+}
+
+/** 藏经阁开放条件：宗门建有藏经阁（≥ 1 级）。 */
+function requireScriptureLibrary(draft: SectDraft): void {
+  const level = draft.buildings.find((building) => building.def_id === SCRIPTURE_LIBRARY_BUILDING_ID)?.level ?? 0;
+  if (Number(level) < 1) {
+    throw new AppError('INVALID_STATUS', '宗门建有藏经阁后才能收录与参悟功法');
+  }
+}
+
+/** 按 id 找功法定义；未知 id 报 VALIDATION_ERROR。 */
+function requireTechniqueDef(techniqueId: string) {
+  const def = findTechnique(techniqueId);
+  if (def === undefined) {
+    throw new AppError('VALIDATION_ERROR', '未知功法');
+  }
+  return def;
+}
+
+/** 本宗某功法的收录行（没有行 = 未收录、残卷为 0）。 */
+function techniqueRowOf(draft: SectDraft, techniqueId: string): SectTechniqueRow {
+  return (
+    draft.techniques.find((row) => row.technique_id === techniqueId) ?? {
+      sect_id: draft.sect.id,
+      technique_id: techniqueId,
+      level: 0,
+      scrolls: 0,
+    }
+  );
+}
+
+/**
+ * 收录 / 参悟的写库：写回绝对值（level / scrolls）+ 并发守卫（读快照时的等级与残卷数仍在，否则整批回滚）。
+ */
+async function commitTechniqueChange(
+  draft: SectDraft,
+  before: SectTechniqueRow,
+  after: SectTechniqueRow,
+): Promise<void> {
+  draft.addStatement(
+    upsertSectTechniqueStatement({
+      sectId: draft.sect.id,
+      techniqueId: after.technique_id,
+      level: Number(after.level),
+      scrolls: Number(after.scrolls),
+    }),
+  );
+  const guardId = `${crypto.randomUUID()}:technique`;
+  await draft.commit({
+    extraGuards: [
+      {
+        id: guardId,
+        statement: techniqueGuardStatement(guardId, {
+          sectId: draft.sect.id,
+          techniqueId: before.technique_id,
+          level: Number(before.level),
+          scrolls: Number(before.scrolls),
+        }),
+      },
+    ],
+  });
+  draft.setTechnique(after);
+}
+
+/** 藏经阁面板（只读）：全部功法、本宗收录 / 参悟 / 残卷状态与下一级消耗。 */
+function techniqueLibraryViewOf(draft: SectDraft): TechniqueLibraryView {
+  const scriptureLevel = Number(
+    draft.buildings.find((building) => building.def_id === SCRIPTURE_LIBRARY_BUILDING_ID)?.level ?? 0,
+  );
+  const items: TechniqueCatalogView[] = TECHNIQUES.map((def) => {
+    const row = techniqueRowOf(draft, def.id);
+    const level = Number(row.level);
+    const scrolls = Number(row.scrolls);
+    const learned = level >= 1;
+    const learnScrolls = techniqueLearnScrolls(def.tier);
+    const upgrade = learned ? techniqueUpgradeCost(def.tier, level) : null;
+    return {
+      id: def.id,
+      name: def.name,
+      school: def.school,
+      schoolName: TECHNIQUE_SCHOOLS.find((item) => item.id === def.school)?.name ?? '',
+      tier: def.tier,
+      tierName: TECHNIQUE_TIER_NAMES[def.tier],
+      tag: def.tag,
+      summary: def.summary,
+      towerGain: def.towerGain,
+      cost: def.cost,
+      bossGain: def.bossGain,
+      learned,
+      level,
+      scrolls,
+      learnScrolls,
+      learnRemaining: learned ? 0 : Math.max(0, learnScrolls - scrolls),
+      upgradeScrolls: upgrade?.scrolls ?? null,
+      upgradeStone: upgrade?.stone ?? null,
+      scrollName: `${def.name}残卷`,
+      levelFactor: techniqueLevelFactor(Math.max(1, level)),
+      disciplesUsing: draft.disciples.filter((item) => item.technique_id === def.id).length,
+    };
+  });
+  return {
+    unlocked: scriptureLevel >= 1,
+    scriptureLevel,
+    maxLevel: TECHNIQUE_MAX_LEVEL,
+    schools: TECHNIQUE_SCHOOLS.map((item) => ({ id: item.id, name: item.name })),
+    items,
+  };
+}
+
+/** GET /game/techniques：藏经阁面板（只读，不写库）。 */
+export async function getTechniqueLibrary(
+  db: D1Database,
+  userId: string,
+  now: number,
+): Promise<{ library: TechniqueLibraryView }> {
+  const draft = await draftFor(db, userId, now);
+  return { library: techniqueLibraryViewOf(draft) };
+}
+
+/**
+ * 收录（POST /game/techniques/learn）：扣残卷，等级置 1。
+ * 校验：藏经阁已建（≥ 1 级）→ 功法存在 → 未收录 → 残卷够。
+ */
+export async function learnTechnique(
+  db: D1Database,
+  userId: string,
+  techniqueId: string,
+  now: number,
+): Promise<{ state: SectStateView; library: TechniqueLibraryView; result: { message: string } }> {
+  const draft = await draftFor(db, userId, now);
+  const def = requireTechniqueDef(techniqueId);
+  requireScriptureLibrary(draft);
+  const before = techniqueRowOf(draft, def.id);
+  if (Number(before.level) >= 1) {
+    throw new AppError('INVALID_STATUS', `已收录${def.name}`);
+  }
+  const cost = techniqueLearnScrolls(def.tier);
+  const owned = Number(before.scrolls);
+  if (owned < cost) {
+    throw new AppError('INVALID_STATUS', `${def.name}残卷不足：收录需 ${String(cost)} 张，还差 ${String(cost - owned)} 张`);
+  }
+  await commitTechniqueChange(draft, before, { ...before, level: 1, scrolls: owned - cost });
+  return {
+    state: draft.view(),
+    library: techniqueLibraryViewOf(draft),
+    result: { message: `收录${def.name}，参悟等级 1` },
+  };
+}
+
+/**
+ * 参悟升级（POST /game/techniques/upgrade）：扣残卷 + 灵石（灵石 = 单位 × 当前等级），等级 +1。
+ * 校验：藏经阁已建 → 已收录 → 未满级 → 残卷够 → 灵石够（requireResource 报 INSUFFICIENT_RESOURCE）。
+ */
+export async function upgradeTechnique(
+  db: D1Database,
+  userId: string,
+  techniqueId: string,
+  now: number,
+): Promise<{ state: SectStateView; library: TechniqueLibraryView; result: { message: string } }> {
+  const draft = await draftFor(db, userId, now);
+  const def = requireTechniqueDef(techniqueId);
+  requireScriptureLibrary(draft);
+  const before = techniqueRowOf(draft, def.id);
+  const level = Number(before.level);
+  if (level < 1) {
+    throw new AppError('INVALID_STATUS', `尚未收录${def.name}，先收录后才能参悟`);
+  }
+  const cost = techniqueUpgradeCost(def.tier, level);
+  if (cost === null) {
+    throw new AppError('INVALID_STATUS', `${def.name}已达最高参悟等级`);
+  }
+  const owned = Number(before.scrolls);
+  if (owned < cost.scrolls) {
+    throw new AppError(
+      'INVALID_STATUS',
+      `${def.name}残卷不足：参悟到 ${String(level + 1)} 级需 ${String(cost.scrolls)} 张，还差 ${String(cost.scrolls - owned)} 张`,
+    );
+  }
+  draft.requireResource('spiritStone', cost.stone);
+  await commitTechniqueChange(draft, before, { ...before, level: level + 1, scrolls: owned - cost.scrolls });
+  return {
+    state: draft.view(),
+    library: techniqueLibraryViewOf(draft),
+    result: { message: `${def.name}参悟至 ${String(level + 1)} 级` },
+  };
+}
+
+/**
+ * 设置 / 更换 / 卸下弟子主修（POST /game/disciples/technique）。
+ * - 只能选已收录的功法；techniqueId 为 null 即卸下（熟练度与时刻清空）。
+ * - 换功法：熟练度减半后继续增长（从减半后的值起算）；新主修从 0 起算。
+ * - 随时可换：在外历练 / 重伤中也可以，按出战那一刻的熟练度结算。
+ * - 相同值显式早退（不提交、不产生结算副作用）。
+ */
+export async function setDiscipleTechnique(
+  db: D1Database,
+  userId: string,
+  discipleId: string,
+  techniqueId: string | null,
+  now: number,
+): Promise<SectStateView> {
+  const draft = await draftFor(db, userId, now);
+  const disciple = draft.discipleById(discipleId);
+  if (techniqueId !== null) {
+    const def = requireTechniqueDef(techniqueId);
+    if (Number(techniqueRowOf(draft, def.id).level) < 1) {
+      throw new AppError('INVALID_STATUS', `请先在藏经阁收录${def.name}`);
+    }
+  }
+  if (disciple.technique_id === techniqueId) {
+    return draft.view();
+  }
+  let profBase = 0;
+  let since: number | null = null;
+  if (techniqueId !== null) {
+    if (disciple.technique_id !== null) {
+      const currentBp = techniqueProficiencyBp({
+        base: Number(disciple.technique_prof_base),
+        since: disciple.technique_since === null ? null : Number(disciple.technique_since),
+        now,
+      });
+      profBase = techniqueKeptProficiencyBp(currentBp);
+    }
+    since = now;
+  }
+  draft.addStatement(
+    updateDiscipleTechniqueStatement({ discipleId: disciple.id, techniqueId, profBase, since }),
+  );
+  disciple.technique_id = techniqueId;
+  disciple.technique_prof_base = profBase;
+  disciple.technique_since = since;
+  await draft.commitDisciple([{ id: disciple.id }], undefined, {
+    allowActiveJourney: true,
+    allowSevereInjury: true,
+  });
+  return draft.view();
 }
 
 /* ------------------------------------------------------------------ *
@@ -10761,7 +11538,8 @@ export async function processAuctionMerchant(db: D1Database, now: number, random
   const leavesAt = now + MERCHANT_STAY_MS;
   // 商品停留与补货间隔独立：上一批还在竞价，也允许新一批到访。
   const nextArrivalAt = now + merchantGapMs(random);
-  const goods = generateMerchantGoods(random);
+  // 功法残卷占材料单的 1～2 格（单数仍是 8～12，见 withTechniqueScrolls）。
+  const goods = withTechniqueScrolls(generateMerchantGoods(random), random);
   const statements: ParameterizedQuery[] = [{
     sql: `INSERT INTO mutation_guards (command_id, valid)
           SELECT ?, CASE WHEN EXISTS (SELECT 1 FROM auction_merchant_state WHERE id = 1 AND version = ? AND next_arrival_at <= ?) THEN 1 ELSE 0 END`,
@@ -10774,7 +11552,7 @@ export async function processAuctionMerchant(db: D1Database, now: number, random
     merchantVisitId: visitId, sellerNetHash: null, endsAt: leavesAt, now,
   })), insertChatMessageStatement({
     id: `${visitId}:announcement`, userId: 'system', sectName: '系统', now,
-    content: `【游商到访】${MERCHANT_NAME}携 ${goods.filter((item) => item.kind === 'equipment').length} 件装备与 ${goods.filter((item) => item.kind === 'resource').length} 单玄铁 / 神木来到拍卖行，停留 6 小时！凡、灵、宝、仙各品质都有机会出现，支持竞拍与一口价，诸位掌门莫错过。`,
+    content: `【游商到访】${MERCHANT_NAME}携 ${goods.filter((item) => item.kind === 'equipment').length} 件装备、${goods.filter((item) => item.kind === 'resource' && techniqueIdOfScrollItem(item.itemId) === null).length} 单玄铁 / 神木与 ${goods.filter((item) => techniqueIdOfScrollItem(item.itemId) !== null).length} 单功法残卷来到拍卖行，停留 6 小时！凡、灵、宝、仙各品质都有机会出现，支持竞拍与一口价，诸位掌门莫错过。`,
   }), deleteDiscipleSnapshotGuardStatement(guardId)];
   try {
     await db.batch(prepareStatements(db, statements));
@@ -11008,6 +11786,12 @@ function deliverAuctionItem(draft: SectDraft, lot: AuctionLotRow, now: number): 
   }
   if (lot.kind === 'pill') {
     draft.addPill(lot.item_id, Number(lot.quantity));
+    return;
+  }
+  // 功法残卷（云游商人的 kind: 'resource' 货品）：张数进 sect_techniques.scrolls，不进资源余额。
+  const scrollTechniqueId = lot.kind === 'resource' ? techniqueIdOfScrollItem(lot.item_id) : null;
+  if (scrollTechniqueId !== null) {
+    draft.addStatement(addTechniqueScrollsStatement(draft.sect.id, scrollTechniqueId, Number(lot.quantity)));
     return;
   }
   draft.grantResource(lot.item_id, Number(lot.quantity) * 1000);
@@ -12430,7 +13214,7 @@ export async function tradeStock(
 }
 
 /* ------------------------------------------------------------------ *
- * 0061 灵股保证金合约
+ * 0063 灵股保证金合约
  *
  * 逐仓、一向持仓、固定杠杆。合约仓位与现货 / 挂单分表；强平按行情分钟逐分钟扫描。
  * ------------------------------------------------------------------ */
@@ -13626,18 +14410,27 @@ interface ArenaRosterSect {
   level: number;
   disciples: DiscipleRow[];
   blockedReasonOf: ReadonlyMap<string, string>;
+  /** 0066 功法：本宗已收录功法的参悟等级（technique_id → level）。 */
+  techniqueLevels: ReadonlyMap<string, number>;
 }
 
 /** 全服宗门等级达标者的名册（只读；在外 / 执事 / 坐镇 / 重伤 / 疗伤的弟子记下原因）。 */
 async function loadArenaRoster(db: D1Database, now: number): Promise<ArenaRosterSect[]> {
   const repo = new ArenaRepository(db);
-  const [sects, disciples, journeys, stewardIds, garrisonTexts] = await Promise.all([
+  const [sects, disciples, journeys, stewardIds, garrisonTexts, techniqueRows] = await Promise.all([
     repo.sectsAtLeast(ARENA_UNLOCK_SECT_LEVEL),
     repo.disciplesOfSectsAtLeast(ARENA_UNLOCK_SECT_LEVEL),
     repo.openJourneys(),
     repo.stewardDiscipleIds(),
     repo.garrisonTexts(),
+    repo.learnedTechniquesOfSectsAtLeast(ARENA_UNLOCK_SECT_LEVEL),
   ]);
+  const techniqueLevelsBySect = new Map<string, Map<string, number>>();
+  for (const row of techniqueRows) {
+    const levels = techniqueLevelsBySect.get(row.sect_id) ?? new Map<string, number>();
+    levels.set(row.technique_id, Number(row.level));
+    techniqueLevelsBySect.set(row.sect_id, levels);
+  }
   const awayIds = journeyAwayIds(journeys, now);
   const stewardSet = new Set(stewardIds);
   const garrisonSet = new Set(garrisonTexts.flatMap((text) => parseGarrison(text)));
@@ -13663,27 +14456,52 @@ async function loadArenaRoster(db: D1Database, now: number): Promise<ArenaRoster
       });
       if (reason !== null) blockedReasonOf.set(disciple.id, reason);
     }
-    return { id: sect.id, name: sect.name, level: Number(sect.level), disciples: members, blockedReasonOf };
+    return {
+      id: sect.id,
+      name: sect.name,
+      level: Number(sect.level),
+      disciples: members,
+      blockedReasonOf,
+      techniqueLevels: techniqueLevelsBySect.get(sect.id) ?? new Map<string, number>(),
+    };
   });
 }
 
-/** 弟子的战力（计入装备）与战斗属性：配对模拟与榜单共用。 */
-function arenaFighterOf(disciple: DiscipleRow): { power: number; fighter: ArenaFighter } {
+/**
+ * 弟子的战力（计入装备）与战斗属性：配对模拟与榜单共用。
+ * 0066 功法：传入本宗收录等级时按「此刻」的熟练度现算主修功法的修正；没收录 / 没主修就不带（走原有路径）。
+ */
+function arenaFighterOf(
+  disciple: DiscipleRow,
+  techniqueLevels?: ReadonlyMap<string, number>,
+  now?: number,
+): { power: number; fighter: ArenaFighter } {
   const attrs = battleAttrsOf(disciple);
   const power = gearedCombatPower(disciple);
-  return {
+  const fighter: ArenaFighter = {
+    id: disciple.id,
+    name: disciple.name,
     power,
-    fighter: {
-      id: disciple.id,
-      name: disciple.name,
-      power,
-      attack: attrs.attack,
-      defense: attrs.defense,
-      speed: attrs.speed,
-      luck: attrs.luck,
-      physique: attrs.physique,
-    },
+    attack: attrs.attack,
+    defense: attrs.defense,
+    speed: attrs.speed,
+    luck: attrs.luck,
+    physique: attrs.physique,
   };
+  const level = disciple.technique_id === null ? undefined : techniqueLevels?.get(disciple.technique_id);
+  if (level !== undefined && now !== undefined) {
+    const technique = techniqueModifiersOf({
+      techniqueId: disciple.technique_id,
+      level,
+      proficiencyBp: techniqueProficiencyBp({
+        base: Number(disciple.technique_prof_base),
+        since: disciple.technique_since === null ? null : Number(disciple.technique_since),
+        now,
+      }),
+    });
+    if (technique !== null) fighter.technique = technique;
+  }
+  return { power, fighter };
 }
 
 /** 选人候选：战力（计入装备）与此刻能否出战。 */
@@ -13700,7 +14518,6 @@ function arenaLineupOf(
   sect: ArenaRosterSect,
   kind: 'individual' | 'team',
   manual: readonly string[] | null,
-  teamPowerCap: number,
 ): { ids: string[]; auto: boolean } {
   const candidates = arenaCandidatesOf(sect);
   if (kind === 'individual') {
@@ -13709,7 +14526,8 @@ function arenaLineupOf(
       : { ids: adjustTeamLineup(candidates, manual, Number.POSITIVE_INFINITY), auto: false };
   }
   const base = manual ?? autoSelectLineup(candidates, ARENA_MAX_ENTRY);
-  return { ids: adjustTeamLineup(candidates, base, teamPowerCap), auto: manual === null };
+  // 宗门战暂不限制总战力（赛季行里的 team_power_cap 仍照常算定、存档，只是不再用来裁剪阵容）。
+  return { ids: adjustTeamLineup(candidates, base, Number.POSITIVE_INFINITY), auto: manual === null };
 }
 
 /** 前 5 名弟子的总战力（上限按宗门实力算，不随伤势浮动）。 */
@@ -13723,13 +14541,6 @@ function arenaTopPowerOf(disciples: readonly DiscipleRow[]): number {
 
 function arenaTeamCapFrom(roster: readonly ArenaRosterSect[]): number {
   return calculateTeamPowerCap(roster.map((sect) => arenaTopPowerOf(sect.disciples)));
-}
-
-/** 团队赛战力上限（只读）：本赛季已建则用存下的值，否则按当前宗门现算。 */
-async function arenaTeamCapOf(db: D1Database, roster: readonly ArenaRosterSect[], now: number): Promise<number> {
-  const stored = await new ArenaRepository(db).seasonRow(arenaSeasonId(now));
-  if (stored === null || stored.team_power_cap === null) return arenaTeamCapFrom(roster);
-  return Number(stored.team_power_cap);
 }
 
 /** 赛季行：没有就按当前宗门算定上限建一行（周一 0 点后第一次运行时建；赛季内不再变）。 */
@@ -13841,7 +14652,7 @@ function arenaRewardEventStatement(
  */
 async function settleArenaDay(db: D1Database, now: number, dateKey: string): Promise<void> {
   const roster = await loadArenaRoster(db, now);
-  const cap = await ensureArenaSeason(db, now, roster);
+  await ensureArenaSeason(db, now, roster);
   const entries = await new ArenaRepository(db).entriesOf(dateKey);
   const manualOf = (sectId: string, kind: 'individual' | 'team'): string[] | null => {
     const row = entries.find((entry) => entry.sect_id === sectId && entry.kind === kind);
@@ -13854,10 +14665,10 @@ async function settleArenaDay(db: D1Database, now: number, dateKey: string): Pro
   const seasonId = arenaSeasonId(now);
 
   const individualPlans = roster
-    .map((sect) => ({ sect, ...arenaLineupOf(sect, 'individual', manualOf(sect.id, 'individual'), cap) }))
+    .map((sect) => ({ sect, ...arenaLineupOf(sect, 'individual', manualOf(sect.id, 'individual')) }))
     .filter((plan) => plan.ids.length > 0);
   const teamPlans = roster
-    .map((sect) => ({ sect, ...arenaLineupOf(sect, 'team', manualOf(sect.id, 'team'), cap) }))
+    .map((sect) => ({ sect, ...arenaLineupOf(sect, 'team', manualOf(sect.id, 'team')) }))
     .filter((plan) => plan.ids.length > 0);
   if (individualPlans.length === 0 && teamPlans.length === 0) return;
 
@@ -13879,7 +14690,7 @@ async function settleArenaDay(db: D1Database, now: number, dateKey: string): Pro
   const individualEntrants = individualPlans.flatMap((plan) =>
     plan.ids.map((id) => {
       const disciple = disciplesById.get(id)!;
-      return { sect: plan.sect, disciple, ...arenaFighterOf(disciple) };
+      return { sect: plan.sect, disciple, ...arenaFighterOf(disciple, plan.sect.techniqueLevels, now) };
     }),
   );
   type ArenaStat = { points: number; wins: number; losses: number; damage: number };
@@ -13999,7 +14810,7 @@ async function settleArenaDay(db: D1Database, now: number, dateKey: string): Pro
   const teamEntries = teamPlans.map((plan) => {
     const members = plan.ids.map((id) => {
       const disciple = disciplesById.get(id)!;
-      return { disciple, ...arenaFighterOf(disciple) };
+      return { disciple, ...arenaFighterOf(disciple, plan.sect.techniqueLevels, now) };
     });
     return { sect: plan.sect, members, power: members.reduce((sum, member) => sum + member.power, 0) };
   });
@@ -14294,10 +15105,9 @@ export async function getArena(db: D1Database, userId: string, now: number): Pro
   const dateKey = dateKeyUtc8(now);
   const seasonId = arenaSeasonId(now);
   const hour = arenaHourOf(now);
-  const [latest, entries, teamPowerCap, seasonIndividuals, seasonTeams] = await Promise.all([
+  const [latest, entries, seasonIndividuals, seasonTeams] = await Promise.all([
     repo.latestSettledDateKey(),
     repo.entriesOf(dateKey),
-    arenaTeamCapOf(db, roster, now),
     repo.seasonIndividualRanking(seasonId, ARENA_RANKING_SIZE),
     repo.seasonTeamRanking(seasonId, ARENA_RANKING_SIZE),
   ]);
@@ -14335,7 +15145,7 @@ export async function getArena(db: D1Database, userId: string, now: number): Pro
     if (storedTeam !== undefined) {
       teamEntries.push(entryViewOf(sectRoster, arenaIdsOf(storedTeam.lineup), storedTeam.auto === 1));
     } else if (!settled) {
-      const ids = adjustTeamLineup(candidates, autoSelectLineup(candidates, ARENA_MAX_ENTRY), teamPowerCap);
+      const ids = adjustTeamLineup(candidates, autoSelectLineup(candidates, ARENA_MAX_ENTRY), Number.POSITIVE_INFINITY);
       if (ids.length > 0) teamEntries.push(entryViewOf(sectRoster, ids, true));
     }
   }
@@ -14410,7 +15220,8 @@ export async function getArena(db: D1Database, userId: string, now: number): Pro
     settled,
     canRegister: unlocked && hour < ARENA_SETTLE_HOUR && !settled,
     settleInMs: settled ? null : Math.max(0, settleAt - now),
-    teamPowerCap,
+    // 宗门战暂不限制总战力：前端看到 null 就不显示上限。
+    teamPowerCap: null,
     seasonId,
     dateKey: latest,
     myIndividualEntry: individualEntries.find((entry) => entry.sectId === sect.id) ?? null,
@@ -14473,16 +15284,6 @@ export async function setArenaLineup(
     const reason = mine.blockedReasonOf.get(member.id);
     if (reason !== undefined) {
       throw new AppError('INVALID_STATUS', `${member.name}：${reason}，无法呈报出战`);
-    }
-  }
-  if (kind === 'team') {
-    const cap = await ensureArenaSeason(db, now, roster);
-    const total = members.reduce((sum, member) => sum + gearedCombatPower(member), 0);
-    if (total > cap) {
-      throw new AppError('INVALID_STATUS', `出战战力 ${String(total)} 超过本赛季上限 ${String(cap)}，请调换弟子`, {
-        total,
-        cap,
-      });
     }
   }
   await repo.saveLineup({ sectId: sect.id, kind, lineup: discipleIds, auto: false, dateKey, now });
