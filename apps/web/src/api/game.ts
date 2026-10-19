@@ -203,7 +203,7 @@ export interface RenameView {
 
 export interface SectStateView {
   /** 0066 功法：宗门已收录的功法（弟子「更换主修」的候选）。 */
-  learnedTechniques: { id: string; name: string; level: number }[];
+  learnedTechniques: { id: string; name: string; level: number; tierName: string; schoolName: string; summary: string }[];
   /** 0066 功法：各功法持有的残卷数（只列 > 0 的）。 */
   techniqueScrolls: Record<string, number>;
   sect: {

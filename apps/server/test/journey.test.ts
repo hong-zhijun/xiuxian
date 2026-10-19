@@ -638,7 +638,7 @@ describe('预览：只读、数值与截断', () => {
     expect(preview.maxConcurrent).toBe(2);
     expect(preview.directions.map((item) => item.direction)).toEqual(['daoSeeking', 'gathering']);
     for (const direction of preview.directions) {
-      expect(direction.durations.map((item) => item.durationSeconds)).toEqual([7_200, 21_600]);
+      expect(direction.durations.map((item) => item.durationSeconds)).toEqual([7_200, 21_600, 43_200, 86_400]);
       for (const duration of direction.durations) {
         const plan = findJourneyPlan(direction.direction as JourneyDirection, duration.durationSeconds);
         expect(plan).toBeDefined();
@@ -1345,8 +1345,12 @@ describe('回归：既有探索与挑战规则不受影响', () => {
     expect(JOURNEY_PLANS.map((plan) => `${plan.direction}:${String(plan.durationSeconds)}`)).toEqual([
       'daoSeeking:7200',
       'daoSeeking:21600',
+      'daoSeeking:43200',
+      'daoSeeking:86400',
       'gathering:7200',
       'gathering:21600',
+      'gathering:43200',
+      'gathering:86400',
     ]);
   });
 });

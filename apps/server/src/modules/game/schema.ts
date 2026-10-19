@@ -220,7 +220,7 @@ export const journeyPreviewQuerySchema = z.strictObject({
 
 /**
  * 0014 出发：方向与时长只做「类型 + 宽松长度」的第一道防线，
- * 真正的白名单（daoSeeking/gathering × 7200/21600）在 journey.ts 里判定。
+ * 真正的白名单（daoSeeking/gathering × 2/6/12/24 小时）在 journey.ts 里判定。
  */
 export const startJourneyRequestSchema = z.strictObject({
   discipleId: z.string().min(1).max(64),

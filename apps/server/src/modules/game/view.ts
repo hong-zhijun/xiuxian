@@ -168,7 +168,7 @@ import { cultivationRatePerHour, resourceRates, type DiscipleState, type SettleR
 import type { MarketOrderKind } from './market';
 import type { WorldBossPhase } from './worldBoss';
 import type { TowerTechniqueSummary } from './tower';
-import { TECHNIQUES, techniqueNameOf, techniqueProficiencyBp } from './techniques';
+import { TECHNIQUES, TECHNIQUE_SCHOOLS, TECHNIQUE_TIER_NAMES, techniqueNameOf, techniqueProficiencyBp } from './techniques';
 /**
  * 接口返回的视图类型（前端只读这些字段，不需要再读配置）。
  *
@@ -1551,7 +1551,7 @@ export interface WorldBossAttackResultView {
 
 export interface SectStateView {
   /** 0066 功法：宗门已收录的功法（弟子「更换主修」的候选）。 */
-  learnedTechniques: { id: string; name: string; level: number }[];
+  learnedTechniques: { id: string; name: string; level: number; tierName: string; schoolName: string; summary: string }[];
   /** 0066 功法：各功法持有的残卷数（只列 > 0 的；功勋兑换显示「现有」用）。 */
   techniqueScrolls: Record<string, number>;
   sect: {
@@ -2499,7 +2499,16 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
   const learnedTechniques = TECHNIQUES.flatMap((def) => {
     const row = (input.techniques ?? []).find((item) => item.technique_id === def.id);
     return row !== undefined && Number(row.level) >= 1
-      ? [{ id: def.id, name: def.name, level: Number(row.level) }]
+      ? [
+          {
+            id: def.id,
+            name: def.name,
+            level: Number(row.level),
+            tierName: TECHNIQUE_TIER_NAMES[def.tier],
+            schoolName: TECHNIQUE_SCHOOLS.find((item) => item.id === def.school)?.name ?? '',
+            summary: def.summary,
+          },
+        ]
       : [];
   });
 

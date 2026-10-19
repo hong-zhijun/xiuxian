@@ -157,7 +157,7 @@ describe('功法 · 主修', () => {
     const set = await setDiscipleTechnique(env.DB, sect.userId, disciple, 'qingfeng', NOW);
     const view = set.disciples.find((item) => item.id === disciple)!;
     expect(view).toMatchObject({ techniqueId: 'qingfeng', techniqueName: '青锋剑诀', techniqueLevel: 1, techniqueProficiency: 0 });
-    expect(set.learnedTechniques).toEqual([{ id: 'qingfeng', name: '青锋剑诀', level: 1 }, { id: 'jingang', name: '金刚不坏体', level: 1 }]);
+    expect(set.learnedTechniques).toMatchObject([{ id: 'qingfeng', name: '青锋剑诀', level: 1 }, { id: 'jingang', name: '金刚不坏体', level: 1 }]);
 
     // 主修 48 小时后熟练度满（10000 基点），换功法时减半为 5000，之后从 5000 起算。
     const later = NOW + 48 * HOUR_MS;

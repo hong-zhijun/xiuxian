@@ -88,6 +88,28 @@ export const JOURNEY_PLANS: readonly JourneyPlanDef[] = [
     insightChanceBp: 1_500,
     attributeChanceBp: 800,
   },
+  // 12 / 24 小时：给挂机玩家的长线档。保底按 2 小时档 ×5.5 / ×10（略低于线性，短档仍更划算），
+  // 额外奖励概率与受伤概率随时长继续上调。
+  {
+    direction: 'daoSeeking',
+    durationSeconds: 43_200,
+    cultivation: 990,
+    resources: { spiritStone: 82_500 },
+    injuryChanceBp: 1_000,
+    fortuneChanceBp: 1_800,
+    insightChanceBp: 2_000,
+    attributeChanceBp: 1_100,
+  },
+  {
+    direction: 'daoSeeking',
+    durationSeconds: 86_400,
+    cultivation: 1_800,
+    resources: { spiritStone: 150_000 },
+    injuryChanceBp: 1_200,
+    fortuneChanceBp: 2_500,
+    insightChanceBp: 2_800,
+    attributeChanceBp: 1_500,
+  },
   {
     direction: 'gathering',
     durationSeconds: 7_200,
@@ -108,10 +130,30 @@ export const JOURNEY_PLANS: readonly JourneyPlanDef[] = [
     insightChanceBp: 600,
     attributeChanceBp: 1_500,
   },
+  {
+    direction: 'gathering',
+    durationSeconds: 43_200,
+    cultivation: 220,
+    resources: { herb: 137_500, ore: 110_000 },
+    injuryChanceBp: 1_800,
+    fortuneChanceBp: 900,
+    insightChanceBp: 900,
+    attributeChanceBp: 2_000,
+  },
+  {
+    direction: 'gathering',
+    durationSeconds: 86_400,
+    cultivation: 400,
+    resources: { herb: 250_000, ore: 200_000 },
+    injuryChanceBp: 2_000,
+    fortuneChanceBp: 1_200,
+    insightChanceBp: 1_200,
+    attributeChanceBp: 2_800,
+  },
 ];
 
-/** 合法时长白名单（秒）：只有 2 小时与 6 小时两档。 */
-export const JOURNEY_DURATIONS_SECONDS: readonly number[] = [7_200, 21_600];
+/** 合法时长白名单（秒）：2 / 6 / 12 / 24 小时四档。 */
+export const JOURNEY_DURATIONS_SECONDS: readonly number[] = [7_200, 21_600, 43_200, 86_400];
 
 /** 同一宗门最多同时在外（尚未到期）的人数；已到期待领取不占名额。 */
 export const JOURNEY_MAX_CONCURRENT = 2;

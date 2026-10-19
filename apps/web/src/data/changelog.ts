@@ -19,6 +19,15 @@ export const MAX_ENTRIES = 5;
 
 export const CHANGELOG: readonly ChangelogEntry[] = [
   {
+    id: '2026-10-19-journey-long',
+    time: '2026-10-19 21:00',
+    title: '历练 · 新增 12 / 24 小时档',
+    items: [
+      '历练新增 12 小时与 24 小时两档：收益约为 2 小时档的 5.5 倍与 10 倍，机遇、悟道、淬炼概率更高，受伤概率也略高。',
+      '弟子详情的「历练」页并入「修行」页：点「派遣历练」在弹窗里选方向与时长；主修功法点「更换」弹出功法列表再确认。',
+    ],
+  },
+  {
     id: '2026-10-19-technique-merit',
     time: '2026-10-19 18:00',
     title: '功法 · 功勋兑换与入口调整',
