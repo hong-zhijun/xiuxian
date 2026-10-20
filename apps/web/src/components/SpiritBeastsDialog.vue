@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import type { BeastCaptureAction, BeastCaptureView, SpiritBeastsPanel } from '@xiuxian/contracts';
 
 import { actBeastCapture, fetchSpiritBeasts, startBeastCapture, type SectStateView } from '../api/game';
@@ -8,6 +8,7 @@ import { formatAmount } from '../utils/format';
 import { beastAttrList } from '../utils/spiritBeasts';
 import BeastCaptureFx, { type CaptureFxKind } from './BeastCaptureFx.vue';
 import DisciplePicker from './DisciplePicker.vue';
+import SearchBush from './SearchBush.vue';
 
 /**
  * 宠物秘境：野外捕捉与灵兽图鉴。已有灵兽的装备、培养与放生在首页「灵兽苑」。
@@ -42,10 +43,29 @@ const confirmLeave = ref(false);
 /** 动画播放或请求进行中都不接受下一次操作。 */
 const busy = computed(() => pending.value || held.value !== null);
 const area = computed(() => panel.value?.areas.find((item) => item.id === areaId.value) ?? null);
+const TIER_RANK = { divine: 3, rare: 2, spirit: 1 } as const;
+/** 区域里出没的灵兽：神兽、珍兽在前（同档保持图鉴顺序）。 */
 const areaSpecies = computed(() => {
   const current = area.value;
-  return current === null ? [] : (panel.value?.species ?? []).filter((item) => current.speciesIds.includes(item.id));
+  return current === null
+    ? []
+    : (panel.value?.species ?? [])
+      .filter((item) => current.speciesIds.includes(item.id))
+      .sort((a, b) => TIER_RANK[b.tier] - TIER_RANK[a.tier]);
 });
+/** 出没灵兽默认折叠成一排小头像，换区域时自动收起，省出选人的位置。 */
+const habitatOpen = ref(false);
+watch(areaId, () => {
+  habitatOpen.value = false;
+});
+/** 折叠时标题旁的概要：「神兽 5 · 珍兽 2 · 灵兽 5」。 */
+const habitatSummary = computed(() =>
+  (['divine', 'rare', 'spirit'] as const)
+    .map((tier) => ({ tier, items: areaSpecies.value.filter((item) => item.tier === tier) }))
+    .filter((group) => group.items.length > 0)
+    .map((group) => `${group.items[0]?.tierName ?? ''} ${String(group.items.length)}`)
+    .join(' · '),
+);
 const spiritStone = computed(() => Number(props.state.resources.find((item) => item.id === 'spiritStone')?.balance ?? 0));
 const caughtCount = computed(() => panel.value?.collection.filter((item) => item.caught > 0).length ?? 0);
 const NEED_DISCIPLE = '请选择一名出发弟子';
@@ -123,15 +143,43 @@ function announce(view: BeastCaptureView | null): void {
   emit('notify', outcome.tone, outcome.title, message);
 }
 
-async function run(action: () => Promise<{ state: SectStateView; beasts: SpiritBeastsPanel }>): Promise<void> {
+/**
+ * 出发分两步：「进入山野搜寻」只进入选草丛的画面（不请求、不扣费、不占次数）；
+ * 选定一处草丛后才向服务端发起搜寻——扣费、扣次数并随机灵兽。选哪一丛不影响结果。
+ */
+const searching = ref(false);
+const pickedBush = ref<number | null>(null);
+const searcher = computed(() => props.state.disciples.find((item) => item.id === selectedDisciples.value[0]) ?? null);
+
+function start(): void {
+  if (startBlock.value !== null) return;
+  pickedBush.value = null;
+  searching.value = true;
+}
+
+function leaveSearch(): void {
   if (pending.value) return;
+  searching.value = false;
+  pickedBush.value = null;
+}
+
+async function pickBush(index: number): Promise<void> {
+  const discipleId = selectedDisciples.value[0];
+  if (pending.value || pickedBush.value !== null || discipleId === undefined) return;
+  pickedBush.value = index;
   pending.value = true;
   try {
-    const result = await action();
+    // 草丛至少抖动一会儿再揭晓，避免请求太快时一闪而过。
+    const [result] = await Promise.all([startBeastCapture(areaId.value, discipleId, crypto.randomUUID()), wait(900)]);
     panel.value = result.beasts;
     emit('state-update', result.state);
+    searching.value = false;
+    pickedBush.value = null;
+    void playFx('emerge', 1000);
   } catch (caught) {
-    emit('notify', 'warning', '宠物秘境', caught instanceof Error ? caught.message : '操作失败');
+    searching.value = false;
+    pickedBush.value = null;
+    emit('notify', 'warning', '宠物秘境', caught instanceof Error ? caught.message : '搜寻失败');
     try {
       panel.value = (await fetchSpiritBeasts()).beasts;
     } catch {
@@ -140,12 +188,6 @@ async function run(action: () => Promise<{ state: SectStateView; beasts: SpiritB
   } finally {
     pending.value = false;
   }
-}
-
-function start(): void {
-  const discipleId = selectedDisciples.value[0];
-  if (discipleId === undefined || startBlock.value !== null) return;
-  void run(() => startBeastCapture(areaId.value, discipleId, crypto.randomUUID()));
 }
 
 const reducedMotion = typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -358,6 +400,35 @@ onMounted(async () => {
           </ol>
         </article>
 
+        <!-- 选草丛：选定后才真正搜寻（扣费、扣次数、随机灵兽） -->
+        <section v-else-if="searching && area" class="bush-scene" aria-labelledby="bush-title">
+          <h4 id="bush-title" class="beast-section-title">
+            {{ area.name }} · 草丛里似乎有动静
+            <small>{{ searcher?.name ?? '弟子' }}屏息靠近</small>
+          </h4>
+          <div class="bush-row" role="group" aria-label="选择一处草丛探查">
+            <button
+              v-for="index in [0, 1, 2]"
+              :key="index"
+              class="bush-button"
+              type="button"
+              :disabled="pending"
+              :aria-label="`探查第 ${String(index + 1)} 处草丛`"
+              @click="pickBush(index)"
+            >
+              <SearchBush :variant="index" :state="pickedBush === null ? 'idle' : pickedBush === index ? 'picked' : 'faded'" />
+            </button>
+          </div>
+          <p class="bush-hint">
+            {{ pickedBush === null
+              ? `选一处草丛探查：选定后才消耗 ${formatAmount(String(area.cost))} 灵石与 1 次搜寻，返回不扣`
+              : '草丛晃动，有什么要出来了……' }}
+          </p>
+          <div class="bush-actions">
+            <button class="beast-quiet-button" type="button" :disabled="pending" @click="leaveSearch">返回</button>
+          </div>
+        </section>
+
         <!-- 出发前：区域 → 出没灵兽 → 选人 → 出发 -->
         <template v-else>
           <section class="beast-block" aria-labelledby="beast-area-title">
@@ -383,8 +454,39 @@ onMounted(async () => {
           </section>
 
           <section v-if="area" class="beast-block" aria-labelledby="beast-habitat-title">
-            <h4 id="beast-habitat-title" class="beast-section-title">出没灵兽 <small>{{ area.name }}</small></h4>
-            <ul class="habitat-list">
+            <h4 id="beast-habitat-title" class="beast-section-title">
+              出没灵兽
+              <button
+                class="habitat-toggle"
+                type="button"
+                :aria-expanded="habitatOpen"
+                aria-controls="beast-habitat-list"
+                @click="habitatOpen = !habitatOpen"
+              >
+                {{ habitatSummary }} · {{ habitatOpen ? '收起' : '展开' }}
+              </button>
+            </h4>
+            <!-- 折叠：一排小头像（档次高的在前），点开看名字与五行。 -->
+            <button
+              v-if="!habitatOpen"
+              class="habitat-strip"
+              type="button"
+              :aria-label="`展开${area.name}的出没灵兽`"
+              @click="habitatOpen = true"
+            >
+              <span
+                v-for="item in areaSpecies"
+                :key="item.id"
+                class="beast-avatar habitat-mini"
+                :class="`is-${item.tier}`"
+                :data-element="item.element"
+                :title="`${item.name} · ${item.elementName}行 · ${item.tierName}`"
+              >
+                <img v-if="item.avatar" :src="item.avatar" :alt="item.name" width="96" height="96" loading="lazy" decoding="async" />
+                <span v-else>{{ item.glyph }}</span>
+              </span>
+            </button>
+            <ul v-else id="beast-habitat-list" class="habitat-list">
               <li v-for="item in areaSpecies" :key="item.id" class="habitat" :class="`is-${item.tier}`" :data-element="item.element">
                 <span class="beast-avatar habitat-avatar">
                   <img v-if="item.avatar" :src="item.avatar" :alt="item.name" width="96" height="96" loading="lazy" decoding="async" />
@@ -417,7 +519,7 @@ onMounted(async () => {
               {{ startHint }}
             </p>
             <button class="action-button primary-action" type="button" :disabled="pending || startBlock !== null" @click="start">
-              {{ pending ? '正在搜寻……' : '进入山野搜寻' }}
+              进入山野搜寻
             </button>
           </div>
         </template>
@@ -553,6 +655,50 @@ onMounted(async () => {
 
 /* ---------- 出没灵兽 ---------- */
 
+.habitat-toggle {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--faint);
+  font-size: 12px;
+  font-weight: 400;
+  letter-spacing: 0;
+  cursor: pointer;
+}
+
+.habitat-toggle:hover {
+  color: var(--gold);
+}
+
+.habitat-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.015);
+  cursor: pointer;
+}
+
+.habitat-strip:hover {
+  border-color: rgba(202, 169, 106, 0.35);
+}
+
+.habitat-mini {
+  --beast-avatar-size: 34px;
+}
+
+/* 档次用外圈光晕区分：神兽金、珍兽紫蓝。 */
+.habitat-mini.is-divine {
+  box-shadow: 0 0 0 1px rgba(235, 196, 124, 0.7), 0 0 10px rgba(235, 196, 124, 0.35);
+}
+
+.habitat-mini.is-rare {
+  box-shadow: 0 0 0 1px rgba(154, 167, 228, 0.6);
+}
+
 .habitat-list {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
@@ -603,6 +749,57 @@ onMounted(async () => {
 }
 
 /* ---------- 出发栏 ---------- */
+
+/* ---------- 选草丛 ---------- */
+
+.bush-scene {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid rgba(119, 184, 154, 0.22);
+  border-radius: 10px;
+  background:
+    radial-gradient(90% 70% at 50% 100%, rgba(77, 140, 90, 0.18), transparent 70%),
+    linear-gradient(180deg, rgba(6, 16, 15, 0.4), rgba(18, 39, 32, 0.9));
+}
+
+.bush-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  padding: 18px 4px 6px;
+}
+
+.bush-button {
+  padding: 4px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  cursor: pointer;
+  transition: border-color 140ms ease, background-color 140ms ease, transform 140ms ease;
+}
+
+.bush-button:not(:disabled):hover {
+  border-color: rgba(166, 213, 185, 0.35);
+  background: rgba(119, 184, 154, 0.06);
+  transform: translateY(-2px);
+}
+
+.bush-button:disabled {
+  cursor: default;
+}
+
+.bush-hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+.bush-actions {
+  display: flex;
+  justify-content: center;
+}
 
 .start-bar {
   display: flex;
@@ -677,6 +874,15 @@ onMounted(async () => {
 .encounter-portrait.fx-restrain img,
 .encounter-portrait.fx-fail img {
   animation: fx-shake 360ms ease-in-out 160ms;
+}
+
+.encounter-portrait.fx-emerge img {
+  animation: fx-emerge 700ms cubic-bezier(0.2, 1.4, 0.4, 1) both;
+}
+
+@keyframes fx-emerge {
+  from { opacity: 0; transform: translateY(26px) scale(0.6); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
 }
 
 .encounter-portrait.fx-cast img {

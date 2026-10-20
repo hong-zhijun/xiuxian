@@ -1,17 +1,28 @@
 <script setup lang="ts">
 /**
  * 捕捉遭遇的立绘特效（纯 SVG + CSS 动画，叠在立绘上、不接收点击）：
+ * - emerge：灵兽从草丛里窜出，草叶四散（立绘本身的弹出由父组件负责）；
  * - attack / restrain：三道 / 一道剑光划过（留手是淡青色的细剑光）；
  * - cast：御兽阵展开并旋转，等待服务端判定期间一直循环；
  * - caught：阵法收拢、金光一闪，盖下「收服」印；
  * - fail / escaped：阵法碎成四段飞散；
  * - killed / defeated：不画叠层，由父组件让立绘倒下变灰 / 让遭遇卡泛红。
  */
-export type CaptureFxKind = 'attack' | 'restrain' | 'cast' | 'caught' | 'fail' | 'escaped' | 'killed' | 'defeated';
+export type CaptureFxKind = 'emerge' | 'attack' | 'restrain' | 'cast' | 'caught' | 'fail' | 'escaped' | 'killed' | 'defeated';
 
 defineProps<{ kind: CaptureFxKind }>();
 
 const RUNES = [0, 45, 90, 135, 180, 225, 270, 315];
+/** 灵兽现身时从立绘底部四散的草叶。 */
+const LEAVES = [
+  { dx: '-80px', dy: '-60px', rot: '-140deg', delay: '0ms' },
+  { dx: '-46px', dy: '-104px', rot: '90deg', delay: '40ms' },
+  { dx: '-8px', dy: '-120px', rot: '-60deg', delay: '80ms' },
+  { dx: '36px', dy: '-108px', rot: '120deg', delay: '20ms' },
+  { dx: '78px', dy: '-66px', rot: '-100deg', delay: '60ms' },
+  { dx: '-96px', dy: '-14px', rot: '70deg', delay: '100ms' },
+  { dx: '94px', dy: '-20px', rot: '-80deg', delay: '120ms' },
+];
 /** 阵法外环的四段圆弧（碎裂时各自朝外飞）。 */
 const SHARDS = [
   { d: 'M100 10 A90 90 0 0 1 190 100', dx: '34px', dy: '-34px', rot: '24deg' },
@@ -31,7 +42,20 @@ const SHARDS = [
       </radialGradient>
     </defs>
 
-    <g v-if="kind === 'attack' || kind === 'restrain'" class="fx-slashes">
+    <g v-if="kind === 'emerge'" class="fx-leaves">
+      <ellipse
+        v-for="leaf in LEAVES"
+        :key="leaf.rot"
+        class="fx-leaf"
+        cx="100"
+        cy="150"
+        rx="7"
+        ry="3"
+        :style="{ '--dx': leaf.dx, '--dy': leaf.dy, '--rot': leaf.rot, animationDelay: leaf.delay }"
+      />
+    </g>
+
+    <g v-else-if="kind === 'attack' || kind === 'restrain'" class="fx-slashes">
       <path class="fx-slash" d="M38 44 L162 152" pathLength="1" />
       <template v-if="kind !== 'restrain'">
         <path class="fx-slash is-second" d="M154 38 L54 160" pathLength="1" />
@@ -91,6 +115,7 @@ const SHARDS = [
 }
 
 /* 只给做缩放 / 旋转动画的元素改变换原点：符文自带的 rotate(… 100 100) 要保持以画布为原点。 */
+.fx-leaf,
 .fx-seal,
 .fx-ring-outer,
 .fx-ring-inner,
@@ -99,6 +124,20 @@ const SHARDS = [
 .fx-shard {
   transform-box: fill-box;
   transform-origin: center;
+}
+
+/* ---------- 现身草叶 ---------- */
+
+.fx-leaf {
+  fill: #7fbf6a;
+  opacity: 0;
+  animation: fx-leaf 800ms ease-out forwards;
+}
+
+@keyframes fx-leaf {
+  0% { opacity: 0; transform: translate(0, 0) rotate(0); }
+  15% { opacity: 1; }
+  100% { opacity: 0; transform: translate(var(--dx), var(--dy)) rotate(var(--rot)); }
 }
 
 /* ---------- 剑光 ---------- */
