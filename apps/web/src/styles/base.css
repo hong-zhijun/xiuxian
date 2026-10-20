@@ -8044,7 +8044,7 @@ p.steward-bonus-note {
   border: 1px solid var(--line-strong);
   border-radius: 12px;
   background: transparent;
-  color: var(--text);
+  color: var(--ink-text);
   text-align: left;
   cursor: pointer;
 }
@@ -8061,7 +8061,7 @@ p.steward-bonus-note {
 .explore-type-card > span:not(.explore-type-glyph),
 .explore-type-card small {
   font-size: 13px;
-  color: var(--text-muted);
+  color: var(--muted);
 }
 
 .explore-type-glyph {
@@ -8093,7 +8093,7 @@ p.steward-bonus-note {
 .disciple-beast-slot small {
   font-size: 12px;
   line-height: 1.6;
-  color: var(--text-muted);
+  color: var(--muted);
   margin: 5px 0;
 }
 
@@ -8104,6 +8104,182 @@ p.steward-bonus-note {
   border-radius: 10px;
   object-fit: contain;
   background: rgba(128, 128, 128, 0.08);
+}
+
+/*
+ * 灵兽共用视觉（宠物秘境 / 灵兽苑 / 弟子灵兽槽）：
+ * data-element 给出五行色 --el，data-quality 给出品质色 --q，各组件只引用变量。
+ */
+[data-element='metal'] { --el: #dcc28b; --el-rgb: 220, 194, 139; }
+[data-element='wood'] { --el: #82c493; --el-rgb: 130, 196, 147; }
+[data-element='water'] { --el: #86b8de; --el-rgb: 134, 184, 222; }
+[data-element='fire'] { --el: #e3957c; --el-rgb: 227, 149, 124; }
+[data-element='earth'] { --el: #c8ab76; --el-rgb: 200, 171, 118; }
+[data-quality='common'] { --q: #a9b9af; --q-rgb: 169, 185, 175; }
+[data-quality='spirit'] { --q: #7fc79c; --q-rgb: 127, 199, 156; }
+[data-quality='treasure'] { --q: #7db3e0; --q-rgb: 125, 179, 224; }
+[data-quality='immortal'] { --q: #ebc47c; --q-rgb: 235, 196, 124; }
+
+/* 头像框：五行色细环 + 柔光底；图片缺失时显示单字。 */
+.beast-avatar {
+  position: relative;
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: var(--beast-avatar-size, 48px);
+  height: var(--beast-avatar-size, 48px);
+  overflow: hidden;
+  border: 1px solid rgba(var(--el-rgb, 202, 169, 106), 0.55);
+  border-radius: 50%;
+  background: radial-gradient(circle at 50% 38%, rgba(var(--el-rgb, 202, 169, 106), 0.22), rgba(6, 16, 15, 0.6) 72%);
+  color: var(--el, var(--gold-bright));
+  font-family: serif;
+  font-size: calc(var(--beast-avatar-size, 48px) * 0.42);
+}
+
+.beast-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+/* 小标签：五行 / 档次 / 品质 */
+.beast-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 7px;
+  border: 1px solid rgba(var(--chip-rgb, 146, 167, 157), 0.4);
+  border-radius: 999px;
+  background: rgba(var(--chip-rgb, 146, 167, 157), 0.08);
+  color: rgb(var(--chip-rgb, 146, 167, 157));
+  font-size: 11px;
+  line-height: 18px;
+  white-space: nowrap;
+}
+
+.beast-chip.is-element { --chip-rgb: var(--el-rgb); }
+.beast-chip.is-quality { --chip-rgb: var(--q-rgb); }
+.beast-chip.is-tier-rare { --chip-rgb: 154, 167, 228; }
+.beast-chip.is-tier-divine { --chip-rgb: 235, 196, 124; }
+
+/* 两个灵兽弹窗共用的标题栏、说明框、分区标题与标签页（标签页沿用坊市 / 藏经阁同一套样式）。 */
+.beast-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.beast-title {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0;
+  color: var(--gold-bright);
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.beast-title-sub {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.beast-quiet-button {
+  padding: 2px 10px;
+  border: 1px solid rgba(202, 169, 106, 0.4);
+  border-radius: 2px;
+  background: rgba(202, 169, 106, 0.08);
+  color: var(--gold);
+  font-size: 12px;
+  line-height: 22px;
+  white-space: nowrap;
+}
+
+.beast-quiet-button:not(:disabled):hover {
+  border-color: rgba(202, 169, 106, 0.7);
+  color: var(--gold-bright);
+}
+
+.beast-rules {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 10px 12px 10px 28px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.014);
+  color: #b9c9c0;
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.beast-tabs {
+  display: grid;
+  grid-template-columns: repeat(var(--beast-tab-count, 2), minmax(0, 1fr));
+  gap: 8px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.beast-tab {
+  padding: 8px 10px;
+  border: 1px solid rgba(119, 184, 154, 0.16);
+  border-radius: 3px;
+  color: #9db3a8;
+  background: rgba(255, 255, 255, 0.02);
+  font-size: 13px;
+  letter-spacing: 0.06em;
+  transition: border-color 140ms ease, background-color 140ms ease, color 140ms ease;
+}
+
+.beast-tab:not(:disabled):hover {
+  border-color: rgba(202, 169, 106, 0.3);
+  color: #e4ece6;
+}
+
+.beast-tab[aria-selected='true'] {
+  border-color: rgba(202, 169, 106, 0.42);
+  color: var(--gold-bright);
+  background: rgba(202, 169, 106, 0.08);
+}
+
+.beast-section-title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0;
+  color: var(--gold);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.beast-section-title small {
+  color: var(--faint);
+  font-size: 12px;
+  font-weight: 400;
+  letter-spacing: 0;
+}
+
+.beast-lock {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px dashed rgba(202, 169, 106, 0.35);
+  border-radius: 4px;
+  color: var(--gold);
+  font-size: 13px;
+}
+
+.beast-empty {
+  margin: 0;
+  padding: 18px 0;
+  color: var(--muted);
+  font-size: 13px;
+  text-align: center;
 }
 
 .steward-launch {

@@ -69,6 +69,7 @@ import EquipmentDialog from './EquipmentDialog.vue';
 import EventLogPanel from './EventLogPanel.vue';
 import ExplorePanel from './ExplorePanel.vue';
 import SpiritBeastsDialog from './SpiritBeastsDialog.vue';
+import BeastGardenDialog from './BeastGardenDialog.vue';
 import ExplorePartyDialog from './ExplorePartyDialog.vue';
 import GamblingHouseDialog from './GamblingHouseDialog.vue';
 import LoadingState from './LoadingState.vue';
@@ -200,6 +201,7 @@ const openPanel = ref<
   | 'explore'
   | 'explore-menu'
   | 'spirit-beasts'
+  | 'beast-garden'
   | 'leaderboard'
   | 'disciple-leaderboard'
   | 'defense-lineup'
@@ -228,7 +230,12 @@ const openPanel = ref<
  * 由 GamblingHouseDialog 在切换玩法时上报。
  */
 const beastDiscipleId = ref<string | undefined>();
-function openBeastSlot(id:string) { beastDiscipleId.value=id; detailId.value=null; openPanel.value='spirit-beasts'; }
+/** 弟子详情的灵兽槽：打开灵兽苑，详情里默认由这名弟子携带。 */
+function openBeastSlot(id: string): void {
+  beastDiscipleId.value = id;
+  detailId.value = null;
+  openPanel.value = 'beast-garden';
+}
 
 const gamblingGame = ref<'debate' | 'wheel' | 'beast-race' | 'stone'>('debate');
 const gamblingLoadingText = computed(() => {
@@ -1885,7 +1892,7 @@ function signedPct(value: number): string {
 type HubCardId =
   | 'daily' | 'alchemy' | 'forge' | 'refine' | 'steward' | 'defense'
   | 'boss' | 'arena' | 'tower' | 'explore' | 'world'
-  | 'shop' | 'gambling' | 'auction' | 'market' | 'merit' | 'techniques';
+  | 'shop' | 'gambling' | 'auction' | 'market' | 'merit' | 'techniques' | 'beasts';
 
 interface HubCard {
   id: HubCardId;
@@ -1945,6 +1952,14 @@ const hubGroups = computed<{ label: string; cards: HubCard[] }[]>(() => {
           status: props.state.buildings.some((building) => building.defId === 'scriptureLibrary' && building.level >= 1)
             ? `已收录 ${String(props.state.learnedTechniques.length)} 门`
             : '建成藏经阁后开放',
+        },
+        {
+          id: 'beasts',
+          name: '灵兽苑',
+          glyph: '兽',
+          status: props.state.sect.level < 3
+            ? '宗门 3 级开放'
+            : `${String(props.state.disciples.filter((disciple) => disciple.spiritBeast).length)} 名弟子携带灵兽`,
         },
         { id: 'alchemy', name: '炼丹', glyph: '丹', status: healableIds.value.length > 0 ? `${String(healableIds.value.length)} 人受伤可疗伤` : '炼制丹药' },
         { id: 'forge', name: '炼器', glyph: '器', status: equipment.value ? `背包 ${String(equipment.value.bagCount)} / ${String(equipment.value.bagCapacity)}` : '打造装备' },
@@ -2069,6 +2084,7 @@ function openHubCard(id: HubCardId): void {
     market: 'market',
     merit: 'merit',
     techniques: 'techniques',
+    beasts: 'beast-garden',
   };
   openPanel.value = panels[id];
 }
@@ -2679,11 +2695,20 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
     <ModalShell v-if="openPanel === 'explore-menu'" label="秘境探索" @close="openPanel = null">
       <div class="explore-type-grid">
         <button class="explore-type-card" type="button" @click="openPanel = 'explore'"><span class="explore-type-glyph">秘</span><strong>普通秘境</strong><span>派遣弟子，探寻机缘与资源</span><small>{{ state.activeExploration ? '探索进行中 · 点击继续' : '进入原秘境列表' }}</small></button>
-        <button class="explore-type-card" type="button" @click="beastDiscipleId = undefined; openPanel = 'spirit-beasts'"><span class="explore-type-glyph">兽</span><strong>宠物秘境</strong><span>选择捕捉区域，寻找十二种灵兽</span><small>{{ state.disciples.some(d => d.captureUntil) ? '捕捉进行中 · 点击继续' : '捕捉 · 培养 · 图鉴' }}</small></button>
+        <button class="explore-type-card" type="button" @click="openPanel = 'spirit-beasts'"><span class="explore-type-glyph">兽</span><strong>宠物秘境</strong><span>选择捕捉区域，寻找十二种灵兽</span><small>{{ state.disciples.some(d => d.captureUntil) ? '捕捉进行中 · 点击继续' : '野外捕捉 · 灵兽图鉴' }}</small></button>
       </div>
     </ModalShell>
-    <ModalShell v-if="openPanel === 'spirit-beasts'" label="宠物秘境 · 灵兽苑" @close="openPanel = null">
-      <SpiritBeastsDialog :state="state" :disciple-id="beastDiscipleId" @state-update="(s: SectStateView) => emit('recruited', s)" @back="openPanel = 'explore-menu'" />
+    <ModalShell v-if="openPanel === 'spirit-beasts'" label="宠物秘境" @close="openPanel = null">
+      <SpiritBeastsDialog :state="state" @state-update="(s: SectStateView) => emit('recruited', s)" @notify="onDailyTasksNotify" />
+    </ModalShell>
+    <ModalShell v-if="openPanel === 'beast-garden'" label="灵兽苑" @close="openPanel = null; beastDiscipleId = undefined">
+      <BeastGardenDialog
+        :state="state"
+        :disciple-id="beastDiscipleId"
+        @state-update="(s: SectStateView) => emit('recruited', s)"
+        @notify="onDailyTasksNotify"
+        @open-capture="beastDiscipleId = undefined; openPanel = 'spirit-beasts'"
+      />
     </ModalShell>
     <ModalShell
       v-if="openPanel === 'explore'"
