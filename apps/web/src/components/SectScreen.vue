@@ -229,13 +229,6 @@ const openPanel = ref<
  * 赌坊里当前在玩哪个玩法：只为赌坊弹窗那一层的加载层文案（论道 / 天机轮 / 灵兽竞逐），
  * 由 GamblingHouseDialog 在切换玩法时上报。
  */
-const beastDiscipleId = ref<string | undefined>();
-/** 弟子详情的灵兽槽：打开灵兽苑，详情里默认由这名弟子携带。 */
-function openBeastSlot(id: string): void {
-  beastDiscipleId.value = id;
-  detailId.value = null;
-  openPanel.value = 'beast-garden';
-}
 
 const gamblingGame = ref<'debate' | 'wheel' | 'beast-race' | 'stone'>('debate');
 const gamblingLoadingText = computed(() => {
@@ -2701,13 +2694,12 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
     <ModalShell v-if="openPanel === 'spirit-beasts'" label="宠物秘境" @close="openPanel = null">
       <SpiritBeastsDialog :state="state" @state-update="(s: SectStateView) => emit('recruited', s)" @notify="onDailyTasksNotify" />
     </ModalShell>
-    <ModalShell v-if="openPanel === 'beast-garden'" label="灵兽苑" @close="openPanel = null; beastDiscipleId = undefined">
+    <ModalShell v-if="openPanel === 'beast-garden'" label="灵兽苑" @close="openPanel = null">
       <BeastGardenDialog
         :state="state"
-        :disciple-id="beastDiscipleId"
         @state-update="(s: SectStateView) => emit('recruited', s)"
         @notify="onDailyTasksNotify"
-        @open-capture="beastDiscipleId = undefined; openPanel = 'spirit-beasts'"
+        @open-capture="openPanel = 'spirit-beasts'"
       />
     </ModalShell>
     <ModalShell
@@ -3088,7 +3080,7 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
     >
       <DiscipleDetailDialog
         :key="detailDisciple.id"
-        @open-beasts="openBeastSlot"
+        @beast-changed="(s: SectStateView) => emit('recruited', s)"
         :state="state"
         :disciple="detailDisciple"
         :busy="busy || equipmentSubmitting"

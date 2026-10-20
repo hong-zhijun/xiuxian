@@ -11,9 +11,9 @@ import ModalShell from './ModalShell.vue';
 
 /**
  * 灵兽苑（首页「宗门」列）：已收服灵兽的筛选、装备、培养、锁定与放生。
- * 从弟子详情的灵兽槽打开时带上 discipleId：详情里的携带弟子默认选中这名弟子。
+ * 从弟子出发换灵兽走弟子详情里的 BeastPickerDialog，不经过这里。
  */
-const props = defineProps<{ state: SectStateView; discipleId?: string }>();
+const props = defineProps<{ state: SectStateView }>();
 const emit = defineEmits<{
   'state-update': [state: SectStateView];
   notify: [tone: ToastTone, title: string, message: string];
@@ -31,12 +31,9 @@ const pending = ref(false);
 const elementFilter = ref<BeastElement | ''>('');
 const qualityFilter = ref<BeastQuality | ''>('');
 const detailId = ref<string | null>(null);
-const equipTargets = ref<string[]>(props.discipleId === undefined ? [] : [props.discipleId]);
+const equipTargets = ref<string[]>([]);
 const confirmRelease = ref(false);
 
-const forDisciple = computed(() =>
-  props.discipleId === undefined ? null : (props.state.disciples.find((item) => item.id === props.discipleId) ?? null),
-);
 /** 随行的排在前面，其余按档次、品质、等级从高到低。 */
 const items = computed(() =>
   (panel.value?.items ?? [])
@@ -71,7 +68,7 @@ function levelPercent(beast: SpiritBeastView): number {
 function open(beast: SpiritBeastView): void {
   detailId.value = beast.id;
   confirmRelease.value = false;
-  if (props.discipleId === undefined) equipTargets.value = beast.discipleId === null ? [] : [beast.discipleId];
+  equipTargets.value = beast.discipleId === null ? [] : [beast.discipleId];
 }
 function closeDetail(): void {
   detailId.value = null;
@@ -150,10 +147,6 @@ onMounted(async () => {
       </h3>
       <button class="beast-quiet-button" type="button" @click="emit('open-capture')">去捕捉</button>
     </div>
-
-    <p v-if="forDisciple" class="garden-for">
-      为 <strong>{{ forDisciple.name }}</strong> 挑选灵兽：点开一只灵兽，确认后即可让{{ forDisciple.name }}携带。
-    </p>
 
     <p v-if="!panel" class="beast-empty">{{ loading ? '正在清点灵兽……' : '暂未读取到灵兽信息，请稍后再试。' }}</p>
 
@@ -345,20 +338,6 @@ onMounted(async () => {
 .garden {
   display: grid;
   gap: 14px;
-}
-
-.garden-for {
-  margin: 0;
-  padding: 8px 12px;
-  border: 1px solid rgba(202, 169, 106, 0.3);
-  border-radius: 4px;
-  background: rgba(202, 169, 106, 0.06);
-  color: #c7d3cc;
-  font-size: 12px;
-}
-
-.garden-for strong {
-  color: var(--gold-bright);
 }
 
 .garden-empty {

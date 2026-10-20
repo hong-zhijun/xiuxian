@@ -1,4 +1,4 @@
-import type { BeastIdentity, BeastAttrs, SpiritBeastsPanel, BeastCaptureAction } from '@xiuxian/contracts';
+import type { BeastIdentity, BeastAttrs, BeastElement, BeastTier, SpiritBeastsPanel, BeastCaptureAction } from '@xiuxian/contracts';
 import { apiRequest, setCsrfToken } from './client';
 import type { AvatarFrameId } from '../utils/avatarFrames';
 
@@ -35,7 +35,7 @@ export interface ResourceView {
 }
 
 export interface DiscipleView {
-  spiritBeast?: (BeastIdentity & { name: string; qualityName: string; elementName: string; skillText: string; attrs: BeastAttrs; image: string; avatar: string }) | null;
+  spiritBeast?: (BeastIdentity & { name: string; qualityName: string; element: BeastElement; elementName: string; tier: BeastTier; tierName: string; skillName: string; skillText: string; attrs: BeastAttrs; image: string; avatar: string }) | null;
   captureUntil?: number | null;
   id: string;
   name: string;

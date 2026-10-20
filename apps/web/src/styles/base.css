@@ -8074,38 +8074,6 @@ p.steward-bonus-note {
   margin-bottom: 15px;
 }
 
-.disciple-beast-slot {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  border: 1px solid var(--line-strong);
-  border-radius: 8px;
-  padding: 12px;
-  margin: 12px 0;
-}
-
-.disciple-beast-info {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
-.disciple-beast-slot p,
-.disciple-beast-slot small {
-  font-size: 12px;
-  line-height: 1.6;
-  color: var(--muted);
-  margin: 5px 0;
-}
-
-.disciple-beast-avatar {
-  flex: 0 0 auto;
-  width: 56px;
-  height: 56px;
-  border-radius: 10px;
-  object-fit: contain;
-  background: rgba(128, 128, 128, 0.08);
-}
-
 /*
  * 灵兽共用视觉（宠物秘境 / 灵兽苑 / 弟子灵兽槽）：
  * data-element 给出五行色 --el，data-quality 给出品质色 --q，各组件只引用变量。
@@ -8290,11 +8258,6 @@ p.steward-bonus-note {
 @media (max-width: 520px) {
   .explore-type-grid {
     grid-template-columns: 1fr;
-  }
-
-  .disciple-beast-slot {
-    align-items: flex-start;
-    flex-wrap: wrap;
   }
 
   .disciple-panel .panel-heading {

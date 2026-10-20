@@ -41,10 +41,12 @@ import AvatarCropDialog from './AvatarCropDialog.vue';
 import DiscipleAvatar from './DiscipleAvatar.vue';
 import DiscipleRadarChart from './DiscipleRadarChart.vue';
 import HelpTip from './HelpTip.vue';
+import { beastAttrList } from '../utils/spiritBeasts';
 import LoadingState from './LoadingState.vue';
 import ModalShell from './ModalShell.vue';
 import TalentCatalogDialog from './TalentCatalogDialog.vue';
 import TalentRerollDialog from './TalentRerollDialog.vue';
+import BeastPickerDialog from './BeastPickerDialog.vue';
 import RealmCatalogDialog from './RealmCatalogDialog.vue';
 import RefineTag from './RefineTag.vue';
 import UpgradeSimulatorDialog from './UpgradeSimulatorDialog.vue';
@@ -88,7 +90,8 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-  'open-beasts': [discipleId:string];
+  /** 灵兽卡片「更换」：选择弹窗自己提交，这里把服务端返回的宗门状态交给上层。 */
+  beastChanged: [state: SectStateView];
   assign: [discipleId: string, assignment: string];
   breakthrough: [discipleId: string];
   /** count = 想服几颗（「服到满」传所需颗数，服务端按所需与库存截断）。 */
@@ -124,7 +127,6 @@ const emit = defineEmits<{
   notify: [tone: ToastTone, title: string, message: string];
 }>();
 
-const beastAttrNames: Record<string,string> = {attack:'攻击',defense:'防御',speed:'身法',luck:'幸运',physique:'体魄'};
 const serverNowMs = computed(() => Date.parse(props.state.serverNow));
 const injured = computed(() => isInjured(props.disciple, serverNowMs.value));
 
@@ -234,6 +236,8 @@ watch(
 const techniquePercent = computed(() => Math.floor(props.disciple.techniqueProficiency / 100));
 /** 「更换」弹出功法选择弹窗；选中后确认才提交。 */
 const showTechniquePicker = ref(false);
+/** 灵兽卡片「更换」：二级弹窗里直接选灵兽或卸下。 */
+const showBeastPicker = ref(false);
 function openTechniquePicker(): void {
   techniqueDraft.value = props.disciple.techniqueId ?? '';
   showTechniquePicker.value = true;
@@ -1187,30 +1191,6 @@ function refineGear(item: EquipmentItemView | null): void {
             </div>
           </div>
 
-          <section class="disciple-beast-slot" :data-quality="disciple.spiritBeast?.quality">
-            <img
-              v-if="disciple.spiritBeast"
-              class="disciple-beast-avatar"
-              :src="disciple.spiritBeast.avatar"
-              :alt="disciple.spiritBeast.name"
-              width="56"
-              height="56"
-              loading="lazy"
-              decoding="async"
-            />
-            <div class="disciple-beast-info">
-              <strong>灵兽 · {{ disciple.spiritBeast?.name ?? '未携带' }}</strong>
-              <p v-if="disciple.spiritBeast">
-                {{ disciple.spiritBeast.qualityName }} · {{ disciple.spiritBeast.elementName }}行 · Lv.{{ disciple.spiritBeast.level }} ·
-                {{ disciple.spiritBeast.skillText }}
-              </p>
-              <p v-else>捕获灵兽后可在此装备，与主修功法搭配。</p>
-              <small v-if="disciple.spiritBeast">
-                {{ Object.entries(disciple.spiritBeast.attrs).filter(([,v])=>v>0).map(([k,v])=>beastAttrNames[k]+' +'+v).join(' · ') }}
-              </small>
-            </div>
-            <button class="action-button" type="button" @click="emit('open-beasts', disciple.id)">{{ disciple.spiritBeast ? '查看 / 更换' : '选择灵兽' }}</button>
-          </section>
           <!-- 当前装备：只列名称与祭炼等级，品阶用品质色区分（与背包、装备页同一套颜色）。 -->
           <ul class="overview-gear" aria-label="当前装备">
             <li v-for="slot in gearSlots" :key="slot.id" class="overview-gear-item">
@@ -1287,7 +1267,7 @@ function refineGear(item: EquipmentItemView | null): void {
           </p>
         </section>
 
-        <!-- 天赋、功法与悟道：一行三张卡片（中等宽度两列、窄屏单列）。悟道值的分配在弹窗里做。 -->
+        <!-- 天赋、功法与悟道：一行三张卡片（中等宽度两列、窄屏单列），灵兽卡片占满下一行。悟道值的分配在弹窗里做。 -->
         <div class="overview-cards">
           <section class="overview-card" aria-labelledby="disciple-talent-title">
             <div class="overview-card-head">
@@ -1359,6 +1339,47 @@ function refineGear(item: EquipmentItemView | null): void {
             <p v-if="!daoAllocatable && disciple.daoInsight > 0 && daoBlockedReason !== null" class="overview-card-note">
               {{ daoBlockedReason }}
             </p>
+          </section>
+
+          <!-- 灵兽：与宠物秘境 / 灵兽苑同一套五行色、品质色与小标签；占满整行，放得下头像、技能与属性。 -->
+          <section
+            class="overview-card overview-beast"
+            :data-element="disciple.spiritBeast?.element"
+            :data-quality="disciple.spiritBeast?.quality"
+            aria-labelledby="disciple-overview-beast-title"
+          >
+            <div class="overview-card-head">
+              <h3 id="disciple-overview-beast-title" class="overview-card-title">灵兽</h3>
+              <button class="upgrade-sim-button overview-card-action" type="button" :disabled="busy" @click="showBeastPicker = true">
+                {{ disciple.spiritBeast ? '更换' : '选择灵兽' }}
+              </button>
+            </div>
+            <div v-if="disciple.spiritBeast" class="overview-beast-body">
+              <span class="beast-avatar overview-beast-avatar">
+                <img :src="disciple.spiritBeast.avatar" :alt="disciple.spiritBeast.name" width="96" height="96" loading="lazy" decoding="async" />
+              </span>
+              <div class="overview-beast-info">
+                <p class="overview-beast-name">
+                  <strong class="overview-card-value">{{ disciple.spiritBeast.name }}</strong>
+                  <span class="overview-beast-level">Lv.{{ disciple.spiritBeast.level }}</span>
+                  <span class="beast-chip is-quality">{{ disciple.spiritBeast.qualityName }}</span>
+                  <span class="beast-chip is-element">{{ disciple.spiritBeast.elementName }}行</span>
+                  <span class="beast-chip" :class="`is-tier-${disciple.spiritBeast.tier}`">{{ disciple.spiritBeast.tierName }}</span>
+                </p>
+                <p class="overview-card-note">
+                  <b class="overview-beast-skill">【{{ disciple.spiritBeast.skillName }}】</b>{{ disciple.spiritBeast.skillText }}
+                </p>
+                <ul class="overview-beast-attrs" aria-label="灵兽属性加成">
+                  <li v-for="attr in beastAttrList(disciple.spiritBeast.attrs)" :key="attr.key">
+                    {{ attr.label }} <strong>+{{ attr.value }}</strong>
+                  </li>
+                </ul>
+              </div>
+            </div>
+            <template v-else>
+              <strong class="overview-card-value is-empty">未携带</strong>
+              <p class="overview-card-note">宗门 3 级后可在宠物秘境捕捉灵兽；携带后属性计入战斗，技能与五行在捕捉、镇妖塔、大比中生效。</p>
+            </template>
           </section>
         </div>
 
@@ -1995,6 +2016,15 @@ function refineGear(item: EquipmentItemView | null): void {
     </ModalShell>
 
     <!-- 二级弹窗：该部位的背包装备，点选即穿戴（Esc / 点遮罩只关这一层）。 -->
+    <BeastPickerDialog
+      v-if="showBeastPicker"
+      :state="state"
+      :disciple="disciple"
+      @close="showBeastPicker = false"
+      @state-update="(next: SectStateView) => emit('beastChanged', next)"
+      @notify="(tone: ToastTone, title: string, message: string) => emit('notify', tone, title, message)"
+    />
+
     <!-- 主修功法：点「更换」弹出已收录的功法，选中后确认。 -->
     <ModalShell v-if="showTechniquePicker" narrow :label="`主修功法 · ${disciple.name}`" @close="showTechniquePicker = false">
       <section class="technique-picker" aria-labelledby="technique-picker-title">
@@ -2331,6 +2361,78 @@ function refineGear(item: EquipmentItemView | null): void {
   color: var(--muted);
   font-size: 12px;
   line-height: 1.5;
+}
+
+.overview-beast {
+  grid-column: 1 / -1;
+}
+
+.overview-beast[data-element] {
+  border-color: rgba(var(--el-rgb), 0.28);
+  background: linear-gradient(90deg, rgba(var(--el-rgb), 0.1), rgba(202, 169, 106, 0.03) 70%);
+}
+
+.overview-beast-body {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.overview-beast-avatar {
+  --beast-avatar-size: 56px;
+  border-color: rgba(var(--q-rgb), 0.6);
+}
+
+.overview-beast-info {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.overview-beast-name {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  margin: 0;
+}
+
+.overview-beast-name .overview-card-value {
+  margin-right: 2px;
+  font-size: 16px;
+}
+
+.overview-beast-level {
+  margin-right: 4px;
+  color: var(--gold);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.overview-beast-skill {
+  color: var(--el);
+  font-weight: 600;
+}
+
+.overview-beast-attrs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin: 0;
+  padding: 0;
+  color: var(--faint);
+  font-size: 12px;
+  list-style: none;
+}
+
+.overview-beast-attrs strong {
+  color: var(--jade-bright);
+  font-weight: 600;
+}
+
+.overview-card-value.is-empty {
+  color: var(--muted);
+  font-size: 15px;
 }
 
 .overview-dao-line {

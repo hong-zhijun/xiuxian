@@ -1,4 +1,4 @@
-import type { BeastIdentity, BeastAttrs } from '@xiuxian/contracts';
+import type { BeastAttrs, BeastElement, BeastIdentity, BeastTier } from '@xiuxian/contracts';
 import {
   BEAST_QUALITY,
   BEAST_SPECIES,
@@ -214,7 +214,7 @@ export interface EventLogView {
 }
 
 export interface DiscipleView {
-  spiritBeast?: (BeastIdentity & { name: string; qualityName: string; elementName: string; skillText: string; attrs: BeastAttrs; image: string; avatar: string }) | null;
+  spiritBeast?: (BeastIdentity & { name: string; qualityName: string; element: BeastElement; elementName: string; tier: BeastTier; tierName: string; skillName: string; skillText: string; attrs: BeastAttrs; image: string; avatar: string }) | null;
   captureUntil?: number | null;
   id: string;
   name: string;
@@ -2222,7 +2222,11 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
         ...beast,
         name: beastSpecies.name,
         qualityName: BEAST_QUALITY[beast.quality].name,
+        element: beastSpecies.element,
         elementName: beastSpecies.elementName,
+        tier: beastSpecies.tier,
+        tierName: beastSpecies.tierName,
+        skillName: beastSpecies.skillName,
         skillText: beastSkillText(beast),
         attrs: beastAttributes(beast),
         image: beastArtPath(beast.speciesId),
