@@ -2,7 +2,7 @@ import { applyD1Migrations, env } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import { createApp } from '../src/app';
 import { dataOf, TestClient } from './support/authClient';
-import { getSpiritBeasts, startBeastCapture, actBeastCapture, manageSpiritBeast } from '../src/modules/game/spiritBeastService';
+import { getSpiritBeasts, startBeastCapture, actBeastCapture, manageSpiritBeast, pruneBeastRecords } from '../src/modules/game/spiritBeastService';
 import { assignDisciple, getSectState } from '../src/modules/game/service';
 import type { SectStateView } from '../src/modules/game/view';
 
@@ -73,5 +73,31 @@ describe('灵兽 · D1 集成',()=>{
     await expect(actBeastCapture(env.DB,g.userId,{sessionId:active.id,version:0,action:'capture',commandId:id()},NOW,()=>0)).rejects.toMatchObject({code:'NOT_FOUND'});
     const expired=await getSpiritBeasts(env.DB,f.userId,NOW+1800001);expect(expired.beasts.active).toBeNull();
     const again=await startBeastCapture(env.DB,f.userId,{areaId:'foothills',discipleId:f.discipleId,commandId:id()},NOW+1800001,()=>0);expect(again.beasts.active?.id).not.toBe(active.id);
+  });
+  it('野生个体的血量与品质无关，遭遇时看不出品质',async()=>{
+    // 第一次随机抽物种（0.25 → 青角鹿，体魄型），第二次抽品质（0 → 凡品，0.999 → 仙品）。
+    const encounter=async(qualityRoll:number)=>{
+      const f=await fixture(),rolls=[.25,qualityRoll];
+      const r=await startBeastCapture(env.DB,f.userId,{areaId:'foothills',discipleId:f.discipleId,commandId:id()},NOW,()=>rolls.shift()??0);
+      expect(r.beasts.active?.species.id).toBe('green_deer');
+      const row=await env.DB.prepare("SELECT data FROM beast_capture_sessions WHERE id=?").bind(r.beasts.active!.id).first<{data:string}>();
+      return {view:r.beasts.active!,quality:(JSON.parse(row!.data) as {quality:string}).quality};
+    };
+    const common=await encounter(0),immortal=await encounter(.999);
+    expect(common.quality).toBe('common');expect(immortal.quality).toBe('immortal');
+    expect(immortal.view.targetMaxHp).toBe(common.view.targetMaxHp);
+  });
+  it('定时清理只删 7 天前已结束的记录，整点之外不执行',async()=>{
+    const f=await fixture(),old=NOW-8*86_400_000,hour=Date.UTC(2026,9,20,9);
+    await env.DB.batch([
+      env.DB.prepare("INSERT INTO beast_commands(sect_id,command_id,fingerprint,created_at) VALUES(?,?,?,?)").bind(f.sectId,'old-command','{}',old),
+      env.DB.prepare("INSERT INTO beast_commands(sect_id,command_id,fingerprint,created_at) VALUES(?,?,?,?)").bind(f.sectId,'new-command','{}',hour),
+      env.DB.prepare("INSERT INTO beast_capture_sessions(id,sect_id,disciple_id,status,data,expires_at,created_at,updated_at) VALUES(?,?,?,'caught','{}',?,?,?)").bind('old-session',f.sectId,f.discipleId,old,old,old),
+      env.DB.prepare("INSERT INTO beast_capture_daily(sect_id,date_key,used_count) VALUES(?,?,3)").bind(f.sectId,'2026-10-01'),
+    ]);
+    const count=async()=>Number((await env.DB.prepare("SELECT (SELECT COUNT(*) FROM beast_commands WHERE sect_id=?1)+(SELECT COUNT(*) FROM beast_capture_sessions WHERE sect_id=?1)+(SELECT COUNT(*) FROM beast_capture_daily WHERE sect_id=?1) n").bind(f.sectId).first<{n:number}>())!.n);
+    await pruneBeastRecords(env.DB,hour+60_000);expect(await count()).toBe(4);
+    await pruneBeastRecords(env.DB,hour);expect(await count()).toBe(1);
+    expect(await env.DB.prepare("SELECT command_id FROM beast_commands WHERE sect_id=?").bind(f.sectId).first('command_id')).toBe('new-command');
   });
 });

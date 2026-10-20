@@ -154,6 +154,7 @@ const SYSTEM_EVENT_NAMES: Readonly<Record<string, string>> = {
   rerollLaunchGift: '洗练贺礼',
   worldBossAutoLaunchGift: '自动讨伐上线贺礼',
   techniqueLaunchGift: '功法上线贺礼',
+  spiritBeastLaunchGift: '灵兽上线贺礼',
   stockOrderFilled: '挂单成交',
   stockOrderCancelled: '挂单取消',
   stockOrderExpired: '挂单过期',

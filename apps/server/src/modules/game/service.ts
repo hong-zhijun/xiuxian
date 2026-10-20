@@ -1537,8 +1537,8 @@ class SectDraft {
       guard.cleanup.push(deleteDiscipleSnapshotGuardStatement(extra.id));
     }
     try {
+      // 这里不加 beastGuards：settlementSnapshotGuardStatements 已逐个弟子核对 beast_json / capture_until。
       await this.db.batch(prepareStatements(this.db, [
-        ...this.beastGuards(),
         ...guard.guards,
         ...this.statements,
         ...guard.cleanup,

@@ -62,6 +62,12 @@ function requireFree(d:Draft,id:string) {
   if(d.activeExploration?.party && (JSON.parse(d.activeExploration.party) as string[]).includes(id)) throw new AppError('INVALID_STATUS','该弟子正在普通秘境中');
   return member;
 }
+/** 升级只改数值：随行弟子在历练、任执事或坐镇时也能升级，只避开正在捕捉或普通秘境中的弟子。 */
+function requireNotInBattle(d:Draft,id:string) {
+  const member=d.discipleById(id);
+  if((member.capture_until??0)>d.now)throw new AppError('INVALID_STATUS',`${member.name}正在捕捉灵兽，结束后才能升级`);
+  if(d.activeExploration?.party && (JSON.parse(d.activeExploration.party) as string[]).includes(id)) throw new AppError('INVALID_STATUS','该弟子正在普通秘境中');
+}
 async function replay(db:D1Database,sectId:string,commandId:string,fingerprint:string) {
   const row=await db.prepare('SELECT fingerprint,session_id FROM beast_commands WHERE sect_id=? AND command_id=?').bind(sectId,commandId).first<{fingerprint:string;session_id:string|null}>();
   if(row&&row.fingerprint!==fingerprint)throw new AppError('VALIDATION_ERROR','操作标识已用于另一项操作');return row;
@@ -93,7 +99,10 @@ export async function manageSpiritBeast(db:D1Database,userId:string,input:{beast
   if(!b)throw new AppError('NOT_FOUND','灵兽不存在');
   if(b.version!==input.version)throw new AppError('INVALID_STATUS','灵兽信息已变化，请刷新');
   const extra=[guard(d,'EXISTS(SELECT 1 FROM spirit_beasts WHERE id=? AND sect_id=? AND version=?)',[b.id,d.sect.id,b.version])];
-  if(input.action!=='lock'&&b.disciple_id)requireFree(d,b.disciple_id);
+  if(b.disciple_id) {
+    if(input.action==='upgrade')requireNotInBattle(d,b.disciple_id);
+    else if(input.action!=='lock')requireFree(d,b.disciple_id);
+  }
   if(input.action==='equip') {
     if(!input.discipleId)throw new AppError('VALIDATION_ERROR','请选择携带弟子');
     requireFree(d,input.discipleId);
@@ -139,15 +148,17 @@ export async function startBeastCapture(db:D1Database,userId:string,input:{areaI
   d.requireResource('spiritStone',area.cost);
   const attrs=battleAttrsOf(m),power=gearedCombatPower(m),species=encounterSpecies(area.speciesIds,attrs.luck,random),quality=encounterQuality(random);
   const strength=area.strength*({spirit:1,rare:1.1,divine:1.2}[species.tier]);
-  const skill=beastMods({speciesId:species.id,quality,level:1});
-  const wildAttrs=beastAttributes({speciesId:species.id,quality,level:1});
+  // 野生个体按凡品属性与技能出手：品质只决定收服结果，否则血量与伤害会提前暴露品质。
+  const skill=beastMods({speciesId:species.id,quality:'common',level:1});
+  const wildAttrs=beastAttributes({speciesId:species.id,quality:'common',level:1});
   const data:CaptureData={areaId:area.id,speciesId:species.id,quality,tier:species.tier,round:0,attempts:0,caughtId:null,
     player:makeCaptureFighter({name:m.name,power,...attrs,beast:readBeast(m)?beastMods(readBeast(m)!):undefined,technique:techniqueModsOf(d,m,now)??undefined}),
     target:makeCaptureFighter({name:species.name,power:strength,attack:40+wildAttrs.attack,defense:35+wildAttrs.defense,speed:40+wildAttrs.speed,luck:35+wildAttrs.luck,physique:40+wildAttrs.physique,beast:skill}),
     logs:[`${m.name}进入${area.name}，遭遇${species.elementName}行${species.name}。`, '品质将在收服成功后揭晓。']};
   const id=crypto.randomUUID(),expires=now+BEAST_RULES.sessionMs;
+  // 伤势按「此刻是否在伤」比对：草稿里的 injured_until 可能已被到期归队改写，与库里的旧值不同。
   const extra=[
-    guard(d,`EXISTS(SELECT 1 FROM disciples WHERE id=? AND realm_id=? AND stage=? AND assignment=? AND injured_until IS ? AND technique_id IS ? AND beast_json IS ? AND capture_until IS ?) AND NOT EXISTS(SELECT 1 FROM disciple_journeys WHERE disciple_id=? AND claimed_at IS NULL AND ends_at>?) AND NOT EXISTS(SELECT 1 FROM realm_explorations WHERE sect_id=? AND status='in_progress' AND EXISTS(SELECT 1 FROM json_each(party) WHERE value=?))`,[m.id,m.realm_id,m.stage,m.assignment,m.injured_until,m.technique_id,m.beast_json??null,m.capture_until??null,m.id,now,d.sect.id,m.id]),
+    guard(d,`EXISTS(SELECT 1 FROM disciples WHERE id=? AND realm_id=? AND stage=? AND assignment=? AND COALESCE(injured_until,0)<=? AND COALESCE(severe_injured_until,0)<=? AND technique_id IS ? AND beast_json IS ? AND capture_until IS ?) AND NOT EXISTS(SELECT 1 FROM disciple_journeys WHERE disciple_id=? AND claimed_at IS NULL AND ends_at>?) AND NOT EXISTS(SELECT 1 FROM realm_explorations WHERE sect_id=? AND status='in_progress' AND EXISTS(SELECT 1 FROM json_each(party) WHERE value=?))`,[m.id,m.realm_id,m.stage,m.assignment,now,now,m.technique_id,m.beast_json??null,m.capture_until??null,m.id,now,d.sect.id,m.id]),
     guard(d,'NOT EXISTS(SELECT 1 FROM beast_capture_sessions WHERE sect_id=? AND status=\'active\' AND expires_at>?)',[d.sect.id,now]),
     guard(d,'(SELECT COUNT(*) FROM spirit_beasts WHERE sect_id=?)=?',[d.sect.id,panel.items.length]),
     guard(d,'COALESCE((SELECT used_count FROM beast_capture_daily WHERE sect_id=? AND date_key=?),0)=?',[d.sect.id,dateKeyUtc8(now),BEAST_RULES.dailyLimit-panel.remaining]),
@@ -185,4 +196,15 @@ export async function actBeastCapture(db:D1Database,userId:string,input:{session
     if(next.status==='defeated')d.addStatement({sql:'UPDATE disciples SET injured_until=MAX(COALESCE(injured_until,0),?) WHERE id=?',params:[now+600_000,row.disciple_id]});
   }
   record(d,input.commandId,fingerprint,row.id,now);await commit(db,d,extra,input.commandId,fingerprint);return result(db,userId,now);
+}
+const BEAST_RECORD_KEEP_MS=7*24*3_600_000;
+/** 定时任务每小时顺带清理一次：7 天前的命令幂等记录、已结束或早已过期的捕捉记录与每日计数，防止表无限增长。 */
+export async function pruneBeastRecords(db:D1Database,now:number) {
+  if(new Date(now).getUTCMinutes()!==0)return;
+  const before=now-BEAST_RECORD_KEEP_MS;
+  await db.batch([
+    db.prepare('DELETE FROM beast_commands WHERE created_at<?').bind(before),
+    db.prepare("DELETE FROM beast_capture_sessions WHERE created_at<? AND (status<>'active' OR expires_at<=?)").bind(before,now),
+    db.prepare('DELETE FROM beast_capture_daily WHERE date_key<?').bind(dateKeyUtc8(before)),
+  ]);
 }

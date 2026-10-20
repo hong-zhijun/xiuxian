@@ -19,6 +19,8 @@ CREATE TABLE beast_capture_sessions (
 );
 CREATE UNIQUE INDEX beast_capture_active ON beast_capture_sessions(sect_id) WHERE status='active';
 CREATE INDEX beast_capture_recent ON beast_capture_sessions(sect_id,created_at DESC);
+-- 定时清理按 created_at 删除 7 天前的记录。
+CREATE INDEX beast_capture_created ON beast_capture_sessions(created_at);
 CREATE TABLE beast_capture_daily (
   sect_id TEXT NOT NULL REFERENCES sects(id) ON DELETE CASCADE, date_key TEXT NOT NULL,
   used_count INTEGER NOT NULL DEFAULT 0 CHECK(used_count>=0), PRIMARY KEY(sect_id,date_key)
@@ -33,3 +35,4 @@ CREATE TABLE beast_commands (
   fingerprint TEXT NOT NULL, session_id TEXT, created_at INTEGER NOT NULL,
   PRIMARY KEY(sect_id,command_id)
 );
+CREATE INDEX beast_commands_created ON beast_commands(created_at);

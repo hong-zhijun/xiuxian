@@ -586,9 +586,15 @@ export function simulateTowerBattle(input: {
       const maxStrikes = mods.maxStrikesPerAction ?? 2;
       const extraTag =
         mods.extraChanceMax !== undefined || mods.round1GuaranteedExtra || mods.extraChanceBonus > 0
-          ? technique?.tag ?? fighter.beast?.skillName ?? null
+          ? technique?.tag ?? null
           : null;
-      const baseChance = towerExtraActionChance(fighter.speed, monster.speed);
+      // 不带功法时本来就有的追击概率（含灵兽游龙的加成）：落在这部分里的追击不记作功法的额外伤害。
+      const baseChance = towerExtraActionChance(
+        fighter.speed,
+        monster.speed,
+        Math.min(.85, TOWER_EXTRA_ACTION_MAX + (fighter.beast?.extraCap ?? 0)),
+        fighter.beast?.extra ?? 0,
+      );
       const chance = towerExtraActionChance(
         fighter.speed,
         monster.speed,
