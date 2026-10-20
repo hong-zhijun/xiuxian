@@ -18,6 +18,11 @@ export interface ChangelogEntry {
 export const MAX_ENTRIES = 5;
 
 export const CHANGELOG: readonly ChangelogEntry[] = [
+  { id:'2026-10-20-spirit-beasts', time:'2026-10-20 18:00', title:'野外御兽 · 五行相克', items:[
+    '秘境探索新增普通秘境与宠物秘境分类。宗门 3 级开放捕捉：派一名弟子搜寻、留手削弱并施展御兽术，收集十二种灵兽。',
+    '弟子新增灵兽槽；使用灵石与灵气培养，技能与主修功法搭配。灵兽五行参与捕捉、镇妖塔和大比战斗。',
+    '执事堂移到招贤台与门人调度之间，功法移到宗门列，日课移到出战列。'
+  ]},
   {
     id: '2026-10-19-market-expansion',
     time: '2026-10-19 16:00',

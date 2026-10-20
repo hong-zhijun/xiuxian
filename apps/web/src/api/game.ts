@@ -1,3 +1,4 @@
+import type { BeastIdentity, BeastAttrs, SpiritBeastsPanel, BeastCaptureAction } from '@xiuxian/contracts';
 import { apiRequest, setCsrfToken } from './client';
 import type { AvatarFrameId } from '../utils/avatarFrames';
 
@@ -34,6 +35,8 @@ export interface ResourceView {
 }
 
 export interface DiscipleView {
+  spiritBeast?: (BeastIdentity & { name: string; qualityName: string; elementName: string; skillText: string; attrs: BeastAttrs; image: string; avatar: string }) | null;
+  captureUntil?: number | null;
   id: string;
   name: string;
   gender: string;
@@ -2006,6 +2009,7 @@ export interface WorldBossHitView {
 export type WorldBossPhase = 'before' | 'open' | 'frenzy' | 'closed';
 
 export interface WorldBossCurrentView {
+  elementName?: string;
   id: string;
   dayKey: string;
   /** 第几关（每天从 1 开始，连战递增）。 */
@@ -2105,6 +2109,7 @@ export interface WorldBossAttackResultView {
   members: WorldBossMemberOutcomeView[];
   /** 功法加成（整数百分比；没有功法为 0）。 */
   techniqueBonusPercent: number;
+  beastSummary?: string[];
 }
 
 export async function fetchWorldBoss(): Promise<{ state: SectStateView; boss: WorldBossView }> {
@@ -2505,6 +2510,7 @@ export interface TowerAffixView {
 
 /** 守关妖物（血量 / 攻击已 × 100，与战报同一口径；身法、标准属性、标准战力是原值）。 */
 export interface TowerMonsterView {
+  elementName?: string;
   floor: number;
   name: string;
   isBoss: boolean;
@@ -3452,3 +3458,8 @@ export interface HubView {
 export async function fetchHub(): Promise<{ hub: HubView }> {
   return apiRequest<{ hub: HubView }>('/api/v1/game/hub');
 }
+
+export function fetchSpiritBeasts() { return apiRequest<{beasts:SpiritBeastsPanel}>('/api/v1/game/spirit-beasts'); }
+export function startBeastCapture(areaId:string,discipleId:string,commandId:string) { return apiRequest<{state:SectStateView;beasts:SpiritBeastsPanel}>('/api/v1/game/beast-capture/start',{method:'POST',body:{areaId,discipleId,commandId}}); }
+export function actBeastCapture(sessionId:string,version:number,action:BeastCaptureAction,commandId:string) { return apiRequest<{state:SectStateView;beasts:SpiritBeastsPanel}>('/api/v1/game/beast-capture/action',{method:'POST',body:{sessionId,version,action,commandId}}); }
+export function manageSpiritBeast(beastId:string,version:number,action:'equip'|'unequip'|'upgrade'|'lock'|'release',commandId:string,discipleId?:string,locked?:boolean) { return apiRequest<{state:SectStateView;beasts:SpiritBeastsPanel}>('/api/v1/game/spirit-beasts/manage',{method:'POST',body:{beastId,version,action,commandId,...(discipleId?{discipleId}:{}),...(locked===undefined?{}:{locked})}}); }

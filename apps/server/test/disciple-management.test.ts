@@ -1094,6 +1094,8 @@ describe('0018 迁移：disciples 重建后结构与约束完好', () => {
       'technique_id',
       'technique_prof_base',
       'technique_since',
+      'beast_json',
+      'capture_until',
     ]);
   });
 
@@ -1163,6 +1165,8 @@ describe('0018 迁移：disciples 重建后结构与约束完好', () => {
       'technique_id|TEXT|0|',
       'technique_prof_base|INTEGER|1|0',
       'technique_since|INTEGER|0|',
+      'beast_json|TEXT|0|',
+      'capture_until|INTEGER|0|',
     ]);
   });
 

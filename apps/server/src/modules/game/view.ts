@@ -1,3 +1,14 @@
+import type { BeastIdentity, BeastAttrs } from '@xiuxian/contracts';
+import {
+  BEAST_QUALITY,
+  BEAST_SPECIES,
+  beastArtPath,
+  beastAttributes,
+  beastAvatarPath,
+  beastSkillText,
+  readBeast,
+  withBeastAttributes,
+} from './spiritBeasts';
 import type { GameConfigContent } from '@xiuxian/game-core';
 
 import {
@@ -203,6 +214,8 @@ export interface EventLogView {
 }
 
 export interface DiscipleView {
+  spiritBeast?: (BeastIdentity & { name: string; qualityName: string; elementName: string; skillText: string; attrs: BeastAttrs; image: string; avatar: string }) | null;
+  captureUntil?: number | null;
   id: string;
   name: string;
   gender: string;
@@ -1436,6 +1449,7 @@ export interface WorldBossHitView {
 
 /** 当前关卡（今天还没有 Boss 时为 null）。 */
 export interface WorldBossCurrentView {
+  elementName?: string;
   id: string;
   /** UTC+8 日期键。 */
   dayKey: string;
@@ -1548,6 +1562,7 @@ export interface WorldBossAttackResultView {
   members: WorldBossMemberOutcomeView[];
   /** 功法加成（整数百分比，如 18 = 「功法加成 +18%」）：出战弟子的功法伤害增益合计；没有功法为 0。 */
   techniqueBonusPercent: number;
+  beastSummary?: string[];
 }
 
 export interface SectStateView {
@@ -2145,7 +2160,9 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
 
     let blockedReason: string | null = null;
     let blockedOnlyByEnergy = false;
-    if (away) {
+    if ((disciple.capture_until??0)>now) {
+      blockedReason='正在捕捉灵兽';
+    } else if (away) {
       // 在外期间不能破境（服务端也会拒绝），原因优先于修为/灵气。
       blockedReason = '正在外历练，尚未归队';
     } else if (stage.requiredCultivation === null) {
@@ -2186,7 +2203,7 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
 
     // 0028 装备：战斗属性 = 基础属性 + 装备加成（加成后可以超过 100；基础属性本身仍最高 100）。
     const gear = gearBonusOfDisciple(disciple);
-    const battleAttrs = withGear(
+    const battleAttrs = withBeastAttributes(withGear(
       {
         attack: Number(disciple.attack),
         defense: Number(disciple.defense),
@@ -2195,9 +2212,23 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
         physique: Number(disciple.physique),
       },
       gear,
-    );
+    ), disciple);
 
+    const beast=readBeast(disciple);
+    const beastSpecies=beast?BEAST_SPECIES.find(b=>b.id===beast.speciesId):undefined;
+    if ((disciple.capture_until ?? 0)>now) combatBlockedReason='捕捉灵兽中';
     return {
+      spiritBeast: beast && beastSpecies ? {
+        ...beast,
+        name: beastSpecies.name,
+        qualityName: BEAST_QUALITY[beast.quality].name,
+        elementName: beastSpecies.elementName,
+        skillText: beastSkillText(beast),
+        attrs: beastAttributes(beast),
+        image: beastArtPath(beast.speciesId),
+        avatar: beastAvatarPath(beast.speciesId),
+      } : null,
+      captureUntil: (disciple.capture_until ?? 0)>now ? disciple.capture_until! : null,
       id: disciple.id,
       name: disciple.name,
       gender: disciple.gender,
@@ -3053,6 +3084,7 @@ export interface TowerAffixView {
 
 /** 守关妖物（血量 / 攻击已 × 100，与战报同一口径；身法、标准属性、标准战力是原值）。 */
 export interface TowerMonsterView {
+  elementName?: string;
   floor: number;
   name: string;
   isBoss: boolean;

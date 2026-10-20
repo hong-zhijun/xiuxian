@@ -7917,7 +7917,8 @@ p.steward-bonus-note {
   opacity: 0.6;
 }
 
-.recruit-launch + .dispatch-launch {
+.recruit-launch + .dispatch-launch,
+.steward-launch + .dispatch-launch {
   margin-left: 0;
 }
 
@@ -8025,4 +8026,107 @@ p.steward-bonus-note {
   border-color: rgba(var(--realm-rgb), 0.45);
   color: rgb(var(--realm-rgb));
   background: rgba(var(--realm-rgb), 0.08);
+}
+
+/* 灵兽入口与秘境分流：首页秘境选择弹窗、弟子详情灵兽槽 */
+.explore-type-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  padding: 8px 0;
+}
+
+.explore-type-card {
+  display: grid;
+  justify-items: start;
+  gap: 12px;
+  padding: 24px;
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.explore-type-card:hover {
+  border-color: var(--jade-bright);
+  background: rgba(130, 170, 150, 0.05);
+}
+
+.explore-type-card strong {
+  font-size: 20px;
+}
+
+.explore-type-card > span:not(.explore-type-glyph),
+.explore-type-card small {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.explore-type-glyph {
+  font-family: serif;
+  font-size: 42px;
+  color: var(--gold-bright);
+}
+
+.explore-back {
+  margin-bottom: 15px;
+}
+
+.disciple-beast-slot {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  padding: 12px;
+  margin: 12px 0;
+}
+
+.disciple-beast-info {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.disciple-beast-slot p,
+.disciple-beast-slot small {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-muted);
+  margin: 5px 0;
+}
+
+.disciple-beast-avatar {
+  flex: 0 0 auto;
+  width: 56px;
+  height: 56px;
+  border-radius: 10px;
+  object-fit: contain;
+  background: rgba(128, 128, 128, 0.08);
+}
+
+.steward-launch {
+  margin-left: 0;
+  white-space: nowrap;
+}
+
+@media (max-width: 520px) {
+  .explore-type-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .disciple-beast-slot {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .disciple-panel .panel-heading {
+    gap: 6px;
+  }
+
+  .disciple-panel .panel-heading .recruit-launch,
+  .disciple-panel .panel-heading .dispatch-launch {
+    padding: 4px 8px;
+  }
 }

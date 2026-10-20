@@ -1,3 +1,6 @@
+import type { BeastMods } from './spiritBeasts';
+import { elementFactor, enemyElement } from './elements';
+import { beastDefend, freshBeastState } from './beastCombat';
 import { REALMS } from './constants';
 import type { EquipmentQuality } from './equipment';
 import { ARENA_COMBAT_BONUS_BP_PER_LEVEL } from './realms';
@@ -233,6 +236,7 @@ export function towerMonsterOf(floor: number): TowerMonster {
 /* ---------- 战斗模拟 ---------- */
 
 export interface TowerFighter {
+  beast?: BeastMods;
   id: string;
   name: string;
   /** 战力（计入装备与战意，即 gearedCombatPower）。 */
@@ -324,11 +328,11 @@ function between(random: () => number, range: readonly [number, number]): number
  * 功法修正：金刚改体魄权重（默认 1），百毒 / 太乙 / 背水改血量倍率（默认 1）；没有功法时与原公式完全一致。
  */
 export function towerFighterHp(
-  fighter: Pick<TowerFighter, 'power' | 'physique'> & { technique?: TechniqueModifiers },
+  fighter: Pick<TowerFighter, 'power' | 'physique'> & { technique?: TechniqueModifiers; beast?: BeastMods },
 ): number {
   const tower = fighter.technique?.tower;
   const weight = tower?.physiqueWeight ?? 1;
-  const multiplier = tower?.hpMultiplier ?? 1;
+  const multiplier = (tower?.hpMultiplier ?? 1)*(1+(fighter.beast?.hp??0));
   return Math.floor(
     TOWER_DISCIPLE_HP_FACTOR *
       Math.max(0, fighter.power) *
@@ -404,7 +408,7 @@ export function simulateTowerBattle(input: {
   const monsterDamageMultiplier =
     1 + input.fighters.reduce((sum, f) => sum + (f.technique?.tower.monsterDamageBonus ?? 0), 0) / count;
   // 百毒不侵：免除自己那一份剧毒的人数。
-  const immuneCount = input.fighters.filter((f) => f.technique?.tower.poisonImmune === true).length;
+  const immuneCount = input.fighters.filter((f) => f.technique?.tower.poisonImmune === true || f.beast?.poisonImmune).length;
   const teamFirst = avgSpeed >= monster.speed;
   // 身法从高到低；同身法保持派出顺序（sort 稳定）。
   const order = [...input.fighters].sort((a, b) => b.speed - a.speed);
@@ -453,6 +457,7 @@ export function simulateTowerBattle(input: {
   }
 
   const strikeCounts = new Map<string, number>();
+  const beastStates=new Map(input.fighters.map(f=>[f.id,freshBeastState()]));
   /**
    * 一次出手。随机源取用顺序：浮动 → 暴击判定 →（剑气的触发判定，仅太乙）。
    * chainTag 非空时表示这是功法带来的连续追击（流云 / 鬼影），整次伤害记作功法的额外伤害。
@@ -467,7 +472,7 @@ export function simulateTowerBattle(input: {
     const naturalRate = towerCritRate(fighter.luck, affix);
     // 天机：暴击率 ×(1 + S)；破甲：本场第一次出手必定暴击，暴击倍率替换为 ×(1 + 2S)。
     const boostedRate = mods === undefined ? naturalRate : Math.min(1, naturalRate * mods.critRateMultiplier);
-    const forcedCrit = mods !== undefined && index === 0 ? mods.firstStrikeCritMultiplier : null;
+    const forcedCrit = index===0 ? (mods?.firstStrikeCritMultiplier ?? (fighter.beast?.firstCrit ? TOWER_CRIT_MULTIPLIER : null)) : null;
     const crit = forcedCrit !== null || roll < boostedRate;
     const naturalCrit = roll < naturalRate;
     const lowHpActive = mods !== undefined && mods.lowHpThreshold > 0 && teamHp < teamMaxHp * mods.lowHpThreshold;
@@ -479,6 +484,7 @@ export function simulateTowerBattle(input: {
         multiplier =
           (labels && forcedCrit !== null ? forcedCrit : TOWER_CRIT_MULTIPLIER) + Math.max(0, fighter.critBonusBp) / 10_000;
         if (labels && mods !== undefined) multiplier += mods.critMultiplierBonus;
+        if (labels) multiplier += fighter.beast?.crit ?? 0;
       }
       if (!isCrit && affix?.id === 'aegis') multiplier *= TOWER_AEGIS_NORMAL_FACTOR;
       if (affix?.id === 'ironWall' && fighter.attack < standardAttr) multiplier *= TOWER_IRON_WALL_PENALTY;
@@ -500,6 +506,11 @@ export function simulateTowerBattle(input: {
         // 背水：队伍血量低于阈值时的增益。
         if (labels && lowHpActive) multiplier *= mods.lowHpMultiplier;
       }
+      if(labels && fighter.beast) {
+        if(index===0) multiplier*=1+fighter.beast.first;
+        if(teamHp/teamMaxHp<.35) multiplier*=1+fighter.beast.low;
+      }
+      multiplier*=elementFactor(fighter.beast?.element,enemyElement(input.floor));
       return Math.floor(
         Math.max(0, fighter.power) *
           towerAttackFactor(fighter.attack, standardAttr, cap) *
@@ -512,6 +523,12 @@ export function simulateTowerBattle(input: {
 
     let damage = damageOf(crit, true);
     const tags: string[] = [];
+    const directDamage=damage;
+    if(fighter.beast) {
+      const factor=elementFactor(fighter.beast.element,enemyElement(input.floor));
+      if(factor!==1)tags.push(factor>1?'五行克制 +15%':'五行受克 −15%');
+      if((index===0&&(fighter.beast.first||fighter.beast.firstCrit))||(crit&&fighter.beast.crit)||(teamHp/teamMaxHp<.35&&fighter.beast.low))tags.push(fighter.beast.skillName);
+    }
     if (technique !== undefined && mods !== undefined) {
       const labelTriggered =
         (index === 0 && (mods.firstStrikeMultiplier !== 1 || forcedCrit !== null)) ||
@@ -535,6 +552,7 @@ export function simulateTowerBattle(input: {
         damage += procExtra;
       }
     }
+    if(fighter.beast?.procChance && input.random()<fighter.beast.procChance) {damage+=Math.floor(directDamage*fighter.beast.proc);tags.push(fighter.beast.skillName);}
     if (chainTag !== null && technique !== undefined) {
       const entry = summaryOf(fighter, technique);
       entry.triggers += 1;
@@ -554,7 +572,7 @@ export function simulateTowerBattle(input: {
       monsterHp = Math.max(0, monsterHp - first.damage);
       if (monsterHp <= 0) return true;
       const technique = fighter.technique;
-      if (technique === undefined) {
+      if (technique === undefined && !fighter.beast) {
         if (input.random() < towerExtraActionChance(fighter.speed, monster.speed)) {
           const second = strike(fighter, true, round, null);
           hits.push(second);
@@ -564,18 +582,18 @@ export function simulateTowerBattle(input: {
         continue;
       }
       // 功法路径：流云可连续追击（最多 3 次）；鬼影第 1 回合的第一次追击必定发生（仍取一次随机数，保持取用顺序一致）。
-      const mods = technique.tower;
+      const mods = technique?.tower ?? {maxStrikesPerAction:2,extraChanceMax:TOWER_EXTRA_ACTION_MAX,round1GuaranteedExtra:false,extraChanceBonus:0};
       const maxStrikes = mods.maxStrikesPerAction ?? 2;
       const extraTag =
         mods.extraChanceMax !== undefined || mods.round1GuaranteedExtra || mods.extraChanceBonus > 0
-          ? technique.tag
+          ? technique?.tag ?? fighter.beast?.skillName ?? null
           : null;
       const baseChance = towerExtraActionChance(fighter.speed, monster.speed);
       const chance = towerExtraActionChance(
         fighter.speed,
         monster.speed,
-        mods.extraChanceMax ?? TOWER_EXTRA_ACTION_MAX,
-        mods.extraChanceBonus,
+        Math.min(.85,(mods.extraChanceMax ?? TOWER_EXTRA_ACTION_MAX)+(fighter.beast?.extraCap??0)),
+        mods.extraChanceBonus+(fighter.beast?.extra??0),
       );
       let done = 1;
       while (done < maxStrikes) {
@@ -597,9 +615,18 @@ export function simulateTowerBattle(input: {
   /** 妖物出手：返回伤害。 */
   const monsterActs = (): number => {
     const fluctuation = between(input.random, TOWER_MONSTER_FLUCTUATION);
-    const damage = Math.floor(
+    let damage = Math.floor(
       monsterAttack * fluctuation * towerDefenseFactor(avgDefense) * (1 - avgReduction) * monsterDamageMultiplier,
     );
+    if(input.fighters.some(f=>f.beast)) {
+      let allocated=0, adjusted=0;
+      input.fighters.forEach((f,index)=>{
+        const hp=towerFighterHp(f),share=index===input.fighters.length-1?damage-allocated:Math.floor(damage*hp/teamMaxHp);allocated+=share;
+        const elemental=Math.floor(share*elementFactor(enemyElement(input.floor),f.beast?.element));
+        adjusted+=beastDefend(f.beast,beastStates.get(f.id)!,elemental,hp*teamHp/teamMaxHp,hp).damage;
+      });
+      damage=adjusted;
+    }
     teamHp = Math.max(0, teamHp - damage);
     return damage;
   };
@@ -607,6 +634,11 @@ export function simulateTowerBattle(input: {
   /** 血身：回合结束时，每名持有者为队伍回复自身最大血量 × 4% × S（不超过队伍血量上限）。 */
   const healRound = (): TowerHeal[] => {
     const heals: TowerHeal[] = [];
+    if(teamHp<=0)return heals;
+    for(const f of input.fighters) {
+      const amount=Math.min(teamMaxHp-teamHp,Math.floor(towerFighterHp(f)*(f.beast?.heal??0)));
+      if(amount>0) {teamHp+=amount;heals.push({discipleId:f.id,name:f.name+'【'+f.beast!.skillName+'】',amount});}
+    }
     for (const fighter of input.fighters) {
       const technique = fighter.technique;
       if (technique === undefined || technique.tower.healRatio <= 0) continue;

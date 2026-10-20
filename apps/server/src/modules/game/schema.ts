@@ -1,5 +1,9 @@
 import { z } from 'zod';
 
+export const beastStartSchema = z.strictObject({ areaId:z.string().min(1).max(64), discipleId:z.uuid(), commandId:z.uuid() });
+export const beastActionSchema = z.strictObject({ sessionId:z.uuid(), version:z.number().int().min(0), commandId:z.uuid(), action:z.enum(['attack','restrain','capture','leave']) });
+export const beastManageSchema = z.strictObject({ beastId:z.uuid(), version:z.number().int().min(0), commandId:z.uuid(), action:z.enum(['equip','unequip','upgrade','lock','release']), discipleId:z.uuid().optional(), locked:z.boolean().optional() });
+
 import { ARENA_MAX_ENTRY } from './arena';
 import { MAX_CRAFT_QUANTITY, MAX_PILL_USE_COUNT } from './alchemy';
 import { AVATAR_IMAGE_MAX_BASE64_CHARS, AVATAR_IMAGE_MIMES } from './avatarImage';

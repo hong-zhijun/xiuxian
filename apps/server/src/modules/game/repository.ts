@@ -46,6 +46,8 @@ export interface SectRow {
 }
 
 export interface DiscipleRow {
+  beast_json?: string | null;
+  capture_until?: number | null;
   id: string;
   sect_id: string;
   name: string;
@@ -281,7 +283,7 @@ export class DiscipleRepository extends ParamRepository {
   async findBySectId(sectId: string): Promise<DiscipleRow[]> {
     return this.all<DiscipleRow>({
       sql: `SELECT id, sect_id, name, gender, aptitude, attack, defense, speed, luck, physique, talent,
-                   gear_attack, gear_defense, gear_speed, gear_luck, gear_physique, gear_power_bp,
+                   gear_attack, gear_defense, gear_speed, gear_luck, gear_physique, gear_power_bp, beast_json, capture_until,
                    realm_id, stage, cultivation, cultivation_remainder,
                    assignment, injured_until, severe_injured_until, body_tempering_count, note, avatar_frame_id, avatar_hash, dao_insight, dao_insight_used,
                    talent_reroll_count, talent_candidate, steward_handover_until, aptitude_pill_count,
@@ -294,7 +296,7 @@ export class DiscipleRepository extends ParamRepository {
   async findById(discipleId: string): Promise<DiscipleRow | null> {
     return this.one<DiscipleRow>({
       sql: `SELECT id, sect_id, name, gender, aptitude, attack, defense, speed, luck, physique, talent,
-                   gear_attack, gear_defense, gear_speed, gear_luck, gear_physique, gear_power_bp,
+                   gear_attack, gear_defense, gear_speed, gear_luck, gear_physique, gear_power_bp, beast_json, capture_until,
                    realm_id, stage, cultivation, cultivation_remainder,
                    assignment, injured_until, severe_injured_until, body_tempering_count, note, avatar_frame_id, avatar_hash, dao_insight, dao_insight_used,
                    talent_reroll_count, talent_candidate, steward_handover_until, aptitude_pill_count,
@@ -834,16 +836,17 @@ export function settlementSnapshotGuardStatements(
       params,
     },
   ];
-  const DISCIPLES_PER_GUARD = 10;
+  const DISCIPLES_PER_GUARD = 8;
   for (let start = 0; start < disciples.length; start += DISCIPLES_PER_GUARD) {
     const guardId = `${commandId}:disciples:${String(start)}`;
     const memberChecks: string[] = [];
     const memberParams: (string | number | null)[] = [guardId];
     for (const row of disciples.slice(start, start + DISCIPLES_PER_GUARD)) {
       memberChecks.push(`EXISTS (SELECT 1 FROM disciples WHERE id = ? AND sect_id = ? AND realm_id = ? AND stage = ?
-        AND cultivation = ? AND cultivation_remainder = ? AND assignment = ? AND injured_until IS ?)`);
+        AND cultivation = ? AND cultivation_remainder = ? AND assignment = ? AND injured_until IS ?
+        AND beast_json IS ? AND capture_until IS ?)`);
       memberParams.push(row.id, sect.id, row.realm_id, row.stage, row.cultivation,
-        row.cultivation_remainder, row.assignment, row.injured_until);
+        row.cultivation_remainder, row.assignment, row.injured_until, row.beast_json ?? null, row.capture_until ?? null);
     }
     guardIds.push(guardId);
     guards.push({
@@ -4948,7 +4951,7 @@ export class ArenaRepository extends ParamRepository {
   async disciplesOfSectsAtLeast(minLevel: number): Promise<DiscipleRow[]> {
     return this.all<DiscipleRow>({
       sql: `SELECT id, sect_id, name, gender, aptitude, attack, defense, speed, luck, physique, talent,
-                   gear_attack, gear_defense, gear_speed, gear_luck, gear_physique, gear_power_bp,
+                   gear_attack, gear_defense, gear_speed, gear_luck, gear_physique, gear_power_bp, beast_json, capture_until,
                    realm_id, stage, cultivation, cultivation_remainder,
                    assignment, injured_until, severe_injured_until, body_tempering_count, note, avatar_frame_id, avatar_hash, dao_insight, dao_insight_used,
                    talent_reroll_count, talent_candidate, steward_handover_until, aptitude_pill_count,

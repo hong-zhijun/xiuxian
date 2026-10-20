@@ -383,11 +383,11 @@ const popoverAttributes = computed<
   const disciple = popoverDisciple.value;
   if (disciple === null) return [];
   return [
-    { key: 'attack', label: '攻击', value: disciple.attack, bonus: disciple.gear.attack },
-    { key: 'defense', label: '防御', value: disciple.defense, bonus: disciple.gear.defense },
-    { key: 'speed', label: '身法', value: disciple.speed, bonus: disciple.gear.speed },
-    { key: 'luck', label: '幸运', value: disciple.luck, bonus: disciple.gear.luck },
-    { key: 'physique', label: '体魄', value: disciple.physique, bonus: disciple.gear.physique },
+    { key: 'attack', label: '攻击', value: disciple.attack, bonus: disciple.gear.attack + (disciple.spiritBeast?.attrs.attack ?? 0) },
+    { key: 'defense', label: '防御', value: disciple.defense, bonus: disciple.gear.defense + (disciple.spiritBeast?.attrs.defense ?? 0) },
+    { key: 'speed', label: '身法', value: disciple.speed, bonus: disciple.gear.speed + (disciple.spiritBeast?.attrs.speed ?? 0) },
+    { key: 'luck', label: '幸运', value: disciple.luck, bonus: disciple.gear.luck + (disciple.spiritBeast?.attrs.luck ?? 0) },
+    { key: 'physique', label: '体魄', value: disciple.physique, bonus: disciple.gear.physique + (disciple.spiritBeast?.attrs.physique ?? 0) },
   ];
 });
 
@@ -578,6 +578,7 @@ onUnmounted(() => {
           <span class="dp-meta">
             <span>{{ disciple.stageName }}</span>
             <span>战力 {{ disciple.combatPower }}</span>
+            <span v-if="disciple.spiritBeast" class="dp-technique" :title="disciple.spiritBeast.skillText">{{ disciple.spiritBeast.elementName }} · {{ disciple.spiritBeast.name }}</span>
             <span v-if="showTechnique && disciple.techniqueId !== null" class="dp-technique">
               {{ disciple.techniqueName }}
             </span>

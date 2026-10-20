@@ -419,7 +419,7 @@ onMounted(() => {
 
         <div class="tower-info">
           <p class="tower-name">
-            <span>第 {{ monster.floor }} 层 · {{ monster.name }}</span>
+            <span>第 {{ monster.floor }} 层 · {{ monster.name }}{{ monster.elementName ? ' · ' + monster.elementName + '行' : '' }}</span>
             <span v-if="monster.isBoss" class="tower-tag is-boss">首领</span>
             <span
               v-if="monster.affix"

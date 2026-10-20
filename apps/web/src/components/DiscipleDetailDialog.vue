@@ -88,6 +88,7 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
+  'open-beasts': [discipleId:string];
   assign: [discipleId: string, assignment: string];
   breakthrough: [discipleId: string];
   /** count = 想服几颗（「服到满」传所需颗数，服务端按所需与库存截断）。 */
@@ -123,6 +124,7 @@ const emit = defineEmits<{
   notify: [tone: ToastTone, title: string, message: string];
 }>();
 
+const beastAttrNames: Record<string,string> = {attack:'攻击',defense:'防御',speed:'身法',luck:'幸运',physique:'体魄'};
 const serverNowMs = computed(() => Date.parse(props.state.serverNow));
 const injured = computed(() => isInjured(props.disciple, serverNowMs.value));
 
@@ -960,7 +962,7 @@ function isGearAttribute(attribute: string): attribute is GearAttribute {
 
 /** 该属性的装备加成；资质这类没有装备加成的属性按 0 处理。 */
 function gearBonusOf(attribute: string): number {
-  return isGearAttribute(attribute) ? props.disciple.gear[attribute] : 0;
+  return isGearAttribute(attribute) ? props.disciple.gear[attribute] + (props.disciple.spiritBeast?.attrs[attribute] ?? 0) : 0;
 }
 
 /**
@@ -1185,6 +1187,30 @@ function refineGear(item: EquipmentItemView | null): void {
             </div>
           </div>
 
+          <section class="disciple-beast-slot" :data-quality="disciple.spiritBeast?.quality">
+            <img
+              v-if="disciple.spiritBeast"
+              class="disciple-beast-avatar"
+              :src="disciple.spiritBeast.avatar"
+              :alt="disciple.spiritBeast.name"
+              width="56"
+              height="56"
+              loading="lazy"
+              decoding="async"
+            />
+            <div class="disciple-beast-info">
+              <strong>灵兽 · {{ disciple.spiritBeast?.name ?? '未携带' }}</strong>
+              <p v-if="disciple.spiritBeast">
+                {{ disciple.spiritBeast.qualityName }} · {{ disciple.spiritBeast.elementName }}行 · Lv.{{ disciple.spiritBeast.level }} ·
+                {{ disciple.spiritBeast.skillText }}
+              </p>
+              <p v-else>捕获灵兽后可在此装备，与主修功法搭配。</p>
+              <small v-if="disciple.spiritBeast">
+                {{ Object.entries(disciple.spiritBeast.attrs).filter(([,v])=>v>0).map(([k,v])=>beastAttrNames[k]+' +'+v).join(' · ') }}
+              </small>
+            </div>
+            <button class="action-button" type="button" @click="emit('open-beasts', disciple.id)">{{ disciple.spiritBeast ? '查看 / 更换' : '选择灵兽' }}</button>
+          </section>
           <!-- 当前装备：只列名称与祭炼等级，品阶用品质色区分（与背包、装备页同一套颜色）。 -->
           <ul class="overview-gear" aria-label="当前装备">
             <li v-for="slot in gearSlots" :key="slot.id" class="overview-gear-item">

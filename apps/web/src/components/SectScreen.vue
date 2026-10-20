@@ -68,6 +68,7 @@ import BagDialog from './BagDialog.vue';
 import EquipmentDialog from './EquipmentDialog.vue';
 import EventLogPanel from './EventLogPanel.vue';
 import ExplorePanel from './ExplorePanel.vue';
+import SpiritBeastsDialog from './SpiritBeastsDialog.vue';
 import ExplorePartyDialog from './ExplorePartyDialog.vue';
 import GamblingHouseDialog from './GamblingHouseDialog.vue';
 import LoadingState from './LoadingState.vue';
@@ -197,6 +198,8 @@ const openPanel = ref<
   | 'events'
   | 'techniques'
   | 'explore'
+  | 'explore-menu'
+  | 'spirit-beasts'
   | 'leaderboard'
   | 'disciple-leaderboard'
   | 'defense-lineup'
@@ -224,6 +227,9 @@ const openPanel = ref<
  * 赌坊里当前在玩哪个玩法：只为赌坊弹窗那一层的加载层文案（论道 / 天机轮 / 灵兽竞逐），
  * 由 GamblingHouseDialog 在切换玩法时上报。
  */
+const beastDiscipleId = ref<string | undefined>();
+function openBeastSlot(id:string) { beastDiscipleId.value=id; detailId.value=null; openPanel.value='spirit-beasts'; }
+
 const gamblingGame = ref<'debate' | 'wheel' | 'beast-race' | 'stone'>('debate');
 const gamblingLoadingText = computed(() => {
   if (gamblingGame.value === 'wheel') return '正在推演天机';
@@ -1932,17 +1938,24 @@ const hubGroups = computed<{ label: string; cards: HubCard[] }[]>(() => {
     {
       label: '宗门',
       cards: [
-        { id: 'daily', name: '日课', glyph: '课', status: dailyStatus, alert: dailyClaimable.value > 0 || daily?.chest.available === true },
+        {
+          id: 'techniques',
+          name: '功法',
+          glyph: '功',
+          status: props.state.buildings.some((building) => building.defId === 'scriptureLibrary' && building.level >= 1)
+            ? `已收录 ${String(props.state.learnedTechniques.length)} 门`
+            : '建成藏经阁后开放',
+        },
         { id: 'alchemy', name: '炼丹', glyph: '丹', status: healableIds.value.length > 0 ? `${String(healableIds.value.length)} 人受伤可疗伤` : '炼制丹药' },
         { id: 'forge', name: '炼器', glyph: '器', status: equipment.value ? `背包 ${String(equipment.value.bagCount)} / ${String(equipment.value.bagCapacity)}` : '打造装备' },
         { id: 'refine', name: '祭炼', glyph: '祭', status: refineCardStatus.value },
-        { id: 'steward', name: '执事堂', glyph: '执', status: vacantStewards.value > 0 ? `${String(vacantStewards.value)} 个执事空缺` : '执事齐全' },
         { id: 'defense', name: '守擂阵容', glyph: '擂', status: props.state.sect.defenseLineup ? '已布阵' : '尚未布阵' },
       ],
     },
     {
       label: '出战',
       cards: [
+        { id: 'daily', name: '日课', glyph: '课', status: dailyStatus, alert: dailyClaimable.value > 0 || daily?.chest.available === true },
         { id: 'boss', name: '讨伐', glyph: '讨', status: bossStatus },
         { id: 'arena', name: '宗门大比', glyph: '比', status: arenaCardStatus(h?.arena) },
         {
@@ -2025,14 +2038,7 @@ const hubGroups = computed<{ label: string; cards: HubCard[] }[]>(() => {
                   : '看行情 · 低买高卖',
         },
         { id: 'merit', name: '功勋', glyph: '勋', status: `可用 ${formatAmount(merit?.balance ?? '0')} 功勋` },
-        {
-          id: 'techniques',
-          name: '功法',
-          glyph: '功',
-          status: props.state.buildings.some((building) => building.defId === 'scriptureLibrary' && building.level >= 1)
-            ? `已收录 ${String(props.state.learnedTechniques.length)} 门`
-            : '建成藏经阁后开放',
-        },
+
       ],
     },
   ];
@@ -2055,7 +2061,7 @@ function openHubCard(id: HubCardId): void {
     boss: 'world-boss',
     arena: 'arena',
     tower: 'tower',
-    explore: 'explore',
+    explore: 'explore-menu',
     world: 'world',
     shop: 'shop',
     gambling: 'gambling',
@@ -2546,6 +2552,7 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
           >
             招贤台<span v-if="recruitBadge > 0" class="dispatch-launch-count">{{ recruitBadge }}</span>
           </button>
+          <button class="dispatch-launch steward-launch" type="button" :disabled="busy" :title="vacantStewards > 0 ? vacantStewards + ' 个执事空缺' : '执事齐全'" @click="openPanel = 'steward'">执事堂<span v-if="vacantStewards > 0" class="dispatch-launch-count">{{ vacantStewards }}</span></button>
           <button
             class="dispatch-launch"
             :class="{ 'has-suggestions': dispatchCount > 0 }"
@@ -2669,6 +2676,15 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
       <EventLogPanel :state="state" />
     </ModalShell>
 
+    <ModalShell v-if="openPanel === 'explore-menu'" label="秘境探索" @close="openPanel = null">
+      <div class="explore-type-grid">
+        <button class="explore-type-card" type="button" @click="openPanel = 'explore'"><span class="explore-type-glyph">秘</span><strong>普通秘境</strong><span>派遣弟子，探寻机缘与资源</span><small>{{ state.activeExploration ? '探索进行中 · 点击继续' : '进入原秘境列表' }}</small></button>
+        <button class="explore-type-card" type="button" @click="beastDiscipleId = undefined; openPanel = 'spirit-beasts'"><span class="explore-type-glyph">兽</span><strong>宠物秘境</strong><span>选择捕捉区域，寻找十二种灵兽</span><small>{{ state.disciples.some(d => d.captureUntil) ? '捕捉进行中 · 点击继续' : '捕捉 · 培养 · 图鉴' }}</small></button>
+      </div>
+    </ModalShell>
+    <ModalShell v-if="openPanel === 'spirit-beasts'" label="宠物秘境 · 灵兽苑" @close="openPanel = null">
+      <SpiritBeastsDialog :state="state" :disciple-id="beastDiscipleId" @state-update="(s: SectStateView) => emit('recruited', s)" @back="openPanel = 'explore-menu'" />
+    </ModalShell>
     <ModalShell
       v-if="openPanel === 'explore'"
       label="秘境探索"
@@ -2676,6 +2692,7 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
       loading-text="正在确认秘境信息"
       @close="openPanel = null"
     >
+      <button class="action-button explore-back" type="button" @click="openPanel = 'explore-menu'">返回秘境分类</button>
       <ExplorePanel
         :state="state"
         :busy="busy"
@@ -3046,6 +3063,7 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
     >
       <DiscipleDetailDialog
         :key="detailDisciple.id"
+        @open-beasts="openBeastSlot"
         :state="state"
         :disciple="detailDisciple"
         :busy="busy || equipmentSubmitting"

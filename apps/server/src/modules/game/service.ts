@@ -1,3 +1,5 @@
+import { elementFactor, enemyElement, ELEMENT_NAMES } from './elements';
+import { beastOf, beastBossMods, withBeastAttributes } from './spiritBeasts';
 import type { GameConfigContent } from '@xiuxian/game-core';
 
 import { validatedGameConfig } from '../../config/loadGameConfig';
@@ -1477,6 +1479,16 @@ class SectDraft {
     });
   }
 
+  private beastGuards(): ParameterizedQuery[] {
+    const queries: ParameterizedQuery[] = [];
+    for(let start=0; start<this.base.disciples.length; start+=20) {
+      const rows=this.base.disciples.slice(start,start+20), id=crypto.randomUUID();
+      const checks=rows.map(()=> 'EXISTS(SELECT 1 FROM disciples WHERE id=? AND beast_json IS ? AND capture_until IS ?)');
+      queries.push({sql:'INSERT INTO mutation_guards(command_id,valid) SELECT ?, CASE WHEN '+checks.join(' AND ')+' THEN 1 ELSE 0 END',params:[id,...rows.flatMap(row=>[row.id,row.beast_json??null,row.capture_until??null])]}, {sql:'DELETE FROM mutation_guards WHERE command_id=?',params:[id]});
+    }
+    return queries;
+  }
+
   async commit(options: {
     checkRecruitState?: boolean;
     staleRecruitBatchOnConflict?: boolean;
@@ -1526,6 +1538,7 @@ class SectDraft {
     }
     try {
       await this.db.batch(prepareStatements(this.db, [
+        ...this.beastGuards(),
         ...guard.guards,
         ...this.statements,
         ...guard.cleanup,
@@ -1574,6 +1587,7 @@ class SectDraft {
     }
     try {
       await this.db.batch(prepareStatements(this.db, [
+        ...this.beastGuards(),
         guard,
         ...discipleGuards,
         ...this.statements,
@@ -1657,6 +1671,7 @@ class SectDraft {
     }
     try {
       await this.db.batch(prepareStatements(this.db, [
+        ...this.beastGuards(),
         guard,
         ...memberGuards,
         ...this.statements,
@@ -1703,6 +1718,7 @@ class SectDraft {
     });
     try {
       await this.db.batch(prepareStatements(this.db, [
+        ...this.beastGuards(),
         guard,
         ...this.statements,
         deleteChallengeSnapshotGuardStatement(commandId),
@@ -1772,6 +1788,7 @@ class SectDraft {
     });
     try {
       await this.db.batch(prepareStatements(this.db, [
+        ...this.beastGuards(),
         guard,
         ...this.statements,
         deleteGamblingSnapshotGuardStatement(commandId),
@@ -2016,6 +2033,7 @@ class SectDraft {
     try {
       await this.db.batch(
         prepareStatements(this.db, [
+        ...this.beastGuards(),
           guard,
           ...this.statements,
           deleteJourneyStartSnapshotGuardStatement(commandId),
@@ -2057,6 +2075,7 @@ class SectDraft {
     try {
       await this.db.batch(
         prepareStatements(this.db, [
+        ...this.beastGuards(),
           guard,
           ...this.statements,
           deleteJourneyClaimSnapshotGuardStatement(commandId),
@@ -2101,6 +2120,7 @@ class SectDraft {
     try {
       await this.db.batch(
         prepareStatements(this.db, [
+        ...this.beastGuards(),
           guard,
           ...this.statements,
           deleteRealmExploreSnapshotGuardStatement(commandId),
@@ -2125,7 +2145,7 @@ class SectDraft {
   }
 }
 
-async function draftFor(db: D1Database, userId: string, now: number): Promise<SectDraft> {
+export async function draftFor(db: D1Database, userId: string, now: number): Promise<SectDraft> {
   const snapshot = await loadSnapshot(db, userId, now);
   if (snapshot === null) {
     throw new AppError('NOT_FOUND', '尚未创建宗门');
@@ -3957,8 +3977,8 @@ function fluctuatedPower(basePower: number): number {
  *   不计入：弟子历练、论道赌局、综合评分、悟道值加点上限。
  * 加法由 equipment.ts 的 withGear 实现：加成后可以超过 100，基础属性本身仍最高 100。
  */
-function battleAttrsOf(disciple: DiscipleRow): AttrSet {
-  return withGear(
+export function battleAttrsOf(disciple: DiscipleRow): AttrSet {
+  return withBeastAttributes(withGear(
     {
       attack: Number(disciple.attack),
       defense: Number(disciple.defense),
@@ -3967,14 +3987,14 @@ function battleAttrsOf(disciple: DiscipleRow): AttrSet {
       physique: Number(disciple.physique),
     },
     gearBonusOfDisciple(disciple),
-  );
+  ), disciple);
 }
 
 /**
  * 0028：弟子战力（**计入装备**）——把「基础属性 + 装备加成」与 0032 的装备战力加成
  * 一起传给 realms.ts 的战力函数。
  */
-function gearedCombatPower(disciple: DiscipleRow): number {
+export function gearedCombatPower(disciple: DiscipleRow): number {
   const attrs = battleAttrsOf(disciple);
   return discipleCombatPower(
     disciple.realm_id,
@@ -6225,6 +6245,7 @@ function requireNotAway(draft: SectDraft, disciple: DiscipleRow, action: string)
 
 /** requireNotAway 的判定版：不在外返回 null；批量命令据此把在外弟子记为跳过而不是整批报错。 */
 function awayBlocker(draft: SectDraft, disciple: DiscipleRow, action: string): DiscipleBlocker | null {
+  if ((disciple.capture_until ?? 0) > draft.now) return { error: new AppError('INVALID_STATUS', `${disciple.name}正在捕捉灵兽，无法${action}`), reason: '捕捉灵兽中' };
   const pending = draft.pendingJourneyOf(disciple.id);
   if (pending === undefined || journeyStatusOf(pending, draft.now) !== 'active') {
     return null;
@@ -6306,12 +6327,13 @@ function garrisonBlocker(draft: SectDraft, disciple: DiscipleRow, action: string
 }
 
 function requireNotGarrisoned(draft: SectDraft, disciple: DiscipleRow, action: string): void {
+  if((disciple.capture_until??0)>draft.now)throw new AppError('INVALID_STATUS',`${disciple.name}正在捕捉灵兽，无法${action}`);
   const blocker = garrisonBlocker(draft, disciple, action);
   if (blocker !== null) throw blocker.error;
 }
 
 /** 出战入口（讨伐 / 秘境 / 切磋 / 守擂 / 闯塔 / 山河斗法）的统一校验：不在外、不重伤，不是执事 / 不在交接期，不在坐镇。 */
-function requireCanFight(draft: SectDraft, disciple: DiscipleRow, action: string): void {
+export function requireCanFight(draft: SectDraft, disciple: DiscipleRow, action: string): void {
   requireNotAway(draft, disciple, action);
   const blocker = stewardBlocker(draft, disciple);
   if (blocker !== null) throw blocker.error;
@@ -6535,6 +6557,7 @@ function journeyEligibilityOf(input: {
   worldSites: readonly WorldSiteRow[];
   now: number;
 }): JourneyBlock | null {
+  if((input.disciple.capture_until??0)>input.now)return {code:'INVALID_STATUS',message:'弟子正在捕捉灵兽'};
   const awayIds = journeyAwayIds(input.journeys, input.now);
   // 二期阶段一：重伤卧床期间不能外出历练（比疗伤更重：整个静养期都动不了）。
   if (isSeverelyInjured(input.disciple.severe_injured_until, input.now)) {
@@ -6721,6 +6744,7 @@ export async function startJourney(
 
   const draft = await draftFor(db, userId, now);
   const disciple = draft.discipleById(discipleId);
+  requireNotAway(draft, disciple, '外出历练');
 
   const eligibility = journeyEligibilityOf({
     activeExploration: draft.activeExploration,
@@ -9086,6 +9110,7 @@ async function buildWorldBossView(input: {
       : {
           id: boss.id,
           dayKey: boss.day_key,
+          elementName:ELEMENT_NAMES[enemyElement(Number(boss.stage))],
           stage: Number(boss.stage),
           def: worldBossDefViewOf(Number(boss.boss_index), Number(boss.stage)),
           affix: worldBossAffixViewOf(boss.affix),
@@ -9571,9 +9596,10 @@ export async function attackWorldBoss(
   const averageOverMembers = (pick: (boss: TechniqueBossMods | null) => number): number =>
     members.reduce((sum, member) => sum + pick(bossModsOf(member)), 0) / members.length;
   const critRateMultiplierAvg = averageOverMembers((boss) => boss?.critRateMultiplier ?? 1);
-  const critMultiplierBonusAvg = averageOverMembers((boss) => boss?.critMultiplierBonus ?? 0);
+  const critMultiplierBonusAvg = averageOverMembers((boss) => boss?.critMultiplierBonus ?? 0)+members.reduce((sum,m)=>sum+beastBossMods(m).crit,0)/Math.max(1,members.length);
   const nonCritMultiplierAvg = averageOverMembers((boss) => boss?.nonCritMultiplier ?? 1);
 
+  const bossRowStage=boss.stage;
   const outcomes: WorldBossMemberOutcomeView[] = [];
   const severeMembers: DiscipleRow[] = [];
   const injuredMembers: DiscipleRow[] = [];
@@ -9593,8 +9619,8 @@ export async function attackWorldBoss(
       // 天赋重构 · 铁骨：受伤 / 重伤概率按境界减免。
       injuryReductionBp: talentBonusBp(member.talent, member.realm_id, 'ironBody'),
       // 功法：金刚 / 血身 / 百毒的受伤、重伤概率倍率（逐人判定，按该弟子自己的功法）。
-      normalInjuryMultiplier: boss?.normalInjuryMultiplier ?? 1,
-      severeInjuryMultiplier: boss?.severeInjuryMultiplier ?? 1,
+      normalInjuryMultiplier: (boss?.normalInjuryMultiplier ?? 1)*beastBossMods(member).injury,
+      severeInjuryMultiplier: (boss?.severeInjuryMultiplier ?? 1)*beastBossMods(member).severe,
       random: Math.random,
     });
     if (verdict.severe) {
@@ -9627,7 +9653,7 @@ export async function attackWorldBoss(
     );
     // 功法：伤害增益 / 伤害代价按弟子逐人乘进贡献；gainSum / gainBase 只用来算「功法加成」百分比。
     const damageGain = boss?.damageGain ?? 1;
-    const contribution = baseContribution * damageGain * (boss?.damageCost ?? 1);
+    const contribution = baseContribution * damageGain * (boss?.damageCost ?? 1)*beastBossMods(member).damage*elementFactor(beastOf(member)?.element,enemyElement(Number(bossRowStage)));
     gainBase += baseContribution;
     gainSum += baseContribution * damageGain;
     partyBase += contribution;
@@ -9774,6 +9800,7 @@ export async function attackWorldBoss(
       nextStage,
       members: outcomes,
       techniqueBonusPercent,
+      beastSummary:members.filter(m=>beastOf(m)).map(m=>m.name+'：'+beastBossMods(m).text+'；五行倍率 ×'+elementFactor(beastOf(m)?.element,enemyElement(Number(boss.stage)))),
     },
     boss: await buildWorldBossView({
       db,
@@ -10802,6 +10829,7 @@ function towerAffixViewOf(affix: TowerAffixDef | null): TowerAffixView | null {
 function towerMonsterViewOf(floor: number): TowerMonsterView {
   const monster = towerMonsterOf(floor);
   return {
+    elementName:ELEMENT_NAMES[enemyElement(floor)],
     floor: monster.floor,
     name: monster.name,
     isBoss: monster.isBoss,
@@ -11139,7 +11167,7 @@ export async function sweepTower(
 const TOWER_PREVIEW_SAMPLES = 50;
 
 /** 弟子的功法修正（没有主修为 null）：等级取宗门的收录状态（至少按 1 级算），熟练度读时现算。 */
-function techniqueModsOf(draft: SectDraft, disciple: DiscipleRow, now: number): TechniqueModifiers | null {
+export function techniqueModsOf(draft: SectDraft, disciple: DiscipleRow, now: number): TechniqueModifiers | null {
   if (disciple.technique_id === null) return null;
   const level = Number(techniqueRowOf(draft, disciple.technique_id).level);
   return techniqueModifiersOf({
@@ -11169,6 +11197,7 @@ function towerFighterOf(draft: SectDraft, member: DiscipleRow, now: number): Tow
     critBonusBp: talentBonusBp(member.talent, member.realm_id, 'critical'),
     damageReductionBp: talentBonusBp(member.talent, member.realm_id, 'ironBody'),
     ...(technique === null ? {} : { technique }),
+    ...(beastOf(member) ? { beast: beastOf(member) } : {}),
   };
 }
 
@@ -11537,6 +11566,7 @@ export async function setDiscipleTechnique(
 ): Promise<SectStateView> {
   const draft = await draftFor(db, userId, now);
   const disciple = draft.discipleById(discipleId);
+  if((disciple.capture_until??0)>now)throw new AppError('INVALID_STATUS','捕捉结束后才能更换功法');
   if (techniqueId !== null) {
     const def = requireTechniqueDef(techniqueId);
     if (Number(techniqueRowOf(draft, def.id).level) < 1) {
@@ -14589,7 +14619,8 @@ async function loadArenaRoster(db: D1Database, now: number): Promise<ArenaRoster
         severeInjuredUntil: disciple.severe_injured_until === null ? null : Number(disciple.severe_injured_until),
         injuredUntil: disciple.injured_until === null ? null : Number(disciple.injured_until),
       });
-      if (reason !== null) blockedReasonOf.set(disciple.id, reason);
+      if ((disciple.capture_until??0)>now) blockedReasonOf.set(disciple.id,'捕捉灵兽中');
+      else if (reason !== null) blockedReasonOf.set(disciple.id, reason);
     }
     return {
       id: sect.id,
@@ -14614,6 +14645,7 @@ function arenaFighterOf(
   const attrs = battleAttrsOf(disciple);
   const power = gearedCombatPower(disciple);
   const fighter: ArenaFighter = {
+    ...(beastOf(disciple) ? { beast: beastOf(disciple) } : {}),
     id: disciple.id,
     name: disciple.name,
     power,

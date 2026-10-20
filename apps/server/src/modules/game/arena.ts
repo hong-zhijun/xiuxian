@@ -1,3 +1,6 @@
+import type { BeastMods } from './spiritBeasts';
+import { elementFactor } from './elements';
+import { beastDefend, freshBeastState } from './beastCombat';
 /**
  * 宗门大比（docs/宗门大比开发计划.md）——纯定义与纯计算。
  *
@@ -201,6 +204,7 @@ export function arenaHandicap(myPower: number, opponentPower: number): number {
 /* ---------- 战斗 ---------- */
 
 export interface ArenaFighter {
+  beast?: BeastMods;
   id: string;
   name: string;
   /** 战力（计入装备与战意）：伤害基数，血量也由它算。 */
@@ -352,8 +356,8 @@ export function simulateArenaDuel(input: {
   random: () => number;
 }): ArenaDuelResult {
   const { fighterA, fighterB, random } = input;
-  const maxHpA = arenaFighterHp(fighterA.power, fighterA.physique, fighterA.technique);
-  const maxHpB = arenaFighterHp(fighterB.power, fighterB.physique, fighterB.technique);
+  const maxHpA = Math.floor(arenaFighterHp(fighterA.power, fighterA.physique, fighterA.technique)*(1+(fighterA.beast?.hp??0)));
+  const maxHpB = Math.floor(arenaFighterHp(fighterB.power, fighterB.physique, fighterB.technique)*(1+(fighterB.beast?.hp??0)));
   let hpA = clampHp(input.startHpA ?? maxHpA, maxHpA);
   let hpB = clampHp(input.startHpB ?? maxHpB, maxHpB);
   let damageA = 0;
@@ -361,6 +365,7 @@ export function simulateArenaDuel(input: {
   const rounds: ArenaRound[] = [];
   /** 本场各自的出手次数（功法「本场第一次出手」用；车轮战每场单挑重新计）。 */
   const strikeCounts = new Map<string, number>();
+  const beastStates = new Map([[fighterA.id,freshBeastState()],[fighterB.id,freshBeastState()]]);
 
   /**
    * 一次出手；返回 true 表示对方倒下。
@@ -381,9 +386,10 @@ export function simulateArenaDuel(input: {
     strikeCounts.set(attacker.id, index + 1);
     const fluctuation = between(random, ARENA_FLUCTUATION);
     let damage: number;
+    let directDamage = 0;
     let crit: boolean;
     const tags: string[] = [];
-    if (mods === undefined && defender.technique === undefined) {
+    if (mods === undefined && defender.technique === undefined && !attacker.beast && !defender.beast) {
       crit = random() < arenaCritRate(attacker.luck);
       const raw =
         attacker.power * arenaAttackFactor(attacker.attack) * fluctuation * (crit ? ARENA_CRIT_MULTIPLIER : 1);
@@ -392,12 +398,12 @@ export function simulateArenaDuel(input: {
       const roll = random();
       const naturalRate = arenaCritRate(attacker.luck);
       const rate = mods === undefined ? naturalRate : Math.min(1, naturalRate * mods.critRateMultiplier);
-      const forcedCrit = mods !== undefined && index === 0 ? mods.firstStrikeCritMultiplier : null;
+      const forcedCrit = index === 0 ? (mods?.firstStrikeCritMultiplier ?? (attacker.beast?.firstCrit ? ARENA_CRIT_MULTIPLIER : null)) : null;
       crit = forcedCrit !== null || roll < rate;
       const myHp = attackerIsA ? hpA : hpB;
       const myMax = attackerIsA ? maxHpA : maxHpB;
       const lowHp = mods !== undefined && mods.lowHpThreshold > 0 && myHp < myMax * mods.lowHpThreshold;
-      let multiplier = crit ? (forcedCrit ?? ARENA_CRIT_MULTIPLIER) + (mods?.critMultiplierBonus ?? 0) : 1;
+      let multiplier = crit ? (forcedCrit ?? ARENA_CRIT_MULTIPLIER) + (mods?.critMultiplierBonus ?? 0) + (attacker.beast?.crit ?? 0) : 1;
       if (mods !== undefined) {
         multiplier *= index === 0 ? mods.firstStrikeMultiplier : mods.laterStrikeMultiplier;
         multiplier *= mods.strikeMultiplier;
@@ -405,10 +411,17 @@ export function simulateArenaDuel(input: {
         multiplier *= round === 1 ? mods.round1Multiplier : 1 + mods.roundGrowth * (round - 1);
         if (lowHp) multiplier *= mods.lowHpMultiplier;
       }
+      if (attacker.beast) {
+        if(index===0) multiplier*=1+attacker.beast.first;
+        if(myHp/myMax<.35) multiplier*=1+attacker.beast.low;
+        if((index===0&&(attacker.beast.first||attacker.beast.firstCrit))||(crit&&attacker.beast.crit)||(myHp/myMax<.35&&attacker.beast.low)) tags.push(attacker.beast.skillName);
+      }
+      multiplier*=elementFactor(attacker.beast?.element,defender.beast?.element);
       const cap = ARENA_ATTACK_RATIO_CAP + (mods?.attackCapBonus ?? 0);
       const raw = attacker.power * arenaAttackFactor(attacker.attack, cap) * fluctuation * multiplier;
       const taken = defender.technique?.arena.damageTakenMultiplier ?? 1;
       damage = Math.floor(raw * arenaDefenseFactor(defender.defense) * ARENA_DAMAGE_SCALE * taken);
+      directDamage=damage;
       if (technique !== undefined && mods !== undefined) {
         const signature =
           (index === 0 && (mods.firstStrikeMultiplier !== 1 || forcedCrit !== null)) ||
@@ -424,6 +437,16 @@ export function simulateArenaDuel(input: {
         }
         if (chainTag !== null && !tags.includes(chainTag)) tags.push(chainTag);
       }
+    }
+    if(attacker.beast?.procChance && random()<attacker.beast.procChance) {damage+=Math.floor(directDamage*attacker.beast.proc);tags.push(attacker.beast.skillName);}
+    if(attacker.beast && defender.beast) {
+      const factor=elementFactor(attacker.beast.element,defender.beast.element);
+      if(factor!==1) tags.push(factor>1?'五行克制 +15%':'五行受克 −15%');
+    }
+    if(defender.beast) {
+      const defended=beastDefend(defender.beast,beastStates.get(defender.id)!,damage,attackerIsA?hpB:hpA,attackerIsA?maxHpB:maxHpA);
+      damage=defended.damage; tags.push(...defended.tags);
+      if(defended.absorbed) tags.push('护盾吸收 '+defended.absorbed);
     }
     const hit: ArenaHit = { fighterId: attacker.id, name: attacker.name, damage, crit, extra };
     if (tags.length > 0) hit.tags = tags;
@@ -447,19 +470,19 @@ export function simulateArenaDuel(input: {
     const defender = attackerIsA ? fighterB : fighterA;
     if (strike(attacker, defender, attackerIsA, false, hits, round, null)) return true;
     const mods = attacker.technique?.arena;
-    if (mods === undefined) {
+    if (mods === undefined && !attacker.beast) {
       if (random() < arenaExtraActionChance(attacker.speed, defender.speed)) {
         return strike(attacker, defender, attackerIsA, true, hits, round, null);
       }
       return false;
     }
-    const max = mods.extraChanceMax ?? ARENA_EXTRA_ACTION_MAX;
-    const maxStrikes = mods.maxStrikesPerAction ?? 2;
+    const max = Math.min(.85,(mods?.extraChanceMax ?? ARENA_EXTRA_ACTION_MAX)+(attacker.beast?.extraCap??0));
+    const maxStrikes = mods?.maxStrikesPerAction ?? 2;
     for (let done = 1; done < maxStrikes; done += 1) {
-      const guaranteed = done === 1 && round === 1 && mods.round1GuaranteedExtra;
+      const guaranteed = done === 1 && round === 1 && mods?.round1GuaranteedExtra;
       const chance = Math.min(
         max,
-        Math.max(0, (attacker.speed - defender.speed) * ARENA_EXTRA_ACTION_PER_POINT) + mods.extraChanceBonus,
+        Math.max(0, (attacker.speed - defender.speed) * ARENA_EXTRA_ACTION_PER_POINT) + (mods?.extraChanceBonus??0) + (attacker.beast?.extra??0),
       );
       if (!guaranteed && !(random() < chance)) return false;
       const chainTag = guaranteed || done >= 2 ? (attacker.technique?.tag ?? null) : null;
@@ -470,7 +493,7 @@ export function simulateArenaDuel(input: {
 
   /** 血身：回合结束时活着的一方按自身最大血量回血。 */
   const healOf = (fighter: ArenaFighter, isA: boolean): ArenaHeal | null => {
-    const ratio = fighter.technique?.arena.healRatio ?? 0;
+    const ratio = Math.min(.12,(fighter.technique?.arena.healRatio ?? 0)+(fighter.beast?.heal??0));
     if (ratio <= 0) return null;
     const hp = isA ? hpA : hpB;
     const max = isA ? maxHpA : maxHpB;
