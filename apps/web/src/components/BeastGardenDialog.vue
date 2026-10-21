@@ -80,6 +80,10 @@ function togglePick(beast: SpiritBeastView): void {
   if (blocked.value || !releasable(beast)) return;
   selectedIds.value = isPicked(beast.id) ? selectedIds.value.filter(id => id !== beast.id) : [...selectedIds.value, beast.id];
 }
+/** 某品质里已选了几只（批量按钮上显示部分选中）。 */
+function pickedIn(ids: readonly string[]): number { return ids.filter(id => selectedIds.value.includes(id)).length; }
+/** 已选但被当前筛选挡住、列表里看不到的只数。 */
+const hiddenPicked = computed(() => selectedBeasts.value.filter(item => !items.value.some(visible => visible.id === item.id)).length);
 function isQualityPicked(ids: readonly string[]): boolean { return ids.every(id => selectedIds.value.includes(id)); }
 function toggleQuality(ids: readonly string[]): void {
   if (blocked.value) return;
@@ -250,7 +254,7 @@ onMounted(refreshPanel);
             :title="isQualityPicked(group.ids) ? `取消选择全部${group.name}` : `选中全部待命的${group.name}`"
             @click="toggleQuality(group.ids)"
           >
-            {{ group.name }} ×{{ group.ids.length }}
+            {{ group.name }} ×{{ group.ids.length }}<template v-if="pickedIn(group.ids) > 0 && !isQualityPicked(group.ids)">（已选 {{ pickedIn(group.ids) }}）</template>
           </button>
           <span v-if="lockedIdleCount > 0" class="garden-batch-note">已锁定的 {{ lockedIdleCount }} 只不参与</span>
         </div>
@@ -263,7 +267,7 @@ onMounted(refreshPanel);
           {{ !showCarried && carriedCount > 0 && panel.items.length === carriedCount ? `灵兽都在随行中（勾选「显示已随行」查看）。` : '没有符合筛选条件的灵兽。' }}
         </p>
         <ul v-else class="garden-grid">
-          <li v-for="beast in items" :key="beast.id" class="garden-item">
+          <li v-for="beast in items" :key="beast.id" class="garden-item" :class="{ 'is-picked': isPicked(beast.id) }">
             <label class="garden-pick">
               <input
                 type="checkbox"
@@ -305,7 +309,10 @@ onMounted(refreshPanel);
         </ul>
 
         <div v-if="selectedBeasts.length > 0" class="garden-batch-bar">
-          <p>已选 <strong>{{ selectedBeasts.length }}</strong> 只 · 获得御兽精魄 <strong>{{ formatAmount(batchReward) }}</strong></p>
+          <p>
+            已选 <strong>{{ selectedBeasts.length }}</strong> 只 · 获得御兽精魄 <strong>{{ formatAmount(batchReward) }}</strong>
+            <template v-if="hiddenPicked > 0"> · 其中 {{ hiddenPicked }} 只不在当前筛选中</template>
+          </p>
           <div class="detail-buttons">
             <button class="beast-quiet-button" type="button" :disabled="blocked" @click="selectedIds = []">清空</button>
             <button class="beast-quiet-button is-danger" type="button" :disabled="blocked" @click="releaseBatch">
@@ -477,13 +484,19 @@ onMounted(refreshPanel);
 /* 批量放生：卡片右上角的勾选框，与装备背包同一种多选方式。 */
 .garden-item { position: relative; }
 .garden-item .garden-card { padding-right: 36px; }
+.garden-item.is-picked .garden-card {
+  border-color: rgba(224, 123, 104, 0.6);
+  background: linear-gradient(90deg, rgba(224, 123, 104, 0.12), transparent 70%), var(--surface);
+}
 .garden-pick { position: absolute; z-index: 1; top: 10px; right: 12px; display: flex; cursor: pointer; }
 .garden-pick input { width: 16px; height: 16px; margin: 0; accent-color: var(--gold); cursor: pointer; }
 .garden-pick input:disabled { cursor: not-allowed; opacity: 0.35; }
 .garden-batch-note { color: var(--faint); font-size: 12px; }
 .garden-carried-toggle { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; cursor: pointer; }
+/* 底栏要压住滚到下面的卡片勾选框（勾选框 z-index 1）。 */
 .garden-batch-bar {
   position: sticky;
+  z-index: 3;
   bottom: 0;
   display: flex;
   flex-wrap: wrap;
