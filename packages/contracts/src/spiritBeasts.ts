@@ -10,8 +10,10 @@ export type BeastExchangeInput =
 export interface BeastResourceCost { beastEssence: string; spiritStone: string; spiritualEnergy: string }
 export interface BeastCommandReceipt {
   commandId: string;
-  kind: 'release' | 'quality-breakthrough' | 'exchange';
+  kind: 'release' | 'release-batch' | 'quality-breakthrough' | 'exchange';
   beast: BeastIdentity;
+  /** 批量放生：本次放生的全部灵兽（beast 为其中第一只）。 */
+  released?: BeastIdentity[];
   previousQuality: BeastQuality | null;
   resourceChanges: Partial<Record<keyof BeastResourceCost, { direction: 'credit' | 'debit'; amount: string }>>;
 }

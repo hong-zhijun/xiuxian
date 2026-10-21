@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue';
 import type { BeastAttrs, BeastElement, BeastManageAction, BeastQuality, BeastTier, SpiritBeastView, SpiritBeastsPanel, BeastExchangeInput } from '@xiuxian/contracts';
-import { exchangeSpiritBeast, fetchSpiritBeasts, manageSpiritBeast, type SectStateView, type SpiritBeastActionData } from '../api/game';
+import { exchangeSpiritBeast, fetchSpiritBeasts, manageSpiritBeast, releaseSpiritBeasts, type SectStateView, type SpiritBeastActionData } from '../api/game';
 import { ApiError } from '../api/client';
 import type { ToastTone } from '../types/ui';
 import { formatAmount } from '../utils/format';
@@ -36,7 +36,10 @@ const unresolved = shallowRef<Operation | null>(null);
 const blocked = computed(() => pending.value || unresolved.value !== null);
 watch(pending, busy => emit('busy-change', busy));
 onUnmounted(() => emit('busy-change', false));
+/** 默认不列随行中的灵兽（与装备背包的「显示已穿戴」一致），勾选后才显示。 */
+const showCarried = ref(false);
 const items = computed(() => (panel.value?.items ?? [])
+  .filter(item => showCarried.value || item.discipleId === null)
   .filter(item => (elementFilter.value === '' || item.species.element === elementFilter.value) && (qualityFilter.value === '' || item.quality === qualityFilter.value))
   .slice().sort((a,b) => Number(b.discipleId !== null)-Number(a.discipleId !== null) || TIER_RANK[b.species.tier]-TIER_RANK[a.species.tier] || QUALITY_RANK[b.quality]-QUALITY_RANK[a.quality] || b.level-a.level));
 const carriedCount = computed(() => panel.value?.items.filter(item => item.discipleId !== null).length ?? 0);
@@ -60,6 +63,45 @@ function exchangeBlock(cost: string): string | null {
 function affordable(beast: SpiritBeastView): boolean {
   return beast.upgradeCost !== null && balanceOf('spiritStone') >= beast.upgradeCost.spiritStone && balanceOf('spiritualEnergy') >= beast.upgradeCost.spiritualEnergy;
 }
+/* ---------- 批量放生：多选 + 按品质一键选中（锁定、随行的不参与），二次确认后一次提交 ---------- */
+const selectedIds = ref<string[]>([]);
+const confirmBatch = ref(false);
+function releasable(beast: SpiritBeastView): boolean { return !beast.locked && beast.discipleId === null; }
+/** 选中集合与最新视图对齐：已被装备、锁定或放生的自动剔除。 */
+const selectedBeasts = computed(() => (panel.value?.items ?? []).filter(item => releasable(item) && selectedIds.value.includes(item.id)));
+const batchReward = computed(() => selectedBeasts.value.reduce((sum, item) => sum + Number(item.releaseReward.beastEssence), 0));
+const batchQualities = computed(() => BEAST_QUALITY_OPTIONS
+  .map(option => ({ ...option, ids: (panel.value?.items ?? []).filter(item => releasable(item) && item.quality === option.id).map(item => item.id) }))
+  .filter(group => group.ids.length > 0));
+const lockedIdleCount = computed(() => (panel.value?.items ?? []).filter(item => item.locked && item.discipleId === null).length);
+watch(selectedIds, () => { confirmBatch.value = false; });
+function isPicked(id: string): boolean { return selectedIds.value.includes(id); }
+function togglePick(beast: SpiritBeastView): void {
+  if (blocked.value || !releasable(beast)) return;
+  selectedIds.value = isPicked(beast.id) ? selectedIds.value.filter(id => id !== beast.id) : [...selectedIds.value, beast.id];
+}
+function isQualityPicked(ids: readonly string[]): boolean { return ids.every(id => selectedIds.value.includes(id)); }
+function toggleQuality(ids: readonly string[]): void {
+  if (blocked.value) return;
+  const drop = new Set(ids);
+  selectedIds.value = isQualityPicked(ids) ? selectedIds.value.filter(id => !drop.has(id)) : [...new Set([...selectedIds.value, ...ids])];
+}
+function releaseBatch(): void {
+  if (blocked.value || selectedBeasts.value.length === 0) return;
+  if (!confirmBatch.value) { confirmBatch.value = true; return; }
+  const beasts = selectedBeasts.value.map(item => ({ beastId: item.id, version: item.version }));
+  const commandId = crypto.randomUUID();
+  void perform({ run: () => releaseSpiritBeasts(beasts, commandId), message: '放生完成。', after: () => { selectedIds.value = []; } })
+    .finally(() => { confirmBatch.value = false; });
+}
+
+/* ---------- 携带弟子：详情里只放按钮，点开二级弹窗再用选人组件挑 ---------- */
+const equipPickerOpen = ref(false);
+function openEquipPicker(beast: SpiritBeastView): void {
+  if (blocked.value) return;
+  equipTargets.value = beast.discipleId ? [beast.discipleId] : [];
+  equipPickerOpen.value = true;
+}
 function breakthroughRows(beast: SpiritBeastView) {
   const cost = beast.qualityBreakthrough?.cost;
   return cost ? (['beastEssence','spiritStone','spiritualEnergy'] as const).map(id => ({ id, name: {beastEssence:'御兽精魄',spiritStone:'灵石',spiritualEnergy:'灵气'}[id], cost:cost[id], balance:balanceOf(id), lacking:balanceOf(id)<Number(cost[id]) })) : [];
@@ -75,19 +117,23 @@ function open(beast: SpiritBeastView): void {
   if(blocked.value)return;
   detailId.value=beast.id;confirmRelease.value=false;equipTargets.value=beast.discipleId?[beast.discipleId]:[];
 }
-function closeDetail(): void { if(pending.value)return;detailId.value=null;confirmRelease.value=false; }
+function closeDetail(): void { if(pending.value)return;detailId.value=null;confirmRelease.value=false;equipPickerOpen.value=false; }
 function apply(data: SpiritBeastActionData): void { panel.value=data.beasts;emit('state-update',data.state); }
-async function refreshPanel(): Promise<void> {
+async function refreshPanel(): Promise<boolean> {
   loading.value=true;
-  try { apply(await fetchSpiritBeasts());loadError.value=''; }
-  catch(error) { loadError.value=error instanceof Error?error.message:'读取失败，请重试'; }
+  try { apply(await fetchSpiritBeasts());loadError.value='';return true; }
+  catch(error) { loadError.value=error instanceof Error?error.message:'读取失败，请重试';return false; }
   finally { loading.value=false; }
 }
-/** 不再重试：先刷新拿到真实结果，再解除锁定（原操作若已成功，刷新后就能看到）。 */
+/** 不再重试：先刷新拿到真实结果，再解除锁定并关掉二级弹窗，避免在未确认的状态上再提交一次新操作。 */
 async function abandonUnresolved(): Promise<void> {
   if (pending.value) return;
-  await refreshPanel();
-  unresolved.value = null;
+  // 刷新失败时保留未决状态：否则玩家既看不到真实结果，也失去重试入口。
+  if (!await refreshPanel()) return;
+  unresolved.value=null;
+  exchangeChoice.value=null;
+  detailId.value=null;
+  confirmRelease.value=false;
 }
 async function perform(operation: Operation): Promise<void> {
   if(pending.value)return;
@@ -97,6 +143,7 @@ async function perform(operation: Operation): Promise<void> {
     let message=operation.message;
     const receipt=data.receipt;
     const name=receipt?data.beasts.species.find(item=>item.id===receipt.beast.speciesId)?.name ?? '灵兽':'灵兽';
+    if(receipt?.kind==='release-batch')message='放生 '+String(receipt.released?.length ?? 0)+' 只灵兽，获得 '+formatAmount(receipt.resourceChanges.beastEssence?.amount ?? '0')+' 御兽精魄。';
     if(receipt?.kind==='release')message=name+'已放生，获得 '+formatAmount(receipt.resourceChanges.beastEssence?.amount ?? '0')+' 御兽精魄。';
     if(receipt?.kind==='exchange')message='获得凡品'+name+'（Lv.1），已进入灵兽苑。';
     if(receipt?.kind==='quality-breakthrough')message=name+'突破至'+(BEAST_QUALITY_OPTIONS.find(item=>item.id===receipt.beast.quality)?.name ?? receipt.beast.quality)+'。';
@@ -106,7 +153,7 @@ async function perform(operation: Operation): Promise<void> {
     const uncertain=!(error instanceof ApiError) || error.status===0 || error.status>=500 || error.code==='BAD_RESPONSE' || error.code==='UNKNOWN_ERROR';
     unresolved.value=uncertain?operation:null;
     // 不确定失败不把解析层面的技术错误抛给玩家，只提示结果未确认并给出重试入口。
-    emit('notify','warning','灵兽苑',uncertain&&error instanceof ApiError?'网络或响应异常，操作结果未确认，请点“重试原操作”。':error instanceof Error?error.message:'操作失败');
+    emit('notify','warning','灵兽苑',uncertain&&error instanceof ApiError?'网络或响应异常，操作结果未确认，可以重试原操作，也可以刷新后放弃。':error instanceof Error?error.message:'操作失败');
     await refreshPanel();
   } finally { pending.value=false; }
 }
@@ -117,7 +164,7 @@ function manage(beast: SpiritBeastView, action: BeastManageAction): void {
   if(action==='equip'&&!discipleId)return;
   const commandId=crypto.randomUUID();
   const message=action==='upgrade'?beast.species.name+'升至 Lv.'+String(beast.level+1)+'。':action==='lock'?(beast.locked?'已解锁。':'已锁定。'):action==='equip'?'已更换携带灵兽。':action==='unequip'?'灵兽已卸下。':'操作完成。';
-  void perform({run:()=>manageSpiritBeast(beast.id,beast.version,action,commandId,discipleId,action==='lock'?!beast.locked:undefined),message,after:action==='release'?()=>{detailId.value=null;}:undefined});
+  void perform({run:()=>manageSpiritBeast(beast.id,beast.version,action,commandId,discipleId,action==='lock'?!beast.locked:undefined),message,after:action==='release'?()=>{detailId.value=null;}:action==='equip'?()=>{equipPickerOpen.value=false;}:undefined});
 }
 function confirmExchange(): void {
   const choice=exchangeChoice.value;
@@ -190,9 +237,42 @@ onMounted(refreshPanel);
           </div>
         </div>
 
-        <p v-if="items.length === 0" class="beast-empty">没有符合筛选条件的灵兽。</p>
+        <div v-if="batchQualities.length > 0" class="filter-group" role="group" aria-label="按品质批量选择放生">
+          <span class="filter-label">批量</span>
+          <button
+            v-for="group in batchQualities"
+            :key="group.id"
+            class="filter-chip"
+            type="button"
+            :data-quality="group.id"
+            :aria-pressed="isQualityPicked(group.ids)"
+            :disabled="blocked"
+            :title="isQualityPicked(group.ids) ? `取消选择全部${group.name}` : `选中全部待命的${group.name}`"
+            @click="toggleQuality(group.ids)"
+          >
+            {{ group.name }} ×{{ group.ids.length }}
+          </button>
+          <span v-if="lockedIdleCount > 0" class="garden-batch-note">已锁定的 {{ lockedIdleCount }} 只不参与</span>
+        </div>
+        <label v-if="carriedCount > 0" class="garden-carried-toggle">
+          <input v-model="showCarried" type="checkbox" />
+          显示已随行（{{ carriedCount }} 只）
+        </label>
+
+        <p v-if="items.length === 0" class="beast-empty">
+          {{ !showCarried && carriedCount > 0 && panel.items.length === carriedCount ? `灵兽都在随行中（勾选「显示已随行」查看）。` : '没有符合筛选条件的灵兽。' }}
+        </p>
         <ul v-else class="garden-grid">
-          <li v-for="beast in items" :key="beast.id">
+          <li v-for="beast in items" :key="beast.id" class="garden-item">
+            <label class="garden-pick">
+              <input
+                type="checkbox"
+                :checked="isPicked(beast.id)"
+                :disabled="blocked || !releasable(beast)"
+                :aria-label="releasable(beast) ? `选择放生 ${beast.species.name}` : `${beast.species.name}已锁定或随行，不能放生`"
+                @change="togglePick(beast)"
+              />
+            </label>
             <button
               class="garden-card"
               :class="{ 'is-carried': beast.discipleId !== null }"
@@ -224,6 +304,16 @@ onMounted(refreshPanel);
           </li>
         </ul>
 
+        <div v-if="selectedBeasts.length > 0" class="garden-batch-bar">
+          <p>已选 <strong>{{ selectedBeasts.length }}</strong> 只 · 获得御兽精魄 <strong>{{ formatAmount(batchReward) }}</strong></p>
+          <div class="detail-buttons">
+            <button class="beast-quiet-button" type="button" :disabled="blocked" @click="selectedIds = []">清空</button>
+            <button class="beast-quiet-button is-danger" type="button" :disabled="blocked" @click="releaseBatch">
+              {{ confirmBatch ? `确认放生 ${String(selectedBeasts.length)} 只（不可撤销）` : '批量放生' }}
+            </button>
+            <button v-if="confirmBatch" class="beast-quiet-button" type="button" :disabled="blocked" @click="confirmBatch = false">取消</button>
+          </div>
+        </div>
           </template>
         </div>
         <div v-else id="garden-page-exchange" class="garden" role="tabpanel" aria-labelledby="garden-tab-exchange">
@@ -249,7 +339,7 @@ onMounted(refreshPanel);
           </h3>
         </div>
 
-        <div v-if="unresolved" class="detail-upgrade"><p class="blocked-hint">上次操作结果未确认，请重试原操作。</p><button class="action-button primary-action" :disabled="pending" @click="perform(unresolved)">重试原操作</button><button class="beast-quiet-button" type="button" :disabled="pending" @click="abandonUnresolved">刷新并放弃</button></div>
+        <div v-if="unresolved" class="detail-upgrade"><p class="blocked-hint">上次操作结果未确认，请重试原操作，或刷新并放弃。</p><button class="action-button primary-action" :disabled="pending" @click="perform(unresolved)">重试原操作</button><button class="beast-quiet-button" type="button" :disabled="pending" @click="abandonUnresolved">刷新并放弃</button></div>
         <div class="detail-hero">
           <div class="detail-portrait">
             <img v-if="selected.species.image" :src="selected.species.image" :alt="selected.species.name" />
@@ -317,19 +407,36 @@ onMounted(refreshPanel);
         </div>
 
         <section class="detail-equip" aria-label="携带弟子">
-          <DisciplePicker
-            v-model:selected="equipTargets"
-            :disciples="state.disciples"
-            mode="single"
-            :min="1"
-            :max="1"
-            :busy="pending"
-            :block-injured="false"
-            sort="power"
-            title="选择携带弟子"
-          />
           <div class="detail-equip-bar">
-            <p>每名弟子携带一只；换人时对方原有的灵兽自动卸下。</p>
+            <p>{{ selected.discipleName ? `当前由${selected.discipleName}携带。` : '待命中。' }}每名弟子携带一只；换人时对方原有的灵兽自动卸下。</p>
+            <button class="action-button primary-action" type="button" :disabled="blocked" @click="openEquipPicker(selected)">
+              {{ selected.discipleId ? '更换携带弟子' : '选择携带弟子' }}
+            </button>
+          </div>
+        </section>
+      </section>
+    </ModalShell>
+    <!-- 三级弹窗：为当前灵兽挑选携带弟子 -->
+    <ModalShell v-if="equipPickerOpen && selected" :label="`携带弟子 · ${selected.species.name}`" :loading="pending" loading-text="正在更换携带弟子" @close="equipPickerOpen = false">
+      <section class="garden-detail" aria-labelledby="garden-equip-title">
+        <div class="beast-head modal-head">
+          <h3 id="garden-equip-title" class="beast-title"><span>选择携带弟子</span><span class="beast-title-sub">{{ selected.species.name }} · {{ selected.qualityName }} · Lv.{{ selected.level }}</span></h3>
+        </div>
+        <DisciplePicker
+          v-model:selected="equipTargets"
+          :disciples="state.disciples"
+          mode="single"
+          :min="1"
+          :max="1"
+          :busy="pending"
+          :block-injured="false"
+          sort="power"
+          title="选择携带弟子"
+        />
+        <div class="detail-equip-bar">
+          <p>每名弟子携带一只；换人时对方原有的灵兽自动卸下。</p>
+          <div class="detail-buttons">
+            <button class="beast-quiet-button" type="button" :disabled="pending" @click="equipPickerOpen = false">取消</button>
             <button
               class="action-button primary-action"
               type="button"
@@ -345,13 +452,13 @@ onMounted(refreshPanel);
               }}
             </button>
           </div>
-        </section>
+        </div>
       </section>
     </ModalShell>
     <ModalShell v-if="exchangeChoice && choiceOffer" narrow label="确认兑换灵兽" :loading="pending" loading-text="正在兑换灵兽" @close="exchangeChoice=null">
       <section class="garden-detail" data-quality="common" :data-element="choiceSpecies?.element">
         <div class="beast-head modal-head"><h3 class="beast-title">{{ choiceSpecies ? '指定兑换 · '+choiceSpecies.name : '随机兑换 · '+choiceOffer.tierName }}</h3></div>
-        <div v-if="unresolved" class="detail-upgrade"><p class="blocked-hint">上次操作结果未确认，请重试原操作。</p><button class="action-button primary-action" :disabled="pending" @click="perform(unresolved)">重试原操作</button><button class="beast-quiet-button" type="button" :disabled="pending" @click="abandonUnresolved">刷新并放弃</button></div>
+        <div v-if="unresolved" class="detail-upgrade"><p class="blocked-hint">上次操作结果未确认，请重试原操作，或刷新并放弃。</p><button class="action-button primary-action" :disabled="pending" @click="perform(unresolved)">重试原操作</button><button class="beast-quiet-button" type="button" :disabled="pending" @click="abandonUnresolved">刷新并放弃</button></div>
         <div v-if="choiceSpecies" class="detail-hero"><div class="detail-portrait"><img v-if="choiceSpecies.image" :src="choiceSpecies.image" :alt="choiceSpecies.name" /></div><div class="detail-info"><div class="detail-chips"><span class="beast-chip is-quality">凡品</span><span class="beast-chip is-element">{{ choiceSpecies.elementName }}行</span></div><ul class="detail-attrs"><li v-for="attr in beastAttrList(choiceSpecies.attrs)" :key="attr.key"><span>{{ attr.label }}</span><strong>+{{ attr.value }}</strong></li></ul><p class="detail-skill"><b>【{{ choiceSpecies.skillName }}】</b>{{ choiceSpecies.skillText }}</p></div></div>
         <p class="detail-skill">获得 1 级凡品{{ choiceSpecies?.name ?? choiceOffer.tierName }}，不自动装备。{{ exchangeChoice.mode === 'random' ? '在同档 '+choiceOffer.speciesIds.length+' 种物种中等概率随机，可能获得重复物种。' : '确定获得所选物种。' }}</p>
         <div class="detail-upgrade"><span :class="{'blocked-hint':balanceOf('beastEssence')<Number(choiceCost)}">御兽精魄：拥有 {{ formatAmount(balanceOf('beastEssence')) }} / 需要 {{ formatAmount(choiceCost) }}</span><button class="action-button primary-action" :disabled="blocked || !!exchangeBlock(choiceCost)" @click="confirmExchange">确认兑换</button></div>
@@ -366,6 +473,30 @@ onMounted(refreshPanel);
 .garden-costs { display: grid; gap: 6px; min-width: 0; }
 .garden-costs p { margin: 0; }
 .garden-card:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* 批量放生：卡片右上角的勾选框，与装备背包同一种多选方式。 */
+.garden-item { position: relative; }
+.garden-item .garden-card { padding-right: 36px; }
+.garden-pick { position: absolute; z-index: 1; top: 10px; right: 12px; display: flex; cursor: pointer; }
+.garden-pick input { width: 16px; height: 16px; margin: 0; accent-color: var(--gold); cursor: pointer; }
+.garden-pick input:disabled { cursor: not-allowed; opacity: 0.35; }
+.garden-batch-note { color: var(--faint); font-size: 12px; }
+.garden-carried-toggle { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; cursor: pointer; }
+.garden-batch-bar {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid rgba(224, 123, 104, 0.35);
+  border-radius: 6px;
+  background: var(--surface-strong);
+}
+.garden-batch-bar p { margin: 0; color: var(--muted); font-size: 12px; }
+.garden-batch-bar strong { color: var(--gold-bright); }
 
 .garden {
   display: grid;

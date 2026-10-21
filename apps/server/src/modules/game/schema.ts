@@ -8,6 +8,10 @@ export const beastManageSchema = z.discriminatedUnion('action', [
   z.strictObject({ ...beastManageBase, action:z.literal('lock'), locked:z.boolean() }),
   ...(['unequip','upgrade','release','quality-breakthrough'] as const).map(action => z.strictObject({ ...beastManageBase, action:z.literal(action) })),
 ]);
+export const beastReleaseBatchSchema = z.strictObject({
+  beasts:z.array(z.strictObject({ beastId:z.uuid(), version:z.number().int().min(0) })).min(1).max(60),
+  commandId:z.uuid(),
+});
 const beastTierSchema = z.enum(['spirit','rare','divine']);
 export const beastExchangeSchema = z.discriminatedUnion('mode', [
   z.strictObject({ mode:z.literal('random'), tier:beastTierSchema, commandId:z.uuid() }),

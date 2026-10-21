@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
-import { beastStartSchema, beastActionSchema, beastManageSchema, beastExchangeSchema } from './schema';
-import { getSpiritBeasts, manageSpiritBeast, startBeastCapture, actBeastCapture, exchangeSpiritBeast } from './spiritBeastService';
+import { beastStartSchema, beastActionSchema, beastManageSchema, beastExchangeSchema, beastReleaseBatchSchema } from './schema';
+import { getSpiritBeasts, manageSpiritBeast, startBeastCapture, actBeastCapture, exchangeSpiritBeast, releaseSpiritBeasts } from './spiritBeastService';
 
 import { AppError, authOf, type AppContext, type AppEnv } from '../../http/appError';
 import { respondOk } from '../../http/envelope';
@@ -201,6 +201,10 @@ export function createGameRoutes(): Hono<AppEnv> {
   routes.post('/game/spirit-beasts/exchange', async c => {
     const userId=requireUserId(c),body=await parseStrictJson(beastExchangeSchema,c);
     return respondOk(c,await exchangeSpiritBeast(getDb(c.env),userId,body,Date.now()));
+  });
+  routes.post('/game/spirit-beasts/release-batch', async c => {
+    const userId=requireUserId(c),body=await parseStrictJson(beastReleaseBatchSchema,c);
+    return respondOk(c,await releaseSpiritBeasts(getDb(c.env),userId,body,Date.now()));
   });
   routes.post('/game/spirit-beasts/manage', async c => {
     const userId=requireUserId(c),body=await parseStrictJson(beastManageSchema,c);

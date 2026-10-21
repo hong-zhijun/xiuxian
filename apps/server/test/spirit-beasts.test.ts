@@ -2,7 +2,7 @@ import { applyD1Migrations, env } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import { createApp } from '../src/app';
 import { dataOf, TestClient } from './support/authClient';
-import { getSpiritBeasts, startBeastCapture, actBeastCapture, manageSpiritBeast, pruneBeastRecords, exchangeSpiritBeast } from '../src/modules/game/spiritBeastService';
+import { getSpiritBeasts, startBeastCapture, actBeastCapture, manageSpiritBeast, pruneBeastRecords, exchangeSpiritBeast, releaseSpiritBeasts } from '../src/modules/game/spiritBeastService';
 import type { BeastQuality } from '@xiuxian/contracts';
 import { assignDisciple, getSectState } from '../src/modules/game/service';
 import type { SectStateView } from '../src/modules/game/view';
@@ -97,7 +97,7 @@ describe('灵兽 · D1 集成',()=>{
     await expect(manageSpiritBeast(env.DB,f.userId,{beastId:b.beastId,version:beast.version,action:'quality-breakthrough',commandId:id()},NOW)).rejects.toMatchObject({code:'INVALID_STATUS'});
   });
   it('突破幂等、旧version和跨宗门受保护，已有图鉴品质不因兑换凡品降低',async()=>{
-    const f=await fixture(),g=await fixture(),b=await seedBeast(f,'claw_tiger'),input={...b,action:'quality-breakthrough' as const};
+    const f=await fixture(),g=await fixture(),b=await seedBeast(f,'claw_tiger','common',20),input={...b,action:'quality-breakthrough' as const};
     const before=await balance(f),first=await manageSpiritBeast(env.DB,f.userId,input,NOW);
     expect(await balance(f)).toBe(before-4000);
     expect((await manageSpiritBeast(env.DB,f.userId,input,NOW)).receipt).toEqual(first.receipt);
@@ -134,7 +134,7 @@ describe('灵兽 · D1 集成',()=>{
     }
   });
   it('突破与兑换争同一笔精魄不能重复花费，跨操作复用命令被拒绝',async()=>{
-    const f=await fixture(),b=await seedBeast(f,'claw_tiger');
+    const f=await fixture(),b=await seedBeast(f,'claw_tiger','common',20);
     await setBalance(f,6000);
     const attempts=await Promise.allSettled([
       manageSpiritBeast(env.DB,f.userId,{...b,action:'quality-breakthrough'},NOW),
@@ -209,7 +209,7 @@ describe('灵兽 · D1 集成',()=>{
     const valid=await f.api.post('/api/v1/game/spirit-beasts/exchange',{mode:'specific',tier:'spirit',speciesId:'claw_tiger',commandId:id()});expect(valid.status).toBe(200);
   });
   it('培养与携带快照限制生效，旧会话兼容，不按同物种误拦放生',async()=>{
-    const f=await fixture(),b=await seedBeast(f,'claw_tiger'),another=await seedBeast(f,'claw_tiger');
+    const f=await fixture(),b=await seedBeast(f,'claw_tiger','common',20),another=await seedBeast(f,'claw_tiger');
     const equipped=await manageSpiritBeast(env.DB,f.userId,{...b,action:'equip',discipleId:f.discipleId},NOW);
     const current=equipped.beasts.items.find(item=>item.id===b.beastId)!;
     const started=await startBeastCapture(env.DB,f.userId,{areaId:'foothills',discipleId:f.discipleId,commandId:id()},NOW,()=>0);
@@ -298,5 +298,29 @@ describe('灵兽 · D1 集成',()=>{
     await pruneBeastRecords(env.DB,hour+60_000);expect(await count()).toBe(4);
     await pruneBeastRecords(env.DB,hour);expect(await count()).toBe(1);
     expect(await env.DB.prepare("SELECT command_id FROM beast_commands WHERE sect_id=?").bind(f.sectId).first('command_id')).toBe('new-command');
+  });
+  it('品质突破要求满级：未满级时视图给出原因，服务端拒绝且不扣资源',async()=>{
+    const f=await fixture(),b=await seedBeast(f,'claw_tiger','common',19);
+    const beast=(await getSpiritBeasts(env.DB,f.userId,NOW)).beasts.items.find(item=>item.id===b.beastId)!;
+    expect(beast.qualityBreakthrough?.blockedReason).toContain('Lv.20');
+    const before=await balance(f);
+    await expect(manageSpiritBeast(env.DB,f.userId,{...b,action:'quality-breakthrough'},NOW)).rejects.toMatchObject({code:'INVALID_STATUS'});
+    expect(await balance(f)).toBe(before);
+  });
+  it('批量放生：一次放生多只并合计精魄；锁定、随行或版本变化整批拒绝；重放返回同一回执',async()=>{
+    const f=await fixture();
+    const a=await seedBeast(f,'claw_tiger','common'),c=await seedBeast(f,'white_tiger','treasure',5),kept=await seedBeast(f,'green_deer');
+    await manageSpiritBeast(env.DB,f.userId,{...kept,action:'lock',locked:true},NOW);
+    await expect(releaseSpiritBeasts(env.DB,f.userId,{beasts:[{beastId:a.beastId,version:0},{beastId:kept.beastId,version:1}],commandId:id()},NOW)).rejects.toMatchObject({code:'INVALID_STATUS'});
+    await expect(releaseSpiritBeasts(env.DB,f.userId,{beasts:[{beastId:a.beastId,version:0},{beastId:c.beastId,version:3}],commandId:id()},NOW)).rejects.toMatchObject({code:'INVALID_STATUS'});
+    await expect(releaseSpiritBeasts(env.DB,f.userId,{beasts:[{beastId:a.beastId,version:0},{beastId:a.beastId,version:0}],commandId:id()},NOW)).rejects.toMatchObject({code:'VALIDATION_ERROR'});
+    const before=await balance(f),input={beasts:[{beastId:a.beastId,version:0},{beastId:c.beastId,version:0}],commandId:id()};
+    const done=await releaseSpiritBeasts(env.DB,f.userId,input,NOW);
+    expect(done.beasts.items.map(item=>item.id)).toEqual([kept.beastId]);
+    expect(await balance(f)).toBe(before+1000+80000);
+    expect(done.receipt).toMatchObject({kind:'release-batch',released:[{id:expect.any(String)},{id:expect.any(String)}],resourceChanges:{beastEssence:{direction:'credit',amount:'81000'}}});
+    const replayed=await releaseSpiritBeasts(env.DB,f.userId,input,NOW);
+    expect(replayed.receipt).toEqual(done.receipt);expect(await balance(f)).toBe(before+81000);
+    expect((await f.api.post('/api/v1/game/spirit-beasts/release-batch',{beasts:[],commandId:id()})).status).toBe(400);
   });
 });

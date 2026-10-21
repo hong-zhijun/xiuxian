@@ -21,7 +21,7 @@ function viewBeast(b:BeastRow,d:Draft):SpiritBeastView {
     discipleName:d.disciples.find(m=>m.id===b.disciple_id)?.name??null,locked:!!b.locked,version:b.version,upgradeCost:beastUpgradeCost(i),
     releaseReward:{beastEssence:String(beastReleaseReward(i))},
     qualityBreakthrough:breakthrough&&next?{...breakthrough,nextQualityName:BEAST_QUALITY[next.quality].name,
-      attrs:beastAttributes(next),skillText:beastSkillText(next),blockedReason:b.disciple_id?trainingBlocker(d,b.disciple_id):null}:null,
+      attrs:beastAttributes(next),skillText:beastSkillText(next),blockedReason:b.level<BEAST_RULES.maxLevel?`需升到 Lv.${String(BEAST_RULES.maxLevel)} 才能突破品质`:b.disciple_id?trainingBlocker(d,b.disciple_id):null}:null,
     upgradePreview:upgrade?{level:upgrade.level,attrs:beastAttributes(upgrade),skillText:beastSkillText(upgrade)}:null};
 }
 function sessionView(row:SessionRow,beasts:BeastRow[],d:Draft,now:number):BeastCaptureView {
@@ -61,7 +61,7 @@ async function loadPanel(db:D1Database,d:Draft,now:number):Promise<SpiritBeastsP
       '每场最多 15 次操作、5 次收服，30 分钟过期。关闭界面不放弃，返回后可继续。',
       '幸运提高稀有遭遇与收服概率（捕捉用途最高按 100 计算），不影响品质。',
       '留手覆盖全部追击和追加伤害，至少为目标保留 1 血；目标仍会反击。',
-      '捕获后为 1 级；等级升级只消耗灵石和灵气，最高 20 级。品质可消耗精魄、灵石和灵气逐级突破，必定成功。',
+      '捕获后为 1 级；等级升级只消耗灵石和灵气，最高 20 级。升满 20 级后，品质可消耗精魄、灵石和灵气逐级突破，必定成功。',
       '放生按档次和当前品质获得御兽精魄，不返还培养投入。精魄可兑换灵兽，兑换均为 1 级凡品，允许重复物种。',
       '战败弟子疗伤 10 分钟，不损失携带灵兽。已装备或锁定的灵兽不能放生。',
       '技能在捕捉、镇妖塔与大比完整生效；世界 Boss 折算为伤害和受伤修正，旧式普通秘境仅计入属性。',
@@ -165,6 +165,7 @@ export async function manageSpiritBeast(db:D1Database,userId:string,input:{beast
   } else if(input.action==='quality-breakthrough') {
     requireEssenceRow(d);
     const quote=beastBreakthroughCost(identity(b));if(!quote)throw new AppError('INVALID_STATUS','灵兽已为仙品，无法继续突破');
+    if(b.level<BEAST_RULES.maxLevel)throw new AppError('INVALID_STATUS',`灵兽需升到 Lv.${String(BEAST_RULES.maxLevel)} 才能突破品质`);
     const previousQuality=b.quality;
     for(const [resourceId,amount] of Object.entries(quote.cost))d.requireResource(resourceId,toSafeAmountNumber(amount));
     b.quality=quote.nextQuality;
@@ -189,6 +190,43 @@ export async function manageSpiritBeast(db:D1Database,userId:string,input:{beast
   } else {
     throw new AppError('VALIDATION_ERROR','无效的灵兽操作');
   }
+  record(d,input.commandId,fingerprint,null,now,receipt);await commit(db,d,extra,input.commandId,fingerprint);
+  return result(db,userId,now,input.commandId);
+}
+
+/**
+ * 批量放生（灵兽苑多选）：一条命令、一份回执。每只按读到的 version 守卫，
+ * 任一只在此期间被装备、锁定、培养或已放生，整批回滚。只放生待命且未锁定的灵兽——
+ * 捕捉中的携带灵兽必然有 disciple_id，因此不必再查捕捉会话。
+ */
+export async function releaseSpiritBeasts(db:D1Database,userId:string,input:{beasts:{beastId:string;version:number}[];commandId:string},now:number) {
+  const d=await draftFor(db,userId,now);requireUnlocked(d);
+  const fingerprint=JSON.stringify({operation:'release-batch',...input});
+  if(await replay(db,d.sect.id,input.commandId,fingerprint))return result(db,userId,now,input.commandId);
+  const ids=[...new Set(input.beasts.map(item=>item.beastId))];
+  if(ids.length!==input.beasts.length)throw new AppError('VALIDATION_ERROR','放生名单里有重复的灵兽');
+  requireEssenceRow(d);
+  const rows=(await db.prepare(`SELECT * FROM spirit_beasts WHERE sect_id=? AND id IN (${ids.map(()=>'?').join(',')})`).bind(d.sect.id,...ids).all<BeastRow>()).results;
+  if(rows.length!==ids.length)throw new AppError('NOT_FOUND','部分灵兽不存在，请刷新');
+  let reward=0;
+  for(const want of input.beasts) {
+    const b=rows.find(row=>row.id===want.beastId)!;
+    if(b.version!==want.version)throw new AppError('INVALID_STATUS','灵兽信息已变化，请刷新');
+    if(b.locked||b.disciple_id)throw new AppError('INVALID_STATUS',`${BEAST_SPECIES.find(s=>s.id===b.species_id)?.name??'灵兽'}已锁定或正在随行，不能放生`);
+    reward+=beastReleaseReward(identity(b));
+  }
+  const next=d.balanceOf(BEAST_ESSENCE_ID)+reward;
+  if(!Number.isSafeInteger(next)||next>MAX_SAFE_AMOUNT||next>d.resourceCapacityOf(BEAST_ESSENCE_ID))throw new AppError('INVALID_STATUS','御兽精魄容量不足，请先消耗精魄');
+  // 守卫按 30 只一段（每只 3 个参数），不超过 D1 单条语句 100 个参数。
+  const extra:ReturnType<typeof guard>[]=[];
+  for(let start=0;start<rows.length;start+=30) {
+    const chunk=rows.slice(start,start+30);
+    extra.push(guard(d,chunk.map(()=>'EXISTS(SELECT 1 FROM spirit_beasts WHERE id=? AND sect_id=? AND version=?)').join(' AND '),chunk.flatMap(b=>[b.id,d.sect.id,b.version])));
+  }
+  d.addStatement({sql:`DELETE FROM spirit_beasts WHERE sect_id=? AND id IN (${ids.map(()=>'?').join(',')})`,params:[d.sect.id,...ids]});
+  d.addResource(BEAST_ESSENCE_ID,reward);
+  const released=rows.map(identity);
+  const receipt:BeastCommandReceipt={commandId:input.commandId,kind:'release-batch',beast:released[0]!,released,previousQuality:null,resourceChanges:{beastEssence:{direction:'credit',amount:String(reward)}}};
   record(d,input.commandId,fingerprint,null,now,receipt);await commit(db,d,extra,input.commandId,fingerprint);
   return result(db,userId,now,input.commandId);
 }
