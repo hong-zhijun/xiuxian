@@ -1172,7 +1172,7 @@ function refineGear(item: EquipmentItemView | null): void {
       <div
         v-show="activeTab === 'overview'"
         :id="tabPanelId('overview')"
-        class="disciple-tab-panel"
+        class="disciple-tab-panel is-overview"
         role="tabpanel"
         :aria-labelledby="tabButtonId('overview')"
         tabindex="0"
@@ -1261,10 +1261,6 @@ function refineGear(item: EquipmentItemView | null): void {
             :live-cultivation="liveCultivation"
             @close="showUpgradeSimulator = false"
           />
-
-          <p class="disciple-detail-hint">
-            括号里是装备加成。点属性、综合评分、战力旁的「?」查看各自的作用与算法。
-          </p>
         </section>
 
         <!-- 天赋、功法与悟道：一行三张卡片（中等宽度两列、窄屏单列），灵兽卡片占满下一行。悟道值的分配在弹窗里做。 -->
@@ -2266,23 +2262,22 @@ function refineGear(item: EquipmentItemView | null): void {
   gap: 8px;
 }
 
-/* 概览：当前装备（名称 + 祭炼等级，品质色区分品阶）。 */
+/* 概览：当前装备（名称 + 祭炼等级，品质色区分品阶）。间距统一由概览面板的节奏给（见 base.css 的 .is-overview）。 */
 .overview-gear {
   display: flex;
   flex-wrap: wrap;
   gap: 6px 20px;
-  margin: 10px 0;
-  padding: 9px 12px;
+  margin: 0;
+  padding: 8px 12px;
   border: 1px solid rgba(202, 169, 106, 0.22);
   border-radius: 3px;
   background: rgba(202, 169, 106, 0.05);
   list-style: none;
 }
 
-/* 雷达图 + 属性条的外框（与评分、装备、天赋 / 悟道卡片同一套边框）。 */
+/* 雷达图 + 属性条的外框（与评分、装备、天赋 / 悟道卡片同一套边框）；同样不再自带外边距。 */
 .overview-box {
-  margin-bottom: 10px;
-  padding: 10px 12px;
+  padding: 8px 12px;
   border: 1px solid rgba(202, 169, 106, 0.22);
   border-radius: 3px;
   background: rgba(202, 169, 106, 0.05);
@@ -2314,19 +2309,19 @@ function refineGear(item: EquipmentItemView | null): void {
   color: var(--faint);
 }
 
-/* 概览：天赋 / 悟道两张卡片，一行两列。 */
+/* 概览：天赋 / 功法 / 悟道一行三张卡，灵兽卡占满下一行；行内与行间同一个间距（与概览面板的纵向节奏一致）。 */
 .overview-cards {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
-  gap: 10px;
+  gap: 16px;
 }
 
 .overview-card {
   display: grid;
   align-content: start;
-  gap: 6px;
+  gap: 5px;
   min-width: 0;
-  padding: 10px 12px;
+  padding: 9px 12px;
   border: 1px solid rgba(202, 169, 106, 0.22);
   border-radius: 3px;
   background: rgba(202, 169, 106, 0.05);

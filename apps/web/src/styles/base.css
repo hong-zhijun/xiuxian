@@ -2544,7 +2544,7 @@ ul {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding: 13px 0;
+  padding: 11px 0;
   border-top: 1px solid var(--line);
 }
 
@@ -2708,7 +2708,7 @@ ul {
   flex-wrap: wrap;
   align-items: baseline;
   gap: 2px 10px;
-  padding: 10px 12px;
+  padding: 9px 12px;
   border: 1px solid rgba(202, 169, 106, 0.22);
   border-radius: 3px;
   background: rgba(202, 169, 106, 0.05);
@@ -5140,9 +5140,13 @@ ul {
 /*
  * 弟子详情等带内部滚动区的弹窗使用稳定高度：切换内容量不同的 Tab 时外框不跳动。
  * 只有显式传入 fixed-height 的 ModalShell 生效，不影响招贤、炼丹等普通弹窗。
+ * 矮屏上限 = 视口高度 − 56px（遮罩上下各 24px 内边距 + 8px 余量，永远不顶到屏幕边缘），
+ * 高屏仍由 760px 封顶；这样「概览」在常见笔记本屏上也能一页放下、不出现滚动。
+ * max-height 要一起放宽，否则会被 .modal-card 的 86vh 夹住。
  */
 .modal-card.is-fixed-height {
-  height: min(760px, 86vh);
+  height: min(760px, calc(100vh - 56px));
+  max-height: min(760px, calc(100vh - 56px));
 }
 
 .modal-card.is-fixed-height .modal-body {
@@ -7174,7 +7178,7 @@ h2.public-sect-name {
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 11px;
-  padding-bottom: 11px;
+  padding-bottom: 9px;
 }
 
 .disciple-detail-portrait {
@@ -7219,7 +7223,7 @@ h2.public-sect-name {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
-  padding-bottom: 9px;
+  padding-bottom: 7px;
   border-bottom: 1px solid var(--line);
 }
 
@@ -7274,6 +7278,28 @@ h2.public-sect-name {
 /* 首个区块不再画顶部分隔线：Tab 下沿已经有一条。 */
 .disciple-tab-panel > .disciple-detail-section:first-child {
   border-top: 0;
+}
+
+/*
+ * 概览页的纵向节奏：评分卡 / 当前装备 / 雷达图 / 天赋功法悟道 / 灵兽卡，相邻两块一律 16px。
+ * 这三处都会各自贡献间距，叠起来就会出现「上面 16、19，最后一段只有 10」的不匀：
+ *   ① 区块自带的 margin（装备行、雷达图框，已在组件里清零）；
+ *   ② .disciple-detail-section 的 gap；
+ *   ③ 区块与卡片行之间的 section 下内边距。
+ * 这里把 ②③ 也定成 16px（面板列间距负责 section 与卡片行之间那一段），
+ * 并且与 .overview-cards 的 grid gap 同值，横向、纵向因此是同一个节奏。
+ * 只作用于概览：其它 Tab 的区块内部仍是各自的紧凑间距。
+ */
+.disciple-tab-panel.is-overview {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.disciple-tab-panel.is-overview > .disciple-detail-section {
+  gap: 16px;
+  padding-top: 16px;
+  padding-bottom: 0;
 }
 
 /* ---------- 头像框选择器（图像单选，固定白名单） ---------- */
