@@ -102,7 +102,7 @@ function collectionOf(speciesId: string) {
 /** 图鉴卡片右上角：收服过几次 / 只遇见过 / 未遇见。 */
 function statusOf(speciesId: string): string {
   const entry = collectionOf(speciesId);
-  if (entry !== undefined && entry.caught > 0) return `已收服 ×${String(entry.caught)}`;
+  if (entry !== undefined && entry.caught > 0) return `已获得 ×${String(entry.caught)}`;
   if (entry !== undefined && entry.seen > 0) return `遇见 ${String(entry.seen)} 次`;
   return '未遇见';
 }
@@ -181,7 +181,9 @@ async function pickBush(index: number): Promise<void> {
     pickedBush.value = null;
     emit('notify', 'warning', '宠物秘境', caught instanceof Error ? caught.message : '搜寻失败');
     try {
-      panel.value = (await fetchSpiritBeasts()).beasts;
+      const refreshed = await fetchSpiritBeasts();
+      panel.value = refreshed.beasts;
+      emit('state-update', refreshed.state);
     } catch {
       /* 保留原来的错误提示 */
     }
@@ -251,7 +253,9 @@ async function act(action: BeastCaptureAction): Promise<void> {
     held.value = null;
     emit('notify', 'warning', '宠物秘境', caught instanceof Error ? caught.message : '操作失败');
     try {
-      panel.value = (await fetchSpiritBeasts()).beasts;
+      const refreshed = await fetchSpiritBeasts();
+      panel.value = refreshed.beasts;
+      emit('state-update', refreshed.state);
     } catch {
       /* 保留原来的错误提示 */
     }
@@ -262,7 +266,9 @@ async function act(action: BeastCaptureAction): Promise<void> {
 
 onMounted(async () => {
   try {
-    panel.value = (await fetchSpiritBeasts()).beasts;
+    const refreshed = await fetchSpiritBeasts();
+    panel.value = refreshed.beasts;
+    emit('state-update', refreshed.state);
     // 默认停在已开放的最高区域。
     const unlocked = panel.value.areas.filter((item) => item.unlocked);
     areaId.value = unlocked[unlocked.length - 1]?.id ?? areaId.value;

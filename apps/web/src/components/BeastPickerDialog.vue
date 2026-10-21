@@ -87,7 +87,9 @@ async function confirm(): Promise<void> {
   } catch (caught) {
     emit('notify', 'warning', '灵兽', caught instanceof Error ? caught.message : '操作失败');
     try {
-      beasts.value = (await fetchSpiritBeasts()).beasts.items;
+      const data = await fetchSpiritBeasts();
+      beasts.value = data.beasts.items;
+      emit('state-update', data.state);
       draft.value = null;
     } catch {
       /* 保留原来的错误提示 */
@@ -99,7 +101,9 @@ async function confirm(): Promise<void> {
 
 onMounted(async () => {
   try {
-    const panel = (await fetchSpiritBeasts()).beasts;
+    const data = await fetchSpiritBeasts();
+    const panel = data.beasts;
+    emit('state-update', data.state);
     beasts.value = panel.unlocked ? panel.items : [];
     if (!panel.unlocked) loadError.value = `宗门 ${String(panel.unlockLevel)} 级开放灵兽玩法。`;
   } catch (caught) {

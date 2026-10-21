@@ -11,6 +11,7 @@ export interface CaptureFighter {
   guard:BeastCombatState;
 }
 export interface CaptureData {
+  carriedBeastId?: string | null;
   areaId:string; speciesId:string; quality: import('@xiuxian/contracts').BeastQuality;
   player:CaptureFighter; target:CaptureFighter; tier:import('@xiuxian/contracts').BeastTier;
   round:number; attempts:number; logs:string[]; caughtId:string|null;

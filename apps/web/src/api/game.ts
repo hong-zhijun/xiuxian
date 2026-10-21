@@ -1,4 +1,4 @@
-import type { BeastIdentity, BeastAttrs, BeastElement, BeastTier, SpiritBeastsPanel, BeastCaptureAction } from '@xiuxian/contracts';
+import type { BeastIdentity, BeastAttrs, BeastElement, BeastTier, SpiritBeastsPanel, BeastCaptureAction, BeastManageAction, BeastExchangeInput, BeastCommandReceipt } from '@xiuxian/contracts';
 import { apiRequest, setCsrfToken } from './client';
 import type { AvatarFrameId } from '../utils/avatarFrames';
 
@@ -3459,7 +3459,9 @@ export async function fetchHub(): Promise<{ hub: HubView }> {
   return apiRequest<{ hub: HubView }>('/api/v1/game/hub');
 }
 
-export function fetchSpiritBeasts() { return apiRequest<{beasts:SpiritBeastsPanel}>('/api/v1/game/spirit-beasts'); }
+export interface SpiritBeastActionData { state:SectStateView; beasts:SpiritBeastsPanel; receipt:BeastCommandReceipt|null }
+export function fetchSpiritBeasts() { return apiRequest<SpiritBeastActionData>('/api/v1/game/spirit-beasts'); }
 export function startBeastCapture(areaId:string,discipleId:string,commandId:string) { return apiRequest<{state:SectStateView;beasts:SpiritBeastsPanel}>('/api/v1/game/beast-capture/start',{method:'POST',body:{areaId,discipleId,commandId}}); }
 export function actBeastCapture(sessionId:string,version:number,action:BeastCaptureAction,commandId:string) { return apiRequest<{state:SectStateView;beasts:SpiritBeastsPanel}>('/api/v1/game/beast-capture/action',{method:'POST',body:{sessionId,version,action,commandId}}); }
-export function manageSpiritBeast(beastId:string,version:number,action:'equip'|'unequip'|'upgrade'|'lock'|'release',commandId:string,discipleId?:string,locked?:boolean) { return apiRequest<{state:SectStateView;beasts:SpiritBeastsPanel}>('/api/v1/game/spirit-beasts/manage',{method:'POST',body:{beastId,version,action,commandId,...(discipleId?{discipleId}:{}),...(locked===undefined?{}:{locked})}}); }
+export function manageSpiritBeast(beastId:string,version:number,action:BeastManageAction,commandId:string,discipleId?:string,locked?:boolean) { return apiRequest<SpiritBeastActionData>('/api/v1/game/spirit-beasts/manage',{method:'POST',body:{beastId,version,action,commandId,...(discipleId?{discipleId}:{}),...(locked===undefined?{}:{locked})}}); }
+export function exchangeSpiritBeast(input:BeastExchangeInput) { return apiRequest<SpiritBeastActionData>('/api/v1/game/spirit-beasts/exchange',{method:'POST',body:input}); }

@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
-import { beastStartSchema, beastActionSchema, beastManageSchema } from './schema';
-import { getSpiritBeasts, manageSpiritBeast, startBeastCapture, actBeastCapture } from './spiritBeastService';
+import { beastStartSchema, beastActionSchema, beastManageSchema, beastExchangeSchema } from './schema';
+import { getSpiritBeasts, manageSpiritBeast, startBeastCapture, actBeastCapture, exchangeSpiritBeast } from './spiritBeastService';
 
 import { AppError, authOf, type AppContext, type AppEnv } from '../../http/appError';
 import { respondOk } from '../../http/envelope';
@@ -198,6 +198,10 @@ export function createGameRoutes(): Hono<AppEnv> {
   const routes = new Hono<AppEnv>();
 
   routes.get('/game/spirit-beasts', async c => respondOk(c,await getSpiritBeasts(getDb(c.env),requireUserId(c),Date.now())));
+  routes.post('/game/spirit-beasts/exchange', async c => {
+    const userId=requireUserId(c),body=await parseStrictJson(beastExchangeSchema,c);
+    return respondOk(c,await exchangeSpiritBeast(getDb(c.env),userId,body,Date.now()));
+  });
   routes.post('/game/spirit-beasts/manage', async c => {
     const userId=requireUserId(c),body=await parseStrictJson(beastManageSchema,c);
     return respondOk(c,await manageSpiritBeast(getDb(c.env),userId,body,Date.now()));

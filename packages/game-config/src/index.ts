@@ -20,14 +20,14 @@ import type { GameConfigContent } from '@xiuxian/game-core';
  */
 
 /** 版本号：内容变化时必须同步更新版本与 payloadHash（见 03 第 12 节）。 */
-export const GAME_CONFIG_VERSION = 'v12.0.0';
+export const GAME_CONFIG_VERSION = 'v13.0.0';
 
 /**
  * 内容哈希（sha256:，覆盖规范化后的 JSON）。
  * 修改 content 后必须重新计算，否则 Worker 启动与 config:hash 校验都会失败。
  */
 export const GAME_CONFIG_PAYLOAD_HASH =
-  'sha256:dd3843d20d026a51bd81e00606aedc06b9e7bb66fed57a90b0421049d0e8968b';
+  'sha256:c58c61a1e908c8d4a86dc68cd3521d0c9069357d6e26b921a99d1caa9f8aa23f';
 
 export const GAME_CONFIG_CONTENT: GameConfigContent = {
   server: {
@@ -97,6 +97,10 @@ export const GAME_CONFIG_CONTENT: GameConfigContent = {
       capacity: '999000',
       baseRatePerHour: '0',
       visibility: 'public',
+    },
+    {
+      id: 'beastEssence', name: '御兽精魄', startAmount: '0', capacity: '999999000',
+      baseRatePerHour: '0', visibility: 'public',
     },
   ],
   buildings: [

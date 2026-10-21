@@ -1,4 +1,5 @@
 import type { BeastAttrs, BeastIdentity, BeastQuality, BeastSpeciesView, BeastTier } from '@xiuxian/contracts';
+import { MIN_UNITS_PER_DISPLAY_UNIT } from '@xiuxian/contracts';
 import { ELEMENT_NAMES } from './elements';
 
 export const BEAST_RULES = {
@@ -23,18 +24,18 @@ function attrs(main: keyof BeastAttrs, sub: keyof BeastAttrs, value: number, sma
   return { ...EMPTY_BEAST_ATTRS, [main]: value, [sub]: small };
 }
 const DEFINITIONS: Definition[] = [
-  { id: 'claw_tiger', name: '裂爪虎', tier: 'spirit', element: 'metal', glyph: '虎', attrs: attrs('attack','speed',6,2), skillName: '猛袭', skillText: '首次出手伤害 +{first}%' },
-  { id: 'green_deer', name: '青角鹿', tier: 'spirit', element: 'wood', glyph: '鹿', attrs: attrs('physique','defense',6,2), skillName: '回春', skillText: '回合结束回复自身最大血量 {heal}%' },
-  { id: 'frost_crane', name: '霜羽鹤', tier: 'spirit', element: 'water', glyph: '鹤', attrs: attrs('speed','defense',6,2), skillName: '霜衣', skillText: '首次受到的直接伤害 −{firstGuard}%' },
-  { id: 'flame_wolf', name: '赤焰狼', tier: 'spirit', element: 'fire', glyph: '狼', attrs: attrs('attack','physique',6,2), skillName: '凶性', skillText: '血量低于 35% 时伤害 +{low}%' },
-  { id: 'armored_turtle', name: '玄甲龟', tier: 'spirit', element: 'earth', glyph: '龟', attrs: attrs('defense','physique',6,2), skillName: '厚甲', skillText: '最大血量 +{hp}%' },
-  { id: 'three_tail_fox', name: '三尾灵狐', tier: 'rare', element: 'fire', glyph: '狐', attrs: attrs('attack','luck',9,3), skillName: '狐火', skillText: '出手时 20% 概率追加直接伤害的 {proc}%' },
-  { id: 'rock_rhino', name: '岩甲犀', tier: 'rare', element: 'earth', glyph: '犀', attrs: attrs('defense','physique',9,3), skillName: '磐身', skillText: '受到的直接伤害 −{guard}%' },
-  { id: 'white_tiger', name: '庚金白虎', tier: 'divine', element: 'metal', glyph: '虎', attrs: attrs('attack','luck',12,4), skillName: '杀伐', skillText: '首次出手必定暴击；暴击伤害倍率 +{crit}' },
-  { id: 'green_qilin', name: '青木麒麟', tier: 'divine', element: 'wood', glyph: '麟', attrs: attrs('physique','defense',12,4), skillName: '生生不息', skillText: '回合结束回复自身最大血量 {heal}%；免疫自身剧毒' },
-  { id: 'water_dragon', name: '玄水蛟龙', tier: 'divine', element: 'water', glyph: '蛟', attrs: attrs('speed','attack',12,4), skillName: '游龙', skillText: '追击概率 +{extra} 个百分点，概率上限 +{extraCap} 个百分点' },
-  { id: 'vermilion_bird', name: '离火朱雀', tier: 'divine', element: 'fire', glyph: '雀', attrs: attrs('attack','luck',12,4), skillName: '离火', skillText: '出手时 25% 概率追加直接伤害的 {proc}%' },
-  { id: 'mountain_turtle', name: '镇岳龙龟', tier: 'divine', element: 'earth', glyph: '龟', attrs: attrs('defense','physique',12,4), skillName: '镇岳', skillText: '最大血量 +{hp}%；首次低于 35% 且存活时获得最大血量 {shield}% 护盾（每场一次）' },
+  { id: 'claw_tiger', name: '裂爪虎', tier: 'spirit', element: 'metal', glyph: '虎', attrs: attrs('attack','speed',7,2), skillName: '猛袭', skillText: '首次出手伤害 +{first}%' },
+  { id: 'green_deer', name: '青角鹿', tier: 'spirit', element: 'wood', glyph: '鹿', attrs: attrs('physique','defense',7,2), skillName: '回春', skillText: '回合结束回复自身最大血量 {heal}%' },
+  { id: 'frost_crane', name: '霜羽鹤', tier: 'spirit', element: 'water', glyph: '鹤', attrs: attrs('speed','defense',7,2), skillName: '霜衣', skillText: '首次受到的直接伤害 −{firstGuard}%' },
+  { id: 'flame_wolf', name: '赤焰狼', tier: 'spirit', element: 'fire', glyph: '狼', attrs: attrs('attack','physique',7,2), skillName: '凶性', skillText: '血量低于 35% 时伤害 +{low}%' },
+  { id: 'armored_turtle', name: '玄甲龟', tier: 'spirit', element: 'earth', glyph: '龟', attrs: attrs('defense','physique',7,2), skillName: '厚甲', skillText: '最大血量 +{hp}%' },
+  { id: 'three_tail_fox', name: '三尾灵狐', tier: 'rare', element: 'fire', glyph: '狐', attrs: attrs('attack','luck',10,3), skillName: '狐火', skillText: '出手时 20% 概率追加直接伤害的 {proc}%' },
+  { id: 'rock_rhino', name: '岩甲犀', tier: 'rare', element: 'earth', glyph: '犀', attrs: attrs('defense','physique',10,3), skillName: '磐身', skillText: '受到的直接伤害 −{guard}%' },
+  { id: 'white_tiger', name: '庚金白虎', tier: 'divine', element: 'metal', glyph: '虎', attrs: attrs('attack','luck',14,4), skillName: '杀伐', skillText: '首次出手必定暴击；暴击伤害倍率 +{crit}' },
+  { id: 'green_qilin', name: '青木麒麟', tier: 'divine', element: 'wood', glyph: '麟', attrs: attrs('physique','defense',14,4), skillName: '生生不息', skillText: '回合结束回复自身最大血量 {heal}%；免疫自身剧毒' },
+  { id: 'water_dragon', name: '玄水蛟龙', tier: 'divine', element: 'water', glyph: '蛟', attrs: attrs('speed','attack',14,4), skillName: '游龙', skillText: '追击概率 +{extra} 个百分点，概率上限 +{extraCap} 个百分点' },
+  { id: 'vermilion_bird', name: '离火朱雀', tier: 'divine', element: 'fire', glyph: '雀', attrs: attrs('attack','luck',14,4), skillName: '离火', skillText: '出手时 25% 概率追加直接伤害的 {proc}%' },
+  { id: 'mountain_turtle', name: '镇岳龙龟', tier: 'divine', element: 'earth', glyph: '龟', attrs: attrs('defense','physique',14,4), skillName: '镇岳', skillText: '最大血量 +{hp}%；首次低于 35% 且存活时获得最大血量 {shield}% 护盾（每场一次）' },
 ];
 export const BEAST_AREAS = [
   { id: 'foothills', name: '青岚山麓', description: '五行灵兽栖息之地，适合初次御兽。', requiredSectLevel: 3, cost: 20_000, strength: 35, speciesIds: DEFINITIONS.slice(0,5).map(b=>b.id) },
@@ -50,7 +51,7 @@ export interface BeastMods {
 export function beastMods(beast: Pick<BeastIdentity,'speciesId'|'quality'|'level'>): BeastMods {
   const def = DEFINITIONS.find(b=>b.id===beast.speciesId);
   if (!def) throw new Error('Unknown spirit beast');
-  const s = BEAST_QUALITY[beast.quality].skill * (1 + .025 * (Math.max(1,Math.min(20,beast.level))-1));
+  const s = BEAST_QUALITY[beast.quality].skill * (1 + .03 * (Math.max(1,Math.min(20,beast.level))-1));
   const m: BeastMods = { element: def.element, name: def.name, skillName: def.skillName, first:0,heal:0,firstGuard:0,low:0,hp:0,procChance:0,proc:0,guard:0,crit:0,firstCrit:false,extra:0,extraCap:0,poisonImmune:false,shield:0 };
   switch(def.id) {
     case 'claw_tiger': m.first=.2*s; break;
@@ -71,7 +72,7 @@ export function beastMods(beast: Pick<BeastIdentity,'speciesId'|'quality'|'level
 export function beastAttributes(beast: Pick<BeastIdentity,'speciesId'|'quality'|'level'>): BeastAttrs {
   const def = DEFINITIONS.find(b=>b.id===beast.speciesId);
   if (!def) return { ...EMPTY_BEAST_ATTRS };
-  const s = BEAST_QUALITY[beast.quality].attrs * (1+.05*(Math.max(1,Math.min(20,beast.level))-1));
+  const s = BEAST_QUALITY[beast.quality].attrs * (1+.06*(Math.max(1,Math.min(20,beast.level))-1));
   return {attack:Math.floor(def.attrs.attack*s),defense:Math.floor(def.attrs.defense*s),speed:Math.floor(def.attrs.speed*s),luck:Math.floor(def.attrs.luck*s),physique:Math.floor(def.attrs.physique*s)};
 }
 export function beastSkillText(beast: Pick<BeastIdentity,'speciesId'|'quality'|'level'>): string {
@@ -122,6 +123,43 @@ export function weightedPick<T>(items: readonly T[], weight: (item:T)=>number, r
   const total=items.reduce((s,i)=>s+weight(i),0); let roll=random()*total;
   for(const i of items) { roll-=weight(i); if(roll<0) return i; }
   return items[items.length-1]!;
+}
+
+export const BEAST_ESSENCE_ID = 'beastEssence';
+export const BEAST_QUALITY_ORDER: readonly BeastQuality[] = ['common', 'spirit', 'treasure', 'immortal'];
+const units = (value: number) => value * MIN_UNITS_PER_DISPLAY_UNIT;
+export const BEAST_EXCHANGE_RULES = {
+  spirit: { requiredSectLevel: 3, randomCost: units(6), specificCost: units(36) },
+  rare: { requiredSectLevel: 5, randomCost: units(18), specificCost: units(54) },
+  divine: { requiredSectLevel: 7, randomCost: units(50), specificCost: units(300) },
+} as const;
+export function beastReleaseReward(beast: Pick<BeastIdentity, 'speciesId' | 'quality'>): number {
+  const tier = BEAST_SPECIES.find(s => s.id === beast.speciesId)!.tier;
+  return units({ common: 1, spirit: 3, treasure: 8, immortal: 20 }[beast.quality] * { spirit: 1, rare: 3, divine: 10 }[tier]);
+}
+export function beastBreakthroughCost(beast: Pick<BeastIdentity, 'speciesId' | 'quality'>) {
+  const index = BEAST_QUALITY_ORDER.indexOf(beast.quality);
+  if (index < 0 || index >= 3) return null;
+  const tier = BEAST_SPECIES.find(s => s.id === beast.speciesId)!.tier;
+  const factor = { spirit: 1, rare: 2, divine: 3 }[tier];
+  return { nextQuality: BEAST_QUALITY_ORDER[index + 1]!, cost: {
+    beastEssence: String(units([4, 10, 25][index]! * { spirit: 1, rare: 3, divine: 10 }[tier])),
+    spiritStone: String(units([100, 300, 800][index]! * factor)),
+    spiritualEnergy: String(units([80, 240, 640][index]! * factor)),
+  } };
+}
+/** 野生目标沿用上线时的基础预算，不随收藏培养增强。 */
+export function wildBeastAttributes(speciesId: string): BeastAttrs {
+  const def = DEFINITIONS.find(s => s.id === speciesId)!;
+  const main = { spirit: 6, rare: 9, divine: 12 }[def.tier];
+  const sub = { spirit: 2, rare: 3, divine: 4 }[def.tier];
+  const result = { ...EMPTY_BEAST_ATTRS };
+  const highest = Math.max(...Object.values(def.attrs));
+  for (const key of Object.keys(result) as (keyof BeastAttrs)[]) result[key] = def.attrs[key] === 0 ? 0 : def.attrs[key] === highest ? main : sub;
+  return result;
+}
+export function exchangeSpecies(tier: BeastTier, random: () => number): BeastSpeciesView {
+  return weightedPick(BEAST_SPECIES.filter(s => s.tier === tier), () => 1, random);
 }
 export function encounterSpecies(ids: readonly string[], luck: number, random:()=>number): BeastSpeciesView {
   const bonus=1+Math.max(-.25,Math.min(.5,(luck-50)/100));

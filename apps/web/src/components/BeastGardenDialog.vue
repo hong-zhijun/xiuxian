@@ -1,166 +1,162 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
-import type { BeastElement, BeastQuality, SpiritBeastView, SpiritBeastsPanel } from '@xiuxian/contracts';
-
-import { fetchSpiritBeasts, manageSpiritBeast, type SectStateView } from '../api/game';
+import { computed, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue';
+import type { BeastAttrs, BeastElement, BeastManageAction, BeastQuality, BeastTier, SpiritBeastView, SpiritBeastsPanel, BeastExchangeInput } from '@xiuxian/contracts';
+import { exchangeSpiritBeast, fetchSpiritBeasts, manageSpiritBeast, type SectStateView, type SpiritBeastActionData } from '../api/game';
+import { ApiError } from '../api/client';
 import type { ToastTone } from '../types/ui';
 import { formatAmount } from '../utils/format';
 import { BEAST_ELEMENT_OPTIONS, BEAST_QUALITY_OPTIONS, beastAttrList } from '../utils/spiritBeasts';
 import DisciplePicker from './DisciplePicker.vue';
 import ModalShell from './ModalShell.vue';
 
-/**
- * 灵兽苑（首页「宗门」列）：已收服灵兽的筛选、装备、培养、锁定与放生。
- * 从弟子出发换灵兽走弟子详情里的 BeastPickerDialog，不经过这里。
- */
 const props = defineProps<{ state: SectStateView }>();
 const emit = defineEmits<{
   'state-update': [state: SectStateView];
   notify: [tone: ToastTone, title: string, message: string];
   'open-capture': [];
+  'busy-change': [busy: boolean];
 }>();
-
-type ManageAction = 'equip' | 'unequip' | 'upgrade' | 'lock' | 'release';
-
 const TIER_RANK = { divine: 3, rare: 2, spirit: 1 } as const;
 const QUALITY_RANK: Record<BeastQuality, number> = { immortal: 4, treasure: 3, spirit: 2, common: 1 };
-
 const panel = ref<SpiritBeastsPanel | null>(null);
 const loading = ref(true);
 const pending = ref(false);
+const loadError = ref('');
+const tab = ref<'collection' | 'exchange'>('collection');
 const elementFilter = ref<BeastElement | ''>('');
 const qualityFilter = ref<BeastQuality | ''>('');
 const detailId = ref<string | null>(null);
 const equipTargets = ref<string[]>([]);
 const confirmRelease = ref(false);
-
-/** 随行的排在前面，其余按档次、品质、等级从高到低。 */
-const items = computed(() =>
-  (panel.value?.items ?? [])
-    .filter((item) => (elementFilter.value === '' || item.species.element === elementFilter.value)
-      && (qualityFilter.value === '' || item.quality === qualityFilter.value))
-    .slice()
-    .sort((a, b) =>
-      Number(b.discipleId !== null) - Number(a.discipleId !== null)
-      || TIER_RANK[b.species.tier] - TIER_RANK[a.species.tier]
-      || QUALITY_RANK[b.quality] - QUALITY_RANK[a.quality]
-      || b.level - a.level),
-);
-const carriedCount = computed(() => panel.value?.items.filter((item) => item.discipleId !== null).length ?? 0);
-const selected = computed(() => panel.value?.items.find((item) => item.id === detailId.value) ?? null);
-const equipTarget = computed(() => {
-  const id = equipTargets.value[0];
-  return id === undefined ? null : (props.state.disciples.find((item) => item.id === id) ?? null);
+const exchangeTier = ref<BeastTier>('spirit');
+type ExchangeChoice = { mode: 'random'; tier: BeastTier } | { mode: 'specific'; tier: BeastTier; speciesId: string };
+const exchangeChoice = ref<ExchangeChoice | null>(null);
+interface Operation { run: () => Promise<SpiritBeastActionData>; message: string; after?: () => void }
+const unresolved = shallowRef<Operation | null>(null);
+const blocked = computed(() => pending.value || unresolved.value !== null);
+watch(pending, busy => emit('busy-change', busy));
+onUnmounted(() => emit('busy-change', false));
+const items = computed(() => (panel.value?.items ?? [])
+  .filter(item => (elementFilter.value === '' || item.species.element === elementFilter.value) && (qualityFilter.value === '' || item.quality === qualityFilter.value))
+  .slice().sort((a,b) => Number(b.discipleId !== null)-Number(a.discipleId !== null) || TIER_RANK[b.species.tier]-TIER_RANK[a.species.tier] || QUALITY_RANK[b.quality]-QUALITY_RANK[a.quality] || b.level-a.level));
+const carriedCount = computed(() => panel.value?.items.filter(item => item.discipleId !== null).length ?? 0);
+const selected = computed(() => panel.value?.items.find(item => item.id === detailId.value) ?? null);
+const equipTarget = computed(() => props.state.disciples.find(item => item.id === equipTargets.value[0]) ?? null);
+const offer = computed(() => panel.value?.exchangeOffers.find(item => item.tier === exchangeTier.value) ?? null);
+const exchangeSpecies = computed(() => (panel.value?.species ?? []).filter(item => offer.value?.speciesIds.includes(item.id)));
+const choiceOffer = computed(() => panel.value?.exchangeOffers.find(item => item.tier === exchangeChoice.value?.tier) ?? null);
+const choiceSpecies = computed(() => {
+  const choice = exchangeChoice.value;
+  return choice?.mode === 'specific' ? panel.value?.species.find(item => item.id === choice.speciesId) ?? null : null;
 });
-
-function balanceOf(resourceId: string): number {
-  return Number(props.state.resources.find((item) => item.id === resourceId)?.balance ?? 0);
+const choiceCost = computed(() => exchangeChoice.value?.mode === 'specific' ? choiceOffer.value?.specificCost ?? '0' : choiceOffer.value?.randomCost ?? '0');
+function balanceOf(id: string): number { return Number(props.state.resources.find(item => item.id === id)?.balance ?? 0); }
+function exchangeBlock(cost: string): string | null {
+  if (!offer.value?.unlocked) return '宗门 ' + String(offer.value?.requiredSectLevel ?? 3) + ' 级开放';
+  if ((panel.value?.availableSlots ?? 0) < 1) return panel.value?.reservedSlots ? '需为捕捉保留一个位置，请先整理灵兽苑' : '灵兽苑已满，请先整理';
+  if (balanceOf('beastEssence') < Number(cost)) return '御兽精魄不足';
+  return null;
 }
 function affordable(beast: SpiritBeastView): boolean {
-  const cost = beast.upgradeCost;
-  return cost !== null && balanceOf('spiritStone') >= cost.spiritStone && balanceOf('spiritualEnergy') >= cost.spiritualEnergy;
+  return beast.upgradeCost !== null && balanceOf('spiritStone') >= beast.upgradeCost.spiritStone && balanceOf('spiritualEnergy') >= beast.upgradeCost.spiritualEnergy;
 }
-function levelPercent(beast: SpiritBeastView): number {
-  const max = panel.value?.maxLevel ?? 20;
-  return Math.min(100, (beast.level / max) * 100);
+function breakthroughRows(beast: SpiritBeastView) {
+  const cost = beast.qualityBreakthrough?.cost;
+  return cost ? (['beastEssence','spiritStone','spiritualEnergy'] as const).map(id => ({ id, name: {beastEssence:'御兽精魄',spiritStone:'灵石',spiritualEnergy:'灵气'}[id], cost:cost[id], balance:balanceOf(id), lacking:balanceOf(id)<Number(cost[id]) })) : [];
 }
-
+function canBreakthrough(beast: SpiritBeastView): boolean {
+  return beast.qualityBreakthrough !== null && !beast.qualityBreakthrough.blockedReason && breakthroughRows(beast).every(row => !row.lacking);
+}
+function previewText(beast: SpiritBeastView, attrs: BeastAttrs): string {
+  return beastAttrList(attrs).map(attr => attr.label + ' ' + String(beast.attrs[attr.key]) + ' → ' + String(attr.value)).join(' · ');
+}
+function levelPercent(beast: SpiritBeastView): number { return Math.min(100,beast.level/(panel.value?.maxLevel ?? 20)*100); }
 function open(beast: SpiritBeastView): void {
-  detailId.value = beast.id;
-  confirmRelease.value = false;
-  equipTargets.value = beast.discipleId === null ? [] : [beast.discipleId];
+  if(blocked.value)return;
+  detailId.value=beast.id;confirmRelease.value=false;equipTargets.value=beast.discipleId?[beast.discipleId]:[];
 }
-function closeDetail(): void {
-  detailId.value = null;
-  confirmRelease.value = false;
+function closeDetail(): void { if(pending.value)return;detailId.value=null;confirmRelease.value=false; }
+function apply(data: SpiritBeastActionData): void { panel.value=data.beasts;emit('state-update',data.state); }
+async function refreshPanel(): Promise<void> {
+  loading.value=true;
+  try { apply(await fetchSpiritBeasts());loadError.value=''; }
+  catch(error) { loadError.value=error instanceof Error?error.message:'读取失败，请重试'; }
+  finally { loading.value=false; }
 }
-
-function successText(beast: SpiritBeastView, action: ManageAction): string {
-  const name = beast.species.name;
-  switch (action) {
-    case 'equip':
-      return `${equipTarget.value?.name ?? '弟子'}携带了${name}。`;
-    case 'unequip':
-      return `${name}已卸下，回到灵兽苑待命。`;
-    case 'upgrade':
-      return `${name}升至 Lv.${String(beast.level + 1)}。`;
-    case 'lock':
-      return beast.locked ? `${name}已解锁。` : `${name}已锁定，不会被误放生。`;
-    case 'release':
-      return `${name}已放生，图鉴记录保留。`;
-  }
-}
-
-async function manage(beast: SpiritBeastView, action: ManageAction): Promise<void> {
+/** 不再重试：先刷新拿到真实结果，再解除锁定（原操作若已成功，刷新后就能看到）。 */
+async function abandonUnresolved(): Promise<void> {
   if (pending.value) return;
-  if (action === 'release' && !confirmRelease.value) {
-    confirmRelease.value = true;
-    return;
-  }
-  const discipleId = action === 'equip' ? equipTargets.value[0] : undefined;
-  if (action === 'equip' && discipleId === undefined) return;
-  const message = successText(beast, action);
-  pending.value = true;
-  try {
-    const result = await manageSpiritBeast(
-      beast.id,
-      beast.version,
-      action,
-      crypto.randomUUID(),
-      discipleId,
-      action === 'lock' ? !beast.locked : undefined,
-    );
-    panel.value = result.beasts;
-    emit('state-update', result.state);
-    emit('notify', 'success', '灵兽苑', message);
-    if (action === 'release') closeDetail();
-    confirmRelease.value = false;
-  } catch (caught) {
-    emit('notify', 'warning', '灵兽苑', caught instanceof Error ? caught.message : '操作失败');
-    try {
-      panel.value = (await fetchSpiritBeasts()).beasts;
-    } catch {
-      /* 保留原来的错误提示 */
-    }
-  } finally {
-    pending.value = false;
-  }
+  await refreshPanel();
+  unresolved.value = null;
 }
-
-onMounted(async () => {
+async function perform(operation: Operation): Promise<void> {
+  if(pending.value)return;
+  pending.value=true;
   try {
-    panel.value = (await fetchSpiritBeasts()).beasts;
-  } catch (caught) {
-    emit('notify', 'warning', '灵兽苑', caught instanceof Error ? caught.message : '读取失败');
-  } finally {
-    loading.value = false;
-  }
-});
+    const data=await operation.run();apply(data);unresolved.value=null;
+    let message=operation.message;
+    const receipt=data.receipt;
+    const name=receipt?data.beasts.species.find(item=>item.id===receipt.beast.speciesId)?.name ?? '灵兽':'灵兽';
+    if(receipt?.kind==='release')message=name+'已放生，获得 '+formatAmount(receipt.resourceChanges.beastEssence?.amount ?? '0')+' 御兽精魄。';
+    if(receipt?.kind==='exchange')message='获得凡品'+name+'（Lv.1），已进入灵兽苑。';
+    if(receipt?.kind==='quality-breakthrough')message=name+'突破至'+(BEAST_QUALITY_OPTIONS.find(item=>item.id===receipt.beast.quality)?.name ?? receipt.beast.quality)+'。';
+    emit('notify','success','灵兽苑',message);confirmRelease.value=false;operation.after?.();
+  } catch(error) {
+    // 代理可能在写入成功后返回 HTML、空响应或错误信封；这些响应不能证明命令未提交。
+    const uncertain=!(error instanceof ApiError) || error.status===0 || error.status>=500 || error.code==='BAD_RESPONSE' || error.code==='UNKNOWN_ERROR';
+    unresolved.value=uncertain?operation:null;
+    // 不确定失败不把解析层面的技术错误抛给玩家，只提示结果未确认并给出重试入口。
+    emit('notify','warning','灵兽苑',uncertain&&error instanceof ApiError?'网络或响应异常，操作结果未确认，请点“重试原操作”。':error instanceof Error?error.message:'操作失败');
+    await refreshPanel();
+  } finally { pending.value=false; }
+}
+function manage(beast: SpiritBeastView, action: BeastManageAction): void {
+  if(blocked.value)return;
+  if(action==='release'&&!confirmRelease.value){confirmRelease.value=true;return;}
+  const discipleId=action==='equip'?equipTargets.value[0]:undefined;
+  if(action==='equip'&&!discipleId)return;
+  const commandId=crypto.randomUUID();
+  const message=action==='upgrade'?beast.species.name+'升至 Lv.'+String(beast.level+1)+'。':action==='lock'?(beast.locked?'已解锁。':'已锁定。'):action==='equip'?'已更换携带灵兽。':action==='unequip'?'灵兽已卸下。':'操作完成。';
+  void perform({run:()=>manageSpiritBeast(beast.id,beast.version,action,commandId,discipleId,action==='lock'?!beast.locked:undefined),message,after:action==='release'?()=>{detailId.value=null;}:undefined});
+}
+function confirmExchange(): void {
+  const choice=exchangeChoice.value;
+  if(!choice||blocked.value||exchangeBlock(choiceCost.value))return;
+  const input: BeastExchangeInput={...choice,commandId:crypto.randomUUID()};
+  void perform({run:()=>exchangeSpiritBeast(input),message:'兑换完成。',after:()=>{exchangeChoice.value=null;}});
+}
+function onTabKey(event: KeyboardEvent): void {
+  if(blocked.value || !['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;
+  event.preventDefault();tab.value=event.key==='Home'?'collection':event.key==='End'?'exchange':tab.value==='collection'?'exchange':'collection';
+  const buttons=(event.currentTarget as HTMLElement).parentElement?.querySelectorAll<HTMLButtonElement>('[role="tab"]');
+  buttons?.[tab.value==='collection'?0:1]?.focus();
+}
+onMounted(refreshPanel);
 </script>
 
 <template>
   <section class="garden" aria-labelledby="garden-title">
     <div class="beast-head modal-head">
-      <h3 id="garden-title" class="beast-title">
-        <span>灵兽苑</span>
-        <span v-if="panel" class="beast-title-sub">{{ panel.items.length }}/{{ panel.capacity }} · 随行 {{ carriedCount }}</span>
-      </h3>
-      <button class="beast-quiet-button" type="button" @click="emit('open-capture')">去捕捉</button>
+      <h3 id="garden-title" class="beast-title"><span>灵兽苑</span><span v-if="panel" class="beast-title-sub">随行 {{ carriedCount }}</span></h3>
+      <button class="beast-quiet-button" type="button" :disabled="blocked" @click="emit('open-capture')">去捕捉</button>
     </div>
-
-    <p v-if="!panel" class="beast-empty">{{ loading ? '正在清点灵兽……' : '暂未读取到灵兽信息，请稍后再试。' }}</p>
-
+    <p v-if="loadError" class="blocked-hint">{{ loadError }} <button class="beast-quiet-button" :disabled="pending || loading" @click="refreshPanel">重新读取</button></p>
+    <div v-if="unresolved && detailId === null && exchangeChoice === null" class="detail-upgrade">
+      <p class="blocked-hint">上次操作结果尚未确认：重试会使用同一操作标识，不会重复扣费；也可以刷新查看结果后放弃。</p>
+      <button class="action-button primary-action" :disabled="pending" @click="perform(unresolved)">重试原操作</button><button class="beast-quiet-button" type="button" :disabled="pending" @click="abandonUnresolved">刷新并放弃</button>
+    </div>
+    <p v-if="!panel" class="beast-empty">{{ loading ? '正在清点灵兽……' : '暂未读取到灵兽信息，请重试。' }}</p>
     <template v-else>
+      <p class="beast-section-title"><span>御兽精魄 {{ formatAmount(balanceOf('beastEssence')) }}</span><small>灵兽 {{ panel.items.length }}/{{ panel.capacity }}</small></p>
       <p v-if="!panel.unlocked" class="beast-lock">宗门 {{ panel.unlockLevel }} 级开放灵兽玩法。</p>
-
-      <template v-else-if="panel.items.length === 0">
-        <div class="garden-empty">
-          <p>灵兽苑还空着。到秘境探索的「宠物秘境」里，派弟子去山野寻找第一只灵兽吧。</p>
-          <button class="action-button primary-action" type="button" @click="emit('open-capture')">前往宠物秘境</button>
-        </div>
-      </template>
-
       <template v-else>
+        <div class="beast-tabs" role="tablist" aria-label="灵兽苑分区">
+          <button id="garden-tab-collection" class="beast-tab" type="button" role="tab" :aria-selected="tab === 'collection'" aria-controls="garden-page-collection" :tabindex="tab === 'collection' ? 0 : -1" :disabled="blocked" @click="tab='collection'" @keydown="onTabKey">我的灵兽</button>
+          <button id="garden-tab-exchange" class="beast-tab" type="button" role="tab" :aria-selected="tab === 'exchange'" aria-controls="garden-page-exchange" :tabindex="tab === 'exchange' ? 0 : -1" :disabled="blocked" @click="tab='exchange'" @keydown="onTabKey">精魄兑换</button>
+        </div>
+        <div v-if="tab === 'collection'" id="garden-page-collection" class="garden" role="tabpanel" aria-labelledby="garden-tab-collection">
+          <div v-if="panel.items.length === 0" class="garden-empty"><p>灵兽苑还空着。可以去宠物秘境捕捉，或使用御兽精魄兑换灵兽。</p><button class="action-button primary-action" :disabled="blocked" @click="tab='exchange'">前往精魄兑换</button></div>
+          <template v-else>
         <div class="garden-filters">
           <div class="filter-group" role="group" aria-label="按五行筛选">
             <span class="filter-label">五行</span>
@@ -203,7 +199,7 @@ onMounted(async () => {
               type="button"
               :data-element="beast.species.element"
               :data-quality="beast.quality"
-              @click="open(beast)"
+              :disabled="blocked" @click="open(beast)"
             >
               <span class="beast-avatar garden-avatar">
                 <img v-if="beast.species.avatar" :src="beast.species.avatar" :alt="beast.species.name" width="96" height="96" loading="lazy" decoding="async" />
@@ -227,9 +223,22 @@ onMounted(async () => {
             </button>
           </li>
         </ul>
+
+          </template>
+        </div>
+        <div v-else id="garden-page-exchange" class="garden" role="tabpanel" aria-labelledby="garden-tab-exchange">
+          <div class="filter-group" role="group" aria-label="兑换档次"><span class="filter-label">档次</span><button v-for="item in panel.exchangeOffers" :key="item.tier" class="filter-chip" type="button" :aria-pressed="exchangeTier === item.tier" :disabled="blocked" @click="exchangeTier=item.tier">{{ item.tierName }}</button></div>
+          <p class="detail-skill">所有兑换均获得 1 级凡品，允许重复物种。随机兑换在所选档次内等概率抽取。</p>
+          <div v-if="offer" class="detail-upgrade">
+            <div class="garden-costs"><span>随机{{ offer.tierName }} · {{ offer.speciesIds.length }} 种物种</span><span>拥有 {{ formatAmount(balanceOf('beastEssence')) }} / 需要 {{ formatAmount(offer.randomCost) }} 精魄</span><p v-if="exchangeBlock(offer.randomCost)" class="blocked-hint">{{ exchangeBlock(offer.randomCost) }}</p></div>
+            <button class="action-button primary-action" :disabled="blocked || !!exchangeBlock(offer.randomCost)" @click="exchangeChoice={mode:'random',tier:exchangeTier}">随机兑换</button>
+          </div>
+          <h4 class="beast-section-title">指定兑换 <small v-if="offer">每只 {{ formatAmount(offer.specificCost) }} 精魄</small></h4>
+          <p v-if="offer && exchangeBlock(offer.specificCost)" class="blocked-hint">{{ exchangeBlock(offer.specificCost) }}</p>
+          <ul class="garden-grid"><li v-for="species in exchangeSpecies" :key="species.id"><button class="garden-card" type="button" :data-element="species.element" data-quality="common" :disabled="blocked || !offer?.unlocked" @click="exchangeChoice={mode:'specific',tier:exchangeTier,speciesId:species.id}"><span class="beast-avatar garden-avatar"><img v-if="species.avatar" :src="species.avatar" :alt="species.name" width="96" height="96" loading="lazy" /></span><span class="garden-card-body"><span class="garden-card-name"><strong>{{ species.name }}</strong><span class="garden-level">Lv.1</span></span><span class="garden-card-chips"><span class="beast-chip is-quality">凡品</span><span class="beast-chip is-element">{{ species.elementName }}</span><span class="beast-chip" :class="'is-tier-'+species.tier">{{ species.tierName }}</span></span><span class="garden-holder">查看兑换详情</span></span></button></li></ul>
+        </div>
       </template>
     </template>
-
     <!-- 二级弹窗：灵兽详情（装备 / 升级 / 锁定 / 放生） -->
     <ModalShell v-if="selected && panel" label="灵兽详情" :loading="pending" loading-text="灵兽苑处理中" @close="closeDetail">
       <section class="garden-detail" :data-element="selected.species.element" :data-quality="selected.quality" aria-labelledby="garden-detail-title">
@@ -240,6 +249,7 @@ onMounted(async () => {
           </h3>
         </div>
 
+        <div v-if="unresolved" class="detail-upgrade"><p class="blocked-hint">上次操作结果未确认，请重试原操作。</p><button class="action-button primary-action" :disabled="pending" @click="perform(unresolved)">重试原操作</button><button class="beast-quiet-button" type="button" :disabled="pending" @click="abandonUnresolved">刷新并放弃</button></div>
         <div class="detail-hero">
           <div class="detail-portrait">
             <img v-if="selected.species.image" :src="selected.species.image" :alt="selected.species.name" />
@@ -267,33 +277,40 @@ onMounted(async () => {
 
         <div class="detail-actions">
           <div class="detail-upgrade">
-            <span v-if="selected.upgradeCost">
-              升到 Lv.{{ selected.level + 1 }}：{{ formatAmount(String(selected.upgradeCost.spiritStone)) }} 灵石 ＋
-              {{ formatAmount(String(selected.upgradeCost.spiritualEnergy)) }} 灵气
-            </span>
-            <span v-else>已满级</span>
-            <button
-              class="action-button primary-action"
-              type="button"
-              :disabled="pending || !affordable(selected)"
-              @click="manage(selected, 'upgrade')"
-            >
-              {{ selected.upgradeCost && !affordable(selected) ? '资源不足' : '升级' }}
-            </button>
+            <div class="garden-costs">
+              <span v-if="selected.upgradeCost">升到 Lv.{{ selected.level + 1 }}：{{ formatAmount(selected.upgradeCost.spiritStone) }} 灵石 ＋ {{ formatAmount(selected.upgradeCost.spiritualEnergy) }} 灵气</span>
+              <span v-else>等级已满</span>
+              <template v-if="selected.upgradePreview">
+                <p class="detail-skill">{{ previewText(selected, selected.upgradePreview.attrs) }}</p>
+                <p class="detail-skill">技能：{{ selected.upgradePreview.skillText }}</p>
+              </template>
+            </div>
+            <button class="action-button primary-action" type="button" :disabled="blocked || !affordable(selected)" @click="manage(selected, 'upgrade')">{{ selected.upgradeCost && !affordable(selected) ? '资源不足' : '升级' }}</button>
+          </div>
+          <div class="detail-upgrade">
+            <div class="garden-costs" v-if="selected.qualityBreakthrough">
+              <span>突破至{{ selected.qualityBreakthrough.nextQualityName }} · 必定成功</span>
+              <p v-for="row in breakthroughRows(selected)" :key="row.id" :class="{ 'blocked-hint': row.lacking }">{{ row.name }}：拥有 {{ formatAmount(row.balance) }} / 需要 {{ formatAmount(row.cost) }}</p>
+              <p class="detail-skill">{{ previewText(selected, selected.qualityBreakthrough.attrs) }}</p>
+              <p class="detail-skill">技能：{{ selected.qualityBreakthrough.skillText }}</p>
+              <p v-if="selected.qualityBreakthrough.blockedReason" class="blocked-hint">{{ selected.qualityBreakthrough.blockedReason }}</p>
+            </div>
+            <span v-else>品质已达仙品</span>
+            <button class="action-button primary-action" type="button" :disabled="blocked || !canBreakthrough(selected)" @click="manage(selected, 'quality-breakthrough')">品质突破</button>
           </div>
           <div class="detail-buttons">
-            <button v-if="selected.discipleId" class="beast-quiet-button" type="button" :disabled="pending" @click="manage(selected, 'unequip')">卸下</button>
-            <button class="beast-quiet-button" type="button" :disabled="pending" @click="manage(selected, 'lock')">
+            <button v-if="selected.discipleId" class="beast-quiet-button" type="button" :disabled="blocked" @click="manage(selected, 'unequip')">卸下</button>
+            <button class="beast-quiet-button" type="button" :disabled="blocked" @click="manage(selected, 'lock')">
               {{ selected.locked ? '解锁' : '锁定' }}
             </button>
             <button
               class="beast-quiet-button is-danger"
               type="button"
-              :disabled="pending || selected.locked || selected.discipleId !== null"
-              :title="selected.locked || selected.discipleId ? '先解锁并卸下才能放生' : '放生不返还资源'"
+              :disabled="blocked || selected.locked || selected.discipleId !== null"
+              :title="selected.locked || selected.discipleId ? '先解锁并卸下才能放生' : '放生返还精魄，不返还培养投入'"
               @click="manage(selected, 'release')"
             >
-              {{ confirmRelease ? '确认放生（不返还资源）' : '放生' }}
+              {{ confirmRelease ? '确认放生（获得 ' + formatAmount(selected.releaseReward.beastEssence) + ' 精魄）' : '放生（+' + formatAmount(selected.releaseReward.beastEssence) + ' 精魄）' }}
             </button>
             <button v-if="confirmRelease" class="beast-quiet-button" type="button" @click="confirmRelease = false">取消</button>
           </div>
@@ -316,7 +333,7 @@ onMounted(async () => {
             <button
               class="action-button primary-action"
               type="button"
-              :disabled="pending || equipTarget === null || equipTarget.id === selected.discipleId"
+              :disabled="blocked || equipTarget === null || equipTarget.id === selected.discipleId"
               @click="manage(selected, 'equip')"
             >
               {{
@@ -331,10 +348,25 @@ onMounted(async () => {
         </section>
       </section>
     </ModalShell>
+    <ModalShell v-if="exchangeChoice && choiceOffer" narrow label="确认兑换灵兽" :loading="pending" loading-text="正在兑换灵兽" @close="exchangeChoice=null">
+      <section class="garden-detail" data-quality="common" :data-element="choiceSpecies?.element">
+        <div class="beast-head modal-head"><h3 class="beast-title">{{ choiceSpecies ? '指定兑换 · '+choiceSpecies.name : '随机兑换 · '+choiceOffer.tierName }}</h3></div>
+        <div v-if="unresolved" class="detail-upgrade"><p class="blocked-hint">上次操作结果未确认，请重试原操作。</p><button class="action-button primary-action" :disabled="pending" @click="perform(unresolved)">重试原操作</button><button class="beast-quiet-button" type="button" :disabled="pending" @click="abandonUnresolved">刷新并放弃</button></div>
+        <div v-if="choiceSpecies" class="detail-hero"><div class="detail-portrait"><img v-if="choiceSpecies.image" :src="choiceSpecies.image" :alt="choiceSpecies.name" /></div><div class="detail-info"><div class="detail-chips"><span class="beast-chip is-quality">凡品</span><span class="beast-chip is-element">{{ choiceSpecies.elementName }}行</span></div><ul class="detail-attrs"><li v-for="attr in beastAttrList(choiceSpecies.attrs)" :key="attr.key"><span>{{ attr.label }}</span><strong>+{{ attr.value }}</strong></li></ul><p class="detail-skill"><b>【{{ choiceSpecies.skillName }}】</b>{{ choiceSpecies.skillText }}</p></div></div>
+        <p class="detail-skill">获得 1 级凡品{{ choiceSpecies?.name ?? choiceOffer.tierName }}，不自动装备。{{ exchangeChoice.mode === 'random' ? '在同档 '+choiceOffer.speciesIds.length+' 种物种中等概率随机，可能获得重复物种。' : '确定获得所选物种。' }}</p>
+        <div class="detail-upgrade"><span :class="{'blocked-hint':balanceOf('beastEssence')<Number(choiceCost)}">御兽精魄：拥有 {{ formatAmount(balanceOf('beastEssence')) }} / 需要 {{ formatAmount(choiceCost) }}</span><button class="action-button primary-action" :disabled="blocked || !!exchangeBlock(choiceCost)" @click="confirmExchange">确认兑换</button></div>
+        <p v-if="exchangeBlock(choiceCost)" class="blocked-hint">{{ exchangeBlock(choiceCost) }}</p>
+        <div class="detail-buttons"><button class="beast-quiet-button" :disabled="pending" @click="exchangeChoice=null">取消</button></div>
+      </section>
+    </ModalShell>
   </section>
 </template>
-
 <style scoped>
+/* 多资源费用与预览沿用原操作条，仅补充内部纵向排列和长内容收缩。 */
+.garden-costs { display: grid; gap: 6px; min-width: 0; }
+.garden-costs p { margin: 0; }
+.garden-card:disabled { opacity: 0.45; cursor: not-allowed; }
+
 .garden {
   display: grid;
   gap: 14px;

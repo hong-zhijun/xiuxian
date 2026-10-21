@@ -224,6 +224,8 @@ const openPanel = ref<
   | 'advisor'
   | null
 >(null);
+/** 灵兽苑请求进行中：外层弹窗显示加载遮罩。 */
+const beastGardenBusy = ref(false);
 
 /**
  * 赌坊里当前在玩哪个玩法：只为赌坊弹窗那一层的加载层文案（论道 / 天机轮 / 灵兽竞逐），
@@ -1164,7 +1166,7 @@ function openEquipment(): void {
  * 资源栏：四种常规资源走通用卡片；玄铁（炼器）与神木（炼丹）都没有产速，合用一个窄格、上下两层；
  * 功勋（三期）只在首页「功勋」弹窗里看，不上资源栏、也不占窄格。
  */
-const NARROW_RESOURCE_IDS = ['xuantie', 'shenmu', 'bossMerit'];
+const NARROW_RESOURCE_IDS = ['xuantie', 'shenmu', 'bossMerit', 'beastEssence'];
 const mainResources = computed(() =>
   props.state.resources.filter((resource) => !NARROW_RESOURCE_IDS.includes(resource.id)),
 );
@@ -1952,7 +1954,7 @@ const hubGroups = computed<{ label: string; cards: HubCard[] }[]>(() => {
           glyph: '兽',
           status: props.state.sect.level < 3
             ? '宗门 3 级开放'
-            : `${String(props.state.disciples.filter((disciple) => disciple.spiritBeast).length)} 名弟子携带灵兽`,
+            : `精魄 ${formatAmount(props.state.resources.find(resource => resource.id === 'beastEssence')?.balance ?? '0')} · 随行 ${String(props.state.disciples.filter((disciple) => disciple.spiritBeast).length)} 人`,
         },
         { id: 'alchemy', name: '炼丹', glyph: '丹', status: healableIds.value.length > 0 ? `${String(healableIds.value.length)} 人受伤可疗伤` : '炼制丹药' },
         { id: 'forge', name: '炼器', glyph: '器', status: equipment.value ? `背包 ${String(equipment.value.bagCount)} / ${String(equipment.value.bagCapacity)}` : '打造装备' },
@@ -2098,7 +2100,7 @@ const todoItems = computed<TodoItem[]>(() => {
   if ((h?.auction.claimable ?? 0) > 0) {
     items.push({ id: 'auction', tone: 'claim', text: `拍卖行 ${String(h?.auction.claimable)} 件待领取`, action: '去领取' });
   }
-  const capped = props.state.resources.filter((resource) => resource.capped && resource.id !== 'bossMerit');
+  const capped = props.state.resources.filter((resource) => resource.capped && resource.id !== 'bossMerit' && resource.id !== 'beastEssence');
   if (capped.length > 0) {
     items.push({ id: 'resources', tone: 'warn', text: `${capped.map((resource) => resource.name).join('、')}已满仓，产出在溢出`, action: '去看看' });
   }
@@ -2694,9 +2696,10 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
     <ModalShell v-if="openPanel === 'spirit-beasts'" label="宠物秘境" @close="openPanel = null">
       <SpiritBeastsDialog :state="state" @state-update="(s: SectStateView) => emit('recruited', s)" @notify="onDailyTasksNotify" />
     </ModalShell>
-    <ModalShell v-if="openPanel === 'beast-garden'" label="灵兽苑" @close="openPanel = null">
+    <ModalShell v-if="openPanel === 'beast-garden'" label="灵兽苑" :loading="beastGardenBusy" loading-text="灵兽苑处理中" @close="openPanel = null">
       <BeastGardenDialog
         :state="state"
+        @busy-change="beastGardenBusy = $event"
         @state-update="(s: SectStateView) => emit('recruited', s)"
         @notify="onDailyTasksNotify"
         @open-capture="openPanel = 'spirit-beasts'"

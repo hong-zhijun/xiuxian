@@ -10,6 +10,7 @@ const RESOURCE_GLYPHS: Record<string, string> = {
   xuantie: '铁',
   shenmu: '木',
   bossMerit: '勋',
+  beastEssence: '魄',
 };
 
 /** 资源 id → 单字标记。 */

@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
-import { BEAST_SPECIES, BEAST_AREAS, beastMods, beastAttributes, captureRate, encounterQuality, encounterSpecies } from '../../apps/server/src/modules/game/spiritBeasts';
+import { BEAST_SPECIES, BEAST_AREAS, BEAST_QUALITY_ORDER, BEAST_EXCHANGE_RULES, beastMods, beastAttributes, beastReleaseReward, beastBreakthroughCost, wildBeastAttributes, exchangeSpecies, captureRate, encounterQuality, encounterSpecies } from '../../apps/server/src/modules/game/spiritBeasts';
 import { ELEMENTS, elementFactor } from '../../apps/server/src/modules/game/elements';
 import { makeCaptureFighter, stepCapture, type CaptureData } from '../../apps/server/src/modules/game/beastCapture';
 import { beastDefend, freshBeastState } from '../../apps/server/src/modules/game/beastCombat';
@@ -18,6 +18,47 @@ function encounter():CaptureData {
     target:makeCaptureFighter({name:'野兽',power:10,attack:1,defense:1,speed:1,luck:1,physique:1,beast:mods('claw_tiger')})};
 }
 describe('灵兽纯规则',()=>{
+  it('新成长按最终值取整，野生预算保留原数值',()=>{
+    for(const species of BEAST_SPECIES) {
+      const tierIndex={spirit:0,rare:1,divine:2}[species.tier];
+      const sorted=(attrs:ReturnType<typeof beastAttributes>)=>Object.values(attrs).filter(v=>v>0).sort((a,b)=>b-a);
+      expect(sorted(beastAttributes({speciesId:species.id,quality:'common',level:1}))).toEqual([[7,2],[10,3],[14,4]][tierIndex]);
+      expect(sorted(beastAttributes({speciesId:species.id,quality:'immortal',level:20}))).toEqual([[23,6],[34,10],[47,13]][tierIndex]);
+      expect(sorted(wildBeastAttributes(species.id))).toEqual([[6,2],[9,3],[12,4]][tierIndex]);
+      const first=beastAttributes({speciesId:species.id,quality:'common',level:1}),wild=wildBeastAttributes(species.id);
+      for(const key of Object.keys(first) as (keyof typeof first)[])expect(first[key]>0).toBe(wild[key]>0);
+    }
+    expect(beastMods({speciesId:'claw_tiger',quality:'common',level:20}).first).toBeCloseTo(.2*1.57);
+  });
+  it('枚举所有兑换、突破、放生路径，都不能增加精魄',()=>{
+    for(const species of BEAST_SPECIES) {
+      const multiplier={spirit:1,rare:3,divine:10}[species.tier];
+      for(const [index,quality] of BEAST_QUALITY_ORDER.entries()) {
+        expect(beastReleaseReward({speciesId:species.id,quality})).toBe([1,3,8,20][index]!*multiplier*1000);
+      }
+      for(const mode of ['randomCost','specificCost'] as const) {
+        let spent=BEAST_EXCHANGE_RULES[species.tier][mode];
+        for(const quality of BEAST_QUALITY_ORDER) {
+          const beast={speciesId:species.id,quality};
+          expect(beastReleaseReward(beast)).toBeLessThan(spent);
+          const quote=beastBreakthroughCost(beast);
+          if(quote) {
+            expect(Number(quote.cost.beastEssence)).toBe([4,10,25][BEAST_QUALITY_ORDER.indexOf(quality)]!*multiplier*1000);
+            expect(Number(quote.cost.beastEssence)).toBeGreaterThan(beastReleaseReward({...beast,quality:quote.nextQuality})-beastReleaseReward(beast));
+            spent+=Number(quote.cost.beastEssence);
+          } else expect(quality).toBe('immortal');
+        }
+      }
+    }
+  });
+  it('兑换同档物种等概率，随机边界合法且不受野外权重影响',()=>{
+    for(const tier of ['spirit','rare','divine'] as const) {
+      const pool=BEAST_SPECIES.filter(s=>s.tier===tier);
+      for(let i=0;i<pool.length;i++)expect(exchangeSpecies(tier,()=>(i+.5)/pool.length).id).toBe(pool[i]!.id);
+      expect(exchangeSpecies(tier,()=>0).id).toBe(pool[0]!.id);
+      expect(exchangeSpecies(tier,()=>.999999).id).toBe(pool.at(-1)!.id);
+    }
+  });
   it('十二物种、三档，五行均有入门和神兽',()=>{
     expect(BEAST_SPECIES).toHaveLength(12);expect(new Set(BEAST_SPECIES.map(b=>b.id)).size).toBe(12);
     for(const e of ELEMENTS)for(const tier of ['spirit','divine'])expect(BEAST_SPECIES.some(b=>b.element===e&&b.tier===tier)).toBe(true);
@@ -33,7 +74,7 @@ describe('灵兽纯规则',()=>{
     const high=beastMods({speciesId:'three_tail_fox',quality:'immortal',level:20});expect(high.procChance).toBe(.2);expect(high.proc).toBeGreaterThan(mods('three_tail_fox').proc);
     expect(beastMods({speciesId:'white_tiger',quality:'immortal',level:20}).firstCrit).toBe(true);
     expect(beastMods({speciesId:'green_qilin',quality:'immortal',level:20}).poisonImmune).toBe(true);
-    expect(beastAttributes({speciesId:'claw_tiger',quality:'common',level:1}).attack).toBe(6);
+    expect(beastAttributes({speciesId:'claw_tiger',quality:'common',level:1}).attack).toBe(7);
   });
   it('幸运和削弱提高收服率，概率有界且不解锁区域外物种',()=>{
     const low=captureRate('rare',100,100,100,100,20),high=captureRate('rare',100,100,100,100,100);

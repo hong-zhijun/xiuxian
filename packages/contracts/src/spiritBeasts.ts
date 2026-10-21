@@ -3,6 +3,22 @@ export type BeastTier = 'spirit' | 'rare' | 'divine';
 export type BeastQuality = 'common' | 'spirit' | 'treasure' | 'immortal';
 export interface BeastAttrs { attack: number; defense: number; speed: number; luck: number; physique: number }
 export interface BeastIdentity { id: string; speciesId: string; quality: BeastQuality; level: number }
+export type BeastManageAction = 'equip' | 'unequip' | 'upgrade' | 'lock' | 'release' | 'quality-breakthrough';
+export type BeastExchangeInput =
+  | { mode: 'random'; tier: BeastTier; commandId: string }
+  | { mode: 'specific'; tier: BeastTier; speciesId: string; commandId: string };
+export interface BeastResourceCost { beastEssence: string; spiritStone: string; spiritualEnergy: string }
+export interface BeastCommandReceipt {
+  commandId: string;
+  kind: 'release' | 'quality-breakthrough' | 'exchange';
+  beast: BeastIdentity;
+  previousQuality: BeastQuality | null;
+  resourceChanges: Partial<Record<keyof BeastResourceCost, { direction: 'credit' | 'debit'; amount: string }>>;
+}
+export interface BeastExchangeOffer {
+  tier: BeastTier; tierName: string; requiredSectLevel: number; unlocked: boolean;
+  randomCost: string; specificCost: string; speciesIds: string[];
+}
 export interface BeastSpeciesView {
   id: string; name: string; tier: BeastTier; tierName: string; element: BeastElement; elementName: string;
   glyph: string; skillName: string; skillText: string; attrs: BeastAttrs;
@@ -15,6 +31,12 @@ export interface SpiritBeastView extends BeastIdentity {
   species: BeastSpeciesView; qualityName: string; attrs: BeastAttrs; skillText: string;
   discipleId: string | null; discipleName: string | null; locked: boolean; version: number;
   upgradeCost: { spiritStone: number; spiritualEnergy: number } | null;
+  releaseReward: { beastEssence: string };
+  qualityBreakthrough: null | {
+    nextQuality: BeastQuality; nextQualityName: string; cost: BeastResourceCost;
+    attrs: BeastAttrs; skillText: string; blockedReason: string | null;
+  };
+  upgradePreview: null | { level: number; attrs: BeastAttrs; skillText: string };
 }
 export interface BeastAreaView {
   id: string; name: string; description: string; requiredSectLevel: number; unlocked: boolean;
@@ -32,6 +54,7 @@ export interface SpiritBeastsPanel {
   items: SpiritBeastView[]; species: BeastSpeciesView[]; areas: BeastAreaView[];
   collection: { speciesId: string; seen: number; caught: number; bestQuality: BeastQuality | null }[];
   active: BeastCaptureView | null; recent: BeastCaptureView | null;
+  reservedSlots: number; availableSlots: number; exchangeOffers: BeastExchangeOffer[];
   rules: string[];
 }
 export type BeastCaptureAction = 'attack' | 'restrain' | 'capture' | 'leave';
