@@ -43,6 +43,28 @@ watch(() => props.discipleId, (id) => { void load(id); }, { immediate: true });
 /** 熟练度（服务端给基点，0~10000），与弟子详情同一口径。 */
 const techniquePercent = computed(() => Math.floor((profile.value?.techniqueProficiency ?? 0) / 100));
 
+/**
+ * 雷达图右侧数值列表的 `(+n)`：装备 + 灵兽的加成合计。
+ * 两者都进战力公式的同一个括号，所以括号里的数字与服务端战力口径一致。
+ */
+const attributeBonus = computed(() => {
+  const gear = profile.value?.gear;
+  const beast = profile.value?.spiritBeast?.attrs;
+  return {
+    attack: (gear?.attack ?? 0) + (beast?.attack ?? 0),
+    defense: (gear?.defense ?? 0) + (beast?.defense ?? 0),
+    speed: (gear?.speed ?? 0) + (beast?.speed ?? 0),
+    luck: (gear?.luck ?? 0) + (beast?.luck ?? 0),
+    physique: (gear?.physique ?? 0) + (beast?.physique ?? 0),
+  };
+});
+
+/** 灵兽档位（`+8.2%`）：基点按等级折算后不是整百分比，最多留一位小数；没有灵兽时为 null。 */
+const beastPowerText = computed(() => {
+  const bp = profile.value?.spiritBeast?.powerBonusBp ?? 0;
+  return bp > 0 ? `+${String(Number((bp / 100).toFixed(1)))}%` : null;
+});
+
 const injuryText = computed(() => {
   if (profile.value?.injury === 'severe') return '重伤卧床';
   if (profile.value?.injury === 'injured') return '负伤';
@@ -99,7 +121,7 @@ const injuryText = computed(() => {
         :speed="profile.speed"
         :luck="profile.luck"
         :physique="profile.physique"
-        :gear="profile.gear"
+        :bonus="attributeBonus"
       />
 
       <div class="disciple-stats">
@@ -183,9 +205,13 @@ const injuryText = computed(() => {
               <p class="info-card-note">
                 <b class="beast-card-skill">【{{ profile.spiritBeast.skillName }}】</b>{{ profile.spiritBeast.skillText }}
               </p>
-              <ul class="beast-card-attrs" aria-label="灵兽属性加成">
+              <ul class="beast-card-attrs" aria-label="灵兽加成">
                 <li v-for="attr in beastAttrList(profile.spiritBeast.attrs)" :key="attr.key">
                   {{ attr.label }} <strong>+{{ attr.value }}</strong>
+                </li>
+                <!-- 灵兽给弟子的战力加成（与装备加成一起进同一个括号，战力里已经含它）。 -->
+                <li v-if="beastPowerText" class="beast-card-power">
+                  战力 <strong>{{ beastPowerText }}</strong>
                 </li>
               </ul>
             </div>

@@ -3,7 +3,8 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
-import { BEAST_SPECIES, BEAST_AREAS, BEAST_QUALITY_ORDER, BEAST_EXCHANGE_RULES, beastMods, beastAttributes, beastReleaseReward, beastBreakthroughCost, wildBeastAttributes, exchangeSpecies, captureRate, encounterQuality, encounterSpecies } from '../../apps/server/src/modules/game/spiritBeasts';
+import { BEAST_SPECIES, BEAST_AREAS, BEAST_QUALITY_ORDER, BEAST_EXCHANGE_RULES, beastMods, beastAttributes, beastLevelFactor, beastPowerBonusBp, beastPowerBonusBpOf, beastReleaseReward, beastBreakthroughCost, wildBeastAttributes, exchangeSpecies, captureRate, encounterQuality, encounterSpecies } from '../../apps/server/src/modules/game/spiritBeasts';
+import type { BeastQuality } from '@xiuxian/contracts';
 import { ELEMENTS, elementFactor } from '../../apps/server/src/modules/game/elements';
 import { makeCaptureFighter, stepCapture, type CaptureData } from '../../apps/server/src/modules/game/beastCapture';
 import { beastDefend, freshBeastState } from '../../apps/server/src/modules/game/beastCombat';
@@ -125,5 +126,32 @@ describe('灵兽纯规则',()=>{
       expect(existsSync(join(publicDir,beast.image!))).toBe(true);
       expect(existsSync(join(publicDir,beast.avatar!))).toBe(true);
     }
+  });
+  it('战力档位按突破增量累进：抓到即得 1/2/3%，满配 7/12/18%，等级满 20 才吃满',()=>{
+    const at=(speciesId:string,quality:BeastQuality,level:number)=>beastPowerBonusBp({speciesId,quality,level});
+    // 抓到即得：品阶越高，白拿的越多（灵兽 1% / 珍兽 2% / 神兽 3%）。
+    expect(at('claw_tiger','common',20)).toBe(100);
+    expect(at('three_tail_fox','common',20)).toBe(200);
+    expect(at('white_tiger','common',20)).toBe(300);
+    // 每次突破的增量：神兽 +4 / +5 / +6，累计 3 / 7 / 12 / 18。
+    expect(at('white_tiger','spirit',20)).toBe(700);
+    expect(at('white_tiger','treasure',20)).toBe(1200);
+    expect(at('white_tiger','immortal',20)).toBe(1800);
+    // 灵兽 / 珍兽的天花板 7% / 12%（只压「抓到即得」，满配没动）。
+    expect(at('claw_tiger','immortal',20)).toBe(700);
+    expect(at('three_tail_fox','immortal',20)).toBe(1200);
+    // 等级系数：1 级吃一半，20 级吃满，中间线性。
+    expect(at('white_tiger','immortal',1)).toBe(900);
+    expect(at('white_tiger','immortal',10)).toBe(1326);
+    expect(beastLevelFactor(1)).toBe(.5);
+    expect(beastLevelFactor(20)).toBe(1);
+    // 身份不合法（物种 id 不存在）时按 0，不抛错。
+    expect(at('not_a_beast','immortal',20)).toBe(0);
+  });
+  it('未携带 / 非法 beast_json 的弟子，灵兽战力加成按 0 算',()=>{
+    expect(beastPowerBonusBpOf({beast_json:null})).toBe(0);
+    expect(beastPowerBonusBpOf({})).toBe(0);
+    expect(beastPowerBonusBpOf({beast_json:'{"speciesId":"nope","quality":"immortal","level":20}'})).toBe(0);
+    expect(beastPowerBonusBpOf({beast_json:JSON.stringify({speciesId:'white_tiger',quality:'immortal',level:20})})).toBe(1800);
   });
 });

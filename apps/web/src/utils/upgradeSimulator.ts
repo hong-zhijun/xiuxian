@@ -83,6 +83,11 @@ export interface SimDisciple {
   gear: Readonly<Record<SimAttr, number>>;
   /** 身上装备的战力加成（基点，服务端已算好）。 */
   gearPowerBonusBp: number;
+  /**
+   * 灵兽战力加成（基点，服务端已算好）：与装备加成一起进同一个括号，战力里已经含它。
+   * 模拟器不改灵兽，但必须把它算进战力，否则默认方案会与服务端差一截。
+   */
+  beastPowerBonusBp: number;
   /** 每小时修为（修炼岗位才有，否则 0）。 */
   cultivationRatePerHour: number;
   /** 悟道值余额（手上有几点）。 */
@@ -641,8 +646,12 @@ function combatBpOf(ctx: SimContext, realmId: string): number {
 
 /**
  * 战力：与服务端 realms.ts 的 discipleCombatPower 逐步一致（同样的运算顺序与 Math.floor，结果逐位相等）。
- * base = (境界下标 × 3 + 层数) × 10；属性 = 基础 + 装备；power = floor(base × (1 + 属性加权) × (1 + 装备战力加成))；
+ * base = (境界下标 × 3 + 层数) × 10；属性 = 基础 + 装备；
+ * power = floor(base × (1 + 属性加权) × (1 + 装备战力加成 + 灵兽战力加成))；
  * 战意再 power = floor(power × (10000 + bp) / 10000)。
+ *
+ * 灵兽不进模拟（模拟器只改境界 / 装备 / 悟道值），所以灵兽档位是一个常量项，
+ * 但必须算进去，否则「默认方案的战力 = 服务端战力」这条硬条件在带灵兽的弟子上就不成立。
  */
 function combatPowerOf(ctx: SimContext, state: State): number {
   const stage = stageAt(ctx, state.stageIndex);
@@ -651,7 +660,8 @@ function combatPowerOf(ctx: SimContext, state: State): number {
   const defense = state.base.defense + state.gear.defense;
   const speed = state.base.speed + state.gear.speed;
   const attrBonus = (attack * 0.4 + defense * 0.35 + speed * 0.25) / 100;
-  let power = Math.floor(base * (1 + attrBonus) * (1 + state.gearBp / 10_000));
+  const bonusBp = state.gearBp + ctx.input.disciple.beastPowerBonusBp;
+  let power = Math.floor(base * (1 + attrBonus) * (1 + bonusBp / 10_000));
   const combatBp = combatBpOf(ctx, stage.realmId);
   if (combatBp > 0) {
     power = Math.floor((power * (10_000 + combatBp)) / 10_000);

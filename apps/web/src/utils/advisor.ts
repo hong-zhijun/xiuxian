@@ -153,6 +153,8 @@ export interface AdvisorDisciple {
   speed: number;
   gear: { attack: number; defense: number; speed: number };
   gearPowerBonusBp: number;
+  /** 灵兽战力加成（基点）：与装备加成一起进同一个括号，算增幅时要一起算，否则会把装备收益估高。 */
+  beastPowerBonusBp: number;
   combatPower: number;
   stewardOffice: string | null;
   injuredUntil: string | null;
@@ -317,7 +319,8 @@ function profileOf(disciple: AdvisorDisciple): PowerProfile {
     attack: disciple.attack + disciple.gear.attack,
     defense: disciple.defense + disciple.gear.defense,
     speed: disciple.speed + disciple.gear.speed,
-    bp: disciple.gearPowerBonusBp,
+    // 战力加成 = 装备 + 灵兽：进同一个括号，增幅是相对「现在」算的，两项都要带上。
+    bp: disciple.gearPowerBonusBp + disciple.beastPowerBonusBp,
   };
 }
 

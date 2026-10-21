@@ -47,6 +47,8 @@ export type SpiritBeastView = BeastIdentity & {
   attrs: BeastAttrs;
   image: string;
   avatar: string;
+  /** 这只灵兽给弟子加的战力（基点，已按等级折算）：与装备加成一起进同一个括号，战力里已含它。 */
+  powerBonusBp: number;
 };
 
 export interface DiscipleView {
@@ -131,6 +133,11 @@ export interface DiscipleView {
   };
   /** 0032 装备战力加成（基点，10000 = +100%）：身上装备按品质相加；战力已计入，前端只展示。 */
   gearPowerBonusBp: number;
+  /**
+   * 灵兽战力加成（基点）：与装备加成一起进战力公式的同一个括号，战力里已经含它。
+   * 灵兽卡片用它显示「战力 +X%」；没有灵兽时 0。
+   */
+  beastPowerBonusBp: number;
   /**
    * 0016 综合评分：**当前**六项属性等权现算，固定一位小数（服务端 names.ts 的
    * attributeScore）。不是战力：境界、修为、天赋都不参与；服务端不落库，
@@ -882,7 +889,7 @@ export interface DiscipleLeaderboardEntryView {
   attributeScore: number;
   talent: string;
   talentName: string;
-  /** 0032 装备战力加成（基点）；没穿装备为 0。 */
+  /** 战力加成（基点）= 装备 + 灵兽：两者进同一个括号，装备榜也按它排行。 */
   gearPowerBonusBp: number;
   /** 装备榜才有：三个部位各穿了什么品质（没穿的部位 quality 为 null）。 */
   gearSlots?: DiscipleLeaderboardGearSlotView[];

@@ -148,6 +148,46 @@ export function beastBreakthroughCost(beast: Pick<BeastIdentity, 'speciesId' | '
     spiritualEnergy: String(units([80, 240, 640][index]! * factor)),
   } };
 }
+
+/**
+ * 灵兽战力加成（基点，累计档位）：与装备战力加成进战力公式的**同一个括号**
+ * `战力 = 境界基数 ×（1 + 属性加权）×（1 + 装备加成 + 灵兽加成）`。
+ *
+ * 表按**突破增量**给，不是绝对档位：品质是一笔一笔花精魄/灵石/灵气突破上来的，
+ * 每一笔都要能对上「再花这些，再涨多少战力」。四个数依次是：
+ *   抓到即得（凡品） / 突破到灵品 / 突破到宝品 / 突破到仙品。
+ * 满配累计：灵兽 +7% / 珍兽 +12% / 神兽 +18%（一格灵兽 ≈ 一件仙品十二重装备的档位）。
+ * 品阶只决定「抓到就赚多少」与每次突破的含金量，天花板仍按品阶拉开 7 / 12 / 18。
+ */
+export const BEAST_POWER_BP: Readonly<Record<BeastTier, readonly [number, number, number, number]>> = {
+  spirit: [100, 200, 200, 200],
+  rare: [200, 300, 350, 350],
+  divine: [300, 400, 500, 600],
+};
+
+/** 等级系数：1 级吃一半，满 20 级吃满（突破要求满级，所以突破那一刻恒为 1）。 */
+export function beastLevelFactor(level: number): number {
+  const clamped = Math.max(1, Math.min(BEAST_RULES.maxLevel, Math.floor(level) || 1));
+  return 0.5 + (0.5 * (clamped - 1)) / (BEAST_RULES.maxLevel - 1);
+}
+
+/** 某只灵兽当前的战力加成（基点）：按已到达的品质累加增量，再乘等级系数。 */
+export function beastPowerBonusBp(beast: Pick<BeastIdentity, 'speciesId' | 'quality' | 'level'>): number {
+  const tier = BEAST_SPECIES.find(s => s.id === beast.speciesId)?.tier;
+  const index = BEAST_QUALITY_ORDER.indexOf(beast.quality);
+  if (tier === undefined || index < 0) return 0;
+  const steps = BEAST_POWER_BP[tier];
+  let total = 0;
+  for (let step = 0; step <= index; step += 1) total += steps[step] ?? 0;
+  return Math.round(total * beastLevelFactor(beast.level));
+}
+
+/** 弟子携带灵兽的战力加成（基点）；未携带或 beast_json 已不合法时为 0。 */
+export function beastPowerBonusBpOf(row: { beast_json?: string | null }): number {
+  const beast = readBeast(row);
+  return beast === null ? 0 : beastPowerBonusBp(beast);
+}
+
 /** 野生目标沿用上线时的基础预算，不随收藏培养增强。 */
 export function wildBeastAttributes(speciesId: string): BeastAttrs {
   const def = DEFINITIONS.find(s => s.id === speciesId)!;

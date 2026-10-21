@@ -367,6 +367,10 @@ onMounted(refreshPanel);
               <li v-for="attr in beastAttrList(selected.attrs)" :key="attr.key">
                 <span>{{ attr.label }}</span><strong>+{{ attr.value }}</strong>
               </li>
+              <!-- 档位：与装备加成进战力公式的同一个括号，满 20 级吃满。 -->
+              <li>
+                <span>战力</span><strong>+{{ (selected.powerBonusBp / 100).toFixed(1) }}%</strong>
+              </li>
             </ul>
             <p class="detail-skill"><b>【{{ selected.species.skillName }}】</b>{{ selected.skillText }}</p>
           </div>

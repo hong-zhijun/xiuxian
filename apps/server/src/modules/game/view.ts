@@ -5,6 +5,8 @@ import {
   beastArtPath,
   beastAttributes,
   beastAvatarPath,
+  beastPowerBonusBp,
+  beastPowerBonusBpOf,
   beastSkillText,
   readBeast,
   withBeastAttributes,
@@ -229,6 +231,11 @@ export type SpiritBeastView = BeastIdentity & {
   attrs: BeastAttrs;
   image: string;
   avatar: string;
+  /**
+   * 这只灵兽给弟子加的战力（基点，已按等级折算）：与装备加成一起进战力公式的同一个括号。
+   * 累进档位见 spiritBeasts.ts 的 BEAST_POWER_BP（满配 灵兽 7% / 珍兽 12% / 神兽 18%）。
+   */
+  powerBonusBp: number;
 };
 
 /** 未携带灵兽、或 beast_json 里的身份已经不合法（旧数据）时返回 null。 */
@@ -249,6 +256,7 @@ export function spiritBeastViewOf(disciple: { beast_json?: string | null }): Spi
     attrs: beastAttributes(beast),
     image: beastArtPath(beast.speciesId),
     avatar: beastAvatarPath(beast.speciesId),
+    powerBonusBp: beastPowerBonusBp(beast),
   };
 }
 
@@ -306,6 +314,11 @@ export interface DiscipleView {
   gear: AttrSet;
   /** 0032 装备战力加成（基点）：身上装备按品质相加，战力再乘 (1 + 它 / 10000)；没有装备时 0。 */
   gearPowerBonusBp: number;
+  /**
+   * 灵兽战力加成（基点）：与装备加成一起进战力公式的同一个括号，所以战力里已经含它。
+   * 灵兽卡片用它显示「战力 +X%」；没有灵兽时 0。
+   */
+  beastPowerBonusBp: number;
   /**
    * 0016 综合评分：**当前**六项属性等权现算，固定一位小数（names.ts 的 attributeScore）。
    * 不是战力、也不是岗位效率：境界、修为、天赋、战力都不参与；不落库，
@@ -1770,7 +1783,7 @@ export interface DiscipleLeaderboardEntryView {
   attributeScore: number;
   talent: string;
   talentName: string;
-  /** 0032 装备战力加成（基点）：身上装备按品质相加；没穿装备为 0。 */
+  /** 战力加成（基点）= 装备 + 灵兽：两者进同一个括号，装备榜也按它排行。 */
   gearPowerBonusBp: number;
   /**
    * 装备榜才有：三个部位各穿了什么品质（按 EQUIPMENT_SLOTS 的顺序；没穿的部位 quality 为 null）。
@@ -2330,10 +2343,13 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
         battleAttrs.defense,
         battleAttrs.speed,
         disciple.talent,
-        gearPowerBonusBpOfDisciple(disciple),
+        // 战力加成 = 装备 + 灵兽（同一个括号，与 service.ts 的 powerBonusBpOfDisciple 同一口径）。
+        gearPowerBonusBpOfDisciple(disciple) + beastPowerBonusBpOf(disciple),
       ),
       gear,
+      // 装备与灵兽分开给前端：装备页那行「装备战力加成合计」只讲装备，灵兽卡片自己讲档位。
       gearPowerBonusBp: gearPowerBonusBpOfDisciple(disciple),
+      beastPowerBonusBp: beastPowerBonusBpOf(disciple),
       // 六项属性等权现算：与招贤卡共用 names.ts 的同一个纯函数（服务端唯一评分口径）。
       attributeScore: attributeScore({
         aptitude: Number(disciple.aptitude),

@@ -4,7 +4,7 @@ import { AppError } from '../../http/appError';
 import type { ParameterizedQuery } from '../../infra/db/repository';
 import { dateKeyUtc8 } from './constants';
 import { battleAttrsOf, draftFor, gearedCombatPower, requireCanFight, techniqueModsOf } from './service';
-import { BEAST_AREAS, BEAST_QUALITY, BEAST_RULES, BEAST_SPECIES, beastAttributes, beastMods, beastSkillText, beastUpgradeCost, encounterQuality, encounterSpecies, readBeast } from './spiritBeasts';
+import { BEAST_AREAS, BEAST_QUALITY, BEAST_RULES, BEAST_SPECIES, beastAttributes, beastMods, beastPowerBonusBp, beastSkillText, beastUpgradeCost, encounterQuality, encounterSpecies, readBeast } from './spiritBeasts';
 import { BEAST_ESSENCE_ID, BEAST_EXCHANGE_RULES, BEAST_TIER_NAMES, beastBreakthroughCost, beastReleaseReward, exchangeSpecies, wildBeastAttributes } from './spiritBeasts';
 import { captureChance, makeCaptureFighter, stepCapture, type CaptureData } from './beastCapture';
 
@@ -17,7 +17,7 @@ function viewBeast(b:BeastRow,d:Draft):SpiritBeastView {
   const next=breakthrough?{...i,quality:breakthrough.nextQuality}:null;
   const upgrade=b.level<BEAST_RULES.maxLevel?{...i,level:b.level+1}:null;
   return {...i,species:BEAST_SPECIES.find(s=>s.id===i.speciesId)!,qualityName:BEAST_QUALITY[b.quality].name,
-    attrs:beastAttributes(i),skillText:beastSkillText(i),discipleId:b.disciple_id,
+    attrs:beastAttributes(i),skillText:beastSkillText(i),powerBonusBp:beastPowerBonusBp(i),discipleId:b.disciple_id,
     discipleName:d.disciples.find(m=>m.id===b.disciple_id)?.name??null,locked:!!b.locked,version:b.version,upgradeCost:beastUpgradeCost(i),
     releaseReward:{beastEssence:String(beastReleaseReward(i))},
     qualityBreakthrough:breakthrough&&next?{...breakthrough,nextQualityName:BEAST_QUALITY[next.quality].name,

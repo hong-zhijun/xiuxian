@@ -1,5 +1,5 @@
 import { elementFactor, enemyElement, ELEMENT_NAMES } from './elements';
-import { beastOf, beastBossMods, withBeastAttributes } from './spiritBeasts';
+import { beastOf, beastBossMods, beastPowerBonusBpOf, withBeastAttributes } from './spiritBeasts';
 import type { GameConfigContent } from '@xiuxian/game-core';
 
 import { validatedGameConfig } from '../../config/loadGameConfig';
@@ -3802,7 +3802,8 @@ export async function exploreSectRealm(
       defense: attrs.defense,
       speed: attrs.speed,
       talent: disciple.talent,
-      gearPowerBonusBp: gearPowerBonusBpOfDisciple(disciple),
+      // 战力加成 = 装备 + 灵兽（同一个括号）。
+      gearPowerBonusBp: powerBonusBpOfDisciple(disciple),
       name: disciple.name,
     });
   }
@@ -3992,8 +3993,9 @@ export function battleAttrsOf(disciple: DiscipleRow): AttrSet {
 }
 
 /**
- * 0028：弟子战力（**计入装备**）——把「基础属性 + 装备加成」与 0032 的装备战力加成
- * 一起传给 realms.ts 的战力函数。
+ * 0028 / 灵兽：弟子战力（**计入装备与灵兽**）——「基础属性 + 装备加成 + 灵兽属性」与
+ * 「装备战力加成 + 灵兽战力加成」一起传给 realms.ts 的战力函数。
+ * 灵兽档位与装备加成一起进同一个括号（见 spiritBeasts.ts 的 BEAST_POWER_BP）。
  */
 export function gearedCombatPower(disciple: DiscipleRow): number {
   const attrs = battleAttrsOf(disciple);
@@ -4004,8 +4006,17 @@ export function gearedCombatPower(disciple: DiscipleRow): number {
     attrs.defense,
     attrs.speed,
     disciple.talent,
-    gearPowerBonusBpOfDisciple(disciple),
+    powerBonusBpOfDisciple(disciple),
   );
+}
+
+/**
+ * 战力加成合计（基点）= 装备 + 灵兽。战力公式里这两项进同一个括号，
+ * 凡是「计入装备」的战斗上下文都该用这个合计值；
+ * 只讲装备的地方（装备页、装备榜的明细）仍用 gearPowerBonusBpOfDisciple。
+ */
+export function powerBonusBpOfDisciple(disciple: DiscipleRow): number {
+  return gearPowerBonusBpOfDisciple(disciple) + beastPowerBonusBpOf(disciple);
 }
 
 /** 镇派弟子：境界（realmIndex）→ 阶段 → 资质逐级比较取最高；没有弟子返回 null。 */
@@ -4104,12 +4115,13 @@ export async function listDiscipleLeaderboard(
     const disciples = await discipleRepository.findBySectId(sect.id);
     for (const d of disciples) {
       // 0028 装备：天骄榜的「战力」计入装备；「综合评分」不计入（计划 1.2 明列）。
+      // 灵兽战力加成与装备进同一个括号，榜上的「加成」因此是两者的合计（装备榜也按它排）。
       const gear = gearBonusOfDisciple(d);
       all.push({
         row: d,
         sectId: sect.id,
         combatPower: gearedCombatPower(d),
-        gearPowerBonusBp: gearPowerBonusBpOfDisciple(d),
+        gearPowerBonusBp: powerBonusBpOfDisciple(d),
         gearAttrTotal: gear.attack + gear.defense + gear.speed + gear.luck + gear.physique,
         score: attributeScore({
           aptitude: Number(d.aptitude),
@@ -4159,7 +4171,7 @@ export async function listDiscipleLeaderboard(
     .slice(0, DISCIPLE_LEADERBOARD_SIZE)
     .map((item, i) => toEntry(item, i + 1));
 
-  // 0032 装备榜：没穿装备（加成 0）的不上榜；按装备战力加成 → 装备属性总和 → 战力排序。
+  // 0032 装备榜：加成 0（既没穿装备也没带灵兽）的不上榜；按战力加成（装备 + 灵兽）→ 装备属性总和 → 战力排序。
   const equipmentTop = all
     .filter((item) => item.gearPowerBonusBp > 0)
     .sort(
@@ -4885,7 +4897,7 @@ export async function challengeSect(
     if (disciple.injured_until !== null && Number(disciple.injured_until) > now) {
       throw new AppError('INVALID_STATUS', `${disciple.name}正在疗伤，无法出战`);
     }
-    // 0028 装备：挑战（攻方）计入装备 —— 战力与上下文属性都用「基础 + 装备加成」。
+    // 0028 装备：挑战（攻方）计入装备 —— 战力与上下文属性都用「基础 + 装备加成 + 灵兽加成」。
     const attrs = battleAttrsOf(disciple);
     const stage = Number(disciple.stage);
     attackerRichMembers.push({
@@ -4893,7 +4905,7 @@ export async function challengeSect(
       name: disciple.name,
       power: discipleCombatPower(
         disciple.realm_id, stage, attrs.attack, attrs.defense, attrs.speed, disciple.talent,
-        gearPowerBonusBpOfDisciple(disciple),
+        powerBonusBpOfDisciple(disciple),
       ),
       realmName: findStage(disciple.realm_id, stage).name,
       stage,
@@ -4933,7 +4945,7 @@ export async function challengeSect(
   }
   const defenseMode: DefenseMode = plan.mode;
   const toRichMember = (disciple: (typeof defenders)[number]): ChallengeRichMember => {
-    // 0028 装备：挑战（守擂方）同上 —— 守方弟子身上的装备同样计入。
+    // 0028 装备：挑战（守擂方）同上 —— 守方弟子身上的装备与灵兽同样计入。
     const attrs = battleAttrsOf(disciple);
     const stage = Number(disciple.stage);
     return {
@@ -4941,7 +4953,7 @@ export async function challengeSect(
       name: disciple.name,
       power: discipleCombatPower(
         disciple.realm_id, stage, attrs.attack, attrs.defense, attrs.speed, disciple.talent,
-        gearPowerBonusBpOfDisciple(disciple),
+        powerBonusBpOfDisciple(disciple),
       ),
       realmName: findStage(disciple.realm_id, stage).name,
       stage,
@@ -7645,7 +7657,8 @@ export async function chooseRealmExplore(
         defense: attrs.defense,
         speed: attrs.speed,
         talent: disciple.talent,
-        gearPowerBonusBp: gearPowerBonusBpOfDisciple(disciple),
+        // 演武场队伍战力：装备 + 灵兽（同一个括号）。
+        gearPowerBonusBp: powerBonusBpOfDisciple(disciple),
       };
     }),
   );
@@ -9668,7 +9681,7 @@ export async function attackWorldBoss(
         attrs.defense,
         attrs.speed,
         member.talent,
-        gearPowerBonusBpOfDisciple(member),
+        powerBonusBpOfDisciple(member),
       ),
       affix,
       {

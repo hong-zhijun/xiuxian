@@ -964,14 +964,26 @@ function isGearAttribute(attribute: string): attribute is GearAttribute {
   );
 }
 
-/** 该属性的装备加成；资质这类没有装备加成的属性按 0 处理。 */
+/** 该属性的加成合计（装备 + 灵兽）；资质这类没有加成的属性按 0 处理。 */
 function gearBonusOf(attribute: string): number {
   return isGearAttribute(attribute) ? props.disciple.gear[attribute] + (props.disciple.spiritBeast?.attrs[attribute] ?? 0) : 0;
 }
 
 /**
- * 只要数值：`60 (+12)`（「当前 xx」这一类文案用）：括号里是该弟子的装备加成（DiscipleView.gear），为 0 时不显示。
- * 基础属性仍是服务端给的 attack/defense/...（最高 100）；战力已由服务端计入装备，前端不自己加。
+ * 雷达图右侧数值列表的 `(+n)`：五项属性的加成合计（装备 + 灵兽）。
+ * 两者都进战力公式的同一个括号，所以这里的数字与服务端战力口径一致。
+ */
+const attributeBonus = computed(() => ({
+  attack: gearBonusOf('attack'),
+  defense: gearBonusOf('defense'),
+  speed: gearBonusOf('speed'),
+  luck: gearBonusOf('luck'),
+  physique: gearBonusOf('physique'),
+}));
+
+/**
+ * 只要数值：`60 (+12)`（「当前 xx」这一类文案用）：括号里是该弟子的加成合计（装备 + 灵兽），为 0 时不显示。
+ * 基础属性仍是服务端给的 attack/defense/...（最高 100）；战力已由服务端计入装备与灵兽，前端不自己加。
  */
 function valueWithGear(attribute: string, value: number): string {
   const bonus = gearBonusOf(attribute);
@@ -986,45 +998,46 @@ const ATTRIBUTE_HELP = {
   aptitude: [
     '影响修炼速度：资质越高，修为涨得越快。',
     '单人定时历练的修为收获也随资质提高。',
-    '不计入战力，没有装备加成。',
+    '不计入战力，也没有装备与灵兽加成。',
   ].join('\n'),
   attack: [
     '计入战力，权重 0.4（攻防身法里最高）。',
-    '括号里是装备加成，同样计入战力。',
+    '括号里是装备与灵兽的加成，同样计入战力。',
     '讨伐遇到「蛮力」词缀时，攻击越高伤害越高。',
   ].join('\n'),
   defense: [
     '计入战力，权重 0.35。',
-    '括号里是装备加成，同样计入战力。',
+    '括号里是装备与灵兽的加成，同样计入战力。',
     '讨伐遇到「铁甲」词缀时，防御越高伤害越高。',
   ].join('\n'),
   speed: [
     '计入战力，权重 0.25。',
-    '括号里是装备加成，同样计入战力。',
+    '括号里是装备与灵兽的加成，同样计入战力。',
     '讨伐遇到「迅捷」词缀时，身法越高伤害越高。',
   ].join('\n'),
   luck: [
     '不计入战力。',
     '单人定时历练：幸运越高，额外收获的概率越高（只看基础幸运）。',
-    '讨伐：出战弟子的平均幸运决定暴击率（含装备加成）。',
+    '讨伐：出战弟子的平均幸运决定暴击率（含装备与灵兽加成）。',
   ].join('\n'),
   physique: [
     '不计入战力。',
     '单人定时历练：体魄越高，受伤概率越低（只看基础体魄）。',
-    '讨伐：体魄越高，受伤、重伤的概率越低（含装备加成）。',
+    '讨伐：体魄越高，受伤、重伤的概率越低（含装备与灵兽加成）。',
   ].join('\n'),
 };
 
 const SCORE_HELP = [
   '综合评分 =（资质 + 攻击 + 防御 + 身法 + 幸运 + 体魄）÷ 6，保留一位小数。',
-  '只看六项基础属性：不含装备加成，也与境界、修为、天赋、战力无关。',
+  '只看六项基础属性：不含装备与灵兽加成，也与境界、修为、天赋、战力无关。',
 ].join('\n');
 
 const POWER_HELP = [
-  '战力 = 境界基数 ×（1 + 属性加权）×（1 + 装备战力加成）',
+  '战力 = 境界基数 ×（1 + 属性加权）×（1 + 装备战力加成 + 灵兽战力加成）',
   '境界基数 =（境界序号 × 3 + 层数）× 10：炼气一层为 10，每升一层 +10。',
-  '属性加权 =（攻击 × 0.4 + 防御 × 0.35 + 身法 × 0.25）÷ 100，攻防身法都含装备加成。',
+  '属性加权 =（攻击 × 0.4 + 防御 × 0.35 + 身法 × 0.25）÷ 100，攻防身法都含装备与灵兽加成。',
   '装备战力加成：每件穿着的装备按品质 凡 2% / 灵 4% / 宝 7% / 仙 10%，祭炼九重起每重 +1%、十二重再 +2%，三件相加。',
+  '灵兽战力加成：按品阶与品质累进（神兽 抓到即得 3%，每突破一档再 +4% / +5% / +6%，满配 +18%），满 20 级吃满、1 级只吃一半。',
   '战意天赋：最后再 ×（1 + 战意加成），加成随境界提高（金丹 +15%、化神 +25%）。',
 ].join('\n');
 
@@ -1062,6 +1075,15 @@ function chooseTalent(accept: boolean): void {
 function powerBonusPercent(bp: number): string {
   return `${String(bp / 100)}%`;
 }
+
+/**
+ * 灵兽档位的展示文案（`+8.2%`）：基点按等级折算后不是整百分比，这里最多留一位小数。
+ * 没有灵兽（0）时返回 null，调用处据此不渲染。
+ */
+const beastPowerText = computed(() => {
+  const bp = props.disciple.beastPowerBonusBp;
+  return bp > 0 ? `+${String(Number((bp / 100).toFixed(1)))}%` : null;
+});
 
 /** 三个装备格：部位顺序由服务端给；worn 是该弟子在此部位已穿的那件（没有则 null）。 */
 const gearSlots = computed(() =>
@@ -1216,7 +1238,7 @@ function refineGear(item: EquipmentItemView | null): void {
               :speed="disciple.speed"
               :luck="disciple.luck"
               :physique="disciple.physique"
-              :gear="disciple.gear"
+              :bonus="attributeBonus"
               :help="ATTRIBUTE_HELP"
             />
           </div>
@@ -1365,9 +1387,13 @@ function refineGear(item: EquipmentItemView | null): void {
                 <p class="info-card-note">
                   <b class="beast-card-skill">【{{ disciple.spiritBeast.skillName }}】</b>{{ disciple.spiritBeast.skillText }}
                 </p>
-                <ul class="beast-card-attrs" aria-label="灵兽属性加成">
+                <ul class="beast-card-attrs" aria-label="灵兽加成">
                   <li v-for="attr in beastAttrList(disciple.spiritBeast.attrs)" :key="attr.key">
                     {{ attr.label }} <strong>+{{ attr.value }}</strong>
+                  </li>
+                  <!-- 灵兽给弟子的战力加成（与装备加成一起进同一个括号，战力里已经含它）。 -->
+                  <li v-if="beastPowerText" class="beast-card-power">
+                    战力 <strong>{{ beastPowerText }}</strong>
                   </li>
                 </ul>
               </div>

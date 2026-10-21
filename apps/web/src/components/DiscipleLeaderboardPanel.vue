@@ -48,8 +48,8 @@ function entries(): DiscipleLeaderboardEntryView[] {
 function valueLabel(entry: DiscipleLeaderboardEntryView): string {
   if (activeTab.value === 'combatPower') return `战力 ${entry.combatPower}`;
   if (activeTab.value === 'attributeScore') return `综合 ${entry.attributeScore}`;
-  // 装备榜：战力加成是 100 基点的整数倍，直接换成百分数显示。
-  return `装备 +${entry.gearPowerBonusBp / 100}%`;
+  // 装备榜：加成 = 装备 + 灵兽（与战力同一个括号），基点换百分数、最多留一位小数。
+  return `加成 +${Number((entry.gearPowerBonusBp / 100).toFixed(1))}%`;
 }
 </script>
 

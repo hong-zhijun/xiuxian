@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { createApp } from '../src/app';
 import { dataOf, TestClient } from './support/authClient';
 import { getSectState } from '../src/modules/game/service';
+import { discipleCombatPower } from '../src/modules/game/realms';
 import type { SectStateView } from '../src/modules/game/view';
 
 /**
@@ -69,6 +70,13 @@ describe('弟子公开档案 · 灵兽与功法', () => {
     expect(String(profile.spiritBeast.skillText).length).toBeGreaterThan(0);
     expect(profile.spiritBeast.attrs).toEqual(mine.spiritBeast!.attrs);
     expect(profile.spiritBeast.avatar).toContain('white_tiger');
+
+    // 灵兽档位：神兽 · 宝品 · Lv8 = 1200 基点 × 等级系数 0.6842 ≈ 821；战力里确实含它。
+    expect(mine.spiritBeast!.powerBonusBp).toBe(821);
+    expect(profile.combatPower).toBe(mine.combatPower);
+    expect(profile.combatPower).toBeGreaterThan(
+      discipleCombatPower(mine.realmId, mine.stage, mine.attack, mine.defense, mine.speed, mine.talent, 0),
+    );
   });
 
   it('未携带灵兽的弟子：spiritBeast 为 null，不是 undefined', async () => {

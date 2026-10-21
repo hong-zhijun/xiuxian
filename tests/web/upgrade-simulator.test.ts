@@ -17,6 +17,7 @@ import {
   type EquipmentQuality,
 } from '../../apps/server/src/modules/game/equipment';
 import { discipleCombatPower } from '../../apps/server/src/modules/game/realms';
+import { beastPowerBonusBp } from '../../apps/server/src/modules/game/spiritBeasts';
 import { talentCatalog } from '../../apps/server/src/modules/game/talents';
 import {
   defaultCustomSlot,
@@ -187,6 +188,7 @@ const BASE_DISCIPLE: SimDisciple = {
   physique: 15,
   gear: { attack: 0, defense: 0, speed: 0, luck: 0, physique: 0 },
   gearPowerBonusBp: 0,
+  beastPowerBonusBp: 0,
   cultivationRatePerHour: 12,
   daoInsight: 0,
   daoInsightRemaining: 50,
@@ -214,7 +216,7 @@ function inputOf(disciple: SimDisciple, equipment: SimEquipment | null, cultivat
   return { disciple, realmCatalog: REALM_CATALOG, talents: TALENTS, equipment, resources: RESOURCES, cultivation };
 }
 
-/** 服务端口径的战力（与 service.ts gearedCombatPower 同一组参数）。 */
+/** 服务端口径的战力（与 service.ts gearedCombatPower 同一组参数：装备 + 灵兽进同一个括号）。 */
 function serverPower(disciple: SimDisciple, realmId = disciple.realmId, stage = disciple.stage): number {
   return discipleCombatPower(
     realmId,
@@ -223,7 +225,7 @@ function serverPower(disciple: SimDisciple, realmId = disciple.realmId, stage = 
     disciple.defense + disciple.gear.defense,
     disciple.speed + disciple.gear.speed,
     disciple.talent,
-    disciple.gearPowerBonusBp,
+    disciple.gearPowerBonusBp + disciple.beastPowerBonusBp,
   );
 }
 
@@ -301,6 +303,25 @@ describe('默认方案的战力等于服务端 discipleCombatPower', () => {
       expect(result.current.combatPower).toBe(serverPower(disciple));
       expect(result.simulated.combatPower).toBe(serverPower(disciple));
       expect(result.breakdown).toEqual([]);
+    }
+  });
+
+  it('带灵兽：灵兽档位（与装备同一个括号）算进当前与模拟战力，默认方案仍等于服务端', () => {
+    const items = [
+      itemOf({ discipleId: 'd1', slot: 'weapon', quality: 'treasure', mainAttr: 'attack', subAttr: 'speed', subValue: 8, refineLevel: 9 }),
+      itemOf({ discipleId: 'd1', slot: 'armor', quality: 'spirit', mainAttr: 'defense', subAttr: 'physique', subValue: 6, refineLevel: 0 }),
+    ];
+    // 神兽 · 仙品 · 满级 = 1800 基点（见 BEAST_POWER_BP）；服务端算好后原样传给模拟器。
+    const beastBp = beastPowerBonusBp({ speciesId: 'white_tiger', quality: 'immortal', level: 20 });
+    expect(beastBp).toBe(1800);
+    for (const realmId of ['goldenCore', 'voidRefinement', 'tribulation']) {
+      const disciple = discipleOf({ realmId, stage: 3, attack: 60, defense: 48, speed: 41, beastPowerBonusBp: beastBp }, items);
+      const input = inputOf(disciple, equipmentOf(items));
+      const result = simulate(input, defaultPlan(input));
+      expect(result.current.combatPower).toBe(serverPower(disciple));
+      expect(result.simulated.combatPower).toBe(serverPower(disciple));
+      // 灵兽档位确实进了战力：没有它时算出来会小一截。
+      expect(result.current.combatPower).toBeGreaterThan(serverPower({ ...disciple, beastPowerBonusBp: 0 }));
     }
   });
 

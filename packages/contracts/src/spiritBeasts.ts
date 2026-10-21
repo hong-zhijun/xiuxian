@@ -31,6 +31,11 @@ export interface BeastSpeciesView {
 }
 export interface SpiritBeastView extends BeastIdentity {
   species: BeastSpeciesView; qualityName: string; attrs: BeastAttrs; skillText: string;
+  /**
+   * 这只灵兽给弟子加的战力（基点，已按等级折算）：与装备加成一起进战力公式的同一个括号。
+   * 档位表见 apps/server/src/modules/game/spiritBeasts.ts 的 BEAST_POWER_BP。
+   */
+  powerBonusBp: number;
   discipleId: string | null; discipleName: string | null; locked: boolean; version: number;
   upgradeCost: { spiritStone: number; spiritualEnergy: number } | null;
   releaseReward: { beastEssence: string };

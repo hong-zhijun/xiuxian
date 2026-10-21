@@ -63,6 +63,7 @@ function disciple(overrides: Partial<AdvisorDisciple> = {}): AdvisorDisciple {
     speed: 50,
     gear: { attack: 0, defense: 0, speed: 0 },
     gearPowerBonusBp: 0,
+    beastPowerBonusBp: 0,
     combatPower: 100,
     stewardOffice: null,
     injuredUntil: null,
