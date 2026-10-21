@@ -2735,6 +2735,123 @@ ul {
   line-height: 1.5;
 }
 
+/* ---------- 弟子信息卡片（弟子详情「概览」与天骄榜「弟子档案」共用同一套观感） ---------- */
+/*
+ * 一张小卡片 = 标题行（可带「?」与右侧小按钮）+ 主值 + 说明行。
+ * 两个弹窗都直接套这几个类，改观感时只改这里，免得各写一套慢慢跑偏。
+ */
+.info-card {
+  display: grid;
+  align-content: start;
+  gap: 5px;
+  min-width: 0;
+  padding: 9px 12px;
+  border: 1px solid rgba(202, 169, 106, 0.22);
+  border-radius: 3px;
+  background: rgba(202, 169, 106, 0.05);
+}
+
+.info-card-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.info-card-title {
+  margin: 0;
+  color: #93a99e;
+  font-size: 12px;
+  font-weight: 400;
+  letter-spacing: 0.08em;
+}
+
+.info-card-value {
+  color: var(--gold-bright);
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.info-card-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+/* 标题行右侧的小按钮（「更换」「分配悟道值」这类）靠到最右。 */
+.info-card-action {
+  margin-left: auto;
+}
+
+/*
+ * 卡片里的灵兽（弟子详情「概览」与天骄榜「弟子档案」共用）：头像 + 名称行（品质 / 五行 / 档次标签）
+ * + 技能 + 属性。用法：<section class="info-card beast-card" data-element data-quality>，
+ * 五行色与品质色由上面 [data-element] / [data-quality] 给的 --el-rgb / --q-rgb 提供。
+ */
+.beast-card[data-element] {
+  border-color: rgba(var(--el-rgb), 0.28);
+  background: linear-gradient(90deg, rgba(var(--el-rgb), 0.1), rgba(202, 169, 106, 0.03) 70%);
+}
+
+.beast-card-body {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+/* 卡片里的灵兽头像大一号，外圈按品质染色（比五行色更能一眼看出档次）。 */
+.beast-card-avatar {
+  --beast-avatar-size: 56px;
+  border-color: rgba(var(--q-rgb), 0.6);
+}
+
+.beast-card-info {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.beast-card-name {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  margin: 0;
+}
+
+.beast-card-name .info-card-value {
+  margin-right: 2px;
+  font-size: 16px;
+}
+
+.beast-card-level {
+  margin-right: 4px;
+  color: var(--gold);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.beast-card-skill {
+  color: var(--el);
+  font-weight: 600;
+}
+
+.beast-card-attrs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin: 0;
+  padding: 0;
+  color: var(--faint);
+  font-size: 12px;
+  list-style: none;
+}
+
+.beast-card-attrs strong {
+  color: var(--jade-bright);
+  font-weight: 600;
+}
+
 .disciple-break-button {
   width: 100%;
   min-height: 42px;

@@ -741,6 +741,7 @@ import {
   equipmentSlotViews,
   equipmentItemViewOf,
   eventLogViewFromRow,
+  spiritBeastViewOf,
   upgradeCost,
   type ChallengeBlockedReason,
   type ChallengeRewardPreviewView,
@@ -4201,10 +4202,14 @@ export async function getDiscipleProfile(
   if (disciple === null) {
     throw new AppError('NOT_FOUND', '弟子不存在');
   }
-  const [sect, mySect, items] = await Promise.all([
+  const [sect, mySect, items, techniqueRows] = await Promise.all([
     sectRepository.findById(disciple.sect_id),
     sectRepository.findByUserId(userId),
     new EquipmentRepository(db).findByDiscipleId(discipleId),
+    // 功法等级记在宗门表上（sect_techniques）：跨宗读取时只取等级，不碰残卷数。
+    disciple.technique_id === null
+      ? Promise.resolve<SectTechniqueRow[]>([])
+      : new TechniqueRepository(db).findBySectId(disciple.sect_id),
   ]);
   const talent = findTalent(disciple.talent);
   const severeUntil = disciple.severe_injured_until === null ? 0 : Number(disciple.severe_injured_until);
@@ -4250,7 +4255,28 @@ export async function getDiscipleProfile(
     bodyTemperingUses: Number(disciple.body_tempering_count) || 0,
     daoInsightUsed: Number(disciple.dao_insight_used) || 0,
     injury: severeUntil > now ? 'severe' : injuredUntil > now ? 'injured' : null,
-    equipment: items.map((row) => equipmentItemViewOf(row, disciple.name)),
+    // 与弟子详情「概览」的装备行同一顺序（兵器 → 护甲 → 法器）；仓库查询给的是 slot 字母序。
+    equipment: items
+      .slice()
+      .sort(
+        (a, b) =>
+          EQUIPMENT_SLOTS.findIndex((item) => item.id === a.slot) -
+            EQUIPMENT_SLOTS.findIndex((item) => item.id === b.slot) || a.id.localeCompare(b.id),
+      )
+      .map((row) => equipmentItemViewOf(row, disciple.name)),
+    // 灵兽与功法都是战斗里看得见的信息，公开档案照实显示（与弟子详情同一套字段与口径）。
+    spiritBeast: spiritBeastViewOf(disciple),
+    techniqueId: disciple.technique_id,
+    techniqueName: techniqueNameOf(disciple.technique_id),
+    techniqueLevel:
+      disciple.technique_id === null
+        ? 0
+        : (techniqueRows.find((row) => row.technique_id === disciple.technique_id)?.level ?? 0),
+    techniqueProficiency: techniqueProficiencyBp({
+      base: Number(disciple.technique_prof_base),
+      since: disciple.technique_since === null ? null : Number(disciple.technique_since),
+      now,
+    }),
   };
 }
 

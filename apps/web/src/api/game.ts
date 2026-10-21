@@ -34,8 +34,23 @@ export interface ResourceView {
   discarded: string;
 }
 
+/** 携带的灵兽：beast_json 里的身份（种类 / 品质 / 等级）加上图鉴里的名称、五行、档次与技能。 */
+export type SpiritBeastView = BeastIdentity & {
+  name: string;
+  qualityName: string;
+  element: BeastElement;
+  elementName: string;
+  tier: BeastTier;
+  tierName: string;
+  skillName: string;
+  skillText: string;
+  attrs: BeastAttrs;
+  image: string;
+  avatar: string;
+};
+
 export interface DiscipleView {
-  spiritBeast?: (BeastIdentity & { name: string; qualityName: string; element: BeastElement; elementName: string; tier: BeastTier; tierName: string; skillName: string; skillText: string; attrs: BeastAttrs; image: string; avatar: string }) | null;
+  spiritBeast?: SpiritBeastView | null;
   captureUntil?: number | null;
   id: string;
   name: string;
@@ -930,6 +945,18 @@ export interface DiscipleProfileView {
   injury: 'severe' | 'injured' | null;
   /** 已穿戴的装备（按部位排序）。 */
   equipment: EquipmentItemView[];
+  /** 携带的灵兽（null = 未携带）：与弟子详情同一个构造口径。 */
+  spiritBeast: SpiritBeastView | null;
+  /**
+   * 主修功法：未修习时 techniqueId 为 null，techniqueName 与弟子详情同一口径（服务端对空值返回「无」，
+   * 卡片上显示成「未修习」是前端的事）。
+   */
+  techniqueId: string | null;
+  techniqueName: string;
+  /** 功法等级来自该弟子所在宗门的 sect_techniques 行。 */
+  techniqueLevel: number;
+  /** 熟练度（基点，0~10000）。 */
+  techniqueProficiency: number;
 }
 
 export async function fetchDiscipleProfile(discipleId: string): Promise<DiscipleProfileView> {

@@ -3,6 +3,7 @@ import { computed, ref, watch } from 'vue';
 
 import type { DiscipleProfileView } from '../api/game';
 import { fetchDiscipleProfile } from '../api/game';
+import { beastAttrList } from '../utils/spiritBeasts';
 import DiscipleAvatar from './DiscipleAvatar.vue';
 import DiscipleRadarChart from './DiscipleRadarChart.vue';
 import LoadingState from './LoadingState.vue';
@@ -10,8 +11,13 @@ import ModalShell from './ModalShell.vue';
 import RefineTag from './RefineTag.vue';
 
 /**
- * 天骄榜点开的弟子公开档案（只读）：境界、天赋、战力、综合评分、六轴雷达图、属性（含装备加成）、
- * 已穿戴装备与伤势。数据全部来自 GET /game/disciple-profile/:id，不含掌门备注等私有字段。
+ * 天骄榜点开的弟子公开档案（只读）：境界、天赋、战力、综合评分、六轴雷达图与属性（含装备加成）、
+ * 主修功法、已穿戴装备、携带的灵兽与伤势。数据全部来自 GET /game/disciple-profile/:id，
+ * 不含掌门备注等私有字段。
+ *
+ * 版面与弟子详情的「概览」同一套路：分数 → 雷达图（六项属性与 `(+n)` 装备加成都在这张图里，
+ * 不再另外列一遍属性卡）→ 天赋 / 功法一行两张卡 → 装备一行 → 灵兽一行。
+ * 卡片本体用 base.css 的 .info-card / .beast-card（与弟子详情共用同一套观感）。
  */
 const props = defineProps<{ discipleId: string }>();
 const emit = defineEmits<{ close: [] }>();
@@ -34,23 +40,8 @@ async function load(discipleId: string): Promise<void> {
 
 watch(() => props.discipleId, (id) => { void load(id); }, { immediate: true });
 
-type GearKey = keyof DiscipleProfileView['gear'];
-const attributeRows = computed(() => {
-  const p = profile.value;
-  if (p === null) return [];
-  const rows: { label: string; value: number; gear: number }[] = [
-    { label: '资质', value: p.aptitude, gear: 0 },
-  ];
-  const gearRows: [string, GearKey][] = [
-    ['攻击', 'attack'],
-    ['防御', 'defense'],
-    ['身法', 'speed'],
-    ['幸运', 'luck'],
-    ['体魄', 'physique'],
-  ];
-  for (const [label, key] of gearRows) rows.push({ label, value: p[key], gear: p.gear[key] });
-  return rows;
-});
+/** 熟练度（服务端给基点，0~10000），与弟子详情同一口径。 */
+const techniquePercent = computed(() => Math.floor((profile.value?.techniqueProficiency ?? 0) / 100));
 
 const injuryText = computed(() => {
   if (profile.value?.injury === 'severe') return '重伤卧床';
@@ -60,7 +51,7 @@ const injuryText = computed(() => {
 </script>
 
 <template>
-  <ModalShell narrow label="弟子档案" @close="emit('close')">
+  <ModalShell label="弟子档案" @close="emit('close')">
     <LoadingState v-if="profile === null && loadError === null" label="正在读取弟子档案" />
     <p v-else-if="loadError" class="explore-hint">{{ loadError }}</p>
 
@@ -99,6 +90,7 @@ const injuryText = computed(() => {
         </div>
       </div>
 
+      <!-- 六项属性与 `(+n)` 装备加成都在雷达图右侧的数值列表里，下面不再重复列一遍属性卡。 -->
       <DiscipleRadarChart
         :name="profile.name"
         :aptitude="profile.aptitude"
@@ -110,53 +102,108 @@ const injuryText = computed(() => {
         :gear="profile.gear"
       />
 
-      <dl class="dpf-attrs">
-        <div v-for="row in attributeRows" :key="row.label">
-          <dt>{{ row.label }}</dt>
-          <dd>
-            {{ row.value }}<span v-if="row.gear > 0" class="dpf-gear">(+{{ row.gear }})</span>
-          </dd>
-        </div>
-      </dl>
-
       <div class="disciple-stats">
-        <span class="stat-tag stat-talent" :title="profile.talentDescription">
-          <template v-if="profile.talentDescription">{{ profile.talentName }}：{{ profile.talentDescription }}</template>
-          <template v-else>无天赋</template>
-        </span>
         <span class="stat-tag">淬体 {{ profile.bodyTemperingUses }} 次</span>
         <span class="stat-tag">悟道 {{ profile.daoInsightUsed }} 点</span>
       </div>
 
-      <h3 class="disciple-detail-title dpf-section-title">装备</h3>
-      <ul v-if="profile.equipment.length > 0" class="gear-slots">
-        <li
-          v-for="item in profile.equipment"
-          :key="item.id"
-          class="gear-slot"
-          :style="{ borderColor: item.color }"
+      <div class="dpf-cards">
+        <!-- 天赋 / 功法一行两张卡。 -->
+        <section class="info-card" aria-labelledby="dpf-talent-title">
+          <div class="info-card-head">
+            <h3 id="dpf-talent-title" class="info-card-title">天赋</h3>
+          </div>
+          <strong class="info-card-value">{{ profile.talentName }}</strong>
+          <p class="info-card-note">
+            {{ profile.talentDescription === '' ? '当前境界下没有额外加成' : profile.talentDescription }}
+          </p>
+        </section>
+
+        <section class="info-card" aria-labelledby="dpf-technique-title">
+          <div class="info-card-head">
+            <h3 id="dpf-technique-title" class="info-card-title">功法</h3>
+          </div>
+          <strong class="info-card-value">{{ profile.techniqueId === null ? '未修习' : profile.techniqueName }}</strong>
+          <p v-if="profile.techniqueId !== null" class="info-card-note">
+            {{ profile.techniqueLevel }} 级 · 熟练度 {{ techniquePercent }}%
+          </p>
+        </section>
+
+        <!-- 装备一行：一件一行（部位 + 名称 + 祭炼 + 主 / 副属性），不再一件一个方框。 -->
+        <section class="info-card dpf-wide" aria-labelledby="dpf-gear-title">
+          <div class="info-card-head">
+            <h3 id="dpf-gear-title" class="info-card-title">装备</h3>
+          </div>
+          <ul v-if="profile.equipment.length > 0" class="dpf-gear">
+            <li v-for="item in profile.equipment" :key="item.id" class="dpf-gear-item">
+              <span class="dpf-gear-slot">{{ item.slotName }}</span>
+              <span class="dpf-gear-title">
+                <strong class="dpf-gear-name" :style="{ color: item.color }">{{ item.name }}</strong>
+                <RefineTag :level="item.refineLevel" />
+              </span>
+              <span class="dpf-gear-attrs">
+                {{ item.mainAttrName }} +{{ item.mainValue }} · {{ item.subAttrName }} +{{ item.subValue }}
+              </span>
+            </li>
+          </ul>
+          <p v-else class="info-card-note">未穿戴装备</p>
+        </section>
+
+        <!-- 灵兽一行：与弟子详情的灵兽卡片同一套（头像 / 品质五行档次 / 技能 / 属性）。 -->
+        <section
+          class="info-card dpf-wide beast-card"
+          :data-element="profile.spiritBeast?.element"
+          :data-quality="profile.spiritBeast?.quality"
+          aria-labelledby="dpf-beast-title"
         >
-          <span class="gear-slot-label">{{ item.slotName }}</span>
-          <span>
-            <strong class="gear-slot-name" :style="{ color: item.color }">{{ item.name }}</strong>
-            <RefineTag :level="item.refineLevel" />
-          </span>
-          <span class="gear-slot-attrs">
-            {{ item.mainAttrName }} +{{ item.mainValue }} · {{ item.subAttrName }} +{{ item.subValue }}
-          </span>
-        </li>
-      </ul>
-      <p v-else class="gear-slot-empty">未穿戴装备</p>
+          <div class="info-card-head">
+            <h3 id="dpf-beast-title" class="info-card-title">灵兽</h3>
+          </div>
+          <div v-if="profile.spiritBeast" class="beast-card-body">
+            <span class="beast-avatar beast-card-avatar">
+              <img
+                :src="profile.spiritBeast.avatar"
+                :alt="profile.spiritBeast.name"
+                width="96"
+                height="96"
+                loading="lazy"
+                decoding="async"
+              />
+            </span>
+            <div class="beast-card-info">
+              <p class="beast-card-name">
+                <strong class="info-card-value">{{ profile.spiritBeast.name }}</strong>
+                <span class="beast-card-level">Lv.{{ profile.spiritBeast.level }}</span>
+                <span class="beast-chip is-quality">{{ profile.spiritBeast.qualityName }}</span>
+                <span class="beast-chip is-element">{{ profile.spiritBeast.elementName }}行</span>
+                <span class="beast-chip" :class="`is-tier-${profile.spiritBeast.tier}`">
+                  {{ profile.spiritBeast.tierName }}
+                </span>
+              </p>
+              <p class="info-card-note">
+                <b class="beast-card-skill">【{{ profile.spiritBeast.skillName }}】</b>{{ profile.spiritBeast.skillText }}
+              </p>
+              <ul class="beast-card-attrs" aria-label="灵兽属性加成">
+                <li v-for="attr in beastAttrList(profile.spiritBeast.attrs)" :key="attr.key">
+                  {{ attr.label }} <strong>+{{ attr.value }}</strong>
+                </li>
+              </ul>
+            </div>
+          </div>
+          <p v-else class="info-card-note">未携带灵兽</p>
+        </section>
+      </div>
     </section>
   </ModalShell>
 </template>
 
 <style scoped>
+/* 与弟子详情概览同一套纵向节奏：区块之间一律 16px。 */
 .dpf-card {
   display: flex;
   min-width: 0;
   flex-direction: column;
-  gap: 10px;
+  gap: 16px;
 }
 
 .dpf-head {
@@ -205,48 +252,71 @@ const injuryText = computed(() => {
   gap: 8px;
 }
 
-.dpf-attrs {
+/* 天赋 / 功法一行两张卡；装备与灵兽各自占满一行（.dpf-wide）。 */
+.dpf-cards {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.dpf-wide {
+  grid-column: 1 / -1;
+}
+
+/* 装备：一件一行，部位 / 名称 + 祭炼 / 主副属性三列对齐。 */
+.dpf-gear {
+  display: grid;
   gap: 6px;
   margin: 0;
+  padding: 0;
+  list-style: none;
 }
 
-.dpf-attrs > div {
-  display: flex;
+.dpf-gear-item {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 30px minmax(0, 1fr) auto;
   align-items: baseline;
-  justify-content: space-between;
-  gap: 6px;
-  padding: 6px 8px;
-  border: 1px solid rgba(119, 184, 154, 0.12);
-  border-radius: 3px;
-  background: rgba(255, 255, 255, 0.016);
+  gap: 8px;
+  font-size: 13px;
 }
 
-.dpf-attrs dt {
-  color: #7d9186;
+.dpf-gear-slot {
+  color: var(--muted);
   font-size: 12px;
 }
 
-.dpf-attrs dd {
-  margin: 0;
-  color: #e4ece6;
-  font-size: 14px;
+.dpf-gear-title {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 6px;
 }
 
-.dpf-gear {
-  margin-left: 2px;
-  color: var(--jade);
-  font-size: 11px;
+.dpf-gear-name {
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.dpf-section-title {
-  margin: 4px 0 0;
+.dpf-gear-attrs {
+  color: var(--faint);
+  font-size: 12px;
 }
 
 @media (max-width: 420px) {
-  .dpf-attrs {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+  .dpf-cards {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* 窄屏放不下三列：属性换到名称下面一行。 */
+  .dpf-gear-item {
+    grid-template-columns: 30px minmax(0, 1fr);
+  }
+
+  .dpf-gear-attrs {
+    grid-column: 2;
   }
 }
 </style>

@@ -213,8 +213,47 @@ export interface EventLogView {
   createdAt: string;
 }
 
+/**
+ * 弟子携带的灵兽展示视图：beast_json 里的身份（种类 / 品质 / 等级）拼上图鉴里的名称、五行、档次与技能。
+ * 弟子详情与天骄榜公开档案共用这一个构造口径，两处显示的灵兽必须一模一样。
+ */
+export type SpiritBeastView = BeastIdentity & {
+  name: string;
+  qualityName: string;
+  element: BeastElement;
+  elementName: string;
+  tier: BeastTier;
+  tierName: string;
+  skillName: string;
+  skillText: string;
+  attrs: BeastAttrs;
+  image: string;
+  avatar: string;
+};
+
+/** 未携带灵兽、或 beast_json 里的身份已经不合法（旧数据）时返回 null。 */
+export function spiritBeastViewOf(disciple: { beast_json?: string | null }): SpiritBeastView | null {
+  const beast = readBeast(disciple);
+  const species = beast === null ? undefined : BEAST_SPECIES.find((item) => item.id === beast.speciesId);
+  if (beast === null || species === undefined) return null;
+  return {
+    ...beast,
+    name: species.name,
+    qualityName: BEAST_QUALITY[beast.quality].name,
+    element: species.element,
+    elementName: species.elementName,
+    tier: species.tier,
+    tierName: species.tierName,
+    skillName: species.skillName,
+    skillText: beastSkillText(beast),
+    attrs: beastAttributes(beast),
+    image: beastArtPath(beast.speciesId),
+    avatar: beastAvatarPath(beast.speciesId),
+  };
+}
+
 export interface DiscipleView {
-  spiritBeast?: (BeastIdentity & { name: string; qualityName: string; element: BeastElement; elementName: string; tier: BeastTier; tierName: string; skillName: string; skillText: string; attrs: BeastAttrs; image: string; avatar: string }) | null;
+  spiritBeast?: SpiritBeastView | null;
   captureUntil?: number | null;
   id: string;
   name: string;
@@ -1797,6 +1836,21 @@ export interface DiscipleProfileView {
   injury: 'severe' | 'injured' | null;
   /** 已穿戴的装备（按部位排序）。 */
   equipment: EquipmentItemView[];
+  /**
+   * 携带的灵兽（null = 未携带）：与弟子详情同一个构造口径（spiritBeastViewOf）。
+   * 灵兽的属性与技能是战斗里看得见的信息，公开档案照实显示。
+   */
+  spiritBeast: SpiritBeastView | null;
+  /**
+   * 主修功法：未修习时 techniqueId 为 null，techniqueName 与弟子详情同一口径（techniqueNameOf
+   * 对空值返回「无」，卡片上显示成「未修习」是前端的事）。
+   */
+  techniqueId: string | null;
+  techniqueName: string;
+  /** 功法等级来自该弟子所在宗门的 sect_techniques 行（跨宗读取，只有等级没有残卷数）。 */
+  techniqueLevel: number;
+  /** 熟练度（基点，0~10000）：与服务端同一套按时间累积的口径。 */
+  techniqueProficiency: number;
 }
 
 /** 全服聊天消息条目（GET /game/chat）。 */
@@ -2214,24 +2268,9 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
       gear,
     ), disciple);
 
-    const beast=readBeast(disciple);
-    const beastSpecies=beast?BEAST_SPECIES.find(b=>b.id===beast.speciesId):undefined;
     if ((disciple.capture_until ?? 0)>now) combatBlockedReason='捕捉灵兽中';
     return {
-      spiritBeast: beast && beastSpecies ? {
-        ...beast,
-        name: beastSpecies.name,
-        qualityName: BEAST_QUALITY[beast.quality].name,
-        element: beastSpecies.element,
-        elementName: beastSpecies.elementName,
-        tier: beastSpecies.tier,
-        tierName: beastSpecies.tierName,
-        skillName: beastSpecies.skillName,
-        skillText: beastSkillText(beast),
-        attrs: beastAttributes(beast),
-        image: beastArtPath(beast.speciesId),
-        avatar: beastAvatarPath(beast.speciesId),
-      } : null,
+      spiritBeast: spiritBeastViewOf(disciple),
       captureUntil: (disciple.capture_until ?? 0)>now ? disciple.capture_until! : null,
       id: disciple.id,
       name: disciple.name,

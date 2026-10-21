@@ -1265,9 +1265,9 @@ function refineGear(item: EquipmentItemView | null): void {
 
         <!-- 天赋、功法与悟道：一行三张卡片（中等宽度两列、窄屏单列），灵兽卡片占满下一行。悟道值的分配在弹窗里做。 -->
         <div class="overview-cards">
-          <section class="overview-card" aria-labelledby="disciple-talent-title">
-            <div class="overview-card-head">
-              <h3 id="disciple-talent-title" class="overview-card-title">天赋</h3>
+          <section class="info-card" aria-labelledby="disciple-talent-title">
+            <div class="info-card-head">
+              <h3 id="disciple-talent-title" class="info-card-title">天赋</h3>
               <!-- 与页面其它「?」同一个样式（help-tip-button），点开是天赋一览表而不是气泡。 -->
               <button
                 class="help-tip-button"
@@ -1276,7 +1276,7 @@ function refineGear(item: EquipmentItemView | null): void {
                 @click="showTalentCatalog = true"
               >?</button>
               <button
-                class="upgrade-sim-button overview-card-action"
+                class="upgrade-sim-button info-card-action"
                 :class="{ 'is-pending': disciple.talentCandidate !== null }"
                 type="button"
                 :disabled="busy"
@@ -1285,16 +1285,16 @@ function refineGear(item: EquipmentItemView | null): void {
                 {{ disciple.talentCandidate === null ? '更换' : '待选择' }}
               </button>
             </div>
-            <strong class="overview-card-value">{{ disciple.talentName }}</strong>
+            <strong class="info-card-value">{{ disciple.talentName }}</strong>
             <!-- 当前境界下的天赋加成（服务端按境界算好），境界提升后自动变强。 -->
-            <p v-if="disciple.talentEffect !== ''" class="overview-card-note">{{ disciple.talentEffect }}</p>
+            <p v-if="disciple.talentEffect !== ''" class="info-card-note">{{ disciple.talentEffect }}</p>
           </section>
 
-          <section class="overview-card" aria-labelledby="disciple-overview-technique-title">
-            <div class="overview-card-head">
-              <h3 id="disciple-overview-technique-title" class="overview-card-title">功法</h3>
+          <section class="info-card" aria-labelledby="disciple-overview-technique-title">
+            <div class="info-card-head">
+              <h3 id="disciple-overview-technique-title" class="info-card-title">功法</h3>
               <button
-                class="upgrade-sim-button overview-card-action"
+                class="upgrade-sim-button info-card-action"
                 type="button"
                 :disabled="busy || state.learnedTechniques.length === 0"
                 :title="state.learnedTechniques.length === 0 ? '藏经阁尚未收录功法' : undefined"
@@ -1303,8 +1303,8 @@ function refineGear(item: EquipmentItemView | null): void {
                 {{ disciple.techniqueId === null ? '设为主修' : '更换' }}
               </button>
             </div>
-            <strong class="overview-card-value">{{ disciple.techniqueId === null ? '未修习' : disciple.techniqueName }}</strong>
-            <p v-if="disciple.techniqueId !== null" class="overview-card-note">
+            <strong class="info-card-value">{{ disciple.techniqueId === null ? '未修习' : disciple.techniqueName }}</strong>
+            <p v-if="disciple.techniqueId !== null" class="info-card-note">
               {{ disciple.techniqueLevel }} 级 · 熟练度 {{ techniquePercent }}%
             </p>
           </section>
@@ -1313,13 +1313,13 @@ function refineGear(item: EquipmentItemView | null): void {
             0019 悟道值：赌坊赢来的点数分配到六项属性之一。
             上限（总分配上限 = daoInsightUsed + daoInsightRemaining，属性 100）与最终裁决都在服务端。
           -->
-          <section class="overview-card" aria-labelledby="disciple-dao-insight-title">
-            <div class="overview-card-head">
-              <h3 id="disciple-dao-insight-title" class="overview-card-title">悟道</h3>
+          <section class="info-card" aria-labelledby="disciple-dao-insight-title">
+            <div class="info-card-head">
+              <h3 id="disciple-dao-insight-title" class="info-card-title">悟道</h3>
               <button class="help-tip-button" type="button" aria-label="悟道值说明" @click="showDaoInsightHelp = true">?</button>
               <button
                 v-if="daoAllocatable"
-                class="upgrade-sim-button overview-card-action"
+                class="upgrade-sim-button info-card-action"
                 type="button"
                 :disabled="busy"
                 @click="showDaoAllocate = true"
@@ -1328,44 +1328,44 @@ function refineGear(item: EquipmentItemView | null): void {
               </button>
             </div>
             <p class="overview-dao-line">
-              <span>已用 <strong class="overview-card-value">{{ disciple.daoInsightUsed }}</strong></span>
-              <span>未用 <strong class="overview-card-value" :class="{ 'is-gold': disciple.daoInsight > 0 }">{{ disciple.daoInsight }}</strong></span>
+              <span>已用 <strong class="info-card-value">{{ disciple.daoInsightUsed }}</strong></span>
+              <span>未用 <strong class="info-card-value" :class="{ 'is-gold': disciple.daoInsight > 0 }">{{ disciple.daoInsight }}</strong></span>
             </p>
-            <p class="overview-card-note">累计上限 {{ daoInsightCap }} 点</p>
-            <p v-if="!daoAllocatable && disciple.daoInsight > 0 && daoBlockedReason !== null" class="overview-card-note">
+            <p class="info-card-note">累计上限 {{ daoInsightCap }} 点</p>
+            <p v-if="!daoAllocatable && disciple.daoInsight > 0 && daoBlockedReason !== null" class="info-card-note">
               {{ daoBlockedReason }}
             </p>
           </section>
 
           <!-- 灵兽：与宠物秘境 / 灵兽苑同一套五行色、品质色与小标签；占满整行，放得下头像、技能与属性。 -->
           <section
-            class="overview-card overview-beast"
+            class="info-card overview-beast beast-card"
             :data-element="disciple.spiritBeast?.element"
             :data-quality="disciple.spiritBeast?.quality"
             aria-labelledby="disciple-overview-beast-title"
           >
-            <div class="overview-card-head">
-              <h3 id="disciple-overview-beast-title" class="overview-card-title">灵兽</h3>
-              <button class="upgrade-sim-button overview-card-action" type="button" :disabled="busy" @click="showBeastPicker = true">
+            <div class="info-card-head">
+              <h3 id="disciple-overview-beast-title" class="info-card-title">灵兽</h3>
+              <button class="upgrade-sim-button info-card-action" type="button" :disabled="busy" @click="showBeastPicker = true">
                 {{ disciple.spiritBeast ? '更换' : '选择灵兽' }}
               </button>
             </div>
-            <div v-if="disciple.spiritBeast" class="overview-beast-body">
-              <span class="beast-avatar overview-beast-avatar">
+            <div v-if="disciple.spiritBeast" class="beast-card-body">
+              <span class="beast-avatar beast-card-avatar">
                 <img :src="disciple.spiritBeast.avatar" :alt="disciple.spiritBeast.name" width="96" height="96" loading="lazy" decoding="async" />
               </span>
-              <div class="overview-beast-info">
-                <p class="overview-beast-name">
-                  <strong class="overview-card-value">{{ disciple.spiritBeast.name }}</strong>
-                  <span class="overview-beast-level">Lv.{{ disciple.spiritBeast.level }}</span>
+              <div class="beast-card-info">
+                <p class="beast-card-name">
+                  <strong class="info-card-value">{{ disciple.spiritBeast.name }}</strong>
+                  <span class="beast-card-level">Lv.{{ disciple.spiritBeast.level }}</span>
                   <span class="beast-chip is-quality">{{ disciple.spiritBeast.qualityName }}</span>
                   <span class="beast-chip is-element">{{ disciple.spiritBeast.elementName }}行</span>
                   <span class="beast-chip" :class="`is-tier-${disciple.spiritBeast.tier}`">{{ disciple.spiritBeast.tierName }}</span>
                 </p>
-                <p class="overview-card-note">
-                  <b class="overview-beast-skill">【{{ disciple.spiritBeast.skillName }}】</b>{{ disciple.spiritBeast.skillText }}
+                <p class="info-card-note">
+                  <b class="beast-card-skill">【{{ disciple.spiritBeast.skillName }}】</b>{{ disciple.spiritBeast.skillText }}
                 </p>
-                <ul class="overview-beast-attrs" aria-label="灵兽属性加成">
+                <ul class="beast-card-attrs" aria-label="灵兽属性加成">
                   <li v-for="attr in beastAttrList(disciple.spiritBeast.attrs)" :key="attr.key">
                     {{ attr.label }} <strong>+{{ attr.value }}</strong>
                   </li>
@@ -1373,8 +1373,8 @@ function refineGear(item: EquipmentItemView | null): void {
               </div>
             </div>
             <template v-else>
-              <strong class="overview-card-value is-empty">未携带</strong>
-              <p class="overview-card-note">宗门 3 级后可在宠物秘境捕捉灵兽；携带后属性计入战斗，技能与五行在捕捉、镇妖塔、大比中生效。</p>
+              <strong class="info-card-value is-empty">未携带</strong>
+              <p class="info-card-note">宗门 3 级后可在宠物秘境捕捉灵兽；携带后属性计入战斗，技能与五行在捕捉、镇妖塔、大比中生效。</p>
             </template>
           </section>
         </div>
@@ -2309,123 +2309,21 @@ function refineGear(item: EquipmentItemView | null): void {
   color: var(--faint);
 }
 
-/* 概览：天赋 / 功法 / 悟道一行三张卡，灵兽卡占满下一行；行内与行间同一个间距（与概览面板的纵向节奏一致）。 */
+/* 概览：天赋 / 功法 / 悟道一行三张卡，灵兽卡占满下一行；行内与行间同一个间距（与概览面板的纵向节奏一致）。
+   卡片本身的观感（.info-card 系列）在 base.css，与天骄榜的弟子档案共用同一套。 */
 .overview-cards {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
   gap: 16px;
 }
 
-.overview-card {
-  display: grid;
-  align-content: start;
-  gap: 5px;
-  min-width: 0;
-  padding: 9px 12px;
-  border: 1px solid rgba(202, 169, 106, 0.22);
-  border-radius: 3px;
-  background: rgba(202, 169, 106, 0.05);
-}
-
-.overview-card-head {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.overview-card-title {
-  margin: 0;
-  color: #93a99e;
-  font-size: 12px;
-  font-weight: 400;
-  letter-spacing: 0.08em;
-}
-
-.overview-card-action {
-  margin-left: auto;
-}
-
-.overview-card-value {
-  color: var(--gold-bright);
-  font-size: 18px;
-  font-weight: 600;
-}
-
-.overview-card-note {
-  margin: 0;
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1.5;
-}
-
+/* 灵兽卡占满整行；卡片本体与灵兽内容（头像 / 名称行 / 技能 / 属性）的观感在 base.css 的
+   .beast-card 系列，与天骄榜的弟子档案共用。 */
 .overview-beast {
   grid-column: 1 / -1;
 }
 
-.overview-beast[data-element] {
-  border-color: rgba(var(--el-rgb), 0.28);
-  background: linear-gradient(90deg, rgba(var(--el-rgb), 0.1), rgba(202, 169, 106, 0.03) 70%);
-}
-
-.overview-beast-body {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.overview-beast-avatar {
-  --beast-avatar-size: 56px;
-  border-color: rgba(var(--q-rgb), 0.6);
-}
-
-.overview-beast-info {
-  display: grid;
-  gap: 5px;
-  min-width: 0;
-}
-
-.overview-beast-name {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 5px;
-  margin: 0;
-}
-
-.overview-beast-name .overview-card-value {
-  margin-right: 2px;
-  font-size: 16px;
-}
-
-.overview-beast-level {
-  margin-right: 4px;
-  color: var(--gold);
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-}
-
-.overview-beast-skill {
-  color: var(--el);
-  font-weight: 600;
-}
-
-.overview-beast-attrs {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 12px;
-  margin: 0;
-  padding: 0;
-  color: var(--faint);
-  font-size: 12px;
-  list-style: none;
-}
-
-.overview-beast-attrs strong {
-  color: var(--jade-bright);
-  font-weight: 600;
-}
-
-.overview-card-value.is-empty {
+.info-card-value.is-empty {
   color: var(--muted);
   font-size: 15px;
 }
@@ -2438,11 +2336,11 @@ function refineGear(item: EquipmentItemView | null): void {
   font-size: 12px;
 }
 
-.overview-dao-line .overview-card-value {
+.overview-dao-line .info-card-value {
   color: var(--ink-text);
 }
 
-.overview-dao-line .overview-card-value.is-gold {
+.overview-dao-line .info-card-value.is-gold {
   color: var(--gold-bright);
 }
 
