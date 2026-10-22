@@ -751,6 +751,7 @@ import {
   type ChallengeResultView,
   type ChallengeRoundView,
   type ExplorationResultView,
+  type RealmSpeedrunAllResultView,
   type LeaderboardEntryView,
   type PublicSectChallengeView,
   type PublicSectView,
@@ -3728,11 +3729,12 @@ export async function listSparHistory(db: D1Database, userId: string): Promise<S
  *   1. 秘境 id 存在（NOT_FOUND）
  *   2. 宗门等级 >= 秘境要求（INVALID_STATUS）
  *   3. 已建造演武场（INVALID_STATUS）
- *   4. 队伍人数在 [minParty, maxParty]（VALIDATION_ERROR）
- *   5. 队伍无重复弟子（VALIDATION_ERROR）
- *   6. 每个弟子存在、且不在疗伤冷却中（NOT_FOUND / INVALID_STATUS）
- *   7. 每日次数未用完（DAILY_LIMIT，按 UTC+8 自然日窗口统计）
- *   8. 入场费足够（INSUFFICIENT_RESOURCE，由 draft.requireResource 扣减）
+ *   4. 没有进行中的交互探索（INVALID_STATUS）
+ *   5. 队伍人数在 [minParty, maxParty]（VALIDATION_ERROR）
+ *   6. 队伍无重复弟子（VALIDATION_ERROR）
+ *   7. 每个弟子存在、且不在疗伤冷却中（NOT_FOUND / INVALID_STATUS）
+ *   8. 每日次数未用完（DAILY_LIMIT，按 UTC+8 自然日窗口统计）
+ *   9. 入场费足够（INSUFFICIENT_RESOURCE，由 draft.requireResource 扣减）
  *
  * 写回：结算写回 + 入场费扣减 + （成功时）奖励 + （失败时）弟子伤势 + 探索记录，
  * 全部挂在同一个 draft 上，最后只做**一次** `draft.commit()`（单次 D1 batch）。
@@ -3764,18 +3766,22 @@ export async function exploreSectRealm(
   if (realm.requiresArena && !arena) {
     throw new AppError('INVALID_STATUS', '需要先建造演武场');
   }
+  // 3. 交互探索与速通共用同一支出征队伍门禁
+  if (draft.activeExploration !== null) {
+    throw new AppError('INVALID_STATUS', '已有一场进行中的秘境探索');
+  }
 
-  // 3. 队伍人数检查
+  // 4. 队伍人数检查
   if (discipleIds.length < realm.minParty || discipleIds.length > realm.maxParty) {
     throw new AppError('VALIDATION_ERROR', `需要 ${realm.minParty}~${realm.maxParty} 名弟子`);
   }
 
-  // 4. 去重检查
+  // 5. 去重检查
   if (new Set(discipleIds).size !== discipleIds.length) {
     throw new AppError('VALIDATION_ERROR', '不能派遣重复弟子');
   }
 
-  // 5. 弟子存在性与状态检查（不能是受伤弟子）
+  // 6. 弟子存在性与状态检查（不能是受伤弟子）
   const members: {
     realmId: string;
     stage: number;
@@ -3808,7 +3814,7 @@ export async function exploreSectRealm(
     });
   }
 
-  // 6. 每日次数检查（独立的 DB 读取，不参与 draft 的 batch）
+  // 7. 每日次数检查（独立的 DB 读取，不参与 draft 的 batch）
   if (realm.dailyLimit !== null) {
     const dayStart = dayStartMs(now);
     const used = await new ExplorationRepository(db).countTodayBySectAndRealm(
@@ -3821,19 +3827,19 @@ export async function exploreSectRealm(
     }
   }
 
-  // 7. 扣资源（入场费）
+  // 8. 扣资源（入场费）
   for (const [resourceId, amount] of Object.entries(realm.entryCost)) {
     draft.requireResource(resourceId, Number(amount));
   }
 
-  // 8. 计算战力与成功率
+  // 9. 计算战力与成功率
   const power = partyCombatPower(members);
   const arenaLevel = arena?.level ?? 0;
   const chanceBp = explorationSuccessChanceBp(power, realm.difficulty, arenaLevel);
   const roll = Math.floor(Math.random() * 10_000);
   const success = roll < chanceBp;
 
-  // 9. 成功：发放奖励（不夹容量上限，见函数头说明）
+  // 10. 成功：发放奖励（不夹容量上限，见函数头说明）
   // 天赋重构 · 寻宝执事：收获与玄铁掉落概率按比例提高。
   const treasureBp = stewardBonusOf(draft, 'treasure');
   const actualRewards: Record<string, string> = {};
@@ -3861,7 +3867,7 @@ export async function exploreSectRealm(
     }
   }
 
-  // 10. 失败：队伍里所有弟子受伤（冷却 10 分钟）；只改 injured_until，不碰境界/修为
+  // 11. 失败：队伍里所有弟子受伤（冷却 10 分钟）；只改 injured_until，不碰境界/修为
   const INJURY_DURATION_MS = 10 * 60 * 1000;
   if (!success) {
     for (const id of discipleIds) {
@@ -3874,7 +3880,7 @@ export async function exploreSectRealm(
     }
   }
 
-  // 11. 写入探索记录
+  // 12. 写入探索记录
   const explorationId = crypto.randomUUID();
   draft.addStatement(
     insertExplorationStatement({
@@ -3902,6 +3908,161 @@ export async function exploreSectRealm(
       message: success
         ? `探索${realm.name}成功！获得丰厚奖励。`
         : `探索${realm.name}失败，弟子受伤需疗养。`,
+    },
+  };
+}
+
+/**
+ * 一键速通：自动用完该秘境今日剩余次数，每轮都重新挑当前战力最高的可出战弟子。
+ * 普通伤势会沿用讨伐的批量疗伤链：优先吃库存回春丹，不足时自动现炼差额。
+ *
+ * 每次探索与每次疗伤仍各自使用现有的受保护 batch。中途资源不足时不回滚已经完成的
+ * 场次，而是返回最新状态与 stopReason，让玩家能准确看到已经发生的结果。
+ */
+export async function speedrunAllSectRealm(
+  db: D1Database,
+  userId: string,
+  realmId: string,
+  now: number,
+): Promise<{ state: SectStateView; result: RealmSpeedrunAllResultView }> {
+  const realm = findSecretRealm(realmId);
+  if (realm === undefined) {
+    throw new AppError('NOT_FOUND', '秘境不存在');
+  }
+
+  const initial = await getSectState(db, userId, now);
+  if (initial === null) {
+    throw new AppError('NOT_FOUND', '尚未创建宗门');
+  }
+  if (Number(initial.sect.level) < realm.requiredSectLevel) {
+    throw new AppError('INVALID_STATUS', `需要宗门 ${String(realm.requiredSectLevel)} 级才能进入`);
+  }
+  if (realm.requiresArena && !initial.buildings.some((building) => building.defId === ARENA_BUILDING_ID)) {
+    throw new AppError('INVALID_STATUS', '需要先建造演武场');
+  }
+  if (initial.activeExploration !== null) {
+    throw new AppError('INVALID_STATUS', '已有一场进行中的秘境探索');
+  }
+
+  const usedToday = realm.dailyLimit === null
+    ? 0
+    : await new ExplorationRepository(db).countTodayBySectAndRealm(
+        initial.sect.id,
+        realm.id,
+        dayStartMs(now),
+      );
+  if (realm.dailyLimit !== null && usedToday >= realm.dailyLimit) {
+    throw new AppError(
+      'DAILY_LIMIT',
+      `今日${realm.name}探索次数已用完（${String(realm.dailyLimit)}次/天）`,
+    );
+  }
+
+  // 不限次秘境不能在一次请求里无限循环，固定执行一次；当前秘境均为每日 3 次。
+  const plannedAttempts = realm.dailyLimit === null ? 1 : realm.dailyLimit - usedToday;
+  const runs: ExplorationResultView[] = [];
+  const rewards: Record<string, string> = {};
+  const healedNames: string[] = [];
+  const craftCost: Record<string, string> = {};
+  let pillsUsed = 0;
+  let crafted = 0;
+  let stopReason: string | null = null;
+  let state = initial;
+
+  const isActiveInjury = (until: string | null): boolean => {
+    if (until === null) return false;
+    const value = Date.parse(until);
+    return Number.isFinite(value) && value > now;
+  };
+  const mergeAmounts = (target: Record<string, string>, delta: Record<string, string>): void => {
+    for (const [resourceId, amount] of Object.entries(delta)) {
+      target[resourceId] = String(Number(target[resourceId] ?? 0) + Number(amount));
+    }
+  };
+
+  for (let index = 0; index < plannedAttempts; index += 1) {
+    // 与自动讨伐一致：每轮先尝试治疗全部普通伤员；治疗失败时仍可改派健康弟子。
+    const injuredIds = state.disciples
+      .filter((disciple) => isActiveInjury(disciple.injuredUntil))
+      .map((disciple) => disciple.id);
+    if (injuredIds.length > 0) {
+      try {
+        const healed = await healDisciplesBatch(db, userId, injuredIds, now, true);
+        state = healed.state;
+        healedNames.push(...healed.outcome.healed.map((item) => item.discipleName));
+        pillsUsed += healed.outcome.pillsUsed;
+        crafted += healed.outcome.crafted;
+        mergeAmounts(craftCost, healed.outcome.craftCost);
+        stopReason = null;
+      } catch (error) {
+        // 先记住原因；若仍有健康弟子，下面继续改派。确实无人可用时再停止。
+        stopReason = `自动疗伤未完成：${errorMessageOf(error)}`;
+      }
+    }
+
+    const party = state.disciples
+      .filter(
+        (disciple) =>
+          disciple.combatBlockedReason === null && !isActiveInjury(disciple.injuredUntil),
+      )
+      .sort(
+        (left, right) =>
+          right.combatPower - left.combatPower || left.id.localeCompare(right.id),
+      )
+      .slice(0, realm.maxParty)
+      .map((disciple) => disciple.id);
+
+    if (party.length < realm.minParty) {
+      stopReason ??= `可出战弟子不足：${realm.name}至少需要 ${String(realm.minParty)} 人`;
+      break;
+    }
+
+    try {
+      const run = await exploreSectRealm(db, userId, realm.id, party, now);
+      state = run.state;
+      runs.push(run.result);
+      mergeAmounts(rewards, run.result.rewards);
+      // 本轮能正常出发，清掉上轮疗伤失败但不影响改派的临时提示。
+      if (run.result.success) stopReason = null;
+    } catch (error) {
+      stopReason = errorMessageOf(error);
+      break;
+    }
+  }
+
+  // 最后一轮失败也要立即治疗，不能因为没有下一轮而把伤员留在疗伤状态。
+  const finalInjuredIds = state.disciples
+    .filter((disciple) => isActiveInjury(disciple.injuredUntil))
+    .map((disciple) => disciple.id);
+  if (finalInjuredIds.length > 0) {
+    try {
+      const healed = await healDisciplesBatch(db, userId, finalInjuredIds, now, true);
+      state = healed.state;
+      healedNames.push(...healed.outcome.healed.map((item) => item.discipleName));
+      pillsUsed += healed.outcome.pillsUsed;
+      crafted += healed.outcome.crafted;
+      mergeAmounts(craftCost, healed.outcome.craftCost);
+      if (runs.length === plannedAttempts) stopReason = null;
+    } catch (error) {
+      stopReason ??= `自动疗伤未完成：${errorMessageOf(error)}`;
+    }
+  }
+
+  return {
+    state,
+    result: {
+      realmName: realm.name,
+      plannedAttempts,
+      completedAttempts: runs.length,
+      successes: runs.filter((run) => run.success).length,
+      failures: runs.filter((run) => !run.success).length,
+      runs,
+      rewards,
+      healedNames,
+      pillsUsed,
+      crafted,
+      craftCost,
+      stopReason,
     },
   };
 }

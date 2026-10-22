@@ -4486,6 +4486,18 @@ ul {
   background: rgba(202, 169, 106, 0.13);
 }
 
+/* 一键速通是批量命令，用更实的玉色与单次速通区分。 */
+.realm-go.is-auto {
+  border-color: rgba(119, 184, 154, 0.46);
+  color: #d9eee3;
+  background: rgba(119, 184, 154, 0.14);
+}
+
+.realm-go.is-auto:not(:disabled):not(.is-disabled):hover {
+  border-color: rgba(119, 184, 154, 0.76);
+  background: rgba(119, 184, 154, 0.24);
+}
+
 /* 行内状态标记：与锁定标记同形，用玉色表示「进行中」而不是「不可用」。 */
 .realm-flag.is-active {
   border-color: rgba(119, 184, 154, 0.3);
@@ -8211,10 +8223,6 @@ p.steward-bonus-note {
   font-family: serif;
   font-size: 42px;
   color: var(--gold-bright);
-}
-
-.explore-back {
-  margin-bottom: 15px;
 }
 
 /*

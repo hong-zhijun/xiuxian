@@ -17,6 +17,7 @@ import {
   daoDebate,
   expelDisciple,
   explore,
+  speedrunAll,
   fetchMe,
   healBatch,
   logout as apiLogout,
@@ -368,6 +369,39 @@ async function onExplore(realmId: string, discipleIds: string[]): Promise<void> 
       result.success ? 'success' : 'warning',
       result.success ? `探索得手 · ${result.realmName}` : `探索受挫 · ${result.realmName}`,
       `${result.message}（${detail}）`,
+    );
+  } catch (caught) {
+    handleError(caught);
+  } finally {
+    busy.value = false;
+  }
+}
+
+/** 一键速通：服务端自动选最高战力队伍、用完剩余次数，并处理普通伤势与回春丹。 */
+async function onExploreAll(realmId: string): Promise<void> {
+  if (busy.value) return;
+  busy.value = true;
+  try {
+    const { state: next, result } = await speedrunAll(realmId);
+    state.value = next;
+    announceEvents(next);
+
+    const parts = [
+      `完成 ${String(result.completedAttempts)}/${String(result.plannedAttempts)} 次，成功 ${String(result.successes)} 次，失败 ${String(result.failures)} 次`,
+    ];
+    const gained = effectSummary(result.rewards, next.resources);
+    if (gained !== '') parts.push(`获得 ${gained}`);
+    if (result.healedNames.length > 0) {
+      const crafted = result.crafted > 0 ? `，其中现炼 ${String(result.crafted)} 颗` : '';
+      parts.push(`自动治疗 ${String(result.healedNames.length)} 人次${crafted}`);
+    }
+    if (result.stopReason !== null) parts.push(`提前停止：${result.stopReason}`);
+
+    const completed = result.completedAttempts === result.plannedAttempts && result.stopReason === null;
+    notify(
+      completed && result.failures === 0 ? 'success' : 'warning',
+      completed ? `一键速通完成 · ${result.realmName}` : `一键速通停止 · ${result.realmName}`,
+      parts.join('；'),
     );
   } catch (caught) {
     handleError(caught);
@@ -1140,6 +1174,7 @@ onUnmounted(() => {
       @upgrade="onUpgrade"
       @upgrade-sect="onUpgradeSect"
       @explore="onExplore"
+      @explore-all="onExploreAll"
       @explore-start="onExploreStart"
       @explore-choose="onExploreChoose"
       @explore-abandon="onExploreAbandon"

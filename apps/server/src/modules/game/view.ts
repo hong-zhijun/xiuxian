@@ -1745,6 +1745,28 @@ export interface ExplorationResultView {
   message: string;
 }
 
+/** 一键速通结果（POST /game/explore/speedrun-all）。 */
+export interface RealmSpeedrunAllResultView {
+  realmName: string;
+  /** 点击时计划执行的次数，即该秘境今日剩余次数；不限次秘境固定执行 1 次。 */
+  plannedAttempts: number;
+  completedAttempts: number;
+  successes: number;
+  failures: number;
+  /** 每次速通的原始结果，按执行顺序排列。 */
+  runs: ExplorationResultView[];
+  /** 全部成功场次的奖励汇总（最小单位）。 */
+  rewards: Record<string, string>;
+  /** 自动疗伤记录；同一弟子多次受伤会重复出现。 */
+  healedNames: string[];
+  pillsUsed: number;
+  /** 库存不足时现炼并立即服下的回春丹数量。 */
+  crafted: number;
+  craftCost: Record<string, string>;
+  /** 资源或可出战弟子不足时保留已完成场次，并在这里说明原因。 */
+  stopReason: string | null;
+}
+
 /** 排行榜条目（V3 第二节）：综合榜，等级 → 声望 → 创建时间。 */
 export interface LeaderboardEntryView {
   sectId: string;

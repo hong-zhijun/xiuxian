@@ -693,6 +693,22 @@ export interface ExplorationResult {
   message: string;
 }
 
+/** 一键速通结果：自动执行该秘境今日剩余次数。 */
+export interface RealmSpeedrunAllResult {
+  realmName: string;
+  plannedAttempts: number;
+  completedAttempts: number;
+  successes: number;
+  failures: number;
+  runs: ExplorationResult[];
+  rewards: Record<string, string>;
+  healedNames: string[];
+  pillsUsed: number;
+  crafted: number;
+  craftCost: Record<string, string>;
+  stopReason: string | null;
+}
+
 export async function fetchSecretRealms(): Promise<SecretRealmView[]> {
   const data = await apiRequest<{ realms: SecretRealmView[] }>('/api/v1/game/realms');
   return data.realms;
@@ -706,6 +722,15 @@ export async function explore(
     method: 'POST',
     body: { realmId, discipleIds },
   });
+}
+
+export async function speedrunAll(
+  realmId: string,
+): Promise<{ state: SectStateView; result: RealmSpeedrunAllResult }> {
+  return apiRequest<{ state: SectStateView; result: RealmSpeedrunAllResult }>(
+    '/api/v1/game/explore/speedrun-all',
+    { method: 'POST', body: { realmId } },
+  );
 }
 
 /** 江湖榜条目（与后端 view.ts 的 LeaderboardEntryView 一一对应）。 */

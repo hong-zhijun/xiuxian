@@ -25,6 +25,7 @@ import {
   equipRequestSchema,
   expelDiscipleRequestSchema,
   exploreRequestSchema,
+  speedrunAllRequestSchema,
   healBatchRequestSchema,
   forgeEquipmentRequestSchema,
   raceBetRequestSchema,
@@ -97,6 +98,7 @@ import {
   getDiscipleProfile,
   expelDisciple,
   exploreSectRealm,
+  speedrunAllSectRealm,
   equipItem,
   getActiveExploration,
   forgeEquipment,
@@ -342,6 +344,14 @@ export function createGameRoutes(): Hono<AppEnv> {
       body.discipleIds,
       Date.now(),
     );
+    return respondOk(c, { state: result.state, result: result.result });
+  });
+
+  // 一键速通：自动选最高战力队伍，用完今日剩余次数，受伤后自动吃药/现炼回春丹。
+  routes.post('/game/explore/speedrun-all', async (c) => {
+    const userId = requireUserId(c);
+    const body = await parseStrictJson(speedrunAllRequestSchema, c);
+    const result = await speedrunAllSectRealm(getDb(c.env), userId, body.realmId, Date.now());
     return respondOk(c, { state: result.state, result: result.result });
   });
 

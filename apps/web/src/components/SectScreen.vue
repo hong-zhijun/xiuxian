@@ -140,6 +140,8 @@ const emit = defineEmits<{
    * 4 个请求事件都由 App.vue 绑定并负责调接口 / 写 state，本组件只派发与展示。
    */
   'explore-start': [realmId: string, discipleIds: string[]];
+  /** 自动选择最高战力队伍，并用完该秘境今日剩余次数。 */
+  'explore-all': [realmId: string];
   'explore-resume': [];
   'explore-choose': [explorationId: string, choiceId: string];
   'explore-abandon': [explorationId: string];
@@ -2712,11 +2714,11 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
       loading-text="正在确认秘境信息"
       @close="openPanel = null"
     >
-      <button class="action-button explore-back" type="button" @click="openPanel = 'explore-menu'">返回秘境分类</button>
       <ExplorePanel
         :state="state"
         :busy="busy"
         @select="onSelectRealm"
+        @explore-all="emit('explore-all', $event)"
         @explore-start="onExploreStartRequest"
         @explore-resume="onExploreResume"
       />

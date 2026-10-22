@@ -122,6 +122,21 @@ async function dbBalance(sectId: string, resourceId: string): Promise<number> {
   return Number(row?.balance ?? 0);
 }
 
+async function setBalance(sectId: string, resourceId: string, balance: number): Promise<void> {
+  await env.DB.prepare(
+    'UPDATE resource_balances SET balance = ?, updated_at = ? WHERE sect_id = ? AND resource_id = ?',
+  )
+    .bind(balance, Date.now(), sectId, resourceId)
+    .run();
+}
+
+async function unlockAlchemy(sectId: string): Promise<void> {
+  await env.DB.prepare('UPDATE sects SET level = 2 WHERE id = ?').bind(sectId).run();
+  await env.DB.prepare('UPDATE buildings SET level = 2 WHERE sect_id = ? AND def_id = ?')
+    .bind(sectId, 'herbGarden')
+    .run();
+}
+
 async function explorationRow(explorationId: string): Promise<Record<string, any> | null> {
   return env.DB.prepare('SELECT * FROM realm_explorations WHERE id = ?')
     .bind(explorationId)
@@ -700,6 +715,80 @@ describe('V6 秘境探索：放弃与每日限次', () => {
       discipleIds: party,
     });
     expect(errorOf(speedrunBlocked).code).toBe('DAILY_LIMIT');
+  });
+});
+
+describe('秘境一键速通', () => {
+  it('自动选择战力最高的队伍，并一次用完今日剩余次数', async () => {
+    const fixture = await makeSect('speedrun-all-top');
+    await freezeSettlement(fixture.sectId);
+    const attacks = [12, 96, 54];
+    for (let index = 0; index < fixture.discipleIds.length; index += 1) {
+      await env.DB.prepare(
+        'UPDATE disciples SET realm_id = ?, stage = 1, attack = ?, defense = 10, speed = 10 WHERE id = ?',
+      )
+        .bind('qiRefining', attacks[index], fixture.discipleIds[index])
+        .run();
+    }
+    const before = await fixture.state();
+    const expectedNames = [...(before.disciples as Record<string, any>[])]
+      .sort((left, right) => Number(right.combatPower) - Number(left.combatPower))
+      .slice(0, 2)
+      .map((disciple) => disciple.name);
+    forceRandom(0.0001);
+
+    const response = await fixture.api.post('/api/v1/game/explore/speedrun-all', {
+      realmId: MISTY.realmId,
+    });
+    expect(response.status).toBe(200);
+    const data = dataOf(response) as Record<string, any>;
+    expect(data.result).toMatchObject({
+      realmName: '迷雾森林',
+      plannedAttempts: 3,
+      completedAttempts: 3,
+      successes: 3,
+      failures: 0,
+      stopReason: null,
+    });
+    expect(data.result.runs).toHaveLength(3);
+    for (const run of data.result.runs as Record<string, any>[]) {
+      expect(run.memberNames).toEqual(expectedNames);
+    }
+    expect(await legacyExplorationRows(fixture.sectId)).toHaveLength(3);
+    expect((await realmsOf(fixture)).find((realm) => realm.id === MISTY.realmId)?.usedToday).toBe(3);
+  });
+
+  it('每轮失败后自动现炼回春丹并疗伤，最后一轮伤势也会清除', async () => {
+    const fixture = await makeSect('speedrun-all-heal');
+    await unlockAlchemy(fixture.sectId);
+    await setBalance(fixture.sectId, 'spiritStone', 500_000);
+    await setBalance(fixture.sectId, 'herb', 500_000);
+    await freezeSettlement(fixture.sectId);
+    forceRandom(0.9999);
+
+    const response = await fixture.api.post('/api/v1/game/explore/speedrun-all', {
+      realmId: MISTY.realmId,
+    });
+    expect(response.status).toBe(200);
+    const data = dataOf(response) as Record<string, any>;
+    expect(data.result).toMatchObject({
+      plannedAttempts: 3,
+      completedAttempts: 3,
+      successes: 0,
+      failures: 3,
+      pillsUsed: 6,
+      crafted: 6,
+      craftCost: { herb: '60000', spiritStone: '90000' },
+      stopReason: null,
+    });
+    expect(data.result.healedNames).toHaveLength(6);
+    expect(
+      (data.state.disciples as Record<string, any>[]).every(
+        (disciple) => disciple.injuredUntil === null,
+      ),
+    ).toBe(true);
+    expect(await dbBalance(fixture.sectId, 'spiritStone')).toBe(380_000);
+    expect(await dbBalance(fixture.sectId, 'herb')).toBe(440_000);
   });
 });
 

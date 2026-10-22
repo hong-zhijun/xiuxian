@@ -19,6 +19,8 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   select: [realm: SecretRealmView];
+  /** 自动选最高战力队伍，并用完今日剩余次数。 */
+  'explore-all': [realmId: string];
   /** V6 交互探索：只给 realmId，秘境定义由 SectScreen 自己补一次只读列表请求。 */
   'explore-start': [realmId: string];
   /** 面板顶部「继续探索」：断点已在 state 里，直接打开交互弹窗。 */
@@ -99,6 +101,13 @@ function openParty(realm: SecretRealmView): void {
     return;
   }
   emit('select', realm);
+}
+
+function speedrunAll(realm: SecretRealmView): void {
+  if (!canDepart(realm)) {
+    return;
+  }
+  emit('explore-all', realm.id);
 }
 
 /** 交互探索：交给 SectScreen 开选人弹窗（提交时才真正调接口）。 */
@@ -195,6 +204,19 @@ function realmGlyph(realmId: string): string {
             @click="openParty(realm)"
           >
             速通
+          </button>
+
+          <button
+            class="realm-go is-auto"
+            :class="{ 'is-disabled': !canDepart(realm) }"
+            type="button"
+            :disabled="busy"
+            :aria-disabled="!canDepart(realm)"
+            :aria-label="`一键速通${realm.name}今日剩余次数`"
+            title="自动选择战力最高的弟子并完成今日剩余次数"
+            @click="speedrunAll(realm)"
+          >
+            一键速通
           </button>
 
           <button

@@ -106,6 +106,11 @@ export const exploreRequestSchema = z.strictObject({
   discipleIds: z.array(z.uuid()).min(1).max(3),
 });
 
+/** 一键速通：队伍与执行次数全部由服务端决定。 */
+export const speedrunAllRequestSchema = z.strictObject({
+  realmId: z.string().min(1).max(64),
+});
+
 /**
  * V3 切磋：三个 id 都必须是 uuid（与 generateId/弟子 id 的生成方式一致）；
  * 「不能打自己」「弟子归属」「每日次数」等业务判定全部在 service 里。
