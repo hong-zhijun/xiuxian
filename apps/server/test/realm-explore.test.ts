@@ -758,6 +758,49 @@ describe('秘境一键速通', () => {
     expect((await realmsOf(fixture)).find((realm) => realm.id === MISTY.realmId)?.usedToday).toBe(3);
   });
 
+  it('战力最高的弟子正在坐镇时跳过，改选其余可出战弟子', async () => {
+    const fixture = await makeSect('speedrun-all-garrison');
+    await freezeSettlement(fixture.sectId);
+    const [garrisonedId] = fixture.discipleIds;
+    const attacks = [100, 62, 34];
+    for (let index = 0; index < fixture.discipleIds.length; index += 1) {
+      await env.DB.prepare(
+        'UPDATE disciples SET realm_id = ?, stage = 1, attack = ?, defense = 10, speed = 10 WHERE id = ?',
+      )
+        .bind('qiRefining', attacks[index], fixture.discipleIds[index])
+        .run();
+    }
+    await env.DB.prepare(
+      `UPDATE world_sites
+       SET holder_sect_id = ?, holder_name = ?, garrison = ?, updated_at = ?
+       WHERE id = 'center-xuantie'`,
+    )
+      .bind(fixture.sectId, '坐镇测试宗', JSON.stringify([garrisonedId]), Date.now())
+      .run();
+    const before = await fixture.state();
+    const garrisoned = (before.disciples as Record<string, any>[]).find(
+      (disciple) => disciple.id === garrisonedId,
+    );
+    expect(garrisoned?.garrisonSiteName).toBe('中州 · 玄铁祖脉');
+    const expectedNames = (before.disciples as Record<string, any>[])
+      .filter((disciple) => disciple.id !== garrisonedId)
+      .sort((left, right) => Number(right.combatPower) - Number(left.combatPower))
+      .slice(0, 2)
+      .map((disciple) => disciple.name);
+    forceRandom(0.0001);
+
+    const response = await fixture.api.post('/api/v1/game/explore/speedrun-all', {
+      realmId: MISTY.realmId,
+    });
+    expect(response.status).toBe(200);
+    const data = dataOf(response) as Record<string, any>;
+    expect(data.result).toMatchObject({ completedAttempts: 3, successes: 3, stopReason: null });
+    for (const run of data.result.runs as Record<string, any>[]) {
+      expect(run.memberNames).toEqual(expectedNames);
+      expect(run.memberNames).not.toContain(garrisoned?.name);
+    }
+  });
+
   it('每轮失败后自动现炼回春丹并疗伤，最后一轮伤势也会清除', async () => {
     const fixture = await makeSect('speedrun-all-heal');
     await unlockAlchemy(fixture.sectId);

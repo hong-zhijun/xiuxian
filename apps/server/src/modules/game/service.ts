@@ -3912,6 +3912,41 @@ export async function exploreSectRealm(
   };
 }
 
+/** 一键速通选人：直接复用真实出战门禁，再按与秘境判定相同的战力口径排序。 */
+async function autoRealmSpeedrunParty(
+  db: D1Database,
+  userId: string,
+  maxParty: number,
+  now: number,
+): Promise<string[]> {
+  const draft = await draftFor(db, userId, now);
+  return draft.disciples
+    .flatMap((disciple) => {
+      if (disciple.injured_until !== null && Number(disciple.injured_until) > now) return [];
+      try {
+        requireCanFight(draft, disciple, '出战');
+      } catch {
+        return [];
+      }
+      const attrs = battleAttrsOf(disciple);
+      return [{
+        id: disciple.id,
+        power: discipleCombatPower(
+          disciple.realm_id,
+          Number(disciple.stage),
+          attrs.attack,
+          attrs.defense,
+          attrs.speed,
+          disciple.talent,
+          powerBonusBpOfDisciple(disciple),
+        ),
+      }];
+    })
+    .sort((left, right) => right.power - left.power || left.id.localeCompare(right.id))
+    .slice(0, maxParty)
+    .map((disciple) => disciple.id);
+}
+
 /**
  * 一键速通：自动用完该秘境今日剩余次数，每轮都重新挑当前战力最高的可出战弟子。
  * 普通伤势会沿用讨伐的批量疗伤链：优先吃库存回春丹，不足时自动现炼差额。
@@ -4000,17 +4035,7 @@ export async function speedrunAllSectRealm(
       }
     }
 
-    const party = state.disciples
-      .filter(
-        (disciple) =>
-          disciple.combatBlockedReason === null && !isActiveInjury(disciple.injuredUntil),
-      )
-      .sort(
-        (left, right) =>
-          right.combatPower - left.combatPower || left.id.localeCompare(right.id),
-      )
-      .slice(0, realm.maxParty)
-      .map((disciple) => disciple.id);
+    const party = await autoRealmSpeedrunParty(db, userId, realm.maxParty, now);
 
     if (party.length < realm.minParty) {
       stopReason ??= `可出战弟子不足：${realm.name}至少需要 ${String(realm.minParty)} 人`;

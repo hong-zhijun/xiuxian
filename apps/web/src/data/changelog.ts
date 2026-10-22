@@ -19,6 +19,15 @@ export const MAX_ENTRIES = 5;
 
 export const CHANGELOG: readonly ChangelogEntry[] = [
   {
+    id: '2026-10-22-realm-speedrun',
+    time: '2026-10-22 10:00',
+    title: '普通秘境 · 一键速通',
+    items: [
+      '普通秘境新增一键速通：自动用完今日剩余次数，选择可出战弟子中战力最高的队伍；受伤后自动服用回春丹，库存不足时自动炼制。',
+      '坐镇、历练、重伤、任职等无法出战的弟子不会被自动选中；秘境列表顶部的返回按钮已移除。',
+    ],
+  },
+  {
     id: '2026-10-21-beast-essence',
     time: '2026-10-21 15:00',
     title: '灵兽苑 · 精魄兑换与品质突破',
