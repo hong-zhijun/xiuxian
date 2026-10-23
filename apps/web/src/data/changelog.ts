@@ -19,6 +19,14 @@ export const MAX_ENTRIES = 5;
 
 export const CHANGELOG: readonly ChangelogEntry[] = [
   {
+    id: '2026-10-23-friday-gift',
+    time: '2026-10-23 17:30',
+    title: '周五福利 · 庆祝周五下班',
+    items: [
+      '一周辛苦，庆祝周五下班！福利发放时已建立的每个宗门获赠 10000 灵气，已直接到账、无需领取，天机录可查看「周五福利」。',
+    ],
+  },
+  {
     id: '2026-10-23-quick-tweaks',
     time: '2026-10-23 14:50',
     title: '几处顺手改动',
