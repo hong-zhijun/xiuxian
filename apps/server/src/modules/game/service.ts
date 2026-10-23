@@ -4600,10 +4600,13 @@ export async function getPublicSect(
     throw new AppError('NOT_FOUND', '宗门不存在');
   }
 
-  const [disciples, buildings, viewerSect] = await Promise.all([
+  const [disciples, buildings, viewerSect, tower, techniqueRows] = await Promise.all([
     new DiscipleRepository(db).findBySectId(sectId),
     new BuildingRepository(db).findBySectId(sectId),
     new SectRepository(db).findByUserId(viewerUserId),
+    // 镇妖塔层数与已收录功法数都是公开进度（榜单里本来就公开），档案页一起摆出来。
+    new TowerRepository(db).findBySectId(sectId),
+    new TechniqueRepository(db).findBySectId(sectId),
   ]);
   const config = gameConfig();
 
@@ -4678,6 +4681,9 @@ export async function getPublicSect(
     reputation: Number(sect.reputation) || 0,
     // 0073：宗门头像是公开外观（换图时服务端已保证旧图不再被引用才会删）。
     avatarHash: sect.avatar_hash ?? null,
+    // 0051 / 0066：公开进度。镇妖塔没有记录时按 0 层；功法只数参悟到 1 级及以上的（与 learnedTechniques 同口径）。
+    towerFloor: tower === null ? 0 : Number(tower.max_floor) || 0,
+    techniqueCount: techniqueRows.filter((row) => Number(row.level) >= 1).length,
     // 「有效手动守擂阵容」：3 个不重复、仍属于本宗的弟子；无效阵容不算已布阵。
     hasDefenseLineup: plan.canDefend && plan.mode === 'configured',
     challenge,

@@ -795,6 +795,10 @@ export interface PublicSectView {
   reputation: number;
   /** 0073 宗门头像哈希（null = 没有；公开外观，按内容哈希取图）。 */
   avatarHash: string | null;
+  /** 镇妖塔历史最高层（0 = 一层都还没过）。 */
+  towerFloor: number;
+  /** 已收录的功法数量（参悟到 1 级及以上才算）。 */
+  techniqueCount: number;
   disciples: PublicDiscipleView[];
   buildings: PublicBuildingView[];
   /** 是否已设置**有效**的手动守擂阵容（不代表能否挑战；自动守擂也可挑战）。 */

@@ -3,7 +3,7 @@ import { computed, ref, watch } from 'vue';
 
 import type { PublicDiscipleView, PublicSectView, SectStateView } from '../api/game';
 import { fetchPublicSect } from '../api/game';
-import { formatAmount, formatTime } from '../utils/format';
+import { formatTime } from '../utils/format';
 import DiscipleAvatar from './DiscipleAvatar.vue';
 import DiscipleProfileDialog from './DiscipleProfileDialog.vue';
 import LoadingState from './LoadingState.vue';
@@ -12,13 +12,13 @@ import SectAvatar from './SectAvatar.vue';
 /**
  * 别人宗门的公开档案（江湖榜里点一行弹出的二级弹窗内容，外壳由 LeaderboardPanel 用 ModalShell 提供）。
  *
- * 版面（0073 重做）：
- *   名帖（宗门头像 / 名字 / 品阶 / 立宗时间 + 挑战按钮）→ 声望与门人两张小卡 → 挑战情报
- *   → 门人卡片（点开弟子公开档案，与天骄榜同一个 DiscipleProfileDialog）→ 宗门建筑。
+ * 版面（0073 重做，之后按反馈收过一轮）：
+ *   名帖（宗门头像 / 名字 / 品阶 / 立宗时间 + 挑战按钮与今日剩余次数）
+ *   → 声望 / 门人 / 镇妖塔 / 功法 四张小卡 → 宗门建筑 → 门人卡片（只列前 5 位，点开弟子公开档案）。
  * 卡片沿用弟子详情的 .info-card / .stat-tag / .count-badge，只在这里补版面用的类。
  *
  * 只显示服务端给的公开字段：没有资源余额、修为进度、岗位、伤势、招募次数；
- * 挑战预览（剩余次数/等级差/奖励/守擂方式）由服务端相对当前玩家算好，不能挑战的原因留在挑战弹窗里说明。
+ * 挑战预览（剩余次数/等级差/奖励/守擂方式）由服务端相对当前玩家算好，能打不能打的原因留在挑战弹窗里说明。
  */
 const props = defineProps<{
   sectId: string;
@@ -67,33 +67,19 @@ const disciples = computed<PublicDiscipleView[]>(() => {
   return list;
 });
 
-/** 门内最强的那位（没有弟子时为 null）：给「门下弟子」小卡做一句摘要。 */
-const topDisciple = computed<PublicDiscipleView | null>(() => disciples.value[0] ?? null);
+/** 档案页只列前 5 位门人：名单太长会把弹窗撑得没边，其余只报数量。 */
+const ROSTER_SIZE = 5;
+const visibleDisciples = computed(() => disciples.value.slice(0, ROSTER_SIZE));
+const hiddenDiscipleCount = computed(() =>
+  Math.max(0, disciples.value.length - visibleDisciples.value.length),
+);
 
 const buildings = computed(() => sect.value?.buildings ?? []);
 
-/** 等级差文案（与挑战弹窗同一口径：levelDifference = 对方等级 − 我方等级）。 */
-const levelDiffText = computed(() => {
-  const diff = sect.value?.challenge?.levelDifference;
-  if (diff === undefined) return '';
-  if (diff === 0) return '与贵宗同级';
-  return diff > 0 ? `对方高 ${diff} 级` : `对方低 ${-diff} 级`;
-});
-
-/** 「若胜利」的奖励：两项都为 0 时沿用挑战弹窗的说法（等级差过大，只有胜负没有收益）。 */
-const rewardText = computed(() => {
-  const reward = sect.value?.challenge?.rewardPreview;
-  if (reward === undefined) return '';
-  const parts: string[] = [];
-  if (reward.reputation > 0) parts.push(`声望 +${reward.reputation}`);
-  if (reward.spiritStone > 0) parts.push(`灵石 +${formatAmount(reward.spiritStone)}`);
-  return parts.length === 0 ? '无奖励（对方等级低出 3 级以上）' : parts.join('，');
-});
-
-const defenseText = computed(() => {
-  const mode = sect.value?.challenge?.defenseMode;
-  if (mode === null || mode === undefined) return '弟子不足，暂不能应战';
-  return mode === 'configured' ? '已设守擂阵容' : '临时自动守擂';
+/** 镇妖塔：一层都没过时写「未攀登」，比「0 层」好读。 */
+const towerText = computed(() => {
+  const floor = sect.value?.towerFloor ?? 0;
+  return floor > 0 ? `${String(floor)} 层` : '未攀登';
 });
 
 /** 打开某个弟子的公开档案（只读；与天骄榜同一个弹窗，会叠在这一层上面）。 */
@@ -120,34 +106,37 @@ function requestChallenge(): void {
       <header class="public-hero">
         <SectAvatar class="public-hero-avatar" :name="sect.name" :image-hash="sect.avatarHash" />
         <div class="public-hero-copy">
-          <p class="eyebrow">宗门档案</p>
           <h2 id="public-sect-title" class="public-hero-name">{{ sect.name }}</h2>
           <p class="public-hero-tags">
             <span class="stat-tag stat-talent">LV.{{ sect.level }} · {{ sect.levelName }}</span>
             <span class="stat-tag">立于 {{ formatTime(sect.createdAt) }}</span>
           </p>
         </div>
-        <button
-          v-if="sect.challenge"
-          class="action-button primary-action public-challenge-button"
-          :class="{ 'is-disabled': busy }"
-          type="button"
-          :disabled="busy"
-          :aria-disabled="busy"
-          @click="requestChallenge"
-        >
-          <span>挑战</span>
-        </button>
+        <!-- 挑战按钮 + 今日剩余次数（次数是服务端相对当前玩家算好的）。 -->
+        <div v-if="sect.challenge" class="public-hero-actions">
+          <button
+            class="action-button primary-action public-challenge-button"
+            :class="{ 'is-disabled': busy }"
+            type="button"
+            :disabled="busy"
+            :aria-disabled="busy"
+            @click="requestChallenge"
+          >
+            <span>挑战</span>
+          </button>
+          <span class="public-challenge-hint">
+            今日剩余 {{ sect.challenge.remaining }}/{{ sect.challenge.dailyLimit }} 次
+          </span>
+        </div>
       </header>
 
-      <!-- ---------- 声望 / 门人：两张档案小卡 ---------- -->
+      <!-- ---------- 四张档案小卡：声望 / 门人 / 镇妖塔 / 功法 ---------- -->
       <div class="public-facts">
         <section class="info-card" aria-labelledby="public-reputation-title">
           <div class="info-card-head">
             <h3 id="public-reputation-title" class="info-card-title">声望</h3>
           </div>
           <strong class="info-card-value">{{ sect.reputation }}</strong>
-          <p class="info-card-note">切磋、挑战与宗门征伐累积而来</p>
         </section>
 
         <section class="info-card" aria-labelledby="public-disciples-title">
@@ -155,46 +144,50 @@ function requestChallenge(): void {
             <h3 id="public-disciples-title" class="info-card-title">门下弟子</h3>
           </div>
           <strong class="info-card-value">{{ sect.disciples.length }} 位</strong>
-          <p class="info-card-note">
-            <template v-if="topDisciple">
-              最强 {{ topDisciple.name }} · {{ topDisciple.stageName }}
-            </template>
-            <template v-else>山门清净，尚无弟子入门</template>
-          </p>
+        </section>
+
+        <section class="info-card" aria-labelledby="public-tower-title">
+          <div class="info-card-head">
+            <h3 id="public-tower-title" class="info-card-title">镇妖塔</h3>
+          </div>
+          <strong class="info-card-value">{{ towerText }}</strong>
+        </section>
+
+        <section class="info-card" aria-labelledby="public-techniques-title">
+          <div class="info-card-head">
+            <h3 id="public-techniques-title" class="info-card-title">已收录功法</h3>
+          </div>
+          <strong class="info-card-value">{{ sect.techniqueCount }} 部</strong>
         </section>
       </div>
 
-      <!-- ---------- 挑战情报：数字全部来自服务端预览 ---------- -->
-      <section
-        v-if="sect.challenge"
-        class="info-card public-challenge"
-        aria-labelledby="public-challenge-title"
-      >
+      <!-- ---------- 宗门建筑：公开档案只给名称与等级 ---------- -->
+      <section class="info-card public-buildings" aria-labelledby="public-buildings-title">
         <div class="info-card-head">
-          <h3 id="public-challenge-title" class="info-card-title">挑战情报</h3>
+          <h3 id="public-buildings-title" class="info-card-title">宗门建筑</h3>
+          <span class="public-buildings-count">{{ buildings.length }} 座</span>
         </div>
-        <p class="public-challenge-tags">
-          <span class="stat-tag stat-power">
-            今日剩余 {{ sect.challenge.remaining }}/{{ sect.challenge.dailyLimit }} 次
-          </span>
-          <span class="stat-tag">{{ levelDiffText }}</span>
-          <span class="stat-tag">{{ defenseText }}</span>
-        </p>
-        <p class="info-card-note">若胜利：{{ rewardText }}</p>
+        <ul v-if="buildings.length > 0" class="public-buildings-list">
+          <li v-for="building in buildings" :key="building.name" class="public-building">
+            <strong>{{ building.name }}</strong>
+            <span class="public-building-level">Lv.{{ building.level }}</span>
+          </li>
+        </ul>
+        <p v-else class="info-card-note">尚无建筑</p>
       </section>
 
-      <!-- ---------- 门人：一张卡片一位，点开弟子公开档案 ---------- -->
+      <!-- ---------- 门人：只列前 5 位，点开弟子公开档案 ---------- -->
       <section class="public-section" aria-labelledby="public-roster-title">
         <div class="public-section-head">
           <p id="public-roster-title" class="public-section-title">
             门下弟子
-            <span class="public-section-sub">共 {{ disciples.length }} 位</span>
+            <span class="public-section-sub">共 {{ sect.disciples.length }} 位</span>
           </p>
-          <span v-if="disciples.length > 0" class="public-section-hint">点卡片查看弟子档案</span>
+          <span v-if="visibleDisciples.length > 0" class="public-section-hint">点卡片查看弟子档案</span>
         </div>
 
-        <ul v-if="disciples.length > 0" class="public-roster">
-          <li v-for="(disciple, index) in disciples" :key="disciple.id">
+        <ul v-if="visibleDisciples.length > 0" class="public-roster">
+          <li v-for="(disciple, index) in visibleDisciples" :key="disciple.id">
             <button
               class="public-disciple"
               type="button"
@@ -230,20 +223,9 @@ function requestChallenge(): void {
           </li>
         </ul>
         <p v-else class="public-empty">门下暂无弟子</p>
-      </section>
-
-      <!-- ---------- 宗门建筑：公开档案只给名称与等级 ---------- -->
-      <section class="info-card public-buildings" aria-labelledby="public-buildings-title">
-        <div class="info-card-head">
-          <h3 id="public-buildings-title" class="info-card-title">宗门建筑</h3>
-          <span class="public-buildings-count">{{ buildings.length }} 座</span>
-        </div>
-        <p v-if="buildings.length > 0" class="public-buildings-tags">
-          <span v-for="building in buildings" :key="building.name" class="stat-tag">
-            {{ building.name }} Lv.{{ building.level }}
-          </span>
+        <p v-if="hiddenDiscipleCount > 0" class="public-more">
+          另有 {{ hiddenDiscipleCount }} 位门人未列出
         </p>
-        <p v-else class="info-card-note">尚无建筑</p>
       </section>
 
       <!-- 弟子公开档案（只读）：叠在宗门档案上面，关掉回到这一页。 -->
@@ -276,7 +258,7 @@ function requestChallenge(): void {
 
 .public-hero-name {
   overflow: hidden;
-  margin: 3px 0 0;
+  margin: 0;
   color: var(--gold-bright);
   font-family: 'STKaiti', 'KaiTi', serif;
   font-size: 26px;
@@ -293,33 +275,86 @@ function requestChallenge(): void {
   margin: 7px 0 0;
 }
 
+/* 挑战按钮与「今日剩余」上下排：次数就贴在按钮下面，不再单开一张情报卡。 */
+.public-hero-actions {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 5px;
+}
+
 /* 比面板主按钮小一号，别跟宗门名抢注意力。 */
 .public-challenge-button {
-  flex: 0 0 auto;
   min-height: 36px;
   padding: 0 22px;
   font-size: 14px;
   letter-spacing: 0.08em;
 }
 
-/* 声望 / 门人：两张并排的小卡，窄屏收成一列。 */
+.public-challenge-hint {
+  color: #93a99e;
+  font-size: 11px;
+  line-height: 1.3;
+  text-align: center;
+  white-space: nowrap;
+}
+
+/* 声望 / 门人 / 镇妖塔 / 功法：一排四张小卡，窄屏两列。 */
 .public-facts {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;
   margin-top: 14px;
 }
 
-/* 挑战情报：整行一张卡，情报做成一排小标签。 */
-.public-challenge {
+/* 宗门建筑：比其它小卡大一号（内边距更松、一座建筑一张小卡）。 */
+.public-buildings {
   margin-top: 8px;
+  padding: 12px 14px;
 }
 
-.public-challenge-tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
+.public-buildings-count {
+  margin-left: auto;
+  color: var(--jade);
+  font-size: 12px;
+}
+
+.public-buildings-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(118px, 1fr));
+  gap: 6px;
   margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.public-building {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 5px 9px;
+  border: 1px solid rgba(119, 184, 154, 0.16);
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.02);
+  font-size: 13px;
+}
+
+.public-building strong {
+  overflow: hidden;
+  color: #dce6e0;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.public-building-level {
+  flex: 0 0 auto;
+  color: var(--jade);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
 }
 
 /* 门人区块：标题行沿用档案页的分区标题，正文是两列卡片。 */
@@ -466,36 +501,28 @@ function requestChallenge(): void {
   margin-top: 1px;
 }
 
-/* 宗门建筑：一整行卡，建筑做成一排小标签。 */
-.public-buildings {
-  margin-top: 8px;
-}
-
-.public-buildings-count {
-  margin-left: auto;
-  color: var(--jade);
+/* 只列前 5 位：剩下的在这里报个数。 */
+.public-more {
+  margin: 9px 0 0;
+  color: #7f948a;
   font-size: 12px;
-}
-
-.public-buildings-tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  margin: 0;
+  text-align: right;
 }
 
 @media (max-width: 520px) {
-  /* 窄屏：名帖的挑战按钮换到第二行，两张小卡与门人卡片各收成一列。 */
+  /* 窄屏：挑战按钮换到第二行，四张小卡与门人卡片各收成两列 / 一列。 */
   .public-hero {
     grid-template-columns: auto minmax(0, 1fr);
   }
 
-  .public-challenge-button {
+  .public-hero-actions {
     grid-column: 1 / -1;
-    justify-self: stretch;
   }
 
-  .public-facts,
+  .public-facts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .public-roster {
     grid-template-columns: minmax(0, 1fr);
   }
