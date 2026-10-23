@@ -84,7 +84,7 @@ export interface WorldSiteDef {
 /**
  * 全服 14 处灵地（顺序即面板顺序）。每个域只产主产资源：
  * 青木域产药材、赤铜域产矿石、云泽域产灵气、古墟域产灵石；按档位取「灵地 / 福地 / 洞天」的每小时产出。
- * 中州两处是祖脉：每小时灵气 80，另外每坐镇满 6 个整点小时得 5 个玄铁（玄铁祖脉）/ 神木（神木祖脉）。
+ * 中州两处是祖脉：每小时灵气 150，另外每坐镇满 6 个整点小时得 5 个玄铁（玄铁祖脉）/ 神木（神木祖脉）。
  */
 export const WORLD_SITES: readonly WorldSiteDef[] = [
   { id: 'east-lingdi', name: '百草谷', regionId: 'east', tier: 'lingdi', outputs: { herb: 75_000 }, rare: null },
@@ -93,9 +93,9 @@ export const WORLD_SITES: readonly WorldSiteDef[] = [
   { id: 'west-lingdi', name: '赤砂岭', regionId: 'west', tier: 'lingdi', outputs: { ore: 75_000 }, rare: null },
   { id: 'west-fudi', name: '熔金峡', regionId: 'west', tier: 'fudi', outputs: { ore: 120_000 }, rare: null },
   { id: 'west-dongtian', name: '赤霄洞天', regionId: 'west', tier: 'dongtian', outputs: { ore: 180_000 }, rare: null },
-  { id: 'south-lingdi', name: '雾隐泉', regionId: 'south', tier: 'lingdi', outputs: { spiritualEnergy: 30_000 }, rare: null },
-  { id: 'south-fudi', name: '云梦泽', regionId: 'south', tier: 'fudi', outputs: { spiritualEnergy: 50_000 }, rare: null },
-  { id: 'south-dongtian', name: '碧落洞天', regionId: 'south', tier: 'dongtian', outputs: { spiritualEnergy: 80_000 }, rare: null },
+  { id: 'south-lingdi', name: '雾隐泉', regionId: 'south', tier: 'lingdi', outputs: { spiritualEnergy: 50_000 }, rare: null },
+  { id: 'south-fudi', name: '云梦泽', regionId: 'south', tier: 'fudi', outputs: { spiritualEnergy: 80_000 }, rare: null },
+  { id: 'south-dongtian', name: '碧落洞天', regionId: 'south', tier: 'dongtian', outputs: { spiritualEnergy: 120_000 }, rare: null },
   { id: 'north-lingdi', name: '残碑坡', regionId: 'north', tier: 'lingdi', outputs: { spiritStone: 50_000 }, rare: null },
   { id: 'north-fudi', name: '旧市墟', regionId: 'north', tier: 'fudi', outputs: { spiritStone: 80_000 }, rare: null },
   { id: 'north-dongtian', name: '藏金洞天', regionId: 'north', tier: 'dongtian', outputs: { spiritStone: 120_000 }, rare: null },
@@ -104,7 +104,7 @@ export const WORLD_SITES: readonly WorldSiteDef[] = [
     name: '玄铁祖脉',
     regionId: 'center',
     tier: 'zumai',
-    outputs: { spiritualEnergy: 80_000 },
+    outputs: { spiritualEnergy: 150_000 },
     rare: { resourceId: 'xuantie' },
   },
   {
@@ -112,7 +112,7 @@ export const WORLD_SITES: readonly WorldSiteDef[] = [
     name: '神木祖脉',
     regionId: 'center',
     tier: 'zumai',
-    outputs: { spiritualEnergy: 80_000 },
+    outputs: { spiritualEnergy: 150_000 },
     rare: { resourceId: 'shenmu' },
   },
 ];

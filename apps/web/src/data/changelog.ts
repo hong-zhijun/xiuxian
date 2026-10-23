@@ -19,6 +19,15 @@ export const MAX_ENTRIES = 5;
 
 export const CHANGELOG: readonly ChangelogEntry[] = [
   {
+    id: '2026-10-23-balance-tweaks',
+    time: '2026-10-23 20:45',
+    title: '数值调整',
+    items: [
+      '灵兽竞逐的投注上限从 500 灵石提高到 10000 灵石（下限仍是 10）。',
+      '山河舆图的灵气产出上调：云泽域三处改为每小时 50 / 80 / 120（雾隐泉 / 云梦泽 / 碧落洞天），中州两处祖脉都改为每小时 150。',
+    ],
+  },
+  {
     id: '2026-10-23-friday-gift',
     time: '2026-10-23 17:30',
     title: '周五福利 · 庆祝周五下班',

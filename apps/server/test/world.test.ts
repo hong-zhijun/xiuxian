@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../src/app';
 import { dateKeyUtc8, effectiveCapacity, findSectLevel, findStage } from '../src/modules/game/constants';
 import { worldGarrisonFreeGuardStatement } from '../src/modules/game/repository';
+import { findWorldSite } from '../src/modules/game/world';
 import {
   assignDisciple,
   attackWorldBoss,
@@ -668,7 +669,9 @@ describe('山河舆图 · 整点供奉（计划 1.5）', () => {
     await processWorldSites(env.DB, NOW + 6 * HOUR + 10 * MIN);
     expect(await balanceOf(zu.sectId, 'xuantie')).toBe(5_000);
     expect(await siteRow('center-xuantie')).toMatchObject({ rare_hours: 0 });
-    expect(await balanceOf(zu.sectId, 'spiritualEnergy')).toBe(energyStart + 6 * 80_000);
+    // 祖脉的灵气产出取自灵地定义（改数值时这里不用跟着改）。
+    const zuEnergyPerHour = findWorldSite('center-xuantie')!.outputs.spiritualEnergy ?? 0;
+    expect(await balanceOf(zu.sectId, 'spiritualEnergy')).toBe(energyStart + 6 * zuEnergyPerHour);
   });
 
   it('入账不超过仓库上限：溢出的部分作废，余额停在上限', async () => {

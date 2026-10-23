@@ -614,9 +614,9 @@ export const RACE_HOUSE_EDGE = 0.1;
 export const RACE_WEIGHT_MIN = 1;
 export const RACE_WEIGHT_MAX = 10;
 
-/** 赌注范围（灵石最小单位；1 展示单位 = 1000 最小单位）：即展示 10 ~ 500。 */
+/** 赌注范围（灵石最小单位；1 展示单位 = 1000 最小单位）：即展示 10 ~ 10000。 */
 export const RACE_BET_MIN = 10_000;
-export const RACE_BET_MAX = 500_000;
+export const RACE_BET_MAX = 10_000_000;
 
 /** 大奖广播阈值：实际倍率 ≥ 此值且中奖 → 全服聊天广播。 */
 export const RACE_BROADCAST_PAYOUT_THRESHOLD = 5.0;

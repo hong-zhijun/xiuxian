@@ -47,14 +47,14 @@ describe('山河舆图 · 地图定义', () => {
       ['赤砂岭', 'west', 'lingdi', { ore: 75_000 }, null],
       ['熔金峡', 'west', 'fudi', { ore: 120_000 }, null],
       ['赤霄洞天', 'west', 'dongtian', { ore: 180_000 }, null],
-      ['雾隐泉', 'south', 'lingdi', { spiritualEnergy: 30_000 }, null],
-      ['云梦泽', 'south', 'fudi', { spiritualEnergy: 50_000 }, null],
-      ['碧落洞天', 'south', 'dongtian', { spiritualEnergy: 80_000 }, null],
+      ['雾隐泉', 'south', 'lingdi', { spiritualEnergy: 50_000 }, null],
+      ['云梦泽', 'south', 'fudi', { spiritualEnergy: 80_000 }, null],
+      ['碧落洞天', 'south', 'dongtian', { spiritualEnergy: 120_000 }, null],
       ['残碑坡', 'north', 'lingdi', { spiritStone: 50_000 }, null],
       ['旧市墟', 'north', 'fudi', { spiritStone: 80_000 }, null],
       ['藏金洞天', 'north', 'dongtian', { spiritStone: 120_000 }, null],
-      ['玄铁祖脉', 'center', 'zumai', { spiritualEnergy: 80_000 }, { resourceId: 'xuantie' }],
-      ['神木祖脉', 'center', 'zumai', { spiritualEnergy: 80_000 }, { resourceId: 'shenmu' }],
+      ['玄铁祖脉', 'center', 'zumai', { spiritualEnergy: 150_000 }, { resourceId: 'xuantie' }],
+      ['神木祖脉', 'center', 'zumai', { spiritualEnergy: 150_000 }, { resourceId: 'shenmu' }],
     ]);
   });
 

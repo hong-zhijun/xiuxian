@@ -24,7 +24,7 @@ const emit = defineEmits<{
 }>();
 
 const RACE_BET_MIN_DISPLAY = 10;
-const RACE_BET_MAX_DISPLAY = 500;
+const RACE_BET_MAX_DISPLAY = 10000;
 const UNITS_PER_DISPLAY = 1000;
 
 const race = ref<RaceStateView | null>(null);
@@ -561,7 +561,7 @@ onUnmounted(() => {
         <pre class="race-rules-text">每轮 10 分钟：逢 x2 分开盘投注，逢整十分封盘开跑并结算，
 随后 2 分钟播放比赛、公布结果。每日 08:02–23:00 开放。
 
-· 单注 10~500 灵石，同一轮可多次下注、押多只灵兽。
+· 单注 {{ RACE_BET_MIN_DISPLAY }}~{{ RACE_BET_MAX_DISPLAY }} 灵石，同一轮可多次下注、押多只灵兽。
 · 每轮首次下注占用 1 次赌坊次数（与论道、天机轮共享每日 50 次）。
 · 只押冠军：押中得「赌注 × 倍率」（含本金），未押中则赌注归庄。
 · 第 2~5 名与比赛过程只作展示，不影响输赢。</pre>
