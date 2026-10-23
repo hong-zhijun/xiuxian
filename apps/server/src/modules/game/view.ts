@@ -1632,6 +1632,8 @@ export interface SectStateView {
     reputation: number;
     /** 守擂阵容（弟子 id 数组，顺序即出战顺序）；null = 未设置（V5 2.4）。 */
     defenseLineup: string[] | null;
+    /** 0073 宗门头像哈希（null = 没有，顶栏用静态 Logo）。图片走 GET /game/avatars/:hash。 */
+    avatarHash: string | null;
     veinLevel: number;
     discipleCapacity: number;
     buildingCapacity: number;
@@ -1774,6 +1776,13 @@ export interface LeaderboardEntryView {
   level: number;
   levelName: string;
   reputation: number;
+  /** 0073 宗门头像哈希（null = 没有，榜单显示宗门名首字）。公开外观。 */
+  avatarHash: string | null;
+  /**
+   * 门人战力：战力最高的 5 名弟子的含装备战力合计。
+   * 既是综合榜的第三排序键（等级 → 声望 → 门人战力 → 建宗时间），也直接显示在榜行上。
+   */
+  sectPower: number;
   discipleCount: number;
   /** 最高境界弟子（用于展示「镇派之宝」）。 */
   topDisciple: {
@@ -1812,6 +1821,11 @@ export interface DiscipleLeaderboardEntryView {
    * 战力榜 / 综合榜不查装备表，这一项省略。
    */
   gearSlots?: DiscipleLeaderboardGearSlotView[];
+  /**
+   * 装备榜才有：弟子携带的灵兽（类型 + 名字，例如「神兽 庚金白虎」）；没带灵兽为 null。
+   * 战力加成里已经含灵兽，装备榜把它一并列出来，玩家才知道那部分加成从哪来。
+   */
+  spiritBeast?: DiscipleLeaderboardBeastView | null;
   /** 是否属于当前用户的宗门。 */
   isMe: boolean;
 }
@@ -1824,6 +1838,14 @@ export interface DiscipleLeaderboardGearSlotView {
   qualityName: string | null;
   /** 品质色；没穿为 null。 */
   color: string | null;
+}
+
+/** 装备榜一行里的灵兽：只给列表要显示的「类型 + 名字」，不搬整份灵兽档案。 */
+export interface DiscipleLeaderboardBeastView {
+  name: string;
+  /** 类型 id（spirit / rare / divine）：前端按它取色（与灵兽弹窗同一个色板）。 */
+  tier: string;
+  tierName: string;
 }
 
 /** 弟子榜单（GET /game/disciple-leaderboard）：战力 / 综合分 / 装备 各 top 10。 */
@@ -1943,6 +1965,8 @@ export interface PublicSectView {
   level: number;
   levelName: string;
   reputation: number;
+  /** 0073 宗门头像哈希（null = 没有；公开外观，别人也看得到）。 */
+  avatarHash: string | null;
   disciples: PublicDiscipleView[];
   buildings: PublicBuildingView[];
   /** 是否已设置**有效**的手动守擂阵容（0012 起不再代表「能否挑战」；自动守擂也可挑战）。 */
@@ -2642,6 +2666,7 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
       levelName: levelDef.name,
       reputation: Number(sect.reputation) || 0,
       defenseLineup: parseDefenseLineup(sect.defense_lineup),
+      avatarHash: sect.avatar_hash ?? null,
       veinLevel: sect.vein_level,
       discipleCapacity,
       buildingCapacity,

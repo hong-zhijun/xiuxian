@@ -123,7 +123,7 @@ function valueLabel(entry: DiscipleLeaderboardEntryView): string {
               <span v-if="entry.talentName !== '无'">天赋 {{ entry.talentName }}</span>
               <span class="dlb-value">{{ valueLabel(entry) }}</span>
             </span>
-            <!-- 装备榜：三个部位的品质（品质色边框；没穿的部位显示「空」）。 -->
+            <!-- 装备榜：三个部位的品质（品质色边框；没穿的部位显示「空」），后面接携带的灵兽。 -->
             <span v-if="activeTab === 'equipment' && entry.gearSlots" class="dlb-gear">
               <span
                 v-for="slot in entry.gearSlots"
@@ -132,6 +132,12 @@ function valueLabel(entry: DiscipleLeaderboardEntryView): string {
                 :class="{ 'is-empty': slot.quality === null }"
                 :style="slot.color ? { borderColor: slot.color, color: slot.color } : undefined"
               >{{ slot.slotName }} {{ slot.qualityName ?? '空' }}</span>
+              <!-- 0073：装备后面接灵兽（类型 + 名字），与装备名同一套小标签，按灵兽类型取色。 -->
+              <span
+                v-if="entry.spiritBeast"
+                class="dlb-gear-slot dlb-beast"
+                :class="`is-tier-${entry.spiritBeast.tier}`"
+              >{{ entry.spiritBeast.tierName }} {{ entry.spiritBeast.name }}</span>
             </span>
           </span>
           <span class="rank-arrow" aria-hidden="true">›</span>
@@ -178,7 +184,7 @@ function valueLabel(entry: DiscipleLeaderboardEntryView): string {
   background: rgba(202, 169, 106, 0.08);
 }
 
-.dlb-row {
+.rank-open.dlb-row {
   display: grid;
   width: 100%;
   min-width: 0;
@@ -223,5 +229,15 @@ function valueLabel(entry: DiscipleLeaderboardEntryView): string {
 .dlb-gear-slot.is-empty {
   border-color: rgba(119, 184, 154, 0.16);
   color: #6f8479;
+}
+
+/* 0073 灵兽：与装备名同一套小标签（.dlb-gear-slot 的边框跟 currentColor 走），
+   颜色按灵兽类型取，和灵兽苑 / 弟子档案里的类型色一致（珍兽冷蓝、神兽金）。 */
+.dlb-beast.is-tier-rare {
+  color: #9aa7e4;
+}
+
+.dlb-beast.is-tier-divine {
+  color: #ebc47c;
 }
 </style>

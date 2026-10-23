@@ -1,5 +1,5 @@
 import { elementFactor, enemyElement, ELEMENT_NAMES } from './elements';
-import { beastOf, beastBossMods, beastPowerBonusBpOf, withBeastAttributes } from './spiritBeasts';
+import { beastOf, beastBossMods, beastPowerBonusBpOf, withBeastAttributes, readBeast, BEAST_SPECIES } from './spiritBeasts';
 import type { GameConfigContent } from '@xiuxian/game-core';
 
 import { validatedGameConfig } from '../../config/loadGameConfig';
@@ -295,6 +295,7 @@ import {
   updateEquipmentSubStatement,
   recallDiscipleJourneyStatement,
   updateSectChallengeCounterStatement,
+  updateSectAvatarHashStatement,
   updateSectDefenseLineupStatement,
   updateSectLevelStatement,
   updateSectNameStatement,
@@ -787,6 +788,7 @@ import {
   type ShopExchangeResultView,
   type StoneGambleResultView,
   type DiscipleLeaderboardEntryView,
+  type DiscipleLeaderboardBeastView,
   type DiscipleLeaderboardView,
   type ChatMessageView,
   type WorldBossAttackResultView,
@@ -2372,6 +2374,8 @@ export async function createSect(
         debate_count: 0,
         // 0020 天机轮：格局种子从 0 开始（迁移的列默认值也是 0，内存口径与库一致）。
         wheel_seed: 0,
+        // 0073 宗门头像：新建宗门没有自定义头像，顶栏用静态 Logo（迁移的列默认值也是 NULL）。
+        avatar_hash: null,
         created_at: now,
       },
       disciples,
@@ -3316,6 +3320,57 @@ export async function getAvatarImage(
   return { mime: row.mime, bytes: base64ToBytes(row.data) };
 }
 
+/**
+ * 上传宗门头像（0073：公开外观，顶栏左侧的宗门 Logo，别人的宗门公开档案也显示）。
+ *
+ * - 与弟子头像同一套：图片在浏览器里裁正方形并压缩成 160×160 的 WebP / JPEG，
+ *   这里由 validateAvatarImage 按文件头再校验格式 / 尺寸 / 大小；
+ * - 图片与弟子头像共用 avatar_images，按内容哈希入库（INSERT OR IGNORE），同一张图只存一份；
+ * - 换图时旧图若已没人引用（没有弟子、也没有宗门在用），同批删掉（放在 UPDATE 之后）；
+ * - 幂等：与当前哈希相同时显式早退，不写库；
+ * - 纯外观：不花资源，宗门行也没有历练 / 重伤这类状态需要放行。
+ */
+export async function setSectAvatarImage(
+  db: D1Database,
+  userId: string,
+  mime: string,
+  base64: string,
+  now: number,
+): Promise<SectStateView> {
+  const image = await validateAvatarImage(mime, base64);
+  const draft = await draftFor(db, userId, now);
+  if (draft.sect.avatar_hash === image.hash) {
+    return draft.view();
+  }
+  draft.addStatement(insertAvatarImageStatement(image.hash, image.mime, image.base64, now));
+  return commitSectAvatarHash(draft, image.hash);
+}
+
+/** 移除宗门头像（0073）：回到静态宗门 Logo；本来就没有时显式早退。 */
+export async function clearSectAvatarImage(
+  db: D1Database,
+  userId: string,
+  now: number,
+): Promise<SectStateView> {
+  const draft = await draftFor(db, userId, now);
+  if (draft.sect.avatar_hash === null) {
+    return draft.view();
+  }
+  return commitSectAvatarHash(draft, null);
+}
+
+/** 写回 sects.avatar_hash，并在同批最后清理旧图（还有弟子 / 别的宗门用着同一张图时 NOT EXISTS 会保留）。 */
+async function commitSectAvatarHash(draft: SectDraft, hash: string | null): Promise<SectStateView> {
+  const previous = draft.sect.avatar_hash;
+  draft.addStatement(updateSectAvatarHashStatement(draft.sect.id, hash));
+  if (previous !== null) {
+    draft.addStatement(deleteOrphanAvatarImageStatement(previous));
+  }
+  draft.sect.avatar_hash = hash;
+  await draft.commit();
+  return draft.view();
+}
+
 /* ---------- 改名（宗门 / 弟子）：扣灵石的名称写回 ---------- */
 
 /**
@@ -4230,11 +4285,27 @@ function topDiscipleOf(disciples: readonly DiscipleRow[]): LeaderboardEntryView[
   };
 }
 
+/** 江湖榜「门人战力」取战力最高的几名弟子：只算前 N 人，堆人头刷不上去。 */
+const SECT_POWER_TOP_DISCIPLES = 5;
+
+/** 门人战力：战力最高的 5 名弟子的含装备战力合计（装备与灵兽加成都在里面，与天骄榜同一口径）。 */
+function sectPowerOf(disciples: readonly DiscipleRow[]): number {
+  const powers: number[] = [];
+  for (const disciple of disciples) {
+    powers.push(gearedCombatPower(disciple));
+  }
+  powers.sort((a, b) => b - a);
+  return powers.slice(0, SECT_POWER_TOP_DISCIPLES).reduce((sum, power) => sum + power, 0);
+}
+
 /**
  * 江湖榜（V3 第二节）：综合榜，只读、不结算、不写库。
  *
- * 排序由 SQL 决定（等级 DESC → 声望 DESC → 创建时间 ASC，见 SectRepository.findAll）；
- * 3~5 个宗门不优化查询，逐个宗门查弟子列表找镇派弟子。
+ * 名次规则：**等级 DESC → 声望 DESC → 门人战力 DESC → 建宗时间 ASC**（四项全同再按 id，名次不抖）。
+ * 同等级同声望时用「门人战力」见高下，而不是直接比建宗早晚——新宗门把门人练强就能越过老宗门；
+ * 建宗时间只在战力也相同时兜底（老门派在前）。
+ *
+ * 3~5 个宗门不优化查询：逐个宗门查一次弟子列表，顺便得到镇派弟子与门人战力。
  */
 export async function listLeaderboard(
   db: D1Database,
@@ -4248,24 +4319,51 @@ export async function listLeaderboard(
   ]);
   const mySectId = mySect?.id ?? null;
 
-  const entries: LeaderboardEntryView[] = [];
+  const rows: { sect: SectRow; disciples: DiscipleRow[]; power: number }[] = [];
   for (const sect of sects) {
     const disciples = await discipleRepository.findBySectId(sect.id);
-    entries.push({
-      sectId: sect.id,
-      name: sect.name,
-      level: Number(sect.level),
-      levelName: findSectLevel(Number(sect.level)).name,
-      reputation: Number(sect.reputation) || 0,
-      discipleCount: disciples.length,
-      topDisciple: topDiscipleOf(disciples),
-      isMe: sect.id === mySectId,
-    });
+    rows.push({ sect, disciples, power: sectPowerOf(disciples) });
   }
-  return entries;
+
+  // 排序在服务端做：门人战力要现算，SQL 排不了；id 兜底保证同毫秒建的两个宗门名次也不抖。
+  rows.sort(
+    (a, b) =>
+      Number(b.sect.level) - Number(a.sect.level) ||
+      (Number(b.sect.reputation) || 0) - (Number(a.sect.reputation) || 0) ||
+      b.power - a.power ||
+      Number(a.sect.created_at) - Number(b.sect.created_at) ||
+      a.sect.id.localeCompare(b.sect.id),
+  );
+
+  return rows.map(({ sect, disciples, power }) => ({
+    sectId: sect.id,
+    name: sect.name,
+    level: Number(sect.level),
+    levelName: findSectLevel(Number(sect.level)).name,
+    reputation: Number(sect.reputation) || 0,
+    // 0073：江湖榜左侧的宗门头像（没有自定义头像时前端显示宗门名首字）。
+    avatarHash: sect.avatar_hash ?? null,
+    // 排序键之一，榜行直接显示，玩家才知道名次差在哪。
+    sectPower: power,
+    discipleCount: disciples.length,
+    topDisciple: topDiscipleOf(disciples),
+    isMe: sect.id === mySectId,
+  }));
 }
 
 const DISCIPLE_LEADERBOARD_SIZE = 10;
+
+/**
+ * 装备榜每行要展示的灵兽（类型 + 名字，例如「神兽 庚金白虎」）。
+ * 只取列表需要的两项，不搬整份 SpiritBeastView；没带灵兽或存档里是未知物种时返回 null。
+ */
+function leaderboardBeastOf(disciple: DiscipleRow): DiscipleLeaderboardBeastView | null {
+  const beast = readBeast(disciple);
+  if (beast === null) return null;
+  const species = BEAST_SPECIES.find((item) => item.id === beast.speciesId);
+  if (species === undefined) return null;
+  return { name: species.name, tier: species.tier, tierName: species.tierName };
+}
 
 /**
  * 弟子榜单：战力 / 综合分 / 装备 各 top 10，只读、不结算、不写库。
@@ -4383,6 +4481,8 @@ export async function listDiscipleLeaderboard(
         color: quality === null ? null : qualityColorOf(quality),
       };
     }),
+    // 战力加成里已经含灵兽，榜单把灵兽一并列出来（没带灵兽显示为 null）。
+    spiritBeast: leaderboardBeastOf(item.row),
   }));
 
   return { byCombatPower, byAttributeScore, byEquipment };
@@ -4576,6 +4676,8 @@ export async function getPublicSect(
     level: Number(sect.level),
     levelName: findSectLevel(Number(sect.level)).name,
     reputation: Number(sect.reputation) || 0,
+    // 0073：宗门头像是公开外观（换图时服务端已保证旧图不再被引用才会删）。
+    avatarHash: sect.avatar_hash ?? null,
     // 「有效手动守擂阵容」：3 个不重复、仍属于本宗的弟子；无效阵容不算已布阵。
     hasDefenseLineup: plan.canDefend && plan.mode === 'configured',
     challenge,

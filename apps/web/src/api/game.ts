@@ -243,6 +243,8 @@ export interface SectStateView {
     reputation: number;
     /** 守擂阵容（3 名弟子 id，顺序即出战顺序）；null = 尚未布阵。 */
     defenseLineup: string[] | null;
+    /** 0073 宗门头像哈希（null = 没有，顶栏用静态 Logo）。 */
+    avatarHash: string | null;
   };
   serverNow: string;
   resources: ResourceView[];
@@ -740,6 +742,10 @@ export interface LeaderboardEntryView {
   level: number;
   levelName: string;
   reputation: number;
+  /** 0073 宗门头像哈希（null = 没有，榜单显示宗门名首字）。 */
+  avatarHash: string | null;
+  /** 门人战力：战力最高的 5 名弟子的含装备战力合计（综合榜第三排序键，也显示在榜行）。 */
+  sectPower: number;
   discipleCount: number;
   /** 最高境界弟子（「镇派之宝」）；尚无可战弟子时为 null。 */
   topDisciple: {
@@ -787,6 +793,8 @@ export interface PublicSectView {
   level: number;
   levelName: string;
   reputation: number;
+  /** 0073 宗门头像哈希（null = 没有；公开外观，按内容哈希取图）。 */
+  avatarHash: string | null;
   disciples: PublicDiscipleView[];
   buildings: PublicBuildingView[];
   /** 是否已设置**有效**的手动守擂阵容（不代表能否挑战；自动守擂也可挑战）。 */
@@ -918,6 +926,8 @@ export interface DiscipleLeaderboardEntryView {
   gearPowerBonusBp: number;
   /** 装备榜才有：三个部位各穿了什么品质（没穿的部位 quality 为 null）。 */
   gearSlots?: DiscipleLeaderboardGearSlotView[];
+  /** 装备榜才有：携带的灵兽（类型 + 名字，例如「神兽 庚金白虎」）；没带为 null。 */
+  spiritBeast?: DiscipleLeaderboardBeastView | null;
   isMe: boolean;
 }
 
@@ -927,6 +937,14 @@ export interface DiscipleLeaderboardGearSlotView {
   quality: string | null;
   qualityName: string | null;
   color: string | null;
+}
+
+/** 装备榜一行里的灵兽：只给列表要显示的「类型 + 名字」。 */
+export interface DiscipleLeaderboardBeastView {
+  name: string;
+  /** 类型 id（spirit / rare / divine）：按它取色（与灵兽弹窗同一个色板）。 */
+  tier: string;
+  tierName: string;
 }
 
 export interface DiscipleLeaderboardView {
@@ -1218,6 +1236,26 @@ export async function clearDiscipleAvatarImage(discipleId: string): Promise<Sect
     '/api/v1/game/clear-disciple-avatar-image',
     { method: 'POST', body: { discipleId } },
   );
+  return result.state;
+}
+
+/**
+ * 0073 上传宗门头像（POST /game/set-sect-avatar-image）：与弟子头像同一个成品口径，
+ * data 是浏览器里裁剪压缩好的图片（utils/avatarImage.ts 的 compressAvatar），服务端按文件头再校验。
+ */
+export async function setSectAvatarImage(mime: string, data: string): Promise<SectStateView> {
+  const result = await apiRequest<{ state: SectStateView }>('/api/v1/game/set-sect-avatar-image', {
+    method: 'POST',
+    body: { mime, data },
+  });
+  return result.state;
+}
+
+/** 0073 移除宗门头像（POST /game/clear-sect-avatar-image），回到静态宗门 Logo。 */
+export async function clearSectAvatarImage(): Promise<SectStateView> {
+  const result = await apiRequest<{ state: SectStateView }>('/api/v1/game/clear-sect-avatar-image', {
+    method: 'POST',
+  });
   return result.state;
 }
 

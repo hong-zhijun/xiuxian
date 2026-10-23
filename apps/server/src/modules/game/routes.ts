@@ -40,6 +40,7 @@ import {
   setDiscipleAvatarFrameRequestSchema,
   setDiscipleAvatarImageRequestSchema,
   clearDiscipleAvatarImageRequestSchema,
+  setSectAvatarImageRequestSchema,
   setDiscipleNoteRequestSchema,
   shopBuyRequestSchema,
   stoneGambleRequestSchema,
@@ -108,6 +109,8 @@ import {
   getAvatarImage,
   setDiscipleAvatarImage,
   clearDiscipleAvatarImage,
+  setSectAvatarImage,
+  clearSectAvatarImage,
   healDisciplesBatch,
   appointSteward,
   chooseTalent,
@@ -544,8 +547,23 @@ export function createGameRoutes(): Hono<AppEnv> {
     return respondOk(c, { state });
   });
 
-  // 0038：头像图片本体。地址按内容哈希寻址、内容永不变，所以给 immutable 长缓存（覆盖全局 no-store）；
-  // 只对登录玩家开放（<img> 同源请求会带上会话 Cookie）。
+  // 0073：上传宗门头像（与弟子头像同一个成品口径；服务端按文件头再校验，按内容哈希入库）。
+  routes.post('/game/set-sect-avatar-image', async (c) => {
+    const userId = requireUserId(c);
+    const body = await parseStrictJson(setSectAvatarImageRequestSchema, c);
+    const state = await setSectAvatarImage(getDb(c.env), userId, body.mime, body.data, Date.now());
+    return respondOk(c, { state });
+  });
+
+  // 0073：移除宗门头像（回到静态宗门 Logo；本来就没有时服务端直接早退）。
+  routes.post('/game/clear-sect-avatar-image', async (c) => {
+    const userId = requireUserId(c);
+    const state = await clearSectAvatarImage(getDb(c.env), userId, Date.now());
+    return respondOk(c, { state });
+  });
+
+  // 0038 / 0073：头像图片本体（弟子与宗门共用一张表）。地址按内容哈希寻址、内容永不变，
+  // 所以给 immutable 长缓存（覆盖全局 no-store）；只对登录玩家开放（<img> 同源请求会带上会话 Cookie）。
   routes.get('/game/avatars/:hash', async (c) => {
     requireUserId(c);
     const hash = c.req.param('hash');

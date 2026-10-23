@@ -31,7 +31,7 @@ import type {
 } from '../api/game';
 import type { ToastTone } from '../types/ui';
 import type { AvatarFrameId } from '../utils/avatarFrames';
-import type { CompressedAvatar } from '../utils/avatarImage';
+import { avatarImageUrl, type CompressedAvatar } from '../utils/avatarImage';
 import { ApiError } from '../api/client';
 import { formatAmount, formatBp, formatRate, formatTime } from '../utils/format';
 import {
@@ -100,6 +100,7 @@ import WorldMapDialog from './WorldMapDialog.vue';
 import MarketDialog from './MarketDialog.vue';
 import TodoFloat, { type TodoItem } from './TodoFloat.vue';
 import ModalShell from './ModalShell.vue';
+import AvatarCropDialog from './AvatarCropDialog.vue';
 
 /**
  * 游戏主界面：服务端负责结算和规则，本组件只展示、本地平滑数值并派发操作。
@@ -185,6 +186,9 @@ const emit = defineEmits<{
   /** 0038 自定义头像：上传（浏览器里已压缩好）/ 移除。 */
   setAvatarImage: [discipleId: string, image: CompressedAvatar];
   clearAvatarImage: [discipleId: string];
+  /** 0073 宗门头像：上传（浏览器里已压缩好）/ 移除（请求与提示都在 App.vue）。 */
+  setSectAvatarImage: [image: CompressedAvatar];
+  clearSectAvatarImage: [];
   /** 0019 赌坊：论道请求与悟道值加点都由 App.vue 绑定并调接口，这里只派发与展示。 */
   daoDebate: [input: DaoDebateInput];
   allocateDaoInsight: [discipleId: string, attribute: DaoAttribute, points: number];
@@ -301,6 +305,50 @@ function closeRenameDialog(): void {
 function onRenameInput(event: Event): void {
   renameDraft.value = (event.target as HTMLInputElement).value;
 }
+
+/* ---------- 0073 宗门头像：选图 → 裁剪弹窗里压缩 → 上传；服务端回填新哈希后关弹窗 ---------- */
+
+/** 顶栏的宗门图案：有自定义头像就按内容哈希取图，否则用静态 Logo。 */
+const sectLogoUrl = computed(() =>
+  props.state.sect.avatarHash === null
+    ? '/brand-logo.png'
+    : avatarImageUrl(props.state.sect.avatarHash),
+);
+
+const sectAvatarFileInput = ref<HTMLInputElement | null>(null);
+/** 正在裁剪的图片；null = 裁剪弹窗没开。 */
+const sectAvatarCropFile = ref<File | null>(null);
+
+function pickSectAvatarFile(): void {
+  if (props.busy) return;
+  sectAvatarFileInput.value?.click();
+}
+
+function onSectAvatarFileChange(event: Event): void {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0] ?? null;
+  // 清空选择，同一张图再选一次也能触发 change。
+  input.value = '';
+  if (file !== null) sectAvatarCropFile.value = file;
+}
+
+function confirmSectAvatarImage(image: CompressedAvatar): void {
+  if (props.busy) return;
+  emit('setSectAvatarImage', image);
+}
+
+function clearSectAvatarImage(): void {
+  if (props.busy || props.state.sect.avatarHash === null) return;
+  emit('clearSectAvatarImage');
+}
+
+// 上传成功（服务端回填了新哈希）就关掉裁剪弹窗；失败时弹窗留着，可以直接换个位置再试。
+watch(
+  () => props.state.sect.avatarHash,
+  () => {
+    sectAvatarCropFile.value = null;
+  },
+);
 
 // 服务端回填了新名字（= 改名成功）就自动关弹窗，不需要额外的成功回调。
 watch(
@@ -2318,7 +2366,13 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
     <TodoFloat :items="todoItems" @select="onTodo" @docked="(docked: boolean) => (todoDocked = docked)" />
     <header class="game-topbar">
       <div class="sect-identity">
-        <img class="sect-logo" src="/brand-logo.png" alt="" aria-hidden="true" />
+        <img
+          class="sect-logo"
+          :class="{ 'is-custom': state.sect.avatarHash !== null }"
+          :src="sectLogoUrl"
+          alt=""
+          aria-hidden="true"
+        />
         <div class="sect-identity-text">
           <div class="sect-name-row">
             <h1>{{ state.sect.name }}</h1>
@@ -2335,6 +2389,41 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
                 <path d="M14 6l4 4" />
               </svg>
             </button>
+            <button
+              class="sect-rename"
+              type="button"
+              :disabled="busy"
+              :aria-label="state.sect.avatarHash === null ? '上传宗门头像' : '更换宗门头像'"
+              :title="state.sect.avatarHash === null ? '上传头像' : '换一张'"
+              @click="pickSectAvatarFile"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M12 16V4m0 0L8 8m4-4 4 4" />
+                <path d="M5 15v4h14v-4" />
+              </svg>
+            </button>
+            <button
+              v-if="state.sect.avatarHash !== null"
+              class="sect-rename is-clear"
+              type="button"
+              :disabled="busy"
+              aria-label="移除宗门头像"
+              title="移除头像"
+              @click="clearSectAvatarImage"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M7 7l10 10M17 7 7 17" />
+              </svg>
+            </button>
+            <input
+              ref="sectAvatarFileInput"
+              class="sect-avatar-input"
+              type="file"
+              accept="image/*"
+              tabindex="-1"
+              aria-hidden="true"
+              @change="onSectAvatarFileChange"
+            />
           </div>
           <p class="eyebrow sect-world">太初界 · 掌门府</p>
         </div>
@@ -3381,6 +3470,18 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
         </div>
       </section>
     </ModalShell>
+
+    <!--
+      0073 宗门头像：裁剪弹窗（与弟子头像共用同一个组件）。成功后服务端回填新哈希，
+      上面的 watch 会自动关掉这一层；失败时保持打开，错误由 App.vue 提示。
+    -->
+    <AvatarCropDialog
+      v-if="sectAvatarCropFile !== null"
+      :file="sectAvatarCropFile"
+      :busy="busy"
+      @confirm="confirmSectAvatarImage"
+      @close="sectAvatarCropFile = null"
+    />
 
     <!--
       0044 装备祭炼：二级弹窗，叠在背包 / 弟子详情之上（Esc / 点遮罩只关它）。

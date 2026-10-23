@@ -42,6 +42,11 @@ export interface SectRow {
    * （见 gambling.ts 的 wheelLayoutSeed）；每次重置 +1，只有它变，格局才变。
    */
   wheel_seed: number;
+  /**
+   * 0073 宗门头像的内容哈希（与弟子头像共用 avatar_images.hash）；
+   * null = 没有，顶栏继续用静态的 /brand-logo.png。公开外观。
+   */
+  avatar_hash: string | null;
   created_at: number;
 }
 
@@ -240,17 +245,21 @@ export interface DaoDebateLogRow {
 export class SectRepository extends ParamRepository {
   async findByUserId(userId: string): Promise<SectRow | null> {
     return this.one<SectRow>({
-      sql: `SELECT id, user_id, name, level, vein_level, reputation, last_settled_at, recruit_date_key, recruit_count, recruit_refresh_level, recruit_refresh_used, created_at, defense_lineup, challenge_date_key, challenge_count, debate_date_key, debate_count, wheel_seed
+      sql: `SELECT id, user_id, name, level, vein_level, reputation, last_settled_at, recruit_date_key, recruit_count, recruit_refresh_level, recruit_refresh_used, created_at, defense_lineup, challenge_date_key, challenge_count, debate_date_key, debate_count, wheel_seed, avatar_hash
             FROM sects WHERE user_id = ?`,
       params: [userId],
     });
   }
 
-  /** 排行榜用：全部宗门，按综合榜顺序（等级 DESC → 声望 DESC → 创建时间 ASC）。 */
+  /**
+   * 排行榜用：全部宗门。这里的顺序只是稳定的基础顺序；
+   * 江湖榜的最终名次由 service 的 listLeaderboard 按「等级 → 声望 → 门人战力 → 建宗时间」再排一次
+   * （门人战力要现算，SQL 排不了）。其它调用方可以直接沿用这个顺序。
+   */
   async findAll(): Promise<SectRow[]> {
     return this.all<SectRow>({
       sql: `SELECT id, user_id, name, level, vein_level, reputation, last_settled_at,
-                   recruit_date_key, recruit_count, recruit_refresh_level, recruit_refresh_used, created_at, defense_lineup, challenge_date_key, challenge_count, debate_date_key, debate_count, wheel_seed
+                   recruit_date_key, recruit_count, recruit_refresh_level, recruit_refresh_used, created_at, defense_lineup, challenge_date_key, challenge_count, debate_date_key, debate_count, wheel_seed, avatar_hash
             FROM sects ORDER BY level DESC, reputation DESC, created_at ASC`,
       params: [],
     });
@@ -260,7 +269,7 @@ export class SectRepository extends ParamRepository {
   async findById(sectId: string): Promise<SectRow | null> {
     return this.one<SectRow>({
       sql: `SELECT id, user_id, name, level, vein_level, reputation, last_settled_at,
-                   recruit_date_key, recruit_count, recruit_refresh_level, recruit_refresh_used, created_at, defense_lineup, challenge_date_key, challenge_count, debate_date_key, debate_count, wheel_seed
+                   recruit_date_key, recruit_count, recruit_refresh_level, recruit_refresh_used, created_at, defense_lineup, challenge_date_key, challenge_count, debate_date_key, debate_count, wheel_seed, avatar_hash
             FROM sects WHERE id = ?`,
       params: [sectId],
     });
@@ -1112,13 +1121,30 @@ export function updateDiscipleAvatarHashStatement(
 }
 
 /**
- * 0038 清理孤儿图片：换头像 / 移除头像 / 驱逐弟子时，放在同一个 batch 的**最后**，
- * 删掉不再被任何弟子引用的那张旧图（别的弟子用着同一张图时保留）。
+ * 0073 宗门头像写回：只更新 sects.avatar_hash 一列（null = 移除，回到静态宗门 Logo）。
+ * sects 只有主键可用，并发保护靠 commit() 的 mutation_guards 快照守卫。
+ */
+export function updateSectAvatarHashStatement(
+  sectId: string,
+  hash: string | null,
+): ParameterizedQuery {
+  return {
+    sql: 'UPDATE sects SET avatar_hash = ? WHERE id = ?',
+    params: [hash, sectId],
+  };
+}
+
+/**
+ * 0038 / 0073 清理孤儿图片：换头像 / 移除头像 / 驱逐弟子时，放在同一个 batch 的**最后**，
+ * 删掉不再被任何弟子、任何宗门引用的那张旧图（别人用着同一张图时保留）。
+ * 两个表共用 avatar_images，所以这里必须两边都看，否则一方清理会把另一方的图删掉。
  */
 export function deleteOrphanAvatarImageStatement(hash: string): ParameterizedQuery {
   return {
-    sql: 'DELETE FROM avatar_images WHERE hash = ? AND NOT EXISTS (SELECT 1 FROM disciples WHERE avatar_hash = ?)',
-    params: [hash, hash],
+    sql: `DELETE FROM avatar_images WHERE hash = ?
+            AND NOT EXISTS (SELECT 1 FROM disciples WHERE avatar_hash = ?)
+            AND NOT EXISTS (SELECT 1 FROM sects WHERE avatar_hash = ?)`,
+    params: [hash, hash, hash],
   };
 }
 

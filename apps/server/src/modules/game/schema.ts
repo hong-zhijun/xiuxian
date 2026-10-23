@@ -332,6 +332,15 @@ export const clearDiscipleAvatarImageRequestSchema = z.strictObject({
 });
 
 /**
+ * 0073 上传宗门头像：与弟子自定义头像同一个成品口径（浏览器里裁剪压缩后的 base64）。
+ * 这里只挡类型与长度，格式 / 尺寸 / 大小由 avatarImage.ts 按文件头再校验一次。
+ */
+export const setSectAvatarImageRequestSchema = z.strictObject({
+  mime: z.enum(AVATAR_IMAGE_MIMES),
+  data: z.string().min(1).max(AVATAR_IMAGE_MAX_BASE64_CHARS),
+});
+
+/**
  * 0019 论道赌局（赌坊）：只做「类型 + 长度/范围」的第一道防线，
  * 真正的规则（解锁、每日次数、弟子归属与状态、余额、赌注白名单）全部在 service 里判定。
  * 三种赌注模式共用同一个请求体，按 betMode 取用各自字段；多余字段由 strictObject 拒绝。

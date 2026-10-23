@@ -293,6 +293,37 @@ describe('战力计入装备（计划 1.2）', () => {
     expect(board.byCombatPower.every((entry) => entry.gearSlots === undefined)).toBe(true);
   });
 
+  it('天骄榜 · 装备榜（0073）：装备后面列携带的灵兽（类型 + 名字），没带为 null', async () => {
+    const { fixture, now } = await frozenSect('eq-board-beast');
+    const [withBeast, bare] = fixture.discipleIds as [string, string];
+    // 两人各穿一件（有加成才会上装备榜）；只有前者带灵兽。
+    for (const discipleId of [withBeast, bare]) {
+      const item = await insertEquipment(fixture.sectId, { quality: 'immortal', mainValue: 24 });
+      await equipItem(env.DB, fixture.userId, item, discipleId, now);
+    }
+    await env.DB.prepare('UPDATE disciples SET beast_json = ? WHERE id = ?')
+      .bind(JSON.stringify({ speciesId: 'white_tiger', quality: 'immortal', level: 10 }), withBeast)
+      .run();
+
+    const board = await listDiscipleLeaderboard(env.DB, fixture.userId);
+    const mine = new Map(
+      board.byEquipment
+        .filter((entry) => entry.sectId === fixture.sectId)
+        .map((entry) => [entry.discipleId, entry]),
+    );
+    expect(mine.size).toBe(2);
+    expect(mine.get(withBeast)?.spiritBeast).toEqual({
+      name: '庚金白虎',
+      tier: 'divine',
+      tierName: '神兽',
+    });
+    // 没带灵兽：字段在，值为 null（前端据此不画那枚标签）。
+    expect(mine.get(bare)?.spiritBeast).toBeNull();
+    // 战力榜 / 综合榜不查灵兽，这一项省略。
+    expect(board.byCombatPower.every((entry) => entry.spiritBeast === undefined)).toBe(true);
+    expect(board.byAttributeScore.every((entry) => entry.spiritBeast === undefined)).toBe(true);
+  });
+
   it('挑战：战报里的每轮战力就是含装备的战力（攻方）', async () => {
     const attacker = await makeSect('eq-challenge-a');
     const defender = await makeSect('eq-challenge-b');

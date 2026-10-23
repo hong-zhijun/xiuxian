@@ -30,6 +30,8 @@ import {
   setDiscipleAvatarFrame,
   setDiscipleAvatarImage,
   clearDiscipleAvatarImage,
+  setSectAvatarImage,
+  clearSectAvatarImage,
   setDefenseLineup,
   startJourney,
   startRealmExplore,
@@ -960,6 +962,25 @@ function onClearAvatarImage(discipleId: string): void {
   );
 }
 
+/** 0073 上传宗门头像：与弟子头像同一套（浏览器里裁剪压缩好，服务端再校验格式 / 尺寸 / 大小）。 */
+function onSetSectAvatarImage(image: CompressedAvatar): void {
+  void runAction(
+    () => setSectAvatarImage(image.mime, image.data),
+    () => ({
+      title: '宗门头像已换',
+      message: `新头像已挂上山门（压缩后 ${Math.max(1, Math.round(image.bytes / 1024))}KB）。`,
+    }),
+  );
+}
+
+/** 0073 移除宗门头像：恢复静态宗门 Logo。 */
+function onClearSectAvatarImage(): void {
+  void runAction(
+    () => clearSectAvatarImage(),
+    () => ({ title: '宗门头像已移除', message: '山门已换回原来的宗门图案。' }),
+  );
+}
+
 /** 0021 宗门改名（一次 500 灵石）：名称规则与扣费都在服务端，这里只按回执提示。 */
 function onRenameSect(name: string): void {
   void runAction(
@@ -1202,6 +1223,8 @@ onUnmounted(() => {
       @set-avatar-frame="onSetAvatarFrame"
       @set-avatar-image="onSetAvatarImage"
       @clear-avatar-image="onClearAvatarImage"
+      @set-sect-avatar-image="onSetSectAvatarImage"
+      @clear-sect-avatar-image="onClearSectAvatarImage"
       @rename-sect="onRenameSect"
       @rename-disciple="onRenameDisciple"
       @expel="onExpelDisciple"

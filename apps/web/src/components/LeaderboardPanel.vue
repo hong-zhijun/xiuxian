@@ -6,12 +6,13 @@ import { fetchLeaderboard } from '../api/game';
 import LoadingState from './LoadingState.vue';
 import ModalShell from './ModalShell.vue';
 import PublicSectPanel from './PublicSectPanel.vue';
+import SectAvatar from './SectAvatar.vue';
 
 /**
  * 江湖榜（弹窗内容）。
  *
  * 列表按服务端给的顺序展示（等级 → 声望 → 创建时间）；点别人那行弹出公开档案（二级弹窗，关掉回到榜单原位），
- * 自己的行不可点。
+ * 自己的行不可点。0073 起每行左侧带宗门头像（没上传过的显示宗门名首字）。
  */
 const props = defineProps<{
   state: SectStateView;
@@ -74,8 +75,14 @@ function openSect(entry: LeaderboardEntryView): void {
         class="rank-row"
         :class="{ 'is-me': entry.isMe }"
       >
-        <button class="rank-open" type="button" :disabled="entry.isMe || busy" @click="openSect(entry)">
+        <button
+          class="rank-open lb-row"
+          type="button"
+          :disabled="entry.isMe || busy"
+          @click="openSect(entry)"
+        >
           <span class="rank-no">{{ index + 1 }}</span>
+          <SectAvatar class="lb-avatar" :name="entry.name" :image-hash="entry.avatarHash" />
           <span class="rank-copy">
             <span class="rank-title">
               <strong>{{ entry.name }}</strong>
@@ -84,6 +91,8 @@ function openSect(entry: LeaderboardEntryView): void {
             </span>
             <span class="rank-meta">
               <span>声望 {{ entry.reputation }}</span>
+              <!-- 0073：综合榜的排序键之一，直接显示（同等级同声望时就是它决定名次）。 -->
+              <span>门人战力 {{ entry.sectPower }}</span>
               <span>弟子 {{ entry.discipleCount }}</span>
               <span v-if="entry.topDisciple">最强者 {{ entry.topDisciple.name }} · {{ entry.topDisciple.stageName }}</span>
               <span v-else>尚无可战弟子</span>
@@ -112,3 +121,14 @@ function openSect(entry: LeaderboardEntryView): void {
     </ModalShell>
   </section>
 </template>
+
+<style scoped>
+/* 0073：江湖榜每行多一格宗门头像（与天骄榜同一套「名次 / 头像 / 正文 / 箭头」节奏）。 */
+.rank-open.lb-row {
+  grid-template-columns: 26px 34px minmax(0, 1fr) 14px;
+}
+
+.lb-avatar {
+  --sect-avatar-size: 34px;
+}
+</style>
