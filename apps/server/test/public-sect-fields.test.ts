@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 
 import { createApp } from '../src/app';
 import { dataOf, TestClient } from './support/authClient';
+import { attributeScore } from '../src/modules/game/names';
 
 /**
  * 宗门公开档案（GET /game/sect/:id）的公开进度：镇妖塔最高层与已收录功法数。
@@ -80,5 +81,23 @@ describe('宗门公开档案 · 公开进度', () => {
     const sect = await publicSectOf(viewer.api, owner.sectId);
     expect(sect.towerFloor).toBe(27);
     expect(sect.techniqueCount).toBe(1);
+  });
+
+  it('弟子的综合评分与天骄榜同一口径（六项基础属性，一位小数）', async () => {
+    const owner = await makeSect('sect-fields-score');
+    const viewer = await makeSect('sect-fields-viewer3');
+    // 直接写库造一组确定的属性，再用同一个 attributeScore 算期望值。
+    await env.DB.prepare(
+      'UPDATE disciples SET aptitude = ?, attack = ?, defense = ?, speed = ?, luck = ?, physique = ? WHERE sect_id = ?',
+    )
+      .bind(88, 71, 64, 59, 52, 45, owner.sectId)
+      .run();
+
+    const sect = await publicSectOf(viewer.api, owner.sectId);
+    const expected = attributeScore({ aptitude: 88, attack: 71, defense: 64, speed: 59, luck: 52, physique: 45 });
+    expect(sect.disciples.length).toBeGreaterThan(0);
+    for (const disciple of sect.disciples as { attributeScore: number }[]) {
+      expect(disciple.attributeScore).toBe(expected);
+    }
   });
 });

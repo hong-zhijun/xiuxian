@@ -4704,6 +4704,15 @@ export async function getPublicSect(
       avatarHash: disciple.avatar_hash ?? null,
       stage: Number(disciple.stage),
       stageName: findStage(disciple.realm_id, Number(disciple.stage)).name,
+      // 综合评分与天骄榜同一口径（六项基础属性；装备与灵兽只进战力，不计入评分）。
+      attributeScore: attributeScore({
+        aptitude: Number(disciple.aptitude),
+        attack: Number(disciple.attack),
+        defense: Number(disciple.defense),
+        speed: Number(disciple.speed),
+        luck: Number(disciple.luck),
+        physique: Number(disciple.physique),
+      }),
       // 0028 装备：公开档案的「战力」计入装备（这里展示的攻/防/身法仍是基础属性）。
       combatPower: gearedCombatPower(disciple),
     })),

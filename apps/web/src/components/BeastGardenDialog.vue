@@ -63,9 +63,22 @@ function exchangeBlock(cost: string): string | null {
 function affordable(beast: SpiritBeastView): boolean {
   return beast.upgradeCost !== null && balanceOf('spiritStone') >= beast.upgradeCost.spiritStone && balanceOf('spiritualEnergy') >= beast.upgradeCost.spiritualEnergy;
 }
-/* ---------- 批量放生：多选 + 按品质一键选中（锁定、随行的不参与），二次确认后一次提交 ---------- */
+/* ---------- 批量放生：点「多选放生」进入多选，之后整张卡片就是勾选框；按品质可一键全选 ---------- */
 const selectedIds = ref<string[]>([]);
 const confirmBatch = ref(false);
+/**
+ * 多选模式：开启后点卡片 = 选中 / 取消（不再打开详情），卡片右上角出现勾选标记；
+ * 退出时清空选择。平时点卡片仍是打开详情。
+ */
+const pickMode = ref(false);
+function togglePickMode(): void {
+  if (blocked.value) return;
+  pickMode.value = !pickMode.value;
+  if (!pickMode.value) {
+    selectedIds.value = [];
+    confirmBatch.value = false;
+  }
+}
 function releasable(beast: SpiritBeastView): boolean { return !beast.locked && beast.discipleId === null; }
 /** 选中集合与最新视图对齐：已被装备、锁定或放生的自动剔除。 */
 const selectedBeasts = computed(() => (panel.value?.items ?? []).filter(item => releasable(item) && selectedIds.value.includes(item.id)));
@@ -76,6 +89,14 @@ const batchQualities = computed(() => BEAST_QUALITY_OPTIONS
 const lockedIdleCount = computed(() => (panel.value?.items ?? []).filter(item => item.locked && item.discipleId === null).length);
 watch(selectedIds, () => { confirmBatch.value = false; });
 function isPicked(id: string): boolean { return selectedIds.value.includes(id); }
+/** 多选模式下点卡片是选中 / 取消，平时是打开详情。 */
+function onCardClick(beast: SpiritBeastView): void {
+  if (pickMode.value) {
+    togglePick(beast);
+    return;
+  }
+  open(beast);
+}
 function togglePick(beast: SpiritBeastView): void {
   if (blocked.value || !releasable(beast)) return;
   selectedIds.value = isPicked(beast.id) ? selectedIds.value.filter(id => id !== beast.id) : [...selectedIds.value, beast.id];
@@ -95,7 +116,7 @@ function releaseBatch(): void {
   if (!confirmBatch.value) { confirmBatch.value = true; return; }
   const beasts = selectedBeasts.value.map(item => ({ beastId: item.id, version: item.version }));
   const commandId = crypto.randomUUID();
-  void perform({ run: () => releaseSpiritBeasts(beasts, commandId), message: '放生完成。', after: () => { selectedIds.value = []; } })
+  void perform({ run: () => releaseSpiritBeasts(beasts, commandId), message: '放生完成。', after: () => { selectedIds.value = []; pickMode.value = false; } })
     .finally(() => { confirmBatch.value = false; });
 }
 
@@ -239,9 +260,24 @@ onMounted(refreshPanel);
               {{ option.name }}
             </button>
           </div>
+          <div class="filter-group" role="group" aria-label="批量放生">
+            <span class="filter-label">放生</span>
+            <button
+              class="filter-chip garden-pick-toggle"
+              :class="{ 'is-on': pickMode }"
+              type="button"
+              :aria-pressed="pickMode"
+              :disabled="blocked"
+              :title="pickMode ? '退出多选' : '开启多选：点灵兽卡片即选中'"
+              @click="togglePickMode"
+            >
+              {{ pickMode ? '退出多选' : '多选放生' }}
+            </button>
+            <span v-if="pickMode" class="garden-batch-note">点卡片选中，再点取消</span>
+          </div>
         </div>
 
-        <div v-if="batchQualities.length > 0" class="filter-group" role="group" aria-label="按品质批量选择放生">
+        <div v-if="pickMode && batchQualities.length > 0" class="filter-group" role="group" aria-label="按品质批量选择放生">
           <span class="filter-label">批量</span>
           <button
             v-for="group in batchQualities"
@@ -267,23 +303,27 @@ onMounted(refreshPanel);
           {{ !showCarried && carriedCount > 0 && panel.items.length === carriedCount ? `灵兽都在随行中（勾选「显示已随行」查看）。` : '没有符合筛选条件的灵兽。' }}
         </p>
         <ul v-else class="garden-grid">
-          <li v-for="beast in items" :key="beast.id" class="garden-item" :class="{ 'is-picked': isPicked(beast.id) }">
-            <label class="garden-pick">
-              <input
-                type="checkbox"
-                :checked="isPicked(beast.id)"
-                :disabled="blocked || !releasable(beast)"
-                :aria-label="releasable(beast) ? `选择放生 ${beast.species.name}` : `${beast.species.name}已锁定或随行，不能放生`"
-                @change="togglePick(beast)"
-              />
-            </label>
+          <li
+            v-for="beast in items"
+            :key="beast.id"
+            class="garden-item"
+            :class="{ 'is-picked': pickMode && isPicked(beast.id) }"
+          >
+            <!-- 多选模式下右上角显示勾选标记；标记本身不接收点击，整张卡片才是开关。 -->
+            <span v-if="pickMode" class="garden-pick-mark" aria-hidden="true">{{ isPicked(beast.id) ? '✓' : '' }}</span>
             <button
               class="garden-card"
               :class="{ 'is-carried': beast.discipleId !== null }"
               type="button"
               :data-element="beast.species.element"
               :data-quality="beast.quality"
-              :disabled="blocked" @click="open(beast)"
+              :disabled="blocked || (pickMode && !releasable(beast))"
+              :aria-pressed="pickMode ? isPicked(beast.id) : undefined"
+              :aria-label="pickMode
+                ? (releasable(beast) ? `选择放生 ${beast.species.name}` : `${beast.species.name}已锁定或随行，不能放生`)
+                : undefined"
+              :title="pickMode && !releasable(beast) ? (beast.locked ? '已锁定，不能放生' : '随行中，不能放生') : undefined"
+              @click="onCardClick(beast)"
             >
               <span class="beast-avatar garden-avatar">
                 <img v-if="beast.species.avatar" :src="beast.species.avatar" :alt="beast.species.name" width="96" height="96" loading="lazy" decoding="async" />
@@ -308,14 +348,14 @@ onMounted(refreshPanel);
           </li>
         </ul>
 
-        <div v-if="selectedBeasts.length > 0" class="garden-batch-bar">
+        <div v-if="pickMode" class="garden-batch-bar">
           <p>
             已选 <strong>{{ selectedBeasts.length }}</strong> 只 · 获得御兽精魄 <strong>{{ formatAmount(batchReward) }}</strong>
             <template v-if="hiddenPicked > 0"> · 其中 {{ hiddenPicked }} 只不在当前筛选中</template>
           </p>
           <div class="detail-buttons">
-            <button class="beast-quiet-button" type="button" :disabled="blocked" @click="selectedIds = []">清空</button>
-            <button class="beast-quiet-button is-danger" type="button" :disabled="blocked" @click="releaseBatch">
+            <button class="beast-quiet-button" type="button" :disabled="blocked || selectedBeasts.length === 0" @click="selectedIds = []">清空</button>
+            <button class="beast-quiet-button is-danger" type="button" :disabled="blocked || selectedBeasts.length === 0" @click="releaseBatch">
               {{ confirmBatch ? `确认放生 ${String(selectedBeasts.length)} 只（不可撤销）` : '批量放生' }}
             </button>
             <button v-if="confirmBatch" class="beast-quiet-button" type="button" :disabled="blocked" @click="confirmBatch = false">取消</button>
@@ -485,16 +525,41 @@ onMounted(refreshPanel);
 .garden-costs p { margin: 0; }
 .garden-card:disabled { opacity: 0.45; cursor: not-allowed; }
 
-/* 批量放生：卡片右上角的勾选框，与装备背包同一种多选方式。 */
+/* 批量放生：多选模式下整张卡片就是勾选框（点卡片选中 / 取消），右上角只放一个勾选标记。 */
 .garden-item { position: relative; }
 .garden-item .garden-card { padding-right: 36px; }
 .garden-item.is-picked .garden-card {
   border-color: rgba(224, 123, 104, 0.6);
   background: linear-gradient(90deg, rgba(224, 123, 104, 0.12), transparent 70%), var(--surface);
 }
-.garden-pick { position: absolute; z-index: 1; top: 10px; right: 12px; display: flex; cursor: pointer; }
-.garden-pick input { width: 16px; height: 16px; margin: 0; accent-color: var(--gold); cursor: pointer; }
-.garden-pick input:disabled { cursor: not-allowed; opacity: 0.35; }
+.garden-pick-mark {
+  position: absolute;
+  z-index: 1;
+  top: 10px;
+  right: 12px;
+  display: flex;
+  width: 18px;
+  height: 18px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(202, 169, 106, 0.42);
+  border-radius: 3px;
+  color: transparent;
+  background: rgba(8, 24, 20, 0.6);
+  font-size: 12px;
+  line-height: 1;
+  pointer-events: none;
+}
+.garden-item.is-picked .garden-pick-mark {
+  border-color: var(--gold);
+  color: #0b1713;
+  background: var(--gold);
+}
+.garden-pick-toggle.is-on {
+  border-color: var(--gold);
+  color: var(--gold);
+  background: rgba(202, 169, 106, 0.08);
+}
 .garden-batch-note { color: var(--faint); font-size: 12px; }
 .garden-carried-toggle { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; cursor: pointer; }
 /* 底栏要压住滚到下面的卡片勾选框（勾选框 z-index 1）。 */

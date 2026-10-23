@@ -209,7 +209,7 @@ function requestChallenge(): void {
                   <span v-if="index === 0" class="public-disciple-top">最强</span>
                 </span>
                 <span class="public-disciple-meta">
-                  {{ disciple.stageName }} · 资质 {{ disciple.aptitude }}
+                  {{ disciple.stageName }} · 综合 {{ disciple.attributeScore.toFixed(1) }}
                 </span>
                 <span class="public-disciple-tags">
                   <span v-if="disciple.talentName !== '无'" class="stat-tag stat-talent">

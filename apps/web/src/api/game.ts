@@ -776,6 +776,8 @@ export interface PublicDiscipleView {
   realmId: string;
   /** 0038 自定义头像哈希（null = 没有）。 */
   avatarHash: string | null;
+  /** 综合评分（六项基础属性，与天骄榜同一口径，一位小数）。 */
+  attributeScore: number;
   /** 当前战力（服务端现算；只由已公开的字段算出，不泄漏私有属性）。 */
   combatPower: number;
 }

@@ -88,9 +88,24 @@ const maxLevel = computed(() => library.value?.maxLevel ?? 10);
 const selectedId = ref<string | null>(null);
 const selected = computed(() => library.value?.items.find((item) => item.id === selectedId.value) ?? null);
 
-/** 列表里的收集状态：已收录看参悟等级，未收录看残卷进度。 */
-function progressText(item: TechniqueCatalogView): string {
-  return item.learned ? `参悟 ${String(item.level)} 级` : `残卷 ${String(item.scrolls)} / ${String(item.learnScrolls)}`;
+/**
+ * 列表第三行：参悟进度 + 还差多少残卷。
+ * - 未收录：所需 = 收录所需的张数（0/10 · 所需 8/40）；
+ * - 已收录：所需 = 下一级的参悟张数（3/10 · 所需 4/5）；
+ * - 已满级：没有下一档，写「已圆满」。
+ */
+function needText(item: TechniqueCatalogView): string {
+  const head = `参悟 ${String(item.level)}/${String(maxLevel.value)}`;
+  const required = item.learned ? item.upgradeScrolls : item.learnScrolls;
+  return required === null
+    ? `${head} · 已圆满`
+    : `${head} · 所需 ${String(item.scrolls)}/${String(required)}`;
+}
+
+/** 残卷够不够（未收录 = 够收录；已收录 = 够往下一级参悟）：够了用金色标出来，一眼能看出能否升级。 */
+function needReady(item: TechniqueCatalogView): boolean {
+  const required = item.learned ? item.upgradeScrolls : item.learnScrolls;
+  return required !== null && item.scrolls >= required;
 }
 
 /** 按流派分组（服务端下发的流派顺序）。 */
@@ -273,9 +288,10 @@ onMounted(() => {
             >
               <span class="technique-card-head">
                 <strong class="technique-name">{{ item.name }}</strong>
-                <span class="technique-progress">{{ progressText(item) }}</span>
               </span>
               <span class="technique-summary">{{ item.summary }}</span>
+              <!-- 第三行：参悟进度与所需残卷，够了变金色（第一行不再重复参悟等级）。 -->
+              <span class="technique-need" :class="{ 'is-ready': needReady(item) }">{{ needText(item) }}</span>
             </button>
           </li>
         </ul>
@@ -596,6 +612,20 @@ onMounted(() => {
   color: var(--muted);
 }
 
+/* 第三行：参悟进度与所需残卷；残卷够了（可收录 / 可参悟）用金色标出来。 */
+.technique-need {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 12px;
+  color: var(--faint);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.technique-need.is-ready {
+  color: var(--gold);
+}
+
 /* 未收录的行整体淡一点；已收录正常。可收录（残卷够）的进度文字用金色。 */
 .technique-row {
   cursor: pointer;
@@ -608,14 +638,6 @@ onMounted(() => {
 
 .technique-row:not(.is-learned) {
   opacity: 0.72;
-}
-
-.technique-row.is-learned .technique-progress {
-  color: var(--jade);
-}
-
-.technique-row.is-ready .technique-progress {
-  color: var(--gold);
 }
 
 /* ---------- 商店 ---------- */

@@ -42,8 +42,11 @@ const PASSWORD = 'password-123456';
 
 let seq = 0;
 
-/** 私有字段的三个键（哨兵搜索用，带引号避免命中别的子串）。 */
-const PRIVATE_ATTRIBUTE_KEYS = ['"luck"', '"physique"', '"attributeScore"'] as const;
+/**
+ * 始终私有的原始属性（哨兵搜索用，带引号避免命中别的子串）：只出现在自己的 sync 里。
+ * 综合评分是派生值，弟子公开档案 / 天骄榜 / 宗门档案都会公开，所以不在这里列。
+ */
+const PRIVATE_ATTRIBUTE_KEYS = ['"luck"', '"physique"'] as const;
 
 const HOUR = 3_600_000;
 
@@ -1013,8 +1016,8 @@ describe('历练：幸运/体魄概率与出发快照不重掷', () => {
   });
 });
 
-describe('公开契约不泄漏私有字段（luck / physique / attributeScore）', () => {
-  it('私有 sync 带这三项；公开档案 / 排行榜 / 战报与历史都搜不到', async () => {
+describe('公开契约：luck / physique 始终私有，综合评分按接口需要公开', () => {
+  it('私有 sync 带三项；公开档案与榜单不出现原始属性，战报与历史也不带综合评分', async () => {
     const attacker = await makeSect('dr-leak-a');
     const defender = await makeSect('dr-leak-b');
     await freezeSettlement(attacker.sectId);
@@ -1031,7 +1034,8 @@ describe('公开契约不泄漏私有字段（luck / physique / attributeScore�
     expect(privateKeys).toContain('physique');
     expect(privateKeys).toContain('attributeScore');
 
-    // 公开档案：对任何人（含自己）都不该出现这三项。
+    // 公开档案：原始属性 luck / physique 对任何人（含自己）都不该出现；
+    // 综合评分是弟子卡片的展示项（与弟子公开档案、天骄榜同一口径），宗门公开档案里要带上。
     for (const viewer of [attacker.api, defender.api]) {
       const profile = await viewer.get(`/api/v1/game/sect/${defender.sectId}`);
       expect(profile.status).toBe(200);
@@ -1039,15 +1043,17 @@ describe('公开契约不泄漏私有字段（luck / physique / attributeScore�
       for (const key of PRIVATE_ATTRIBUTE_KEYS) {
         expect(text).not.toContain(key);
       }
+      expect(text).toContain('"attributeScore"');
     }
 
+    // 宗门榜（江湖榜）只有宗门级信息，连综合评分都不该出现。
     const leaderboard = await attacker.api.get('/api/v1/game/leaderboard');
     expect(leaderboard.status).toBe(200);
-    for (const key of PRIVATE_ATTRIBUTE_KEYS) {
+    for (const key of [...PRIVATE_ATTRIBUTE_KEYS, '"attributeScore"']) {
       expect(JSON.stringify(leaderboard.body)).not.toContain(key);
     }
 
-    // 打一场（确定性胜负），战报正文与双方历史里都不能带私有字段。
+    // 打一场（确定性胜负），战报正文与双方历史里都不能带私有字段，也不带综合评分。
     await makeStrong(attacker.sectId);
     await makeWeak(defender.sectId);
     const battle = await attacker.api.post('/api/v1/game/challenge', {
@@ -1056,13 +1062,13 @@ describe('公开契约不泄漏私有字段（luck / physique / attributeScore�
     });
     expect(battle.status).toBe(200);
     const battleResult = (dataOf(battle) as Record<string, any>).result;
-    for (const key of PRIVATE_ATTRIBUTE_KEYS) {
+    for (const key of [...PRIVATE_ATTRIBUTE_KEYS, '"attributeScore"']) {
       expect(JSON.stringify(battleResult)).not.toContain(key);
     }
 
     const history = await attacker.api.get('/api/v1/game/challenge-history');
     expect(history.status).toBe(200);
-    for (const key of PRIVATE_ATTRIBUTE_KEYS) {
+    for (const key of [...PRIVATE_ATTRIBUTE_KEYS, '"attributeScore"']) {
       expect(JSON.stringify(history.body)).not.toContain(key);
     }
   });
