@@ -14,7 +14,7 @@ import SectAvatar from './SectAvatar.vue';
  *
  * 版面（0073 重做，之后按反馈收过一轮）：
  *   名帖（宗门头像 / 名字 / 品阶 / 立宗时间 + 挑战按钮与今日剩余次数）
- *   → 声望 / 门人 / 镇妖塔 / 功法 四张小卡 → 宗门建筑 → 门人卡片（只列前 5 位，点开弟子公开档案）。
+ *   → 声望 / 门人 / 镇妖塔 / 功法 四张小卡 → 宗门建筑 → 门人卡片（只列前 6 位，点开弟子公开档案）。
  * 卡片沿用弟子详情的 .info-card / .stat-tag / .count-badge，只在这里补版面用的类。
  *
  * 只显示服务端给的公开字段：没有资源余额、修为进度、岗位、伤势、招募次数；
@@ -67,8 +67,8 @@ const disciples = computed<PublicDiscipleView[]>(() => {
   return list;
 });
 
-/** 档案页只列前 5 位门人：名单太长会把弹窗撑得没边，其余只报数量。 */
-const ROSTER_SIZE = 5;
+/** 档案页只列前 6 位门人：名单太长会把弹窗撑得没边，其余只报数量（6 位正好两列三行）。 */
+const ROSTER_SIZE = 6;
 const visibleDisciples = computed(() => disciples.value.slice(0, ROSTER_SIZE));
 const hiddenDiscipleCount = computed(() =>
   Math.max(0, disciples.value.length - visibleDisciples.value.length),
@@ -176,7 +176,7 @@ function requestChallenge(): void {
         <p v-else class="info-card-note">尚无建筑</p>
       </section>
 
-      <!-- ---------- 门人：只列前 5 位，点开弟子公开档案 ---------- -->
+      <!-- ---------- 门人：只列前 6 位，点开弟子公开档案 ---------- -->
       <section class="public-section" aria-labelledby="public-roster-title">
         <div class="public-section-head">
           <p id="public-roster-title" class="public-section-title">
@@ -501,7 +501,7 @@ function requestChallenge(): void {
   margin-top: 1px;
 }
 
-/* 只列前 5 位：剩下的在这里报个数。 */
+/* 只列前 6 位：剩下的在这里报个数。 */
 .public-more {
   margin: 9px 0 0;
   color: #7f948a;
