@@ -1,4 +1,6 @@
 import type { BeastAttrs, BeastElement, BeastIdentity, BeastTier } from '@xiuxian/contracts';
+import type { ScratchCardPanel } from '@xiuxian/contracts';
+import { scratchCardPanel } from './scratchCards';
 import {
   BEAST_QUALITY,
   BEAST_SPECIES,
@@ -1687,6 +1689,7 @@ export interface SectStateView {
     race: RaceStateView | null;
     /** 0046 赌石：赌坊未解锁时为 null；解锁后四档（含门槛、概率与玄铁个数，全部服务端口径）。 */
     stones: StoneGambleView | null;
+    scratchCards: ScratchCardPanel | null;
   };
   /**
    * 坊市面板：材料买卖价格与可售丹药（没有解锁条件，1 级宗门即可使用）。
@@ -2638,6 +2641,7 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
     race: null,
     // 0046 赌石：解锁只看宗门等级（与赌坊同一门槛）；四档的门槛文案与概率在这里一次算好。
     stones: gamblingLockedReason === null ? buildStoneView(Number(sect.level)) : null,
+    scratchCards: gamblingLockedReason === null ? scratchCardPanel() : null,
   };
 
   // 0066 功法：宗门已收录的功法（弟子「更换主修」的候选；只列等级 ≥ 1 的）。

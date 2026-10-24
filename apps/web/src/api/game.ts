@@ -1,5 +1,7 @@
 import type { BeastIdentity, BeastAttrs, BeastElement, BeastTier, SpiritBeastsPanel, BeastCaptureAction, BeastManageAction, BeastExchangeInput, BeastCommandReceipt } from '@xiuxian/contracts';
 import { apiRequest, setCsrfToken } from './client';
+import type { ScratchCardBuyInput, ScratchCardPanel, ScratchCardTicket } from '@xiuxian/contracts';
+export type { ScratchCardBuyInput, ScratchCardMode, ScratchCardModeView, ScratchCardPanel, ScratchCardTicket, ScratchCardTier, ScratchSymbol } from '@xiuxian/contracts';
 import type { AvatarFrameId } from '../utils/avatarFrames';
 
 /**
@@ -300,6 +302,7 @@ export interface SectStateView {
     wheel: WheelView | null;
     /** 0046 赌石：赌坊未解锁时为 null；解锁后四档（门槛、概率、玄铁个数都是服务端口径）。 */
     stones: StoneGambleView | null;
+    scratchCards: ScratchCardPanel | null;
   };
   /** 0014 宗门历练名额与最近 10 条历练摘要（仅本宗可见，结果由服务端决定）。 */
   journey: JourneyView;
@@ -1950,6 +1953,17 @@ export async function stoneGamble(
     method: 'POST',
     body: { tier, payResource, count },
   });
+}
+
+/* ---------- 赌坊：刮刮乐 ---------- */
+
+export function buyScratchCard(input: ScratchCardBuyInput): Promise<{ state: SectStateView; ticket: ScratchCardTicket }> {
+  return apiRequest('/api/v1/game/scratch-cards/buy', { method: 'POST', body: input });
+}
+
+export function fetchScratchCard(requestId?: string): Promise<{ state: SectStateView; ticket: ScratchCardTicket | null }> {
+  const query = requestId === undefined ? '' : `?requestId=${encodeURIComponent(requestId)}`;
+  return apiRequest(`/api/v1/game/scratch-cards${query}`);
 }
 
 /* ---------- 坊市（材料买卖与丹药回收） ---------- */

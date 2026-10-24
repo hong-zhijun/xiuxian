@@ -234,18 +234,19 @@ const openPanel = ref<
 const beastGardenBusy = ref(false);
 
 /**
- * 赌坊里当前在玩哪个玩法：只为赌坊弹窗那一层的加载层文案（论道 / 天机轮 / 灵兽竞逐），
+ * 赌坊里当前在玩哪个玩法，用于弹窗的加载层文案，
  * 由 GamblingHouseDialog 在切换玩法时上报。
  */
 
-const gamblingGame = ref<'debate' | 'wheel' | 'beast-race' | 'stone'>('debate');
+const gamblingGame = ref<'debate' | 'wheel' | 'beast-race' | 'stone' | 'scratch'>('debate');
 const gamblingLoadingText = computed(() => {
   if (gamblingGame.value === 'wheel') return '正在推演天机';
   if (gamblingGame.value === 'stone') return '切石中';
+  if (gamblingGame.value === 'scratch') return '正在购票';
   return gamblingGame.value === 'beast-race' ? '灵兽竞逐中' : '正在论道';
 });
 
-function onGamblingGame(game: 'debate' | 'wheel' | 'beast-race' | 'stone'): void {
+function onGamblingGame(game: 'debate' | 'wheel' | 'beast-race' | 'stone' | 'scratch'): void {
   gamblingGame.value = game;
 }
 
@@ -2964,6 +2965,8 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
         @race-bet-pending="onRaceBetPending"
         @stone-state-update="(s: SectStateView) => emit('recruited', s)"
         @stone-notify="onStoneNotify"
+        @scratch-state-update="(s: SectStateView) => emit('recruited', s)"
+        @scratch-notify="onStoneNotify"
         @game="onGamblingGame"
         @close="onCloseGambling"
         @reveal="onGamblingRevealed"
