@@ -151,6 +151,7 @@ const SYSTEM_EVENT_NAMES: Readonly<Record<string, string>> = {
   refineLaunchGift: '祭炼贺礼',
   mondayGift: '周一福利',
   fridayGift: '周五福利',
+  scratchCardUpdateGift: '刮刮乐更新奖励',
   discipleCapacityGift: '扩容贺礼',
   rerollLaunchGift: '洗练贺礼',
   worldBossAutoLaunchGift: '自动讨伐上线贺礼',
