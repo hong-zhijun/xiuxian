@@ -8,7 +8,7 @@ import { dataOf, TestClient } from './support/authClient';
 import { splitSqlStatements } from './support/sql';
 
 const MIGRATION = '0075_scratch_card_update_gift.sql';
-const REWARD = 100_000_000 * 1000;
+const REWARD = 10_000 * 1000;
 await applyD1Migrations(env.DB, env.TEST_MIGRATIONS.filter(item => item.name !== MIGRATION));
 
 const app = createApp({ logger: { info() {}, warn() {}, error() {} } });
@@ -46,7 +46,7 @@ function giftStatements() {
 }
 
 describe('0075 刮刮乐更新奖励', () => {
-  it('迁移给所有已有宗门各加一亿灵石，补齐缺失余额，重复部署及后建宗门不再发奖', async () => {
+  it('迁移给所有已有宗门各加一万灵石，补齐缺失余额，重复部署及后建宗门不再发奖', async () => {
     const first = await makeSect();
     const missing = await makeSect();
     const before = await stoneOf(first.sectId);
@@ -66,14 +66,14 @@ describe('0075 刮刮乐更新奖励', () => {
     for (const sectId of [first.sectId, missing.sectId]) {
       const gifts = await giftsOf(sectId);
       expect(gifts).toHaveLength(1);
-      expect(gifts[0]!.description).toContain('10000 万（1 亿）灵石');
+      expect(gifts[0]!.description).toContain('10000（1 万）灵石');
       expect(JSON.parse(gifts[0]!.effects)).toEqual({ spiritStone: String(REWARD) });
     }
 
     const announcement = await env.DB.prepare(
       "SELECT content FROM chat_messages WHERE id = 'announcement-scratch-card-update-20261024'",
     ).first<{ content: string }>();
-    expect(announcement?.content).toContain('10000 万（1 亿）灵石');
+    expect(announcement?.content).toContain('10000（1 万）灵石');
     expect(announcement?.content).toContain('刮开 80%');
 
     const later = await makeSect();
@@ -97,7 +97,7 @@ describe('0075 刮刮乐更新奖励', () => {
     ).first<{ total: number }>())?.total)).toBe(1);
   });
 
-  it('一亿奖励超出仓库也保留，离线结算后余额与天机录展示正确', async () => {
+  it('一万奖励超出仓库也保留，离线结算后余额与天机录展示正确', async () => {
     const { sectId, userId } = await makeSect();
     await env.DB.batch(giftStatements());
     const balance = await stoneOf(sectId);
