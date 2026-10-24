@@ -188,6 +188,8 @@ import {
 } from './service';
 import type { SectStateView } from './view';
 import type { Multiplier, WheelTier } from './gambling';
+import { scratchCardBuySchema, scratchCardQuerySchema } from './scratchCards';
+import { buyScratchCard, getScratchCard } from './scratchCardService';
 
 /**
  * 游戏接口（一次性可玩版本，任务卡第二节）。
@@ -756,6 +758,16 @@ export function createGameRoutes(): Hono<AppEnv> {
     const userId = requireUserId(c);
     const result = await wheelReset(getDb(c.env), userId, Date.now());
     return respondOk(c, { state: result.state });
+  });
+
+  routes.get('/game/scratch-cards', async (c) => {
+    const query = parseStrictQuery(scratchCardQuerySchema, c);
+    return respondOk(c, await getScratchCard(getDb(c.env), requireUserId(c), Date.now(), query.requestId));
+  });
+
+  routes.post('/game/scratch-cards/buy', async (c) => {
+    const body = await parseStrictJson(scratchCardBuySchema, c);
+    return respondOk(c, await buyScratchCard(getDb(c.env), requireUserId(c), body, Date.now()));
   });
 
   // 0024 灵兽竞逐：获取当前轮次状态（投注池、倍率、阶段、倒计时）。

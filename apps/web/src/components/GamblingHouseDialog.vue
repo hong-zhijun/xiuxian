@@ -15,6 +15,7 @@ import ModalShell from './ModalShell.vue';
 import DisciplePicker from './DisciplePicker.vue';
 import SpiritBeastRaceDialog from './SpiritBeastRaceDialog.vue';
 import StoneGambleDialog from './StoneGambleDialog.vue';
+import ScratchCardDialog from './ScratchCardDialog.vue';
 import WheelDialog from './WheelDialog.vue';
 
 /**
@@ -57,17 +58,19 @@ const emit = defineEmits<{
   'stone-state-update': [state: SectStateView];
   /** 赌石结果提示。 */
   'stone-notify': [tone: 'success' | 'warning', title: string, message: string];
+  'scratch-state-update': [state: SectStateView];
+  'scratch-notify': [tone: 'success' | 'warning', title: string, message: string];
   game: [game: GamblingGame];
 }>();
 
-type GamblingGame = 'debate' | 'wheel' | 'beast-race' | 'stone';
+type GamblingGame = 'debate' | 'wheel' | 'beast-race' | 'stone' | 'scratch';
 
 /** 所有资源数量都是最小单位整数，1 展示单位 = 1000 最小单位（与 utils/format.ts 同口径）。 */
 const UNITS_PER_DISPLAY = 1000;
 /** 自由输入的最小赌注：展示 10 = 后端 FREE_BET_MIN（10000 最小单位）。 */
 const FREE_BET_MIN_DISPLAY = 10;
 
-type Stage = 'mode-select' | 'configure' | 'confrontation' | 'result' | 'wheel' | 'beast-race' | 'stone';
+type Stage = 'mode-select' | 'configure' | 'confrontation' | 'result' | 'wheel' | 'beast-race' | 'stone' | 'scratch';
 
 /** 挂载时停在玩法列表；只有「新结果到达」才切进 confrontation（不因父组件残留旧 result 跳阶段）。 */
 const stage = ref<Stage>('mode-select');
@@ -119,6 +122,7 @@ const BET_MODE_LABELS: Record<string, string> = {
   horse_race: '赛马',
   // 0046 赌石：倍率列对它是「块数」，赌注列写档位与花费。
   stone: '赌石',
+  scratch: '刮刮乐',
 };
 
 function formatStake(entry: DebateHistoryEntry): string {
@@ -138,7 +142,7 @@ function formatStake(entry: DebateHistoryEntry): string {
       }
       return `押 ${String(detail.beastName ?? '')} · ${(entry.multiplier / 10).toFixed(1)}x`;
     }
-    if (entry.betMode === 'stone') {
+    if (entry.betMode === 'stone' || entry.betMode === 'scratch') {
       const amount = Number(detail.amount) / UNITS_PER_DISPLAY;
       const resName = resourceLabel(String(detail.resourceId ?? 'spiritStone'));
       return `${String(detail.tierName ?? '')} · ${resName} ${String(amount)}`;
@@ -162,6 +166,13 @@ function formatStake(entry: DebateHistoryEntry): string {
  */
 function formatMultiplier(entry: DebateHistoryEntry): string {
   if (entry.betMode === 'stone') return `${String(entry.multiplier)} 块`;
+  if (entry.betMode === 'scratch' && entry.result === 'lose') return '未中奖';
+  if (entry.betMode === 'scratch') {
+    try {
+      const detail = JSON.parse(entry.rewardDetail) as { ticket?: { multiplier?: number } };
+      return `${detail.ticket?.multiplier ?? entry.multiplier}x`;
+    } catch { return `${entry.multiplier}x`; }
+  }
   return entry.betMode === 'horse_race' || entry.betMode === 'beast_race'
     ? `${(entry.multiplier / 10).toFixed(1)}x`
     : `${String(entry.multiplier)}x`;
@@ -391,6 +402,12 @@ function enterStone(): void {
   stage.value = 'stone';
 }
 
+function enterScratch(): void {
+  if (!unlocked.value || props.state.gambling.scratchCards === null) return;
+  reportGame('scratch');
+  stage.value = 'scratch';
+}
+
 function onStoneStateUpdate(newState: SectStateView): void {
   emit('stone-state-update', newState);
 }
@@ -411,11 +428,11 @@ function continueDebate(): void {
 }
 
 // 结果到达先进 confrontation（看对手属性），玩家点揭晓后再到 result。
-// 天机轮 / 灵兽竞逐 / 赌石不参与这里：它们的结果由各自的子组件消费（stage 是 'wheel' | 'beast-race' | 'stone' 时不动）。
+// 独立玩法由各自的子组件消费结果，不切入论道阶段。
 watch(
   () => props.result,
   (result) => {
-    if (stage.value === 'wheel' || stage.value === 'beast-race' || stage.value === 'stone') return;
+    if (stage.value === 'wheel' || stage.value === 'beast-race' || stage.value === 'stone' || stage.value === 'scratch') return;
     if (result !== null) {
       stage.value = 'confrontation';
     } else if (stage.value === 'result' || stage.value === 'confrontation') {
@@ -510,6 +527,13 @@ const RULES_TEXT = `论道赌局 · 玩法说明
           >
             <strong>赌石</strong>
             <small>花灵石或材料买原石，切开见玄铁。</small>
+          </button>
+        </li>
+        <li>
+          <button class="gambling-game-button" type="button"
+            :disabled="busy || !unlocked || !state.gambling.scratchCards" @click="enterScratch">
+            <strong>刮刮乐</strong>
+            <small>三同、对号、比大小与八线连奖，自选刮法，最高50倍票价。</small>
           </button>
         </li>
       </ul>
@@ -681,7 +705,7 @@ const RULES_TEXT = `论道赌局 · 玩法说明
         >
           <span>开始论道</span>
         </button>
-        <p v-if="remaining <= 0" class="blocked-hint">今日赌坊次数已用尽（论道与天机轮共享），明日再来。</p>
+        <p v-if="remaining <= 0" class="blocked-hint">今日赌坊次数已用尽（所有赌坊玩法共享），明日再来。</p>
         <p v-else-if="!modeConfigured" class="blocked-hint">请先填写合法的押注数量。</p>
         <p v-else-if="insightFull" class="blocked-hint">
           {{ selectedDisciple?.name }}的悟道值已满（已分配 + 未分配已达上限），请改选灵石奖励或换一名弟子。
@@ -765,6 +789,13 @@ const RULES_TEXT = `论道赌局 · 玩法说明
         @notify="onStoneNotify"
         @back="backToModeSelect"
       />
+    </template>
+
+    <template v-else-if="stage === 'scratch'">
+      <ScratchCardDialog :state="state" :busy="busy"
+        @state-update="(s: SectStateView) => emit('scratch-state-update', s)"
+        @notify="(tone, title, message) => emit('scratch-notify', tone, title, message)"
+        @back="backToModeSelect" />
     </template>
 
     <!-- ---------- 结果展示 ---------- -->

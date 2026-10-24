@@ -923,7 +923,8 @@ async function loadDebateStats(db: D1Database, sectId: string): Promise<DebateSt
           -- 灵兽竞逐（0024）同天机轮：每轮都减总投入，押中的赔付（含本金）在上面加回。
           WHEN (result = 'lose' AND bet_mode IN ('preset_spirit_stone', 'free_resource'))
                -- 赌石（0046）同天机轮：每次都先付原石钱（只有灵石付款计入），开出的是玄铁不是灵石。
-          OR bet_mode IN ('wheel', 'beast_race', 'stone')
+               -- 刮刮乐同样先付票价，奖金包含本金，净收益需扣除每张票价。
+          OR bet_mode IN ('wheel', 'beast_race', 'stone', 'scratch')
           THEN CASE
             WHEN COALESCE(json_extract(stake_detail, '$.resourceId'), 'spiritStone') = 'spiritStone'
             THEN CAST(json_extract(stake_detail, '$.amount') AS INTEGER)

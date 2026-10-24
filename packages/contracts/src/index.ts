@@ -8,5 +8,6 @@ export * from './envelope';
 export * from './errors';
 export * from './primitives';
 export * from './spiritBeasts';
+export * from './scratchCards';
 
 export const PACKAGE_NAME = '@xiuxian/contracts' as const;
