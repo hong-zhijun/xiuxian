@@ -7,6 +7,7 @@ import {
   beastArtPath,
   beastAttributes,
   beastAvatarPath,
+  beastOf,
   beastPowerBonusBp,
   beastPowerBonusBpOf,
   beastSkillText,
@@ -183,8 +184,15 @@ import {
 import { cultivationRatePerHour, resourceRates, type DiscipleState, type SettleResult } from './settle';
 import type { MarketOrderKind } from './market';
 import type { WorldBossPhase } from './worldBoss';
-import type { TowerTechniqueSummary } from './tower';
-import { TECHNIQUES, TECHNIQUE_SCHOOLS, TECHNIQUE_TIER_NAMES, techniqueNameOf, techniqueProficiencyBp } from './techniques';
+import { towerCritProfile, type TowerTechniqueSummary } from './tower';
+import {
+  TECHNIQUES,
+  TECHNIQUE_SCHOOLS,
+  TECHNIQUE_TIER_NAMES,
+  techniqueModifiersOf,
+  techniqueNameOf,
+  techniqueProficiencyBp,
+} from './techniques';
 /**
  * 接口返回的视图类型（前端只读这些字段，不需要再读配置）。
  *
@@ -307,6 +315,12 @@ export interface DiscipleView {
   daoInsightRoom: number;
   /** 天赋重构 · 铁骨：讨伐受伤 / 重伤概率减免（基点）；前端算冒进风险用。 */
   bossInjuryReductionBp: number;
+  /**
+   * 暴击率 / 暴击伤害倍率（基点；暴伤 15000 = ×1.5）。镇妖塔口径（tower.ts 的 towerCritProfile）：
+   * 幸运计入装备与灵兽，再算会心、天机、破军与灵兽加成；不含词缀与首击必暴。
+   */
+  critRateBp: number;
+  critDamageBp: number;
   /**
    * 当前战力（展示用，由 realms.ts 的 discipleCombatPower 现算）。
    * 0028 起**计入装备**：属性用的是「基础属性 + 装备加成」（见下面的 gear）。
@@ -2336,6 +2350,29 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
       gear,
     ), disciple);
 
+    // 暴击：与镇妖塔出手同一套算法（功法等级至少按 1 级算，同 service 的 techniqueModsOf）。
+    const techniqueLevel = disciple.technique_id === null ? 0 : (techniqueLevels.get(disciple.technique_id) ?? 0);
+    const techniqueProficiency = techniqueProficiencyBp({
+      base: Number(disciple.technique_prof_base),
+      since: disciple.technique_since === null ? null : Number(disciple.technique_since),
+      now,
+    });
+    const technique = techniqueModifiersOf({
+      techniqueId: disciple.technique_id,
+      level: Math.max(1, techniqueLevel),
+      proficiencyBp: techniqueProficiency,
+    });
+    const beast = beastOf(disciple);
+    const crit = towerCritProfile(
+      {
+        luck: battleAttrs.luck,
+        critBonusBp: talentBonusBp(disciple.talent, disciple.realm_id, 'critical'),
+        ...(technique === null ? {} : { technique }),
+        ...(beast === undefined ? {} : { beast }),
+      },
+      null,
+    );
+
     if ((disciple.capture_until ?? 0)>now) combatBlockedReason='捕捉灵兽中';
     return {
       spiritBeast: spiritBeastViewOf(disciple),
@@ -2368,12 +2405,8 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
       combatBlockedReason,
       techniqueId: disciple.technique_id,
       techniqueName: techniqueNameOf(disciple.technique_id),
-      techniqueLevel: disciple.technique_id === null ? 0 : (techniqueLevels.get(disciple.technique_id) ?? 0),
-      techniqueProficiency: techniqueProficiencyBp({
-        base: Number(disciple.technique_prof_base),
-        since: disciple.technique_since === null ? null : Number(disciple.technique_since),
-        now,
-      }),
+      techniqueLevel,
+      techniqueProficiency,
       garrisonSiteName,
       cultivationPillGain: pillGain,
       greatCultivationPillGain: greatPillGain,
@@ -2391,6 +2424,8 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
       ),
       daoInsightRoom: daoInsightRoom(Number(disciple.dao_insight) || 0, Number(disciple.dao_insight_used) || 0),
       bossInjuryReductionBp: talentBonusBp(disciple.talent, disciple.realm_id, 'ironBody'),
+      critRateBp: Math.round(crit.rate * 10_000),
+      critDamageBp: Math.round(crit.multiplier * 10_000),
       combatPower: discipleCombatPower(
         disciple.realm_id,
         Number(disciple.stage),

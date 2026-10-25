@@ -4,6 +4,7 @@ import type { BeastMods } from './spiritBeasts';
 import { BEAST_RULES, captureRate } from './spiritBeasts';
 import { elementFactor } from './elements';
 import { beastDefend, freshBeastState, type BeastCombatState } from './beastCombat';
+import { CRIT_MULTIPLIER, critMultiplier, critRate } from './crit';
 
 export interface CaptureFighter {
   name:string; power:number; attack:number; defense:number; speed:number; luck:number; physique:number;
@@ -32,8 +33,8 @@ function attack(a:CaptureFighter,b:CaptureFighter,round:number,restrain:boolean,
     if(i>0 && !(i===1 && round===1 && m?.round1GuaranteedExtra) && random()>=chance) break;
     const first=a.strikes++===0;
     const forced=first && (m?.firstStrikeCritMultiplier!=null || beast?.firstCrit);
-    const crit=forced || random()<Math.min(1,a.luck/100*.2*(m?.critRateMultiplier??1));
-    let multiplier=crit?((first?m?.firstStrikeCritMultiplier:null)??1.5)+(m?.critMultiplierBonus??0)+(beast?.crit??0):1;
+    const crit=forced || random()<critRate(a.luck,m?.critRateMultiplier??1);
+    let multiplier=crit?critMultiplier([m?.critMultiplierBonus??0,beast?.crit??0],(first?m?.firstStrikeCritMultiplier:null)??CRIT_MULTIPLIER):1;
     multiplier*=first?(m?.firstStrikeMultiplier??1)*(1+(beast?.first??0)):(m?.laterStrikeMultiplier??1);
     multiplier*=m?.strikeMultiplier??1;
     if(!crit) multiplier*=m?.nonCritMultiplier??1;

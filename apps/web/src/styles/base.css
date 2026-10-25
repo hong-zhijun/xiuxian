@@ -3609,6 +3609,28 @@ ul {
   gap: 4px;
 }
 
+/* 派生数值（暴击率 / 暴击伤害）并排一行，与六项属性之间用细线隔开；太窄时自动折行 */
+.radar-extra-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  padding-top: 7px;
+  border-top: 1px solid rgba(192, 216, 199, 0.12);
+}
+
+.radar-extra-line dt {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: #93a99e;
+  font-size: 12px;
+}
+
+.radar-extra-line dd {
+  margin: 0 10px 0 0;
+}
+
 .radar-value-row dd {
   display: flex;
   min-width: 0;

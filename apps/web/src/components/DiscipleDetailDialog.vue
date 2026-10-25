@@ -1027,6 +1027,20 @@ const ATTRIBUTE_HELP = {
   ].join('\n'),
 };
 
+/** 暴击率 / 暴击伤害的说明：数值按镇妖塔的算法（服务端 tower.ts 的 towerCritProfile），这里写其它玩法的差别。 */
+const CRIT_HELP = {
+  rate: [
+    '按镇妖塔的算法：幸运（含装备与灵兽）÷ 100 × 20%，最高 100%。',
+    '天机诀再乘一个倍率，随功法等级与熟练度提高；宗门大比里天机的倍率更高。',
+    '讨伐按出战弟子的平均暴击率判定；罡气、邪祟词缀让暴击率翻倍，不计入这里。',
+  ].join('\n'),
+  damage: [
+    '暴击时的伤害倍率：基础 150%，会心天赋、破军诀、灵兽「杀伐」另加。',
+    '讨伐里破军只加镇妖塔的六成，会心按弟子的伤害另算；宗门大比不计会心。',
+    '破甲诀的首击必暴倍率另算，不计入这里。',
+  ].join('\n'),
+};
+
 const SCORE_HELP = [
   '综合评分 =（资质 + 攻击 + 防御 + 身法 + 幸运 + 体魄）÷ 6，保留一位小数。',
   '只看六项基础属性：不含装备与灵兽加成，也与境界、修为、天赋、战力无关。',
@@ -1084,6 +1098,22 @@ const beastPowerText = computed(() => {
   const bp = props.disciple.beastPowerBonusBp;
   return bp > 0 ? `+${String(Number((bp / 100).toFixed(1)))}%` : null;
 });
+
+/** 属性列表末尾的暴击率 / 暴击伤害（服务端给基点，最多留一位小数）。 */
+const critRows = computed(() => [
+  {
+    key: 'critRate',
+    label: '暴击率',
+    value: `${String(Number((props.disciple.critRateBp / 100).toFixed(1)))}%`,
+    help: CRIT_HELP.rate,
+  },
+  {
+    key: 'critDamage',
+    label: '暴击伤害',
+    value: `${String(Number((props.disciple.critDamageBp / 100).toFixed(1)))}%`,
+    help: CRIT_HELP.damage,
+  },
+]);
 
 /** 三个装备格：部位顺序由服务端给；worn 是该弟子在此部位已穿的那件（没有则 null）。 */
 const gearSlots = computed(() =>
@@ -1240,6 +1270,7 @@ function refineGear(item: EquipmentItemView | null): void {
               :physique="disciple.physique"
               :bonus="attributeBonus"
               :help="ATTRIBUTE_HELP"
+              :extra-rows="critRows"
             />
           </div>
 

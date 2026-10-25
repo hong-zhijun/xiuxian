@@ -1,6 +1,7 @@
 import type { BeastMods } from './spiritBeasts';
 import { elementFactor } from './elements';
 import { beastDefend, freshBeastState } from './beastCombat';
+import { CRIT_MULTIPLIER, critMultiplier, critRate } from './crit';
 /**
  * 宗门大比（docs/宗门大比开发计划.md）——纯定义与纯计算。
  *
@@ -40,9 +41,6 @@ export const ARENA_DAMAGE_SCALE = 100;
 export const ARENA_HP_FACTOR = 4.5;
 /** 出手伤害浮动（均匀随机）。 */
 export const ARENA_FLUCTUATION: readonly [number, number] = [0.8, 1.2];
-/** 暴击：幸运 100 → 20%；暴击伤害 ×1.5。 */
-export const ARENA_CRIT_RATE_MAX = 0.2;
-export const ARENA_CRIT_MULTIPLIER = 1.5;
 /** 追击：身法每高出对手 1 点 +0.5%，最高 30%。 */
 export const ARENA_EXTRA_ACTION_PER_POINT = 0.005;
 export const ARENA_EXTRA_ACTION_MAX = 0.3;
@@ -294,11 +292,6 @@ export function arenaDefenseFactor(defense: number): number {
   return 100 / (100 + Math.max(0, defense));
 }
 
-/** 暴击率：幸运 / 100 × 20%，最高 100%。 */
-export function arenaCritRate(luck: number): number {
-  return Math.min(1, (Math.max(0, luck) / 100) * ARENA_CRIT_RATE_MAX);
-}
-
 /** 追击概率：(我方身法 − 对方身法) × 0.5%，夹在 0~30%。 */
 export function arenaExtraActionChance(mySpeed: number, opponentSpeed: number): number {
   return Math.min(ARENA_EXTRA_ACTION_MAX, Math.max(0, (mySpeed - opponentSpeed) * ARENA_EXTRA_ACTION_PER_POINT));
@@ -390,20 +383,22 @@ export function simulateArenaDuel(input: {
     let crit: boolean;
     const tags: string[] = [];
     if (mods === undefined && defender.technique === undefined && !attacker.beast && !defender.beast) {
-      crit = random() < arenaCritRate(attacker.luck);
+      crit = random() < critRate(attacker.luck);
       const raw =
-        attacker.power * arenaAttackFactor(attacker.attack) * fluctuation * (crit ? ARENA_CRIT_MULTIPLIER : 1);
+        attacker.power * arenaAttackFactor(attacker.attack) * fluctuation * (crit ? CRIT_MULTIPLIER : 1);
       damage = Math.floor(raw * arenaDefenseFactor(defender.defense) * ARENA_DAMAGE_SCALE);
     } else {
       const roll = random();
-      const naturalRate = arenaCritRate(attacker.luck);
+      const naturalRate = critRate(attacker.luck);
       const rate = mods === undefined ? naturalRate : Math.min(1, naturalRate * mods.critRateMultiplier);
-      const forcedCrit = index === 0 ? (mods?.firstStrikeCritMultiplier ?? (attacker.beast?.firstCrit ? ARENA_CRIT_MULTIPLIER : null)) : null;
+      const forcedCrit = index === 0 ? (mods?.firstStrikeCritMultiplier ?? (attacker.beast?.firstCrit ? CRIT_MULTIPLIER : null)) : null;
       crit = forcedCrit !== null || roll < rate;
       const myHp = attackerIsA ? hpA : hpB;
       const myMax = attackerIsA ? maxHpA : maxHpB;
       const lowHp = mods !== undefined && mods.lowHpThreshold > 0 && myHp < myMax * mods.lowHpThreshold;
-      let multiplier = crit ? (forcedCrit ?? ARENA_CRIT_MULTIPLIER) + (mods?.critMultiplierBonus ?? 0) + (attacker.beast?.crit ?? 0) : 1;
+      let multiplier = crit
+        ? critMultiplier([mods?.critMultiplierBonus ?? 0, attacker.beast?.crit ?? 0], forcedCrit ?? CRIT_MULTIPLIER)
+        : 1;
       if (mods !== undefined) {
         multiplier *= index === 0 ? mods.firstStrikeMultiplier : mods.laterStrikeMultiplier;
         multiplier *= mods.strikeMultiplier;

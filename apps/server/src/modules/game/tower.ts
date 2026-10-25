@@ -1,6 +1,7 @@
 import type { BeastMods } from './spiritBeasts';
 import { elementFactor, enemyElement } from './elements';
 import { beastDefend, freshBeastState } from './beastCombat';
+import { CRIT_MULTIPLIER, critMultiplier, critRate } from './crit';
 import { REALMS } from './constants';
 import type { EquipmentQuality } from './equipment';
 import { ARENA_COMBAT_BONUS_BP_PER_LEVEL } from './realms';
@@ -71,9 +72,6 @@ export const TOWER_MONSTER_VIGOR: readonly [number, number] = [0.9, 1.1];
 /** 弟子出手伤害浮动 / 妖物出手伤害浮动。 */
 export const TOWER_DISCIPLE_FLUCTUATION: readonly [number, number] = [0.8, 1.2];
 export const TOWER_MONSTER_FLUCTUATION: readonly [number, number] = [0.9, 1.1];
-/** 暴击：幸运 100 → 20%；暴击伤害 ×1.5（会心另加）。 */
-export const TOWER_CRIT_RATE_MAX = 0.2;
-export const TOWER_CRIT_MULTIPLIER = 1.5;
 /** 攻击修正：0.75 + 0.25 × 攻击 / 标准属性（比值最多算到 2）。 */
 export const TOWER_ATTACK_RATIO_CAP = 2;
 /** 追击：身法每高出妖物 1 点 +0.5%，最高 30%。 */
@@ -342,10 +340,37 @@ export function towerFighterHp(
   );
 }
 
-/** 暴击率：幸运 / 100 × 20%（罡气 ×2），最高 100%。 */
+/** 暴击率：幸运 / 100 × 20%（罡气 ×2），最高 100%（底数见 crit.ts）。 */
 export function towerCritRate(luck: number, affix: TowerAffixDef | null): number {
-  const multiplier = affix?.id === 'aegis' ? TOWER_AEGIS_CRIT_RATE_MULTIPLIER : 1;
-  return Math.min(1, (Math.max(0, luck) / 100) * TOWER_CRIT_RATE_MAX * multiplier);
+  return critRate(luck, affix?.id === 'aegis' ? TOWER_AEGIS_CRIT_RATE_MULTIPLIER : 1);
+}
+
+type TowerCritSource = Pick<TowerFighter, 'luck' | 'critBonusBp' | 'technique' | 'beast'>;
+
+/** 暴击伤害加成：会心；labels = true 时再加破军与灵兽（只算代价时不带功法 / 灵兽的增益）。 */
+function towerCritBonuses(fighter: TowerCritSource, labels: boolean): number[] {
+  const talent = Math.max(0, fighter.critBonusBp) / 10_000;
+  if (!labels) return [talent];
+  return [talent, fighter.technique?.tower.critMultiplierBonus ?? 0, fighter.beast?.crit ?? 0];
+}
+
+/**
+ * 镇妖塔口径的暴击率与暴击伤害倍率（不含首击必暴）：战斗里每次出手按它判定，
+ * 弟子详情的「暴击率 / 暴击伤害」也显示它（affix 传 null）。
+ * naturalRate 是不算天机的暴击率，用来判断这次暴击是不是功法带来的。
+ */
+export function towerCritProfile(
+  fighter: TowerCritSource,
+  affix: TowerAffixDef | null,
+): { naturalRate: number; rate: number; multiplier: number } {
+  const mods = fighter.technique?.tower;
+  const naturalRate = towerCritRate(fighter.luck, affix);
+  return {
+    naturalRate,
+    // 天机：暴击率 ×(1 + S)。
+    rate: mods === undefined ? naturalRate : Math.min(1, naturalRate * mods.critRateMultiplier),
+    multiplier: critMultiplier(towerCritBonuses(fighter, true)),
+  };
 }
 
 /**
@@ -469,10 +494,9 @@ export function simulateTowerBattle(input: {
     strikeCounts.set(fighter.id, index + 1);
     const fluctuation = between(input.random, TOWER_DISCIPLE_FLUCTUATION);
     const roll = input.random();
-    const naturalRate = towerCritRate(fighter.luck, affix);
-    // 天机：暴击率 ×(1 + S)；破甲：本场第一次出手必定暴击，暴击倍率替换为 ×(1 + 2S)。
-    const boostedRate = mods === undefined ? naturalRate : Math.min(1, naturalRate * mods.critRateMultiplier);
-    const forcedCrit = index===0 ? (mods?.firstStrikeCritMultiplier ?? (fighter.beast?.firstCrit ? TOWER_CRIT_MULTIPLIER : null)) : null;
+    const { naturalRate, rate: boostedRate } = towerCritProfile(fighter, affix);
+    // 破甲：本场第一次出手必定暴击，暴击倍率替换为 ×(1 + 2S)。
+    const forcedCrit = index===0 ? (mods?.firstStrikeCritMultiplier ?? (fighter.beast?.firstCrit ? CRIT_MULTIPLIER : null)) : null;
     const crit = forcedCrit !== null || roll < boostedRate;
     const naturalCrit = roll < naturalRate;
     const lowHpActive = mods !== undefined && mods.lowHpThreshold > 0 && teamHp < teamMaxHp * mods.lowHpThreshold;
@@ -481,10 +505,10 @@ export function simulateTowerBattle(input: {
     const damageOf = (isCrit: boolean, labels: boolean): number => {
       let multiplier = 1;
       if (isCrit) {
-        multiplier =
-          (labels && forcedCrit !== null ? forcedCrit : TOWER_CRIT_MULTIPLIER) + Math.max(0, fighter.critBonusBp) / 10_000;
-        if (labels && mods !== undefined) multiplier += mods.critMultiplierBonus;
-        if (labels) multiplier += fighter.beast?.crit ?? 0;
+        multiplier = critMultiplier(
+          towerCritBonuses(fighter, labels),
+          labels && forcedCrit !== null ? forcedCrit : CRIT_MULTIPLIER,
+        );
       }
       if (!isCrit && affix?.id === 'aegis') multiplier *= TOWER_AEGIS_NORMAL_FACTOR;
       if (affix?.id === 'ironWall' && fighter.attack < standardAttr) multiplier *= TOWER_IRON_WALL_PENALTY;

@@ -120,6 +120,9 @@ export interface DiscipleView {
   daoInsightRoom: number;
   /** 天赋重构 · 铁骨：讨伐受伤 / 重伤概率减免（基点）。 */
   bossInjuryReductionBp: number;
+  /** 暴击率 / 暴击伤害倍率（基点，暴伤 15000 = ×1.5）：服务端按镇妖塔口径算好。 */
+  critRateBp: number;
+  critDamageBp: number;
   /** 当前战力（服务端按 realms.ts 公式算好）。 */
   combatPower: number;
   /**

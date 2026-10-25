@@ -19,6 +19,15 @@ export const MAX_ENTRIES = 5;
 
 export const CHANGELOG: readonly ChangelogEntry[] = [
   {
+    id: '2026-10-25-crit-stats',
+    time: '2026-10-25 09:45',
+    title: '弟子详情显示暴击率与暴击伤害',
+    items: [
+      '弟子详情的属性列表末尾新增「暴击率」「暴击伤害」，按镇妖塔的算法计入幸运（含装备与灵兽）、会心天赋、天机诀、破军诀与灵兽「杀伐」。',
+      '讨伐、宗门大比里的差别写在旁边的问号说明里；战斗数值本身没有改动。',
+    ],
+  },
+  {
     id: '2026-10-24-scratch-card-update-gift',
     time: '2026-10-24 18:55',
     title: '刮刮乐上线 · 全服更新福利',

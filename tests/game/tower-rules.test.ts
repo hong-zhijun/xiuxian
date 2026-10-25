@@ -10,6 +10,7 @@ import {
   towerAttackFactor,
   towerClearEquipment,
   towerClearReward,
+  towerCritProfile,
   towerCritRate,
   towerExtraActionChance,
   towerFailsToday,
@@ -20,6 +21,7 @@ import {
   towerSweepReward,
   type TowerFighter,
 } from '../../apps/server/src/modules/game/tower';
+import { techniqueModifiersOf } from '../../apps/server/src/modules/game/techniques';
 
 /** 按顺序循环吐出固定随机数。 */
 function sequence(values: readonly number[]): () => number {
@@ -99,6 +101,21 @@ describe('镇妖塔 · 战斗系数', () => {
   it('暴击率：幸运 100 → 20%，罡气翻倍', () => {
     expect(towerCritRate(100, null)).toBeCloseTo(0.2);
     expect(towerCritRate(50, towerAffixOf(20))).toBeCloseTo(0.2);
+  });
+
+  it('暴击面板（弟子详情同口径）：天机乘暴击率，会心与破军加暴伤倍率', () => {
+    const plain = towerCritProfile(fighter({ luck: 50 }), null);
+    expect(plain.rate).toBeCloseTo(0.1);
+    expect(plain.multiplier).toBeCloseTo(1.5);
+
+    const tianji = techniqueModifiersOf({ techniqueId: 'tianji', level: 1, proficiencyBp: 10_000 })!;
+    const boosted = towerCritProfile(fighter({ luck: 50, technique: tianji }), null);
+    expect(boosted.naturalRate).toBeCloseTo(0.1);
+    expect(boosted.rate).toBeCloseTo(0.1 * tianji.tower.critRateMultiplier);
+
+    const pojun = techniqueModifiersOf({ techniqueId: 'pojun', level: 1, proficiencyBp: 10_000 })!;
+    const heavy = towerCritProfile(fighter({ luck: 50, critBonusBp: 6000, technique: pojun }), null);
+    expect(heavy.multiplier).toBeCloseTo(1.5 + 0.6 + pojun.tower.critMultiplierBonus);
   });
 
   it('追击：身法每高出 1 点 +0.5%，0~30%', () => {

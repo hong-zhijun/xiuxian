@@ -1,5 +1,6 @@
 import { bossDropDescription, type EquipmentQuality } from './equipment';
 import { ARENA_COMBAT_BONUS_BP_PER_LEVEL } from './realms';
+import { critMultiplier, critRate } from './crit';
 import { TECHNIQUES, TECHNIQUE_TIER_NAMES, scrollItemIdOf, type TechniqueTier } from './techniques';
 
 /**
@@ -35,10 +36,6 @@ export const WORLD_BOSS_CLOSE_HOUR = 24;
 
 /** 力竭期伤害倍率（23:00~24:00）。 */
 export const WORLD_BOSS_FRENZY_MULTIPLIER = 1.5;
-
-/** 暴击倍率与暴击率上限（luck 1~100 → 最高 20%）。 */
-export const WORLD_BOSS_CRIT_MULTIPLIER = 1.5;
-export const WORLD_BOSS_CRIT_RATE_MAX = 0.2;
 
 /** 伤害浮动区间（均匀随机）。 */
 export const WORLD_BOSS_FLUCTUATION_MIN = 0.8;
@@ -393,14 +390,10 @@ export function rollDamage(input: {
   const fluctuation =
     WORLD_BOSS_FLUCTUATION_MIN +
     input.random() * (WORLD_BOSS_FLUCTUATION_MAX - WORLD_BOSS_FLUCTUATION_MIN);
-  const critRate = Math.min(
-    1,
-    (input.avgLuck / 100) * WORLD_BOSS_CRIT_RATE_MAX * (input.critRateMultiplier ?? 1),
-  );
-  const crit = input.random() < critRate;
+  const crit = input.random() < critRate(input.avgLuck, input.critRateMultiplier ?? 1);
   const partyBase = Math.max(0, input.partyBase);
   const base = crit
-    ? partyBase * (WORLD_BOSS_CRIT_MULTIPLIER + (input.critMultiplierBonus ?? 0)) +
+    ? partyBase * critMultiplier([input.critMultiplierBonus ?? 0]) +
       Math.max(0, input.critBonusBase ?? 0)
     : partyBase * (input.nonCritMultiplier ?? 1);
   const damage = Math.floor(

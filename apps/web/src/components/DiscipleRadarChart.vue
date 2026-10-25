@@ -28,6 +28,8 @@ const props = defineProps<{
   bonus?: { attack: number; defense: number; speed: number; luck: number; physique: number };
   /** 每项属性的说明（给了就在名称后面加一个问号）；公开档案不传，不显示问号。 */
   help?: Partial<Record<'aptitude' | 'attack' | 'defense' | 'speed' | 'luck' | 'physique', string>>;
+  /** 数值列表末尾追加的派生数值（如暴击率 / 暴击伤害）：并排在同一行，不画轴、没有进度条。 */
+  extraRows?: ReadonlyArray<{ key: string; label: string; value: string; help?: string }>;
 }>();
 
 /** viewBox 尺寸：留出六个轴标签的空间，宽度由 CSS 控制（响应式）。 */
@@ -175,6 +177,16 @@ const ariaLabel = computed(
           <span v-if="point.bonus > 0" class="gear-bonus">(+{{ point.bonus }})</span>
           <span class="radar-value-track" aria-hidden="true"><i :style="{ width: `${point.value}%` }" /></span>
         </dd>
+      </div>
+      <!-- 派生数值并排成一行：`暴击率 ? 19%   暴击伤害 ? 210%`。 -->
+      <div v-if="extraRows?.length" class="radar-extra-line">
+        <template v-for="row in extraRows" :key="row.key">
+          <dt>
+            {{ row.label }}
+            <HelpTip v-if="row.help" :label="`${row.label}说明`" :text="row.help" />
+          </dt>
+          <dd class="radar-value-number">{{ row.value }}</dd>
+        </template>
       </div>
     </dl>
   </figure>
