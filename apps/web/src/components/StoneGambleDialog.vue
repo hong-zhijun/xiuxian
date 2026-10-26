@@ -412,7 +412,7 @@ onUnmounted(() => {
         <h2 id="stone-rules-title" class="disciple-detail-title">赌石说明</h2>
         <p class="stone-rules-text">
           每块原石独立开一次，四种结果按下表概率决定，开出的玄铁个数固定。
-          药材与矿石按坊市卖出价折算（2 材料 = 1 灵石）。玄铁剩余容量装不下一块该档的天价时不能切；能切时连切 10 块照常全部入账。
+          药材与矿石按坊市卖出价折算（2 材料 = 1 灵石）。连切 10 块照常全部入账。
         </p>
         <ul class="stone-odds-list">
           <li v-for="tier in tiers" :key="tier.id" class="stone-odds-item">

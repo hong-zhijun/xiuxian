@@ -1595,11 +1595,6 @@ ul {
   text-overflow: ellipsis;
 }
 
-.resource-capacity {
-  color: #52675d;
-  font-size: 10px;
-}
-
 .resource-rate {
   display: flex;
   align-self: center;
@@ -1640,42 +1635,6 @@ ul {
   font-family: inherit;
   font-size: 9px;
   font-weight: 500;
-}
-
-.resource-track {
-  position: absolute;
-  right: 0;
-  bottom: 0;
-  left: 0;
-  height: 3px;
-  background: rgba(255, 255, 255, 0.025);
-}
-
-.resource-track span {
-  display: block;
-  height: 100%;
-  max-width: 100%;
-  background: var(--resource-color);
-  box-shadow: 0 0 8px var(--resource-color);
-  transition: width 400ms linear;
-}
-
-.resource-card.is-near-capacity .resource-capacity {
-  color: var(--gold-bright);
-}
-
-.resource-card.is-near-capacity .resource-track span {
-  background: var(--gold);
-  box-shadow: 0 0 8px var(--gold);
-}
-
-.resource-card.is-at-capacity .resource-capacity {
-  color: var(--red-bright);
-}
-
-.resource-card.is-at-capacity .resource-track span {
-  background: var(--red-bright);
-  box-shadow: 0 0 8px var(--red-bright);
 }
 
 .management-grid {

@@ -5,7 +5,7 @@ import { GAME_CONFIG_CONTENT } from '@xiuxian/game-config';
 
 import { createApp } from '../src/app';
 import { findPillRecipe } from '../src/modules/game/alchemy';
-import { effectiveCapacity, findSectLevel } from '../src/modules/game/constants';
+import { levelScaledCapacity, findSectLevel } from '../src/modules/game/constants';
 import {
   SHOP_BUY_PRICE,
   SHOP_MAX_PILL_QUANTITY,
@@ -134,7 +134,7 @@ async function pillQuantityOf(sectId: string, pillId: string): Promise<number> {
 function capacityAtLevel1(resourceId: string): number {
   const definition = GAME_CONFIG_CONTENT.resources.find((resource) => resource.id === resourceId);
   expect(definition, `配置里必须有 ${resourceId}`).toBeTruthy();
-  return effectiveCapacity(definition!.capacity, findSectLevel(1).capacityMultiplier);
+  return levelScaledCapacity(definition!.capacity, findSectLevel(1).capacityMultiplier);
 }
 
 function herbCapacity(): number {
@@ -222,27 +222,17 @@ describe('坊市：买入材料', () => {
     expect(await balanceOf(sect.sectId, 'herb')).toBe(0);
   });
 
-  it('买入撞材料容量上限：CAPACITY_FULL，details 给出容量 / 余额 / 还能买多少', async () => {
+  it('仓库不设上限：买入可以超过原来的材料容量', async () => {
     const sect = await makeSect('shp-buy-full');
     await freezeSettlement(sect.sectId);
     await setBalance(sect.sectId, 'spiritStone', 100_000);
     const capacity = herbCapacity();
-    // 差 500 最小单位装满：再买 1 展示单位（1000 最小单位）一定越界。
+    // 原来差 500 最小单位就满：现在再买 1 展示单位（1000 最小单位）照常入账。
     await setBalance(sect.sectId, 'herb', capacity - 500);
-    const before = await shopSnapshot(sect);
 
-    const rejected = await buy(sect, { resourceId: 'herb', amount: 1 });
-    expect(rejected.status).toBe(409);
-    const error = errorOf(rejected);
-    expect(error.code).toBe('CAPACITY_FULL');
-    expect(error.details?.resourceId).toBe('herb');
-    expect(error.details?.capacity).toBe(String(capacity));
-    expect(error.details?.balance).toBe(String(capacity - 500));
-    // 500 < 1000：连 1 个展示单位都装不下。
-    expect(error.details?.room).toBe('0');
-
-    await expectShopUnchanged(sect, before);
-    expect(await balanceOf(sect.sectId, 'herb')).toBe(capacity - 500);
+    const accepted = await buy(sect, { resourceId: 'herb', amount: 1 });
+    expect(accepted.status).toBe(200);
+    expect(await balanceOf(sect.sectId, 'herb')).toBe(capacity + 500);
   });
 });
 
@@ -499,22 +489,17 @@ describe('坊市：神木 ⇄ 玄铁', () => {
     await expectShopUnchanged(sect, before);
   });
 
-  it('反向撞神木容量上限：CAPACITY_FULL，room 按还能换多少玄铁给', async () => {
+  it('仓库不设上限：反向兑换可以把神木换到原来的容量之上', async () => {
     const sect = await makeSect('shp-ex-back-full');
     await freezeSettlement(sect.sectId);
     const capacity = capacityAtLevel1('shenmu');
     await setBalance(sect.sectId, 'xuantie', 100_000);
-    // 只剩 3000 最小单位空位：每个玄铁换 2000 神木，最多还能换 1 个。
+    // 原来只剩 3000 最小单位空位、最多换 1 个：现在换 2 个照常成交。
     await setBalance(sect.sectId, 'shenmu', capacity - 3_000);
-    const before = await shopSnapshot(sect);
 
-    const rejected = await exchange(sect, { direction: 'toShenmu', amount: 2 });
-    expect(rejected.status).toBe(409);
-    const error = errorOf(rejected);
-    expect(error.code).toBe('CAPACITY_FULL');
-    expect(error.details?.resourceId).toBe('shenmu');
-    expect(error.details?.room).toBe('1');
-    await expectShopUnchanged(sect, before);
+    const accepted = await exchange(sect, { direction: 'toShenmu', amount: 2 });
+    expect(accepted.status).toBe(200);
+    expect(await balanceOf(sect.sectId, 'shenmu')).toBeGreaterThan(capacity);
   });
 
   it('神木不足：INSUFFICIENT_RESOURCE，余额与面板原样不变', async () => {
@@ -530,21 +515,16 @@ describe('坊市：神木 ⇄ 玄铁', () => {
     await expectShopUnchanged(sect, before);
   });
 
-  it('撞玄铁容量上限：CAPACITY_FULL，details 给出还能换多少，神木不扣', async () => {
+  it('仓库不设上限：玄铁可以换到原来的容量之上', async () => {
     const sect = await makeSect('shp-ex-full');
     await freezeSettlement(sect.sectId);
     const capacity = capacityAtLevel1('xuantie');
     await setBalance(sect.sectId, 'shenmu', 100_000);
     await setBalance(sect.sectId, 'xuantie', capacity - 500);
-    const before = await shopSnapshot(sect);
 
-    const rejected = await exchange(sect, { amount: 1 });
-    expect(rejected.status).toBe(409);
-    const error = errorOf(rejected);
-    expect(error.code).toBe('CAPACITY_FULL');
-    expect(error.details?.resourceId).toBe('xuantie');
-    expect(error.details?.room).toBe('0');
-    await expectShopUnchanged(sect, before);
+    const accepted = await exchange(sect, { amount: 1 });
+    expect(accepted.status).toBe(200);
+    expect(await balanceOf(sect.sectId, 'xuantie')).toBe(capacity + 500);
   });
 
   it('amount = 0 / 负数 / 非整数 / 超上限 / 多余字段 → 400', async () => {

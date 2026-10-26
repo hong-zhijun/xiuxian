@@ -83,7 +83,7 @@ import {
   REALMS,
   REALM_CULTIVATION_MULTIPLIER,
   SECT_LEVELS,
-  effectiveCapacity,
+  RESOURCE_CAPACITY,
   findRealm,
   findSectLevel,
   findStage,
@@ -2162,7 +2162,6 @@ export interface SectStateInput {
    * 视图输出统一用 `input.activeExploration ?? null`。
    */
   activeExploration?: ActiveExplorationView | null;
-  capacityMultiplier: number;
   /**
    * 0025 世界 Boss：只有 GET /game/sync（getSectState）会算这一个布尔值（两条走索引的小查询），
    * 其他接口一律不给（默认 false）。前端据此在「讨伐」按钮上显示角标。
@@ -2195,7 +2194,6 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
     journeys,
     recentJourneys,
     recentEventRows,
-    capacityMultiplier,
     stewards,
   } = input;
   // 速率按「当前状态」现算，而不是沿用本次结算用的旧状态：派工 / 升级藏经阁返回的那一帧里，
@@ -2245,7 +2243,8 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
       id: definition.id,
       name: definition.name,
       balance: String(row?.balance ?? 0),
-      capacity: String(effectiveCapacity(definition.capacity, capacityMultiplier)),
+      // 仓库不设上限：容量恒为 RESOURCE_CAPACITY，前端不再显示库容。
+      capacity: String(RESOURCE_CAPACITY),
       ratePerHour: String(resourceRatesNow.get(definition.id) ?? 0),
       worldRatePerHour: String(worldRates.get(definition.id) ?? 0),
       capped: settled?.capped ?? false,

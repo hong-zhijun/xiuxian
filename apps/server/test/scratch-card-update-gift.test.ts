@@ -106,9 +106,9 @@ describe('0075 刮刮乐更新奖励', () => {
     const state = await getSectState(env.DB, userId, Date.now() + 3_600_000);
     expect(state).not.toBeNull();
     const resource = state!.resources.find(item => item.id === 'spiritStone')!;
-    expect(balance).toBeGreaterThan(Number(resource.capacity));
-    expect(Number(resource.balance)).toBe(balance);
-    expect(await stoneOf(sectId)).toBe(balance);
+    // 仓库不设上限：离线结算只会往上加，不会截断奖励。
+    expect(Number(resource.balance)).toBeGreaterThanOrEqual(balance);
+    expect(await stoneOf(sectId)).toBe(Number(resource.balance));
     const gift = state!.recentEvents.find(item => item.eventId === 'scratchCardUpdateGift');
     expect(gift?.name).toBe('刮刮乐更新奖励');
     expect(gift?.effects).toEqual({ spiritStone: String(REWARD) });

@@ -195,7 +195,7 @@ describe('晋升目标', () => {
     expect(goal.summary).toContain('瓶颈是灵石');
   });
 
-  it('没有产出的资源：凑不齐；容量不够：存不下', () => {
+  it('没有产出的资源：凑不齐；仓库不设上限，需求超过原容量也只是在攒', () => {
     const goal = run(
       stateOf({
         resources: [resource('xuantie', 0, 0), resource('ore', 100, 10, 500)],
@@ -207,10 +207,7 @@ describe('晋升目标', () => {
       detail: '还差 20，目前没有产出',
       bottleneck: true,
     });
-    expect(goal.lines.find((line) => line.id === 'res:ore')).toMatchObject({
-      status: 'blocked',
-      detail: '仓库上限只有 500，存不下',
-    });
+    expect(goal.lines.find((line) => line.id === 'res:ore')).toMatchObject({ status: 'short' });
     expect(goal.summary).toContain('玄铁目前没有产出');
   });
 

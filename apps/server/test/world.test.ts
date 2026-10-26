@@ -2,7 +2,7 @@ import { applyD1Migrations, env } from 'cloudflare:test';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createApp } from '../src/app';
-import { dateKeyUtc8, effectiveCapacity, findSectLevel, findStage } from '../src/modules/game/constants';
+import { dateKeyUtc8, findSectLevel, findStage, levelScaledCapacity } from '../src/modules/game/constants';
 import { worldGarrisonFreeGuardStatement } from '../src/modules/game/repository';
 import { findWorldSite } from '../src/modules/game/world';
 import {
@@ -674,18 +674,18 @@ describe('山河舆图 · 整点供奉（计划 1.5）', () => {
     expect(await balanceOf(zu.sectId, 'spiritualEnergy')).toBe(energyStart + 6 * zuEnergyPerHour);
   });
 
-  it('入账不超过仓库上限：溢出的部分作废，余额停在上限', async () => {
+  it('仓库不设上限：余额超过原来的容量也照样入账', async () => {
     await resetWorldSites();
     const sect = await makeSect(3);
     pinRandom(0.5);
     await attackWorldSite(env.DB, sect.userId, { siteId: 'east-lingdi', discipleIds: sect.discipleIds }, NOW);
     const herb = gameConfig().resources.find((item) => item.id === 'herb');
-    const cap = effectiveCapacity(herb?.capacity ?? '0', findSectLevel(3).capacityMultiplier);
+    const cap = levelScaledCapacity(herb?.capacity ?? '0', findSectLevel(3).capacityMultiplier);
     await env.DB.prepare("UPDATE resource_balances SET balance = ? WHERE sect_id = ? AND resource_id = 'herb'")
       .bind(cap - 10_000, sect.sectId)
       .run();
     await processWorldSites(env.DB, NOW + 3 * HOUR + MIN);
-    expect(await balanceOf(sect.sectId, 'herb')).toBe(cap);
+    expect(await balanceOf(sect.sectId, 'herb')).toBeGreaterThan(cap);
   });
 
   it('占领者宗门已不存在：整点结算时灵地回到无主', async () => {

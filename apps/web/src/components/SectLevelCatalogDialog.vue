@@ -6,7 +6,7 @@ import { formatAmount } from '../utils/format';
 import ModalShell from './ModalShell.vue';
 
 /**
- * 宗门等级一览（首页宗门品阶旁的「?」）：每级名称、弟子上限、资源容量倍率、升级消耗与条件。
+ * 宗门等级一览（首页宗门品阶旁的「?」）：每级名称、弟子上限、升级消耗与条件（资源仓库不设上限）。
  * 数据来自服务端 state.sectLevelCatalog（资源名取 state.resources），前端只渲染；当前等级高亮。
  */
 const props = defineProps<{
@@ -40,7 +40,7 @@ function costText(cost: Record<string, string>): string {
           <h2 id="sect-level-catalog-title">宗门等级一览</h2>
         </div>
       </header>
-      <p class="disciple-detail-hint">升级消耗与条件指「升到这一级」所需；资源容量是各项资源基础容量的倍数。</p>
+      <p class="disciple-detail-hint">升级消耗与条件指「升到这一级」所需；资源仓库不设上限。</p>
 
       <p class="talent-catalog-swipe disciple-detail-hint">表格可左右滑动查看。</p>
       <div class="talent-catalog-scroll">
@@ -50,7 +50,6 @@ function costText(cost: Record<string, string>): string {
               <th scope="col">等级</th>
               <th scope="col">名称</th>
               <th scope="col" class="talent-catalog-value">弟子上限</th>
-              <th scope="col" class="talent-catalog-value">资源容量</th>
               <th scope="col">升级消耗</th>
               <th scope="col">条件</th>
             </tr>
@@ -60,7 +59,6 @@ function costText(cost: Record<string, string>): string {
               <th scope="row" class="talent-catalog-name">{{ level.level }}</th>
               <td class="talent-catalog-name">{{ level.name }}</td>
               <td class="talent-catalog-value">{{ level.discipleCapacity }}</td>
-              <td class="talent-catalog-value">×{{ level.capacityMultiplier }}</td>
               <td class="talent-catalog-condition">{{ costText(level.upgradeCost) }}</td>
               <td class="talent-catalog-condition">{{ level.requirements.length > 0 ? level.requirements.join('；') : '—' }}</td>
             </tr>

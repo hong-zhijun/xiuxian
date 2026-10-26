@@ -82,14 +82,15 @@ describe('0074 周五下班福利', () => {
     // 新宗门 1 级的灵气容量是 3000000（最小单位），这份福利 10000000 远超它 —— 说明没有夹容量。
     expect(energy).toBeGreaterThan(3_000_000);
 
-    // 过 1 小时结算：福利只发一次，余额不会因为满仓被截断。
-    // random 钉 0 → 结算必然触发的事件是第一个（灵石矿脉 +80 灵石），不会动灵气；灵气满仓也不再自然产出。
+    // 过 1 小时结算：福利只发一次，仓库不设上限，余额不会被截断（自然产出照常往上加）。
+    // random 钉 0 → 结算必然触发的事件是第一个（灵石矿脉 +80 灵石），不会动灵气。
     vi.spyOn(Math, 'random').mockReturnValue(0);
     const state = await getSectState(env.DB, userId, Date.now() + 3_600_000);
     if (state === null) throw new Error('宗门不存在');
-    expect(await energyOf(sectId)).toBe(energy);
+    const after = await energyOf(sectId);
+    expect(after).toBeGreaterThanOrEqual(energy);
     const resources = state.resources as { id: string; balance: string }[];
-    expect(Number(resources.find((item) => item.id === 'spiritualEnergy')!.balance)).toBe(energy);
+    expect(Number(resources.find((item) => item.id === 'spiritualEnergy')!.balance)).toBe(after);
 
     const gift = state.recentEvents.find((item) => item.eventId === 'fridayGift');
     expect(gift?.name).toBe('周五福利');

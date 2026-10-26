@@ -234,15 +234,15 @@ describe('镇妖塔', () => {
     expect(won.tower.clearEquipment).toBeNull();
   });
 
-  it('奖励不超过资源容量：仓库满了那一项到账 0', async () => {
+  it('仓库不设上限：余额远超原来的容量，奖励照样全额到账', async () => {
     const sect = await makeSect('cap', { strong: true });
     await env.DB.prepare("UPDATE resource_balances SET balance = 999999999 WHERE sect_id = ? AND resource_id = 'spiritStone'")
       .bind(sect.sectId)
       .run();
     const result = await challengeTower(env.DB, sect.userId, { discipleIds: sect.discipleIds }, NOW);
     expect(result.result.won).toBe(true);
-    expect(result.result.reward.spiritStone).toBe(0);
+    expect(result.result.reward.spiritStone).toBe(towerClearReward(1).spiritStone);
     expect(result.result.reward.herb).toBe(towerClearReward(1).herb);
-    expect(await balanceOf(sect.sectId, 'spiritStone')).toBe(999999999);
+    expect(await balanceOf(sect.sectId, 'spiritStone')).toBe(999999999 + towerClearReward(1).spiritStone);
   });
 });

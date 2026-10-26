@@ -7,7 +7,7 @@ import {
   scriptureLibraryCultivationBonusBp,
   SPIRITUAL_ARRAY_BUILDING_ID,
   SPIRITUAL_ARRAY_ENERGY_BONUS_BP_PER_LEVEL,
-  effectiveCapacity,
+  RESOURCE_CAPACITY,
   findStage,
   realmCultivationMultiplier,
 } from './constants';
@@ -75,8 +75,6 @@ export interface SettleInput {
   now: number;
   resources: readonly ResourceState[];
   disciples: readonly DiscipleState[];
-  /** 宗门等级的资源容量倍率（默认 1；不传时与旧行为完全一致）。 */
-  capacityMultiplier?: number;
   /** 建筑等级表（defId -> level），用于计算藏经阁的修炼加速。 */
   buildingLevels?: Record<string, number>;
   /**
@@ -89,9 +87,9 @@ export interface SettleInput {
 export interface SettledResource extends ResourceState {
   /** 本段结算使用的产量（最小单位/小时，含岗位弟子贡献）。 */
   ratePerHour: number;
-  /** 因容量不足丢弃的量（最小单位）。 */
+  /** 因容量不足丢弃的量（最小单位）；仓库不设上限后恒为 0。 */
   discarded: number;
-  /** 本段结束时是否已满仓（满仓会丢弃小数余量）。 */
+  /** 本段结束时是否已满仓；仓库不设上限后恒为 false。 */
   capped: boolean;
 }
 
@@ -122,7 +120,6 @@ const BP = 10_000;
 
 export function settleEconomy(input: SettleInput, random: () => number = Math.random): SettleResult {
   const { config, lastSettledAt, now, resources, disciples } = input;
-  const capacityMultiplier = input.capacityMultiplier ?? 1;
   const scriptureLibraryLevel = input.buildingLevels?.[SCRIPTURE_LIBRARY_BUILDING_ID] ?? 0;
   const elapsed = Math.max(0, now - lastSettledAt);
   const durationMs = Math.min(elapsed, config.offlineCapSeconds * 1000);
@@ -146,7 +143,7 @@ export function settleEconomy(input: SettleInput, random: () => number = Math.ra
       resource.resourceId,
       durationMs,
     );
-    return settleResource(resource, config, numerator, ratePerHour, capacityMultiplier);
+    return settleResource(resource, numerator, ratePerHour);
   });
 
   const settledDisciples = disciples.map((disciple) =>
@@ -162,7 +159,7 @@ export function settleEconomy(input: SettleInput, random: () => number = Math.ra
   // P3 第 3 节：资源/修为结算完成后再判定事件，效果直接叠加到结算结果余额上。
   // 只调用一次 triggerEvents：分段（历练起止）不会带来多批随机事件。
   const events = triggerEvents(durationMs, random);
-  applyEventEffects(settledResources, config, events, capacityMultiplier);
+  applyEventEffects(settledResources, events);
 
   return {
     lastSettledAt: Math.max(lastSettledAt, now),
@@ -205,35 +202,17 @@ export function absenceDurations(
 }
 
 /**
- * 把事件效果叠加到结算结果余额上：资源不低于 0、不超过该资源容量（P3 第 3 节）。
+ * 把事件效果叠加到结算结果余额上：资源不低于 0（P3 第 3 节；仓库不设上限，收益照加）。
  * 只改 balance（整数最小单位），不动产量/余数/丢弃量这类产量结算字段。
- *
- * 余额本来就高于容量时（拍卖交付、0045 祭炼贺礼都不夹容量），事件不能把它「夹」回容量：
- * 收益事件最多加到容量、已满则不加；损失事件照常扣，只保证不低于 0。
- * 余额在容量以内时与原来的 `min(容量, max(0, 余额 + 变化))` 完全等价。
  */
-export function applyEventEffects(
-  resources: SettledResource[],
-  config: GameConfigContent,
-  events: readonly TriggeredEvent[],
-  capacityMultiplier: number,
-): void {
+export function applyEventEffects(resources: SettledResource[], events: readonly TriggeredEvent[]): void {
   for (const event of events) {
     for (const [resourceId, amountText] of Object.entries(event.effects)) {
       const settled = resources.find((item) => item.resourceId === resourceId);
       if (settled === undefined) {
         continue;
       }
-      const definition = config.resources.find((item) => item.id === resourceId);
-      // 容量按宗门等级倍率放大后再夹取，否则升级后的加成就被基础容量截断了。
-      const capacity =
-        definition === undefined
-          ? Number.MAX_SAFE_INTEGER
-          : effectiveCapacity(definition.capacity, capacityMultiplier);
-      const amount = Number(amountText);
-      const next = settled.balance + amount;
-      settled.balance =
-        amount >= 0 ? Math.max(settled.balance, Math.min(capacity, next)) : Math.max(0, next);
+      settled.balance = Math.max(0, settled.balance + Number(amountText));
     }
   }
 }
@@ -354,40 +333,22 @@ export function cultivationRatePerHour(
 }
 
 /**
- * 资源结算：分子 → 收益；容量不足时丢弃溢出，满仓时连小数余量一起丢弃。
+ * 资源结算：分子 → 收益，整数部分入账、小数部分留作余数（仓库不设上限，不再丢弃溢出）。
  * `numerator` 为 0（本段没有任何产出）时保持余额与余数不变。
  */
-function settleResource(
-  resource: ResourceState,
-  config: GameConfigContent,
-  numerator: number,
-  ratePerHour: number,
-  capacityMultiplier: number,
-): SettledResource {
-  const definition = config.resources.find((item) => item.id === resource.resourceId);
-  const capacity =
-    definition === undefined
-      ? Number.MAX_SAFE_INTEGER
-      : effectiveCapacity(definition.capacity, capacityMultiplier);
-
+function settleResource(resource: ResourceState, numerator: number, ratePerHour: number): SettledResource {
   if (ratePerHour <= 0 || numerator <= 0) {
-    return { ...resource, ratePerHour, discarded: 0, capped: resource.balance >= capacity };
+    return { ...resource, ratePerHour, discarded: 0, capped: false };
   }
-
   const total = numerator + resource.remainder;
-  const gain = Math.floor(total / MS_PER_HOUR);
-  let remainder = total % MS_PER_HOUR;
-
-  const room = Math.max(0, capacity - resource.balance);
-  const accepted = Math.min(gain, room);
-  const balance = resource.balance + accepted;
-  const capped = balance >= capacity;
-  if (capped) {
-    // 满仓时丢弃小数余量，避免满仓暗存收益（03 第 3 节）
-    remainder = 0;
-  }
-
-  return { resourceId: resource.resourceId, balance, remainder, ratePerHour, discarded: gain - accepted, capped };
+  return {
+    resourceId: resource.resourceId,
+    balance: Math.min(RESOURCE_CAPACITY, resource.balance + Math.floor(total / MS_PER_HOUR)),
+    remainder: total % MS_PER_HOUR,
+    ratePerHour,
+    discarded: 0,
+    capped: false,
+  };
 }
 
 /**

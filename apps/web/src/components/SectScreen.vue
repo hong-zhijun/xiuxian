@@ -400,7 +400,7 @@ const exploreRealmLoading = ref(false);
 /** 挑战弹窗的目标宗门（null = 未打开）。 */
 const challengeTarget = ref<PublicSectView | null>(null);
 
-/** 本地平滑显示：按服务端给的产量随时间推进，上限为容量（刷新后以服务端为准）。 */
+/** 本地平滑显示：按服务端给的产量随时间推进（仓库不设上限；刷新后以服务端为准）。 */
 const liveResources = ref<Record<string, number>>({});
 const liveCultivation = ref<Record<string, number>>({});
 
@@ -431,11 +431,7 @@ function advanceLive(): void {
   const elapsed = elapsedSinceSeedSeconds();
   liveResources.value = Object.fromEntries(
     props.state.resources.map((resource) => {
-      const balance = Number(resource.balance);
-      const capacity = Number(resource.capacity);
-      // 只阻止增长越界：探索奖励允许把余额顶到容量之上，这里不能把它压回去（否则界面会跳变）。
-      const grown = Math.min(capacity, balance + (Number(resource.ratePerHour) / 3600) * elapsed);
-      return [resource.id, balance >= capacity ? balance : grown];
+      return [resource.id, Number(resource.balance) + (Number(resource.ratePerHour) / 3600) * elapsed];
     }),
   );
   liveCultivation.value = Object.fromEntries(
@@ -508,7 +504,7 @@ let raceSettleAtMs: number | null = null;
 
 /**
  * 按快照里的产量，把一份成本攒够还要多少秒。
- * 快照里已经够了（当前不可用另有原因）或永远攒不够（没有产量 / 超过容量）时返回 null。
+ * 快照里已经够了（当前不可用另有原因）或永远攒不够（没有产量）时返回 null。
  */
 function secondsUntilAffordable(cost: Record<string, string> | null): number | null {
   if (cost === null) return null;
@@ -520,7 +516,7 @@ function secondsUntilAffordable(cost: Record<string, string> | null): number | n
     const balance = Number(resource.balance);
     if (balance >= need) continue;
     const ratePerSecond = Number(resource.ratePerHour) / 3600;
-    if (ratePerSecond <= 0 || need > Number(resource.capacity)) return null;
+    if (ratePerSecond <= 0) return null;
     wait = Math.max(wait, (need - balance) / ratePerSecond);
   }
   return wait > 0 ? wait : null;
@@ -671,12 +667,6 @@ function costText(cost: Record<string, string> | null): string {
   return Object.entries(cost)
     .map(([resourceId, amount]) => `${resourceName.value[resourceId] ?? resourceId} ${formatAmount(amount)}`)
     .join(' · ');
-}
-
-function resourcePercent(resourceId: string, capacity: string): number {
-  const maximum = Number(capacity);
-  if (maximum <= 0) return 0;
-  return Math.min(100, Math.round(((liveResources.value[resourceId] ?? 0) / maximum) * 100));
 }
 
 
@@ -2151,10 +2141,6 @@ const todoItems = computed<TodoItem[]>(() => {
   if ((h?.auction.claimable ?? 0) > 0) {
     items.push({ id: 'auction', tone: 'claim', text: `拍卖行 ${String(h?.auction.claimable)} 件待领取`, action: '去领取' });
   }
-  const capped = props.state.resources.filter((resource) => resource.capped && resource.id !== 'bossMerit' && resource.id !== 'beastEssence');
-  if (capped.length > 0) {
-    items.push({ id: 'resources', tone: 'warn', text: `${capped.map((resource) => resource.name).join('、')}已满仓，产出在溢出`, action: '去看看' });
-  }
   if (healableIds.value.length > 0) {
     items.push({ id: 'heal', tone: 'warn', text: `${String(healableIds.value.length)} 名弟子受伤`, action: '去疗伤' });
   }
@@ -2515,19 +2501,12 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
             v-for="resource in mainResources"
             :key="resource.id"
             class="resource-card"
-            :class="[
-              resourceClass(resource.id),
-              {
-                'is-near-capacity': resourcePercent(resource.id, resource.capacity) >= 90,
-                'is-at-capacity': (liveResources[resource.id] ?? 0) >= Number(resource.capacity),
-              },
-            ]"
+            :class="resourceClass(resource.id)"
           >
             <div class="resource-glyph" aria-hidden="true">{{ resourceGlyph(resource.id) }}</div>
             <div class="resource-main">
               <span class="resource-name">{{ resource.name }}</span>
               <strong>{{ formatAmount(liveResources[resource.id] ?? 0) }}</strong>
-              <span class="resource-capacity">库容 {{ formatAmount(resource.capacity) }}</span>
             </div>
             <!-- 两行：宗门自身产速（实时平滑）与山河舆图灵地供奉（整点入账），分开显示。 -->
             <div class="resource-rate">
@@ -2539,9 +2518,6 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
                 <span>山河</span>
                 <strong>+{{ formatRate(resource.worldRatePerHour ?? 0) }}<small>/时</small></strong>
               </p>
-            </div>
-            <div class="resource-track" aria-hidden="true">
-              <span :style="{ width: `${resourcePercent(resource.id, resource.capacity)}%` }" />
             </div>
           </li>
           <!-- 玄铁（炼器）与神木（炼丹）合用一个窄格：上下两层，各占一行。 -->

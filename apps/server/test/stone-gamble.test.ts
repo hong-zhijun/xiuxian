@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { GAME_CONFIG_CONTENT } from '@xiuxian/game-config';
 
 import { createApp } from '../src/app';
-import { dateKeyUtc8, effectiveCapacity, findSectLevel } from '../src/modules/game/constants';
+import { dateKeyUtc8, levelScaledCapacity, findSectLevel } from '../src/modules/game/constants';
 import { DEBATE_DAILY_LIMIT } from '../src/modules/game/gambling';
 import { toMinUnits } from '../src/modules/game/shop';
 import {
@@ -184,7 +184,7 @@ async function chatCountOf(content: string): Promise<number> {
 function capacityAtLevel(resourceId: string, level: number): number {
   const definition = GAME_CONFIG_CONTENT.resources.find((resource) => resource.id === resourceId);
   expect(definition, `配置里必须有 ${resourceId}`).toBeTruthy();
-  return effectiveCapacity(definition!.capacity, findSectLevel(level).capacityMultiplier);
+  return levelScaledCapacity(definition!.capacity, findSectLevel(level).capacityMultiplier);
 }
 
 function tierDefOf(tierId: string): StoneTierDef {
@@ -423,30 +423,20 @@ describe('赌石：余额与玄铁容量', () => {
     expect(await logCountOf(sect.sectId)).toBe(0);
   });
 
-  it('玄铁容量装不下一块天价：切石与连切都拒绝（CAPACITY_FULL），余额与记录不变', async () => {
+  it('仓库不设上限：玄铁超过原来的容量也能切石与连切', async () => {
     const sect = await makeSect('stn-full');
     await setSectLevel(sect.sectId, 2);
     await freezeSettlement(sect.sectId);
     await setBalance(sect.sectId, 'spiritStone', 10_000_000);
     const capacity = capacityAtLevel('xuantie', 2);
-    // 剩余 9999 最小单位；碎石天价 10 玄铁 = 10000 最小单位 → 一块都装不下。
+    // 原来剩余 9999 最小单位、装不下一块碎石的天价（10 玄铁 = 10000）就拒绝；现在照常切。
     await setBalance(sect.sectId, 'xuantie', capacity - 9_999);
 
     for (const count of [1, 10]) {
-      const rejected = await stone(sect, { tier: 'gravel', payResource: 'spiritStone', count });
-      expect(rejected.status).toBe(409);
-      const error = errorOf(rejected);
-      expect(error.code).toBe('CAPACITY_FULL');
-      expect(error.details?.resourceId).toBe('xuantie');
-      expect(error.details?.capacity).toBe(String(capacity));
-      expect(error.details?.balance).toBe(String(capacity - 9_999));
-      expect(error.details?.room).toBe('0');
-      expect(error.message).toContain('装不下一块碎石的天价 10 个');
+      const accepted = await stone(sect, { tier: 'gravel', payResource: 'spiritStone', count });
+      expect(accepted.status).toBe(200);
     }
-
-    expect(await balanceOf(sect.sectId, 'spiritStone')).toBe(10_000_000);
-    expect(await balanceOf(sect.sectId, 'xuantie')).toBe(capacity - 9_999);
-    expect(await logCountOf(sect.sectId)).toBe(0);
+    expect(await balanceOf(sect.sectId, 'spiritStone')).toBeLessThan(10_000_000);
   });
 
   it('容量只够 1 块天价：连切 10 照常通过，整批入账可以顶过容量', async () => {

@@ -714,18 +714,6 @@ function buildGoal(state: AdvisorState): AdvisorGoal | null {
       continue;
     }
     const deficit = required - have;
-    const capacity = Number(resource?.capacity ?? 0);
-    if (capacity > 0 && capacity < required) {
-      lines.push({
-        id: `res:${id}`,
-        label,
-        status: 'blocked',
-        detail: `仓库上限只有 ${formatAmount(capacity)}，存不下`,
-        bottleneck: false,
-        action: { kind: 'scroll', target: 'building-title' },
-      });
-      continue;
-    }
     const rate = Math.max(0, Number(resource?.ratePerHour ?? 0));
     const hours = rate > 0 ? deficit / rate : Number.POSITIVE_INFINITY;
     shortages.push({ id, name, deficit, rate, hours });

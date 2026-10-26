@@ -149,7 +149,8 @@ import {
   assignmentLimitOf,
   breakthroughEnergyCost,
   dateKeyUtc8,
-  effectiveCapacity,
+  RESOURCE_CAPACITY,
+  levelScaledCapacity,
   dayStartMs,
   findRealm,
   findSectLevel,
@@ -1093,8 +1094,6 @@ class SectDraft {
   readonly discipleCapacity: number;
   /** 当前宗门等级决定的建筑上限。 */
   readonly buildingCapacity: number;
-  /** 当前宗门等级的资源容量倍率。 */
-  readonly capacityMultiplier: number;
   readonly sect: SectRow;
   disciples: DiscipleRow[];
   readonly buildings: BuildingRow[];
@@ -1152,7 +1151,6 @@ class SectDraft {
     const levelDef = findSectLevel(Number(base.sect.level));
     this.discipleCapacity = levelDef.discipleCapacity;
     this.buildingCapacity = levelDef.buildingCapacity;
-    this.capacityMultiplier = levelDef.capacityMultiplier;
 
     // 0014：未领取的历练记录（在外中 + 待领取）；最近历史另查一次，供摘要用。
     this.journeys = base.journeys.map((row) => ({ ...row }));
@@ -1197,7 +1195,6 @@ class SectDraft {
         assignment: row.assignment,
         talent: row.talent,
       })),
-      capacityMultiplier: this.capacityMultiplier,
       buildingLevels: Object.fromEntries(base.buildings.map((row) => [row.def_id, row.level])),
       absences,
     }, random);
@@ -1289,12 +1286,12 @@ class SectDraft {
   }
 
   /**
-   * 坊市：某资源的容量上限（最小单位），与结算 / 视图同一口径（配置容量 × 等级倍率）。
+   * 某资源的容量上限（最小单位）：仓库不设上限，一律是 RESOURCE_CAPACITY。
    * 配置里没有的资源返回 0（正常路径不可达：余额行都来自配置里的资源）。
    */
   resourceCapacityOf(resourceId: string): number {
     const definition = this.config.resources.find((item) => item.id === resourceId);
-    return definition === undefined ? 0 : effectiveCapacity(definition.capacity, this.capacityMultiplier);
+    return definition === undefined ? 0 : RESOURCE_CAPACITY;
   }
 
   /** 资源检查（只读，不扣减）：不足时抛 INSUFFICIENT_RESOURCE（文案与载荷与旧实现一致）。 */
@@ -1455,9 +1452,6 @@ class SectDraft {
   }
 
   view(): SectStateView {
-    // 容量/上限按「当前（可能刚升级的）等级」现算：upgradeSect 之后的同一请求里返回的
-    // state 就已经是新倍率/新上限，不需要等下一次 sync。
-    const levelDef = findSectLevel(Number(this.sect.level));
     return buildSectStateView({
       config: this.config,
       sect: this.sect,
@@ -1471,7 +1465,6 @@ class SectDraft {
       settleResult: this.settleResult,
       now: this.now,
       recentEventRows: this.base.recentEvents,
-      capacityMultiplier: levelDef.capacityMultiplier,
       journeys: this.journeys,
       recentJourneys: this.recentRowsForView(),
       activeExploration: this.activeExplorationView(),
@@ -10305,20 +10298,16 @@ async function rewardWorldBoss(
     entry.effects[resourceId] = (entry.effects[resourceId] ?? 0) + amount;
   };
 
-  // 防通胀：奖励入账不超过资源容量（与挂机产出同一口径），溢出部分丢弃并记进天机录。
+  // 奖励入账按容量截断（仓库不设上限后容量是 RESOURCE_CAPACITY，实际不会溢出）。
   // 余额按「上次结算」的库存算、同一宗门多笔入账累加；写库用 resourceCreditCappedStatement 在 SQL 里再夹一次。
   const balancesBySect = new Map<string, Map<string, number>>();
-  const capacityMultiplierBySect = new Map<string, number>();
   const overflowBySect = new Map<string, Record<string, number>>();
   const credit = (sectId: string, resourceId: string, amount: number): void => {
     if (amount <= 0) return;
     const definition = gameConfig().resources.find((item) => item.id === resourceId);
     const balances = balancesBySect.get(sectId) ?? new Map<string, number>();
     const balance = balances.get(resourceId) ?? 0;
-    const capacity =
-      definition === undefined
-        ? Number.MAX_SAFE_INTEGER
-        : effectiveCapacity(definition.capacity, capacityMultiplierBySect.get(sectId) ?? 1);
+    const capacity = definition === undefined ? Number.MAX_SAFE_INTEGER : RESOURCE_CAPACITY;
     const actual = Math.max(0, Math.min(amount, capacity - balance));
     if (actual < amount) {
       const overflow = overflowBySect.get(sectId) ?? {};
@@ -10352,7 +10341,6 @@ async function rewardWorldBoss(
       ]);
       ratesById.set(sectId, resourceRatesOfSect({ config, disciples, buildings, journeys, now }));
       balancesBySect.set(sectId, new Map(balances.map((row) => [row.resource_id, Number(row.balance)])));
-      capacityMultiplierBySect.set(sectId, findSectLevel(levelById.get(sectId) ?? 1).capacityMultiplier);
     }
 
     const totalDamage = participants.reduce((sum, [, info]) => sum + info.damage, 0);
@@ -10892,7 +10880,7 @@ function requireTradableResource(resourceId: string): ShopTradableResource {
  * 扣灵石、加材料 → **一次**受保护 batch（`commit()` 的守卫会核对全部资源余额，
  * 并发的结算或交易只会让这一批回滚重试，不会写出半笔交易）。
  *
- * 容量用与结算同一口径的 effectiveCapacity：买入不允许把材料顶到容量之外
+ * 容量用与结算同一口径的 resourceCapacityOf（仓库不设上限后实际不会挡）：买入不允许把材料顶到容量之外
  * （超出的部分在结算里会被算成溢出：room = 0，之后的产出全部丢弃），所以提前拒绝，并在 details 里给出还能买多少。
  */
 export async function shopBuy(
@@ -12672,12 +12660,10 @@ function requireWorldUnlocked(draft: SectDraft): void {
   }
 }
 
-/** 某资源的仓库容量（最小单位）：配置容量 × 宗门等级倍率（与 SectDraft.resourceCapacityOf 同一口径，但按任意宗门算）。 */
-function resourceCapacityOf(resourceId: string, sectLevel: number): number {
+/** 某资源的仓库容量（最小单位）：仓库不设上限，与 SectDraft.resourceCapacityOf 同一口径。 */
+function resourceCapacityOf(resourceId: string): number {
   const definition = gameConfig().resources.find((item) => item.id === resourceId);
-  return definition === undefined
-    ? 0
-    : effectiveCapacity(definition.capacity, findSectLevel(sectLevel).capacityMultiplier);
+  return definition === undefined ? 0 : RESOURCE_CAPACITY;
 }
 
 /** 本宗对这一处的撤回冷却截止（0052）；没有冷却或已过期返回 null。 */
@@ -12714,14 +12700,13 @@ function settleSiteOf(site: WorldSiteRow, now: number): WorldSettlement | null {
 /** 把产出记给占领者：每种资源一条「不超过仓库容量」的相对加法（同一批里同资源已经合并过）。 */
 function worldCreditStatements(
   sectId: string,
-  sectLevel: number,
   credits: Readonly<Record<string, number>>,
   now: number,
 ): ParameterizedQuery[] {
   return Object.entries(credits)
     .filter(([, amount]) => amount > 0)
     .map(([resourceId, amount]) =>
-      resourceCreditCappedStatement(sectId, resourceId, amount, resourceCapacityOf(resourceId, sectLevel), now),
+      resourceCreditCappedStatement(sectId, resourceId, amount, resourceCapacityOf(resourceId), now),
     );
 }
 
@@ -12838,7 +12823,7 @@ export async function processWorldSites(db: D1Database, now: number, lazy = fals
       if (guardIds.length === 0) continue;
       await runGuardedBatch(db, [
         ...statements,
-        ...worldCreditStatements(holder.id, Number(holder.level), total, now),
+        ...worldCreditStatements(holder.id, total, now),
         worldSettleLogStatement(holder.id, holder.name, total, now),
         ...guardIds.map((id) => deleteDiscipleSnapshotGuardStatement(id)),
       ]);
@@ -13207,7 +13192,7 @@ export async function attackWorldSite(
     if (defenderSect !== null) {
       const settled = settleSiteOf(site, now);
       if (settled !== null && settled.hours > 0) {
-        for (const statement of worldCreditStatements(defenderSect.id, Number(defenderSect.level), settled.credits, now)) {
+        for (const statement of worldCreditStatements(defenderSect.id, settled.credits, now)) {
           draft.addStatement(statement);
         }
         draft.addStatement(worldSettleLogStatement(defenderSect.id, defenderSect.name, settled.credits, now));
@@ -13310,7 +13295,7 @@ export async function withdrawWorldSite(
   if (site.holder_sect_id !== draft.sect.id) throw new AppError('INVALID_STATUS', '你没有占领这处灵地');
   const settled = settleSiteOf(site, now);
   if (settled !== null && settled.hours > 0) {
-    for (const statement of worldCreditStatements(draft.sect.id, Number(draft.sect.level), settled.credits, now)) {
+    for (const statement of worldCreditStatements(draft.sect.id, settled.credits, now)) {
       draft.addStatement(statement);
     }
     draft.addStatement(worldSettleLogStatement(draft.sect.id, draft.sect.name, settled.credits, now));
@@ -13500,7 +13485,7 @@ async function buildMarketView(db: D1Database, draft: SectDraft, now: number): P
     dailyTrades: MARKET_DAILY_TRADES,
     tradesUsed,
     tradesLeft: Math.max(0, MARKET_DAILY_TRADES - tradesUsed),
-    positionCap: marketPositionCap(draft.resourceCapacityOf('spiritStone')),
+    positionCap: marketPositionCap(spiritStoneCapacityOf(Number(draft.sect.level))),
     maxSharesPerTrade: MARKET_MAX_SHARES_PER_TRADE,
     serverNow: now,
     nextTickAt: (minute + 1) * MARKET_TICK_MS,
@@ -13625,7 +13610,7 @@ export async function tradeStock(
   let message: string;
 
   if (input.side === 'buy') {
-    const cap = marketPositionCap(draft.resourceCapacityOf('spiritStone'));
+    const cap = marketPositionCap(spiritStoneCapacityOf(Number(draft.sect.level)));
     if (heldCost + amount > cap) {
       throw new AppError(
         'INVALID_STATUS',
@@ -13907,7 +13892,7 @@ export async function tradeStockMargin(
     if (side !== 'long' && side !== 'short') throw new AppError('VALIDATION_ERROR', '开仓必须选择做多或做空');
     if (position !== null) throw new AppError('INVALID_STATUS', `已有${position.side === 'long' ? '多' : '空'}仓，请先平仓`);
     const notional = price * shares;
-    const cap = marketPositionCap(draft.resourceCapacityOf('spiritStone'));
+    const cap = marketPositionCap(spiritStoneCapacityOf(Number(draft.sect.level)));
     if (notional > cap) throw new AppError('INVALID_STATUS', `合约名义价值最多 ${displayAmount(cap)} 灵石`);
     const margin = marginRequired(notional, MARKET_MARGIN_LEVERAGE);
     const fee = marketFee(notional);
@@ -14016,10 +14001,13 @@ function lastBuyOf(holding: StockHoldingRow | undefined): number | null {
   return holding === undefined || holding.last_buy_at === null ? null : Number(holding.last_buy_at);
 }
 
-/** 灵石容量（最小单位）：配置容量 × 宗门等级倍率，与 SectDraft.resourceCapacityOf 同一口径。 */
+/**
+ * 坊市持仓上限的基数（最小单位）：灵石的配置容量 × 宗门等级倍率。
+ * 仓库已不设上限，这个值只用来按宗门等级放大持仓上限。
+ */
 function spiritStoneCapacityOf(sectLevel: number): number {
   const definition = gameConfig().resources.find((item) => item.id === 'spiritStone');
-  return definition === undefined ? 0 : effectiveCapacity(definition.capacity, findSectLevel(sectLevel).capacityMultiplier);
+  return definition === undefined ? 0 : levelScaledCapacity(definition.capacity, findSectLevel(sectLevel).capacityMultiplier);
 }
 
 /** 各股票被卖单锁住的股数（限价卖 + 止损卖；买单不锁股）。 */
@@ -14430,7 +14418,7 @@ export async function placeStockOrder(
   ];
   let reserved = 0;
   if (kind === 'limit_buy') {
-    const cap = marketPositionCap(draft.resourceCapacityOf('spiritStone'));
+    const cap = marketPositionCap(spiritStoneCapacityOf(Number(draft.sect.level)));
     if (heldCost + triggerPrice * shares > cap) {
       throw new AppError(
         'INVALID_STATUS',
@@ -15111,7 +15099,7 @@ class ArenaRewardLedger {
     return this.pills.get(sectId) ?? 0;
   }
 
-  statements(levelOf: ReadonlyMap<string, number>, now: number): ParameterizedQuery[] {
+  statements(now: number): ParameterizedQuery[] {
     const statements: ParameterizedQuery[] = [];
     for (const [sectId, resources] of this.resources) {
       for (const [resourceId, amount] of Object.entries(resources)) {
@@ -15120,7 +15108,7 @@ class ArenaRewardLedger {
             sectId,
             resourceId,
             amount,
-            resourceCapacityOf(resourceId, levelOf.get(sectId) ?? 1),
+            resourceCapacityOf(resourceId),
             now,
           ),
         );
@@ -15171,7 +15159,6 @@ async function settleArenaDay(db: D1Database, now: number, dateKey: string): Pro
   const disciplesById = new Map(
     roster.flatMap((sect) => sect.disciples.map((disciple) => [disciple.id, disciple] as const)),
   );
-  const levelOf = new Map(roster.map((sect) => [sect.id, sect.level] as const));
   const seasonId = arenaSeasonId(now);
 
   const individualPlans = roster
@@ -15496,7 +15483,7 @@ async function settleArenaDay(db: D1Database, now: number, dateKey: string): Pro
     );
   }
 
-  statements.push(...ledger.statements(levelOf, now));
+  statements.push(...ledger.statements(now));
   statements.push(...pruneArenaDailyStatements(arenaDateKeyBefore(now, ARENA_RECORD_KEEP_DAYS)));
   statements.push(deleteDiscipleSnapshotGuardStatement(guardId));
   await runGuardedBatch(db, statements);
@@ -15511,12 +15498,10 @@ async function settleArenaSeason(db: D1Database, now: number): Promise<void> {
   const repo = new ArenaRepository(db);
   const season = await repo.seasonRow(seasonId);
   if (season === null || Number(season.settled) === 1) return;
-  const [individuals, teams, roster] = await Promise.all([
+  const [individuals, teams] = await Promise.all([
     repo.seasonIndividualRanking(seasonId, 3),
     repo.seasonTeamRanking(seasonId, 3),
-    loadArenaRoster(db, now),
   ]);
-  const levelOf = new Map(roster.map((sect) => [sect.id, sect.level] as const));
   const dateKey = dateKeyUtc8(now);
   const guardId = `${crypto.randomUUID()}:arena-season`;
   const statements: ParameterizedQuery[] = [arenaSeasonSettleGuardStatement(guardId, seasonId)];
@@ -15572,7 +15557,7 @@ async function settleArenaSeason(db: D1Database, now: number): Promise<void> {
       arenaRewardEventStatement(sectId, `一纪之赏（${seasonId}）：${parts.join('；')}`, ledger.resourcesOf(sectId), now),
     );
   }
-  statements.push(...ledger.statements(levelOf, now));
+  statements.push(...ledger.statements(now));
   statements.push(markArenaSeasonSettledStatement(seasonId));
   statements.push(deleteDiscipleSnapshotGuardStatement(guardId));
   await runGuardedBatch(db, statements);

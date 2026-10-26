@@ -77,10 +77,12 @@ describe('0045 祭炼上线贺礼', () => {
     const state = await getSectState(env.DB, userId, Date.now() + HOUR_MS);
     if (state === null) throw new Error('宗门不存在');
 
+    // 仓库不设上限：结算与事件只会往上加，不会把超过原容量的余额截断。
     const resources = state.resources as { id: string; balance: string }[];
-    expect(Number(resources.find((item) => item.id === 'spiritStone')!.balance)).toBe(stone);
-    expect(Number(resources.find((item) => item.id === 'ore')!.balance)).toBe(ore);
-    expect(await balanceOf(sectId, 'spiritStone')).toBe(stone);
+    const stoneAfter = Number(resources.find((item) => item.id === 'spiritStone')!.balance);
+    expect(stoneAfter).toBeGreaterThanOrEqual(stone);
+    expect(Number(resources.find((item) => item.id === 'ore')!.balance)).toBeGreaterThanOrEqual(ore);
+    expect(await balanceOf(sectId, 'spiritStone')).toBe(stoneAfter);
 
     const gift = state.recentEvents.find((item) => item.eventId === 'refineLaunchGift');
     expect(gift?.name).toBe('祭炼贺礼');

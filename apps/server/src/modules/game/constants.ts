@@ -475,8 +475,14 @@ export function realmIndex(realmId: string): number {
   return index < 0 ? 0 : index;
 }
 
-/** 实际资源容量 = 基础容量 × 宗门等级倍率（取整）。 */
-export function effectiveCapacity(baseCapacity: string, multiplier: number): number {
+/**
+ * 资源仓库不设上限（2026-10-26 起）：挂机产出、事件、各类奖励、坊市买入都不再按容量截断或拒绝。
+ * 结算、发奖、坊市等调用点仍按「容量 − 余额」写，容量统一取这个值，等于不夹。
+ */
+export const RESOURCE_CAPACITY = Number.MAX_SAFE_INTEGER;
+
+/** 配置容量 × 宗门等级倍率（取整）。仓库已不设上限，现在只给坊市持仓上限当基数（灵石）。 */
+export function levelScaledCapacity(baseCapacity: string, multiplier: number): number {
   return Math.floor(Number(baseCapacity) * multiplier);
 }
 

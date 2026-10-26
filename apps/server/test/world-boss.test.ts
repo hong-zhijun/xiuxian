@@ -840,7 +840,7 @@ describe('世界 Boss 二期：Cron 逃走与发奖', () => {
     expect(await balanceOf(fixture.sectId, BOSS_MERIT_RESOURCE_ID)).toBe(before.bossMerit + 26_000);
   });
 
-  it('奖励入账不超过资源容量：溢出作废并记进天机录；本来就超容量的不往下压', async () => {
+  it('仓库不设上限：奖励全额入账，余额超过原来的容量也照加', async () => {
     const fixture = await makeSect('reward-cap');
     const now = dayAt(90, 10);
     await freezeDay(fixture.sectId, 90);
@@ -851,8 +851,7 @@ describe('世界 Boss 二期：Cron 逃走与发奖', () => {
     await attackWorldBoss(env.DB, fixture.userId, { discipleIds: [fixture.discipleIds[0]!] }, now);
     await env.DB.prepare('DELETE FROM world_bosses WHERE day_key = ? AND stage = 2').bind(dayKey).run();
 
-    // 1 级宗门容量：灵石 5000000、药材 2000000（配置值 × 等级倍率 1）。
-    // 灵石只差 1000 就满；药材本来就顶过了容量（探索奖励允许）。
+    // 原来 1 级宗门容量：灵石 5000000、药材 2000000。灵石只差 1000 就满；药材本来就顶过了容量。
     const setBalance = (resourceId: string, balance: number) =>
       env.DB.prepare('UPDATE resource_balances SET balance = ? WHERE sect_id = ? AND resource_id = ?')
         .bind(balance, fixture.sectId, resourceId)
@@ -862,20 +861,20 @@ describe('世界 Boss 二期：Cron 逃走与发奖', () => {
 
     await processWorldBoss(env.DB, dayAt(90, 14));
 
-    expect(await balanceOf(fixture.sectId, 'spiritStone')).toBe(5_000_000);
-    expect(await balanceOf(fixture.sectId, 'herb')).toBe(2_500_000);
+    const stone = await balanceOf(fixture.sectId, 'spiritStone');
+    const herb = await balanceOf(fixture.sectId, 'herb');
+    expect(stone).toBeGreaterThan(5_000_000);
+    expect(herb).toBeGreaterThan(2_500_000);
     const log = await env.DB.prepare(
       "SELECT description, effects FROM event_log WHERE sect_id = ? AND event_id = 'worldBossReward'",
     )
       .bind(fixture.sectId)
       .first<{ description: string; effects: string }>();
-    expect(log!.description).toContain('仓库已满，溢出');
-    expect(log!.description).toContain('灵石');
-    expect(log!.description).toContain('药材');
-    // 天机录只记实际入账：灵石只进了 1000，药材一分没进。
+    expect(log!.description).not.toContain('仓库已满');
+    // 天机录记的就是实际入账，与余额变化一致。
     const effects = JSON.parse(log!.effects) as Record<string, string>;
-    expect(effects.spiritStone).toBe('1000');
-    expect(effects.herb).toBeUndefined();
+    expect(Number(effects.spiritStone)).toBe(stone - 4_999_000);
+    expect(Number(effects.herb)).toBe(herb - 2_500_000);
   });
 
   it('排名倍数按「对该关的总伤害」分配：伤害高的拿 ×1.5', async () => {
