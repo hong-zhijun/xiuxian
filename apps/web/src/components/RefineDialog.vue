@@ -7,6 +7,8 @@ export interface RefineResult {
   toLevel: number;
   /** 请求失败（材料不足、状态变化等）：弹窗只收起动画，原因由 SectScreen 走 toast。 */
   error: boolean;
+  /** 一键祭炼汇总。 */
+  summary?: string;
 }
 </script>
 
@@ -55,7 +57,7 @@ const tab = ref<Tab>('refine');
 const showGuide = ref(false);
 
 const emit = defineEmits<{
-  refine: [equipmentId: string];
+  refine: [equipmentId: string, bulk: boolean];
   reroll: [equipmentId: string, mode: RerollMode];
   close: [];
 }>();
@@ -95,6 +97,7 @@ const burstColor = computed(() => {
 });
 
 const resultText = computed(() => {
+  if ((phase.value === 'success' || phase.value === 'fail') && shown.value?.summary) return shown.value.summary;
   if (phase.value === 'success') return `祭炼成功 · 已至${REFINE_LEVEL_NAMES[shown.value?.toLevel ?? 0] ?? ''}`;
   if (phase.value === 'fail') return '火候未到，材料已耗去，装备完好无损';
   if (phase.value === 'forging') return '鼎火正旺，祭炼中…';
@@ -171,14 +174,14 @@ function clearTimer(): void {
   }
 }
 
-function startRefine(): void {
+function startRefine(bulk = false): void {
   if (!canRefine.value) return;
   clearTimer();
   frozen.value = props.item;
   shown.value = null;
   startedAt = Date.now();
   phase.value = 'forging';
-  emit('refine', props.item.id);
+  emit('refine', props.item.id, bulk);
 }
 
 // 结果到了：炼制不足 MIN_FORGE_MS 就再等一会儿，然后放成功 / 未成，放完回待机。
@@ -309,6 +312,8 @@ onUnmounted(clearTimer);
         <p class="refine-result" :class="`is-${phase}`" aria-live="polite">{{ resultText }}</p>
       </div>
 
+      <p v-if="shown?.summary && phase === 'idle'" class="refine-bulk-summary" aria-live="polite">{{ shown.summary }}</p>
+
       <template v-if="next === null">
         <p class="refine-hint">已祭炼至十二重圆满。</p>
         <div class="disciple-break-confirm-actions">
@@ -338,6 +343,7 @@ onUnmounted(clearTimer);
 
         <p class="refine-odds">成功率 {{ next.successBp / 100 }}%</p>
         <p class="refine-note">失败只耗材料，不会降重、不会损坏装备。</p>
+        <p class="refine-note">一键祭炼会连续消耗材料，直到材料不足或达到十二重圆满。</p>
 
         <ul class="refine-cost" aria-label="本次消耗">
           <li v-for="row in costRows" :key="row.resourceId" :class="{ 'is-lacking': row.lacking }">
@@ -348,8 +354,11 @@ onUnmounted(clearTimer);
 
         <div class="disciple-break-confirm-actions">
           <button class="action-button" type="button" @click="emit('close')">取消</button>
-          <button class="action-button primary-action" type="button" :disabled="!canRefine" @click="startRefine">
+          <button class="action-button" type="button" :disabled="!canRefine" @click="startRefine(false)">
             <span>{{ phase === 'forging' ? '祭炼中…' : '祭炼' }}</span>
+          </button>
+          <button class="action-button primary-action" type="button" :disabled="!canRefine" @click="startRefine(true)">
+            一键祭炼
           </button>
         </div>
       </template>
@@ -592,6 +601,13 @@ onUnmounted(clearTimer);
   margin: 0;
   color: #7d9186;
   font-size: 11px;
+}
+
+.refine-bulk-summary {
+  margin: 0;
+  color: var(--gold-bright, #e0cd97);
+  font-size: 12px;
+  line-height: 1.6;
 }
 
 .refine-cost {

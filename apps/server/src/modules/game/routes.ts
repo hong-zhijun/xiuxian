@@ -492,7 +492,7 @@ export function createGameRoutes(): Hono<AppEnv> {
   routes.post('/game/refine-equipment', async (c) => {
     const userId = requireUserId(c);
     const body = await parseStrictJson(refineEquipmentRequestSchema, c);
-    const result = await refineEquipment(getDb(c.env), userId, body.equipmentId, Date.now());
+    const result = await refineEquipment(getDb(c.env), userId, body.equipmentId, Date.now(), body.bulk);
     return respondOk(c, { state: result.state, outcome: result.outcome });
   });
 

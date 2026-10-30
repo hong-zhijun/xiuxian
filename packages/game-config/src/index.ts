@@ -11,7 +11,7 @@ import type { GameConfigContent } from '@xiuxian/game-core';
  * - 岗位产量（药园 20 药材/小时、采矿 15 矿石/小时）：03 第 2 节；采灵 15 灵石/小时：V5.1 第 3 节；
  * - 弟子初始 3 人、初始等级上限 6/建筑上限 3、赠三座 Lv1 建筑：03 第 2 节（运行期上限由 SECT_LEVELS 等级决定）；
  * - 招募每日 3 次、每次 50 灵石：03 第 4 节；
- * - 修炼基础 60/小时、资质系数 8000 + 资质×40 基点：03 第 4 节；
+ * - 修炼基础 600/小时（飞升更新提升 10 倍）、资质系数 8000 + 资质×40 基点；
  * - 突破基础 8000 基点、clamp 到 500～9500、失败保留 90%、冷却 5 分钟：03 第 4 节；
  * - 离线经济上限 12 小时 = 43200 秒：03 第 3 节（D04 待确认）。
  *
@@ -20,14 +20,14 @@ import type { GameConfigContent } from '@xiuxian/game-core';
  */
 
 /** 版本号：内容变化时必须同步更新版本与 payloadHash（见 03 第 12 节）。 */
-export const GAME_CONFIG_VERSION = 'v13.0.0';
+export const GAME_CONFIG_VERSION = 'v13.1.0';
 
 /**
  * 内容哈希（sha256:，覆盖规范化后的 JSON）。
  * 修改 content 后必须重新计算，否则 Worker 启动与 config:hash 校验都会失败。
  */
 export const GAME_CONFIG_PAYLOAD_HASH =
-  'sha256:c58c61a1e908c8d4a86dc68cd3521d0c9069357d6e26b921a99d1caa9f8aa23f';
+  'sha256:e05acd88141af0a5a7654f7ebd2e6225436a93ef028570bf5b5affd92a5ca43e';
 
 export const GAME_CONFIG_CONTENT: GameConfigContent = {
   server: {
@@ -211,7 +211,7 @@ export const GAME_CONFIG_CONTENT: GameConfigContent = {
     cost: { spiritStone: '50000' },
   },
   cultivation: {
-    baseRatePerHour: 60,
+    baseRatePerHour: 600,
     aptitudeCoefficientBaseBp: 8000,
     aptitudeCoefficientPerPointBp: 40,
     maxTotalBonusBp: 20_000,

@@ -258,6 +258,110 @@ async function frozenSect(
   return { fixture, now };
 }
 
+describe('一键祭炼', () => {
+  it('连续升至十二重，精确扣除累计材料，并立即刷新穿戴弟子的属性与战力加成', async () => {
+    const { fixture, now } = await frozenSect('refine-bulk-max');
+    const id = await insertEquipment(fixture.sectId);
+    const discipleId = fixture.discipleIds[0]!;
+    await equipItem(env.DB, fixture.userId, id, discipleId, now);
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+
+    const result = await refineEquipment(env.DB, fixture.userId, id, now, true);
+    expect(result.outcome).toMatchObject({
+      fromLevel: 0, toLevel: 12, attempts: 12, successes: 12, success: true, stopReason: 'maxLevel',
+      cost: { spiritStone: '4110000', ore: '2565000', xuantie: '29000' },
+    });
+    expect(await rowOf(id)).toMatchObject({ refine_level: 12, main_value: 67, sub_value: 18 });
+    expect(await balanceOf(fixture.sectId, 'spiritStone')).toBe(890_000);
+    expect(await balanceOf(fixture.sectId, 'ore')).toBe(2_435_000);
+    expect(await balanceOf(fixture.sectId, 'xuantie')).toBe(4_971_000);
+    expect(await gearOf(discipleId)).toMatchObject({ attack: 67, speed: 18 });
+    expect(discipleOf(result.state, discipleId).gearPowerBonusBp).toBe(1600);
+  });
+
+  it('任一材料不够下一次时停止，保留剩余材料和已经成功的重数', async () => {
+    const { fixture, now } = await frozenSect('refine-bulk-ore');
+    const id = await insertEquipment(fixture.sectId);
+    await setBalance(fixture.sectId, 'ore', 74_000);
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+    const result = await refineEquipment(env.DB, fixture.userId, id, now, true);
+    expect(result.outcome).toMatchObject({
+      toLevel: 1, attempts: 1, successes: 1, stopReason: 'materials',
+      cost: { spiritStone: '40000', ore: '30000' },
+    });
+    expect(await balanceOf(fixture.sectId, 'ore')).toBe(44_000);
+    expect(await balanceOf(fixture.sectId, 'spiritStone')).toBe(4_960_000);
+    expect(await rowOf(id)).toMatchObject({ refine_level: 1 });
+  });
+
+  it('六重起缺玄铁立即停止，不扣下一重的灵石与矿石', async () => {
+    const { fixture, now } = await frozenSect('refine-bulk-xuantie');
+    const id = await insertEquipment(fixture.sectId, { refineLevel: 4 });
+    await setBalance(fixture.sectId, 'xuantie', 0);
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+    const result = await refineEquipment(env.DB, fixture.userId, id, now, true);
+    expect(result.outcome).toMatchObject({
+      toLevel: 5, attempts: 1, stopReason: 'materials', cost: { spiritStone: '150000', ore: '120000' },
+    });
+    expect(await balanceOf(fixture.sectId, 'spiritStone')).toBe(4_850_000);
+    expect(await balanceOf(fixture.sectId, 'ore')).toBe(4_880_000);
+  });
+
+  it('失败后继续，沿用隐藏补偿；下一重失败耗尽材料也会提交此前的成功', async () => {
+    const { fixture, now } = await frozenSect('refine-bulk-pity');
+    const id = await insertEquipment(fixture.sectId, { refineLevel: 3, mainValue: 33 });
+    await setBalance(fixture.sectId, 'spiritStone', 480_000);
+    await setBalance(fixture.sectId, 'ore', 400_000);
+    vi.spyOn(Math, 'random').mockReturnValue(0.99);
+    const result = await refineEquipment(env.DB, fixture.userId, id, now, true);
+    expect(result.outcome).toMatchObject({
+      fromLevel: 3, toLevel: 4, attempts: 4, successes: 1, stopReason: 'materials',
+      cost: { spiritStone: '480000', ore: '390000' },
+    });
+    expect(await rowOf(id)).toMatchObject({ refine_level: 4, main_value: 36 });
+    expect(await balanceOf(fixture.sectId, 'spiritStone')).toBe(0);
+    expect(await balanceOf(fixture.sectId, 'ore')).toBe(10_000);
+    expect((await refineFailsOf(fixture.sectId, 4)) ?? 0).toBe(0);
+    expect(await refineFailsOf(fixture.sectId, 5)).toBe(1);
+    expect(JSON.stringify(result.outcome)).not.toContain('fails');
+  });
+
+  it('极端连续失败分批提交后可续炼，正好耗尽材料时直接返回停止', async () => {
+    const { fixture, now } = await frozenSect('refine-bulk-limit');
+    const id = await insertEquipment(fixture.sectId, { quality: 'common', refineLevel: 11 });
+    await setBalance(fixture.sectId, 'spiritStone', 282_000 * 1001);
+    await setBalance(fixture.sectId, 'ore', 162_000 * 1001);
+    await setBalance(fixture.sectId, 'xuantie', 2_000 * 1001);
+    vi.spyOn(Math, 'random').mockReturnValue(0.99);
+    const first = await refineEquipment(env.DB, fixture.userId, id, now, true);
+    expect(first.outcome).toMatchObject({ attempts: 1000, successes: 0, toLevel: 11, stopReason: 'batchLimit' });
+    expect(await refineFailsOf(fixture.sectId, 12)).toBe(50);
+    const last = await refineEquipment(env.DB, fixture.userId, id, now, true);
+    expect(last.outcome).toMatchObject({ attempts: 1, successes: 0, toLevel: 11, stopReason: 'materials' });
+    expect(await balanceOf(fixture.sectId, 'spiritStone')).toBe(0);
+  });
+
+  it('bulk 路由验证类型并执行一键祭炼，缺料、满级和越权请求不扣材料', async () => {
+    const { fixture, now } = await frozenSect('refine-bulk-route');
+    const id = await insertEquipment(fixture.sectId);
+    const invalid = await fixture.api.post('/api/v1/game/refine-equipment', { equipmentId: id, bulk: 'true' });
+    expect(invalid.status).toBe(400);
+    await setBalance(fixture.sectId, 'ore', 0);
+    await expect(refineEquipment(env.DB, fixture.userId, id, now, true)).rejects.toMatchObject({ code: 'INSUFFICIENT_RESOURCE' });
+    expect(await balanceOf(fixture.sectId, 'spiritStone')).toBe(5_000_000);
+    await setBalance(fixture.sectId, 'ore', 5_000_000);
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+    const result = await fixture.api.post('/api/v1/game/refine-equipment', { equipmentId: id, bulk: true });
+    expect(result.status).toBe(200);
+    expect((dataOf(result) as Record<string, any>).outcome).toMatchObject({ attempts: 12, toLevel: 12, stopReason: 'maxLevel' });
+    const remaining = await balanceOf(fixture.sectId, 'spiritStone');
+    await expect(refineEquipment(env.DB, fixture.userId, id, now, true)).rejects.toMatchObject({ code: 'INVALID_STATUS' });
+    const other = await frozenSect('refine-bulk-other');
+    await expect(refineEquipment(env.DB, other.fixture.userId, id, other.now, true)).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    expect(await balanceOf(fixture.sectId, 'spiritStone')).toBe(remaining);
+  });
+});
+
 describe('0044 迁移：祭炼列与失败次数表', () => {
   it('equipment.refine_level 是 NOT NULL DEFAULT 0 的 INTEGER；equipment_refine_fails 表存在；旧装备入库即 0 重', async () => {
     const columns = await env.DB.prepare('PRAGMA table_info(equipment)').all<{

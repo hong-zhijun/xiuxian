@@ -6340,10 +6340,14 @@ export interface RefineEquipmentOutcome {
   toLevel: number;
   /** 本次实际扣掉的材料（最小单位字符串）。 */
   cost: Record<string, string>;
+  attempts: number;
+  successes: number;
+  /** batchLimit 时客户端自动续批，避免单次请求占用过久。 */
+  stopReason: 'single' | 'materials' | 'maxLevel' | 'batchLimit';
 }
 
 /**
- * 祭炼（POST /game/refine-equipment，0044，docs/装备祭炼开发计划.md 4.5）：一次只冲 1 重（当前重数 + 1）。
+ * 祭炼：默认单次；bulk 在内存中连续判定，累计扣料与属性后一次受保护提交。
  *
  * - 成功：重数 +1，主 / 副属性增量直接写进装备行；穿在身上的装备同批重算弟子 gear 列（战力立刻变）；
  * - 失败：只扣材料，重数与属性都不变，不碎装备、不降级；
@@ -6356,6 +6360,7 @@ export async function refineEquipment(
   userId: string,
   equipmentId: string,
   now: number,
+  bulk = false,
 ): Promise<{ state: SectStateView; outcome: RefineEquipmentOutcome }> {
   const draft = await draftFor(db, userId, now);
   requireForgeUnlocked(draft);
@@ -6377,28 +6382,68 @@ export async function refineEquipment(
     requireNotAway(draft, holder, '祭炼装备');
   }
 
-  const target = fromLevel + 1;
-  const cost = refineCostUnits(item.quality, target);
+  const cost: Record<string, number> = {};
+  let toLevel = fromLevel;
+  let mainValue = Number(item.main_value);
+  let subValue = Number(item.sub_value);
+  let attempts = 0;
+  const attemptLimit = bulk ? 1000 : 1;
+  const repository = new EquipmentRepository(db);
+  const failures = new Map<number, { initial: number; current: number }>();
+  let stopReason: RefineEquipmentOutcome['stopReason'] = bulk ? 'batchLimit' : 'single';
+  while (toLevel < REFINE_MAX_LEVEL && attempts < attemptLimit) {
+    const target = toLevel + 1;
+    const nextCost = refineCostUnits(item.quality, target);
+    const lacking = Object.entries(nextCost).find(
+      ([resourceId, amount]) => draft.balanceOf(resourceId) - (cost[resourceId] ?? 0) < amount,
+    );
+    if (lacking !== undefined) {
+      // 第一次就缺料沿用单次错误；已完成的尝试正常结算，不被下一重缺料回滚。
+      if (attempts === 0) draft.requireResourceAvailable(lacking[0], lacking[1]);
+      stopReason = 'materials';
+      break;
+    }
+    for (const [resourceId, amount] of Object.entries(nextCost)) {
+      cost[resourceId] = (cost[resourceId] ?? 0) + amount;
+    }
+    let fails = failures.get(target);
+    if (fails === undefined) {
+      const initial = await repository.findRefineFails(draft.sect.id, target);
+      fails = { initial, current: initial };
+      failures.set(target, fails);
+    }
+    const success = rollRefine(target, fails.current, Math.random);
+    fails.current = nextRefineFails(fails.current, success);
+    attempts += 1;
+    if (success) {
+      toLevel = target;
+      mainValue += refineMainGain(item.quality, target);
+      subValue += refineSubGain(item.quality, target);
+    }
+  }
+  if (toLevel === REFINE_MAX_LEVEL) stopReason = 'maxLevel';
+  if (bulk && stopReason === 'batchLimit' && toLevel < REFINE_MAX_LEVEL) {
+    const nextCost = refineCostUnits(item.quality, toLevel + 1);
+    if (Object.entries(nextCost).some(([id, amount]) => draft.balanceOf(id) - (cost[id] ?? 0) < amount)) {
+      stopReason = 'materials';
+    }
+  }
   for (const [resourceId, amount] of Object.entries(cost)) {
     draft.requireResource(resourceId, amount);
   }
-
-  // 隐藏补偿：按宗门 + 目标重数读连续失败次数（没有记录为 0），只参与判定。
-  const fails = await new EquipmentRepository(db).findRefineFails(draft.sect.id, target);
-  const success = rollRefine(target, fails, Math.random);
-  const nextFails = nextRefineFails(fails, success);
-  if (nextFails !== fails) {
-    draft.addStatement(upsertRefineFailsStatement(draft.sect.id, target, nextFails, now));
+  for (const [target, fails] of failures) {
+    if (fails.current !== fails.initial) {
+      draft.addStatement(upsertRefineFailsStatement(draft.sect.id, target, fails.current, now));
+    }
   }
 
+  const success = toLevel > fromLevel;
   if (success) {
-    const mainValue = Number(item.main_value) + refineMainGain(item.quality, target);
-    const subValue = Number(item.sub_value) + refineSubGain(item.quality, target);
     draft.addStatement(
       updateEquipmentRefineStatement({
         equipmentId: item.id,
         sectId: draft.sect.id,
-        refineLevel: target,
+        refineLevel: toLevel,
         mainValue,
         subValue,
       }),
@@ -6406,7 +6451,7 @@ export async function refineEquipment(
     if (holder !== null) {
       // 内存里同步改成新值（随命令返回的 state 立刻带上新战力）；库里的 SUM 排在 update 之后。
       const nextItems = items.map((row) =>
-        row.id === item.id ? { ...row, refine_level: target, main_value: mainValue, sub_value: subValue } : row,
+        row.id === item.id ? { ...row, refine_level: toLevel, main_value: mainValue, sub_value: subValue } : row,
       );
       applyGearRefresh(draft, holder.id, nextItems);
     }
@@ -6420,7 +6465,7 @@ export async function refineEquipment(
       equipmentItems: [{ id: item.id, discipleId: item.disciple_id }],
     });
   }
-  if (success && target === REFINE_MAX_LEVEL && item.quality === 'immortal') {
+  if (success && toLevel === REFINE_MAX_LEVEL && item.quality === 'immortal') {
     await broadcastWorldBoss(db, `【祭炼】${draft.sect.name}将 ${item.name} 祭炼至十二重圆满！`, now);
   }
   return {
@@ -6430,7 +6475,10 @@ export async function refineEquipment(
       name: item.name,
       success,
       fromLevel,
-      toLevel: success ? target : fromLevel,
+      toLevel,
+      attempts,
+      successes: toLevel - fromLevel,
+      stopReason,
       cost: Object.fromEntries(
         Object.entries(cost).map(([resourceId, units]) => [resourceId, String(units)]),
       ),

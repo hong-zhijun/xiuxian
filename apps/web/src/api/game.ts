@@ -2522,6 +2522,9 @@ export interface RefineEquipmentOutcome {
   toLevel: number;
   /** 本次实际扣掉的材料（最小单位字符串）。 */
   cost: Record<string, string>;
+  attempts: number;
+  successes: number;
+  stopReason: 'single' | 'materials' | 'maxLevel' | 'batchLimit';
 }
 
 /** 洗练模式：attr = 种类与数值一起洗，value = 锁定种类只洗数值。两种都直接覆盖。 */
@@ -2596,13 +2599,14 @@ export async function salvageEquipment(
   );
 }
 
-/** 0044 祭炼（POST /game/refine-equipment）：一次冲 1 重；成败、扣料都以服务端为准。 */
+/** 祭炼：bulk 连续尝试，遇到 batchLimit 需续批；成败与扣料以服务端为准。 */
 export async function refineEquipment(
   equipmentId: string,
+  bulk = false,
 ): Promise<{ state: SectStateView; outcome: RefineEquipmentOutcome }> {
   return apiRequest<{ state: SectStateView; outcome: RefineEquipmentOutcome }>(
     '/api/v1/game/refine-equipment',
-    { method: 'POST', body: { equipmentId } },
+    { method: 'POST', body: { equipmentId, bulk } },
   );
 }
 

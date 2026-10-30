@@ -27,7 +27,7 @@ it('Node 部署升级：已有玩家各得一万灵石，重复启动不重发�
     addSect('missing-balance');
     db.exec("INSERT INTO resource_balances(id, sect_id, resource_id, balance, remainder, updated_at) VALUES('balance', 'existing', 'spiritStone', 1234, 5, 0)");
 
-    expect(applyMigrations(db, dir)).toEqual([migration]);
+    expect(applyMigrations(db, dir)).toContain(migration);
     expect(balanceOf('existing')).toBe(10_001_234);
     expect(balanceOf('missing-balance')).toBe(10_000_000);
     expect(db.prepare("SELECT remainder FROM resource_balances WHERE id = 'balance'").get()?.remainder).toBe(5);

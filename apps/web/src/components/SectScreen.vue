@@ -1290,21 +1290,39 @@ async function onSalvageEquipment(equipmentIds: string[]): Promise<void> {
 }
 
 /**
- * 祭炼（POST /game/refine-equipment）：一次冲 1 重；成败与扣料都以服务端回执为准。
+ * 祭炼：保留单次，bulk 自动续批至材料不足或满级，汇总后播放一次动画。
  * 弹窗保持打开（连续祭炼），装备视图刷新后自动显示下一重。
  */
-async function onRefineEquipment(equipmentId: string): Promise<void> {
+async function onRefineEquipment(equipmentId: string, bulk = false): Promise<void> {
   if (props.busy || equipmentSubmitting.value) return;
   equipmentSubmitting.value = true;
   try {
-    const { state: next, outcome } = await refineEquipment(equipmentId);
-    handOffEquipmentState(next);
+    let result = await refineEquipment(equipmentId, bulk);
+    const outcome = { ...result.outcome, cost: { ...result.outcome.cost } };
+    handOffEquipmentState(result.state);
+    while (bulk && result.outcome.stopReason === 'batchLimit') {
+      result = await refineEquipment(equipmentId, true);
+      handOffEquipmentState(result.state);
+      outcome.toLevel = result.outcome.toLevel;
+      outcome.attempts += result.outcome.attempts;
+      outcome.successes += result.outcome.successes;
+      outcome.stopReason = result.outcome.stopReason;
+      for (const [id, amount] of Object.entries(result.outcome.cost)) {
+        outcome.cost[id] = String(Number(outcome.cost[id] ?? 0) + Number(amount));
+      }
+    }
+    outcome.success = outcome.successes > 0;
+    const summary = bulk
+      ? `一键祭炼完成：尝试 ${outcome.attempts} 次，成功 ${outcome.successes} 次，${outcome.fromLevel} → ${outcome.toLevel} 重；${outcome.stopReason === 'maxLevel' ? '已达十二重圆满' : '材料不足，已停止'}。`
+      : undefined;
     await loadEquipment();
     refineSeq += 1;
-    refineResult.value = { seq: refineSeq, equipmentId, success: outcome.success, toLevel: outcome.toLevel, error: false };
+    refineResult.value = { seq: refineSeq, equipmentId, success: outcome.success, toLevel: outcome.toLevel, error: false, summary };
     // 弹窗还开着就交给动画；中途关掉了才用 toast 补一句结果。
     if (refineTargetId.value !== equipmentId) {
-      if (outcome.success) {
+      if (summary !== undefined) {
+        emit('notify', outcome.success ? 'success' : 'warning', '一键祭炼完成', summary);
+      } else if (outcome.success) {
         emit('notify', 'success', '祭炼成功', `${outcome.name} 已至${REFINE_LEVEL_NAMES[outcome.toLevel] ?? ''}`);
       } else {
         emit('notify', 'warning', '祭炼未成', '材料已耗去，装备完好无损。');

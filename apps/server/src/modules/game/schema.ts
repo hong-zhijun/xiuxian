@@ -192,9 +192,10 @@ export const salvageEquipmentRequestSchema = z.strictObject({
   equipmentIds: z.array(z.string().min(1).max(64)).min(1).max(BAG_CAPACITY),
 });
 
-/** 0044 祭炼：只带装备 id（一次冲 1 重，重数与成败都由服务端判定）。 */
+/** 祭炼：默认单次；bulk 连续尝试至材料不足或十二重。 */
 export const refineEquipmentRequestSchema = z.strictObject({
   equipmentId: z.string().min(1).max(64),
+  bulk: z.boolean().default(false),
 });
 
 /** 洗练：装备 id + 模式（attr = 种类与数值一起洗，value = 锁定种类只洗数值）。 */

@@ -530,7 +530,7 @@ const noEventRandom = (): number => 0.999;
 describe('离线结算的在外屏蔽', () => {
   const config = GAME_CONFIG_CONTENT;
   const lastSettledAt = 1_000_000_000;
-  /** d1 采矿石（15000/时）、d2 静修（资质 50 → 60/时）。 */
+  /** d1 采矿石（15000/时）、d2 静修（资质 50 → 600/时）；金丹门槛避免提前满修为。 */
   const disciples = [
     {
       id: 'd1',
@@ -545,7 +545,7 @@ describe('离线结算的在外屏蔽', () => {
     {
       id: 'd2',
       aptitude: 50,
-      realmId: 'qiRefining',
+      realmId: 'goldenCore',
       stage: 1,
       cultivation: 0,
       cultivationRemainder: 0,
@@ -575,8 +575,8 @@ describe('离线结算的在外屏蔽', () => {
     );
     // 矿石：基础 0 + 弟子 15000/时 × (25/60) 小时 = 6250
     expect(balanceOf(result, 'ore')).toBe(6_250);
-    // 修为：60/时 × (25/60) 小时 = 25（未到炼气一层门槛 30）
-    expect(cultivationOf(result, 'd2')).toBe(25);
+    // 修为：600/时 × (25/60) 小时 = 250（未到金丹初期门槛）。
+    expect(cultivationOf(result, 'd2')).toBe(250);
     // 基础产量与弟子无关，照常入账：灵石 30000/时 → 12500
     expect(balanceOf(result, 'spiritStone')).toBe(12_500);
     expect(result.events).toHaveLength(0);
@@ -622,8 +622,8 @@ describe('离线结算的在外屏蔽', () => {
     );
     // 15000 × (12.5/60) 小时 = 3125
     expect(balanceOf(result, 'ore')).toBe(3_125);
-    // 60 × (12.5/60) = 12.5 → 12（余数保留到下次）
-    expect(cultivationOf(result, 'd2')).toBe(12);
+    // 600 × (12.5/60) = 125。
+    expect(cultivationOf(result, 'd2')).toBe(125);
   });
 
   it('区间完全在窗口之前（已归队）时不产生任何屏蔽', () => {
@@ -641,7 +641,7 @@ describe('离线结算的在外屏蔽', () => {
       noEventRandom,
     );
     expect(balanceOf(result, 'ore')).toBe(6_250);
-    expect(cultivationOf(result, 'd2')).toBe(25);
+    expect(cultivationOf(result, 'd2')).toBe(250);
   });
 
   it('absenceDurations 与窗口取交集并按窗口长度封顶', () => {
@@ -701,8 +701,8 @@ describe('离线结算的在外屏蔽', () => {
       },
       noEventRandom,
     );
-    // 炼气一层门槛 30：封顶到 30 并清空余量（不会自动突破）。
-    expect(cultivationOf(result, 'd2')).toBe(30);
+    // 金丹初期门槛 1800：封顶并清空余量（不会自动突破）。
+    expect(cultivationOf(result, 'd2')).toBe(1800);
     expect(result.disciples.find((row) => row.id === 'd2')?.cultivationRemainder).toBe(0);
   });
 });
