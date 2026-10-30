@@ -15,6 +15,7 @@ import {
   assignRequestSchema,
   breakthroughBatchRequestSchema,
   breakthroughRequestSchema,
+  ascensionRequestSchema,
   challengeRequestSchema,
   chooseRealmExploreSchema,
   claimJourneyRequestSchema,
@@ -87,6 +88,7 @@ import {
   assignDisciplesBatch,
   breakthrough,
   breakthroughBatch,
+  ascendDisciple,
   challengeSect,
   chooseRealmExplore,
   claimJourney,
@@ -328,6 +330,13 @@ export function createGameRoutes(): Hono<AppEnv> {
     const userId = requireUserId(c);
     const body = await parseStrictJson(breakthroughRequestSchema, c);
     const result = await breakthrough(getDb(c.env), userId, body.discipleId, Date.now());
+    return respondOk(c, { state: result.state, outcome: result.outcome });
+  });
+
+  routes.post('/game/ascend', async (c) => {
+    const userId = requireUserId(c);
+    const body = await parseStrictJson(ascensionRequestSchema, c);
+    const result = await ascendDisciple(getDb(c.env), userId, body.discipleId, Date.now());
     return respondOk(c, { state: result.state, outcome: result.outcome });
   });
 

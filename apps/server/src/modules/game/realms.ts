@@ -32,6 +32,11 @@ export interface SecretRealmDef {
   requiresArena: boolean;
 }
 
+/** 成仙后的战力总倍率；成仙状态独立于境界保存。 */
+export function ascensionPowerMultiplier(level: number): number {
+  return level > 0 ? 6 : 1;
+}
+
 export const SECRET_REALMS: readonly SecretRealmDef[] = [
   {
     id: 'mistyForest',
@@ -135,6 +140,7 @@ export function discipleCombatPower(
   speed: number,
   talent?: string,
   gearPowerBonusBp = 0,
+  ascensionLevel = 0,
 ): number {
   const rIdx = realmIndex(realmId);
   const base = (rIdx * 3 + stage) * 10;
@@ -145,7 +151,7 @@ export function discipleCombatPower(
   if (combatBp > 0) {
     power = Math.floor((power * (10_000 + combatBp)) / 10_000);
   }
-  return power;
+  return power * ascensionPowerMultiplier(ascensionLevel);
 }
 
 /** 队伍总战力（V4 第三节）：每个成员的属性/天赋都参与计算。 */
@@ -159,12 +165,22 @@ export function partyCombatPower(
     talent?: string;
     /** 装备战力加成（基点）；不计入装备时省略。 */
     gearPowerBonusBp?: number;
+    ascensionLevel?: number;
   }[],
 ): number {
   return members.reduce(
     (sum, m) =>
       sum +
-      discipleCombatPower(m.realmId, m.stage, m.attack, m.defense, m.speed, m.talent, m.gearPowerBonusBp),
+      discipleCombatPower(
+        m.realmId,
+        m.stage,
+        m.attack,
+        m.defense,
+        m.speed,
+        m.talent,
+        m.gearPowerBonusBp,
+        m.ascensionLevel,
+      ),
     0,
   );
 }

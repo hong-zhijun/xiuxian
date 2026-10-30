@@ -114,6 +114,10 @@ export interface DiscipleRow {
   technique_prof_base: number;
   /** 0066 功法：主修时刻（UTC 毫秒）；null = 没有主修。熟练度 = base + (now − since) / 48h。 */
   technique_since: number | null;
+  /** 0077 成仙状态：0 未成仙、1 已成仙。 */
+  ascension_level: number;
+  /** 0077 飞升失败保底层数。 */
+  ascension_pity: number;
 }
 
 /** 0066 功法：宗门级收录 / 参悟进度（level = 0 未收录，scrolls 为持有残卷数）。 */
@@ -296,7 +300,7 @@ export class DiscipleRepository extends ParamRepository {
                    realm_id, stage, cultivation, cultivation_remainder,
                    assignment, injured_until, severe_injured_until, body_tempering_count, note, avatar_frame_id, avatar_hash, dao_insight, dao_insight_used,
                    talent_reroll_count, talent_candidate, steward_handover_until, aptitude_pill_count,
-                   technique_id, technique_prof_base, technique_since, created_at
+                   technique_id, technique_prof_base, technique_since, ascension_level, ascension_pity, created_at
             FROM disciples WHERE sect_id = ? ORDER BY created_at ASC, id ASC`,
       params: [sectId],
     });
@@ -309,7 +313,7 @@ export class DiscipleRepository extends ParamRepository {
                    realm_id, stage, cultivation, cultivation_remainder,
                    assignment, injured_until, severe_injured_until, body_tempering_count, note, avatar_frame_id, avatar_hash, dao_insight, dao_insight_used,
                    talent_reroll_count, talent_candidate, steward_handover_until, aptitude_pill_count,
-                   technique_id, technique_prof_base, technique_since, created_at
+                   technique_id, technique_prof_base, technique_since, ascension_level, ascension_pity, created_at
             FROM disciples WHERE id = ?`,
       params: [discipleId],
     });
@@ -434,6 +438,23 @@ export function updateDiscipleTalentStatement(discipleId: string, talent: string
   return {
     sql: 'UPDATE disciples SET talent = ?, talent_candidate = NULL WHERE id = ?',
     params: [talent, discipleId],
+  };
+}
+
+/** 0077 飞升：一次三劫结算后写回阶位与失败保底；服务层用当前快照做并发保护。 */
+export function updateDiscipleAscensionStatement(input: {
+  discipleId: string;
+  sectId: string;
+  fromLevel: number;
+  fromPity: number;
+  level: number;
+  pity: number;
+}): ParameterizedQuery {
+  return {
+    sql: `UPDATE disciples
+          SET ascension_level = ?, ascension_pity = ?
+          WHERE id = ? AND sect_id = ? AND ascension_level = ? AND ascension_pity = ?`,
+    params: [input.level, input.pity, input.discipleId, input.sectId, input.fromLevel, input.fromPity],
   };
 }
 
@@ -4981,7 +5002,7 @@ export class ArenaRepository extends ParamRepository {
                    realm_id, stage, cultivation, cultivation_remainder,
                    assignment, injured_until, severe_injured_until, body_tempering_count, note, avatar_frame_id, avatar_hash, dao_insight, dao_insight_used,
                    talent_reroll_count, talent_candidate, steward_handover_until, aptitude_pill_count,
-                   technique_id, technique_prof_base, technique_since, created_at
+                   technique_id, technique_prof_base, technique_since, ascension_level, ascension_pity, created_at
             FROM disciples
             WHERE sect_id IN (SELECT id FROM sects WHERE level >= ?)
             ORDER BY created_at ASC, id ASC`,

@@ -94,6 +94,7 @@ const emit = defineEmits<{
   beastChanged: [state: SectStateView];
   assign: [discipleId: string, assignment: string];
   breakthrough: [discipleId: string];
+  ascend: [discipleId: string];
   /** count = 想服几颗（「服到满」传所需颗数，服务端按所需与库存截断）。 */
   usePill: [pillId: string, discipleId: string, count: number];
   /** 天赋重构：洗髓丹二选一（accept = true 换成新天赋，false 保留原天赋）。 */
@@ -488,6 +489,15 @@ function requestBreakthrough(): void {
     return;
   }
   emit('breakthrough', props.disciple.id);
+}
+
+function requestAscend(): void {
+  if (props.busy) return;
+  if (!props.disciple.canAscend) {
+    emit('notify', 'warning', `${props.disciple.name}暂不可成仙`, props.disciple.ascensionBlockedReason ?? '当前条件尚未满足。');
+    return;
+  }
+  emit('ascend', props.disciple.id);
 }
 
 /* ---------- 0014 历练：状态、方向/时长选择与归队倒计时 ---------- */
@@ -1240,6 +1250,8 @@ function refineGear(item: EquipmentItemView | null): void {
               <span class="disciple-score-label">战力 <HelpTip label="战力说明" :text="POWER_HELP" /></span>
               <strong class="disciple-score-value">{{ disciple.combatPower }}</strong>
               <button class="upgrade-sim-button" type="button" @click="showUpgradeSimulator = true">提升模拟</button>
+              <button v-if="disciple.canAscend" class="upgrade-sim-button" type="button" @click="requestAscend">挑战飞升</button>
+              <span v-else-if="disciple.ascended" class="disciple-immortal-tag">已成仙 · 战力 ×6</span>
             </div>
           </div>
 
@@ -2476,6 +2488,11 @@ function refineGear(item: EquipmentItemView | null): void {
   min-height: 32px;
   padding: 5px 16px;
   font-size: 13px;
+}
+
+.disciple-immortal-tag {
+  color: var(--gold-bright, #e0cd97);
+  font-size: 11px;
 }
 
 .technique-picker {

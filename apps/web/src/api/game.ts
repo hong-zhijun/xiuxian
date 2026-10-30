@@ -125,6 +125,12 @@ export interface DiscipleView {
   critDamageBp: number;
   /** 当前战力（服务端按 realms.ts 公式算好）。 */
   combatPower: number;
+  /** 0077 成仙状态与飞升入口。 */
+  ascended: boolean;
+  ascensionPity: number;
+  ascensionPowerMultiplier: number;
+  canAscend: boolean;
+  ascensionBlockedReason: string | null;
   /**
    * 0028 装备加成（该弟子已穿装备的 5 项属性之和；没有装备时全 0）。
    * 战力已经计入这份加成，前端不要自己再加；上面的 attack/defense/… 仍是**基础属性**（最高 100）。
@@ -581,6 +587,32 @@ export async function upgradeBuilding(defId: string): Promise<SectStateView> {
 
 export async function breakthrough(discipleId: string): Promise<GameActionData> {
   return apiRequest<GameActionData>('/api/v1/game/breakthrough', {
+    method: 'POST',
+    body: { discipleId },
+  });
+}
+
+export interface AscensionRoundOutcome {
+  name: string;
+  chanceBp: number;
+  roll: number;
+  success: boolean;
+}
+
+export interface AscensionOutcome {
+  discipleId: string;
+  discipleName: string;
+  success: boolean;
+  ascended: boolean;
+  pity: number;
+  combatPowerBefore: number;
+  combatPowerAfter: number;
+  rounds: AscensionRoundOutcome[];
+}
+
+/** 飞升天门：渡劫后期弟子免费挑战三劫，成功后直接成仙。 */
+export async function ascend(discipleId: string): Promise<{ state: SectStateView; outcome: AscensionOutcome }> {
+  return apiRequest<{ state: SectStateView; outcome: AscensionOutcome }>('/api/v1/game/ascend', {
     method: 'POST',
     body: { discipleId },
   });

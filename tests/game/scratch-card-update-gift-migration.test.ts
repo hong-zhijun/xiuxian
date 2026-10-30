@@ -1,4 +1,5 @@
-import { readFileSync, readdirSync } from 'node:fs';
+import { copyFileSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
@@ -8,12 +9,16 @@ import { applyMigrations } from '../../apps/server/node/migrate';
 it('Node 部署升级：已有玩家各得一万灵石，重复启动不重发，更新后建宗不补发', () => {
   const dir = fileURLToPath(new URL('../../migrations/', import.meta.url));
   const migration = '0075_scratch_card_update_gift.sql';
+  const migrationDir = mkdtempSync(join(tmpdir(), 'scratch-card-migrations-'));
+  for (const file of readdirSync(dir).filter((name) => name.endsWith('.sql') && name <= migration)) {
+    copyFileSync(join(dir, file), join(migrationDir, file));
+  }
   const db = new DatabaseSync(':memory:');
   try {
     db.exec('PRAGMA foreign_keys = ON');
     db.exec('CREATE TABLE d1_migrations(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE, applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL)');
-    for (const file of readdirSync(dir).filter(file => file.endsWith('.sql') && file < migration).sort()) {
-      db.exec(readFileSync(join(dir, file), 'utf8'));
+    for (const file of readdirSync(migrationDir).filter(file => file.endsWith('.sql') && file < migration).sort()) {
+      db.exec(readFileSync(join(migrationDir, file), 'utf8'));
       db.prepare('INSERT INTO d1_migrations(name) VALUES(?)').run(file);
     }
     function addSect(id: string) {
@@ -27,7 +32,7 @@ it('Node 部署升级：已有玩家各得一万灵石，重复启动不重发�
     addSect('missing-balance');
     db.exec("INSERT INTO resource_balances(id, sect_id, resource_id, balance, remainder, updated_at) VALUES('balance', 'existing', 'spiritStone', 1234, 5, 0)");
 
-    expect(applyMigrations(db, dir)).toContain(migration);
+    expect(applyMigrations(db, migrationDir)).toContain(migration);
     expect(balanceOf('existing')).toBe(10_001_234);
     expect(balanceOf('missing-balance')).toBe(10_000_000);
     expect(db.prepare("SELECT remainder FROM resource_balances WHERE id = 'balance'").get()?.remainder).toBe(5);
@@ -35,11 +40,12 @@ it('Node 部署升级：已有玩家各得一万灵石，重复启动不重发�
     expect(db.prepare("SELECT COUNT(*) AS count FROM chat_messages WHERE id = 'announcement-scratch-card-update-20261024'").get()?.count).toBe(1);
 
     addSect('new');
-    expect(applyMigrations(db, dir)).toEqual([]);
+    expect(applyMigrations(db, migrationDir)).toEqual([]);
     expect(balanceOf('existing')).toBe(10_001_234);
     expect(balanceOf('new')).toBeUndefined();
     expect(db.prepare("SELECT COUNT(*) AS count FROM event_log WHERE event_id = 'scratchCardUpdateGift'").get()?.count).toBe(2);
   } finally {
     db.close();
+    rmSync(migrationDir, { recursive: true, force: true });
   }
 });

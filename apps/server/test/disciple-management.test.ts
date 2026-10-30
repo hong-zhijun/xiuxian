@@ -1096,6 +1096,9 @@ describe('0018 迁移：disciples 重建后结构与约束完好', () => {
       'technique_since',
       'beast_json',
       'capture_until',
+      // 0077 成仙状态与失败保底。
+      'ascension_level',
+      'ascension_pity',
     ]);
   });
 
@@ -1167,6 +1170,9 @@ describe('0018 迁移：disciples 重建后结构与约束完好', () => {
       'technique_since|INTEGER|0|',
       'beast_json|TEXT|0|',
       'capture_until|INTEGER|0|',
+      // 0077 成仙状态：未成仙 / 已成仙与失败保底层数。
+      'ascension_level|INTEGER|1|0',
+      'ascension_pity|INTEGER|1|0',
     ]);
   });
 

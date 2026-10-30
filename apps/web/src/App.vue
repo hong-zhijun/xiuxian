@@ -8,6 +8,7 @@ import {
   assign,
   assignBatch,
   breakthrough,
+  ascend,
   breakthroughBatch,
   challenge,
   chooseRealmExplore,
@@ -662,6 +663,32 @@ function onBreakthrough(discipleId: string): void {
   );
 }
 
+function onAscend(discipleId: string): void {
+  void runAction(
+    () => ascend(discipleId),
+    (data) => {
+      const outcome = data.outcome as {
+        success?: boolean;
+        discipleName?: string;
+        combatPowerBefore?: number;
+        combatPowerAfter?: number;
+        pity?: number;
+      } | undefined;
+      if (outcome?.success) {
+        return {
+          title: '飞升成功 · 已成仙',
+          message: `${outcome.discipleName ?? '弟子'} 三劫功成，战力 ${String(outcome.combatPowerBefore ?? 0)} → ${String(outcome.combatPowerAfter ?? 0)}（×6）。`,
+        };
+      }
+      return {
+        tone: 'warning',
+        title: '飞升未成',
+        message: `三劫未能全部通过，下一次挑战成功率已提升（保底 ${String(outcome?.pity ?? 0)} 层）。`,
+      };
+    },
+  );
+}
+
 /** 批量结果里的名单：最多列 5 人，其余用「等 N 人」概括。 */
 function nameList(names: string[]): string {
   const shown = names.slice(0, 5).join('、');
@@ -1209,6 +1236,7 @@ onUnmounted(() => {
       @dao-debate="onDaoDebate"
       @allocate-dao-insight="onAllocateDaoInsight"
       @breakthrough="onBreakthrough"
+      @ascend="onAscend"
       @batch-assign="onBatchAssign"
       @apply-dispatch="onApplyDispatch"
       @batch-breakthrough="onBatchBreakthrough"

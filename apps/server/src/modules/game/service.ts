@@ -280,6 +280,7 @@ import {
   settlementSnapshotGuardStatements,
   updateBuildingLevelStatement,
   updateDiscipleAssignmentStatement,
+  updateDiscipleAscensionStatement,
   updateDiscipleAvatarFrameStatement,
   updateDiscipleAvatarHashStatement,
   updateDiscipleBodyTemperingStatement,
@@ -2272,6 +2273,8 @@ export async function createSect(
       technique_id: null,
       technique_prof_base: 0,
       technique_since: null,
+      ascension_level: 0,
+      ascension_pity: 0,
       talent_candidate: null,
       steward_handover_until: null,
       aptitude_pill_count: 0,
@@ -2638,6 +2641,8 @@ export async function recruitDisciple(
     technique_id: null,
     technique_prof_base: 0,
     technique_since: null,
+    ascension_level: 0,
+    ascension_pity: 0,
     talent_candidate: null,
     steward_handover_until: null,
     aptitude_pill_count: 0,
@@ -3014,6 +3019,105 @@ export async function breakthrough(
   // 同批核对弟子仍属本宗，避免驱逐先提交后白扣灵气、破境写入影响 0 行。
   await draft.commitDisciple([{ id: disciple.id }]);
   return { state: draft.view(), outcome };
+}
+
+export interface AscensionRoundOutcome {
+  name: string;
+  chanceBp: number;
+  roll: number;
+  success: boolean;
+}
+
+export interface AscensionOutcome {
+  discipleId: string;
+  discipleName: string;
+  success: boolean;
+  ascended: boolean;
+  pity: number;
+  combatPowerBefore: number;
+  combatPowerAfter: number;
+  rounds: AscensionRoundOutcome[];
+}
+
+const ASCENSION_ROUND_NAMES = ['雷劫', '心魔劫', '天门守卫'] as const;
+
+function ascensionBlocker(draft: SectDraft, disciple: DiscipleRow): DiscipleBlocker | null {
+  try {
+    requireCanFight(draft, disciple, '挑战飞升天门');
+  } catch (error) {
+    return { error: error instanceof AppError ? error : new AppError('INVALID_STATUS', '当前无法挑战飞升天门'), reason: '当前无法出战' };
+  }
+  if (disciple.realm_id !== 'tribulation' || Number(disciple.stage) !== 3) {
+    return { error: new AppError('INVALID_STATUS', '只有渡劫后期弟子可以挑战飞升天门'), reason: '需要渡劫后期' };
+  }
+  if (disciple.injured_until !== null && Number(disciple.injured_until) > draft.now) {
+    return { error: new AppError('INVALID_STATUS', '弟子正在疗伤，无法挑战飞升天门'), reason: '疗伤中' };
+  }
+  if (Number(disciple.ascension_level) >= 1) {
+    return { error: new AppError('INVALID_STATUS', '该弟子已经成仙'), reason: '已成仙' };
+  }
+  return null;
+}
+
+/** 飞升三劫：不消耗资源，按当前战力与劫难强度自动战斗。 */
+export async function ascendDisciple(
+  db: D1Database,
+  userId: string,
+  discipleId: string,
+  now: number,
+): Promise<{ state: SectStateView; outcome: AscensionOutcome }> {
+  const draft = await draftFor(db, userId, now);
+  const disciple = draft.discipleById(discipleId);
+  const blocker = ascensionBlocker(draft, disciple);
+  if (blocker !== null) throw blocker.error;
+
+  const fromLevel = Number(disciple.ascension_level) || 0;
+  const fromPity = Number(disciple.ascension_pity) || 0;
+  const combatPowerBefore = gearedCombatPower(disciple);
+  const rounds: AscensionRoundOutcome[] = [];
+  const levelFactor = 0.35;
+  let success = true;
+  for (const [index, name] of ASCENSION_ROUND_NAMES.entries()) {
+    const difficulty = Math.floor(combatPowerBefore * (levelFactor + index * 0.1));
+    const chanceBp = Math.min(
+      9800,
+      explorationSuccessChanceBp(combatPowerBefore, Math.max(1, difficulty)) + fromPity * 700,
+    );
+    const roll = Math.floor(Math.random() * 10_000);
+    const roundSuccess = roll < chanceBp;
+    rounds.push({ name, chanceBp, roll, success: roundSuccess });
+    if (!roundSuccess) success = false;
+  }
+
+  const toLevel = success ? 1 : 0;
+  const pity = success ? 0 : Math.min(3, fromPity + 1);
+  draft.addStatement(
+    updateDiscipleAscensionStatement({
+      discipleId: disciple.id,
+      sectId: draft.sect.id,
+      fromLevel,
+      fromPity,
+      level: toLevel,
+      pity,
+    }),
+  );
+  disciple.ascension_level = toLevel;
+  disciple.ascension_pity = pity;
+  await draft.commitDisciple([{ id: disciple.id }]);
+
+  return {
+    state: draft.view(),
+    outcome: {
+      discipleId: disciple.id,
+      discipleName: disciple.name,
+      success,
+      ascended: success,
+      pity,
+      combatPowerBefore,
+      combatPowerAfter: gearedCombatPower(disciple),
+      rounds,
+    },
+  };
 }
 
 /** 批量破境结果（POST /game/breakthrough-batch 的 outcome）。 */
@@ -3839,6 +3943,7 @@ export async function exploreSectRealm(
     speed: number;
     talent: string;
     gearPowerBonusBp: number;
+    ascensionLevel: number;
     name: string;
   }[] = [];
   for (const id of discipleIds) {
@@ -3859,6 +3964,7 @@ export async function exploreSectRealm(
       talent: disciple.talent,
       // 战力加成 = 装备 + 灵兽（同一个括号）。
       gearPowerBonusBp: powerBonusBpOfDisciple(disciple),
+      ascensionLevel: Number(disciple.ascension_level),
       name: disciple.name,
     });
   }
@@ -3988,6 +4094,7 @@ async function autoRealmSpeedrunParty(
           attrs.speed,
           disciple.talent,
           powerBonusBpOfDisciple(disciple),
+          Number(disciple.ascension_level),
         ),
       }];
     })
@@ -4242,6 +4349,7 @@ export function gearedCombatPower(disciple: DiscipleRow): number {
     attrs.speed,
     disciple.talent,
     powerBonusBpOfDisciple(disciple),
+    Number(disciple.ascension_level),
   );
 }
 
@@ -5203,6 +5311,7 @@ export async function challengeSect(
       power: discipleCombatPower(
         disciple.realm_id, stage, attrs.attack, attrs.defense, attrs.speed, disciple.talent,
         powerBonusBpOfDisciple(disciple),
+        Number(disciple.ascension_level),
       ),
       realmName: findStage(disciple.realm_id, stage).name,
       stage,
@@ -5251,6 +5360,7 @@ export async function challengeSect(
       power: discipleCombatPower(
         disciple.realm_id, stage, attrs.attack, attrs.defense, attrs.speed, disciple.talent,
         powerBonusBpOfDisciple(disciple),
+        Number(disciple.ascension_level),
       ),
       realmName: findStage(disciple.realm_id, stage).name,
       stage,
@@ -10027,6 +10137,7 @@ export async function attackWorldBoss(
         attrs.speed,
         member.talent,
         powerBonusBpOfDisciple(member),
+        Number(member.ascension_level),
       ),
       affix,
       {

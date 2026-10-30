@@ -136,7 +136,7 @@ import {
   withGear,
   type AttrSet,
 } from './equipment';
-import { discipleCombatPower } from './realms';
+import { ascensionPowerMultiplier, discipleCombatPower } from './realms';
 import type {
   BuildingRow,
   DiscipleRow,
@@ -326,6 +326,12 @@ export interface DiscipleView {
    * 0028 起**计入装备**：属性用的是「基础属性 + 装备加成」（见下面的 gear）。
    */
   combatPower: number;
+  /** 0077 成仙状态与飞升入口。 */
+  ascended: boolean;
+  ascensionPity: number;
+  ascensionPowerMultiplier: number;
+  canAscend: boolean;
+  ascensionBlockedReason: string | null;
   /** 0028 装备加成（5 项属性各自一件件加起来的和）；没有装备时全 0。 */
   gear: AttrSet;
   /** 0032 装备战力加成（基点）：身上装备按品质相加，战力再乘 (1 + 它 / 10000)；没有装备时 0。 */
@@ -2373,6 +2379,12 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
     );
 
     if ((disciple.capture_until ?? 0)>now) combatBlockedReason='捕捉灵兽中';
+    const ascended = Number(disciple.ascension_level) > 0;
+    let ascensionBlockedReason: string | null = null;
+    if (ascended) ascensionBlockedReason = '已成仙';
+    else if (disciple.realm_id !== 'tribulation' || Number(disciple.stage) !== 3) ascensionBlockedReason = '需要渡劫后期';
+    else if (injured) ascensionBlockedReason = '疗伤中';
+    else if (combatBlockedReason !== null) ascensionBlockedReason = combatBlockedReason;
     return {
       spiritBeast: spiritBeastViewOf(disciple),
       captureUntil: (disciple.capture_until ?? 0)>now ? disciple.capture_until! : null,
@@ -2434,7 +2446,13 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
         disciple.talent,
         // 战力加成 = 装备 + 灵兽（同一个括号，与 service.ts 的 powerBonusBpOfDisciple 同一口径）。
         gearPowerBonusBpOfDisciple(disciple) + beastPowerBonusBpOf(disciple),
+        Number(disciple.ascension_level),
       ),
+      ascended,
+      ascensionPity: Number(disciple.ascension_pity) || 0,
+      ascensionPowerMultiplier: ascensionPowerMultiplier(Number(disciple.ascension_level)),
+      canAscend: ascensionBlockedReason === null,
+      ascensionBlockedReason,
       gear,
       // 装备与灵兽分开给前端：装备页那行「装备战力加成合计」只讲装备，灵兽卡片自己讲档位。
       gearPowerBonusBp: gearPowerBonusBpOfDisciple(disciple),

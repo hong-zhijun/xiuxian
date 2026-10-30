@@ -100,6 +100,11 @@ export const breakthroughRequestSchema = z.strictObject({
   discipleId: z.string().min(1).max(64),
 });
 
+/** 飞升天门：渡劫后期弟子免费挑战三劫。 */
+export const ascensionRequestSchema = z.strictObject({
+  discipleId: z.string().min(1).max(64),
+});
+
 /** V2-2 探索秘境：秘境 id 的合法性由服务端按 SECRET_REALMS 校验，人数/去重在 service 里判定。 */
 export const exploreRequestSchema = z.strictObject({
   realmId: z.string().min(1).max(64),

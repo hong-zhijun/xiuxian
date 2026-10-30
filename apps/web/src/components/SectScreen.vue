@@ -152,6 +152,7 @@ const emit = defineEmits<{
   setDefenseLineup: [discipleIds: string[]];
   dismissChallengeResult: [];
   breakthrough: [discipleId: string];
+  ascend: [discipleId: string];
   /** 名册多选底栏：批量换岗 / 批量破境（请求与提示都在 App.vue）。 */
   'batch-assign': [discipleIds: string[], assignment: string];
   'batch-breakthrough': [discipleIds: string[]];
@@ -1560,6 +1561,11 @@ function onDetailAssign(discipleId: string, assignment: string): void {
 function onDetailBreakthrough(discipleId: string): void {
   if (props.busy) return;
   emit('breakthrough', discipleId);
+}
+
+function onDetailAscend(discipleId: string): void {
+  if (props.busy) return;
+  emit('ascend', discipleId);
 }
 
 function onDetailSaveNote(discipleId: string, note: string): void {
@@ -3183,6 +3189,7 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
         :equipment="equipment"
         @assign="onDetailAssign"
         @breakthrough="onDetailBreakthrough"
+        @ascend="onDetailAscend"
         @use-pill="onUsePill"
         @choose-talent="onChooseTalent"
         @save-note="onDetailSaveNote"
