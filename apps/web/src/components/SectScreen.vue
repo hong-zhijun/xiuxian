@@ -2185,7 +2185,7 @@ const todoItems = computed<TodoItem[]>(() => {
   } else if ((h?.explore.remaining ?? 0) > 0) {
     items.push({ id: 'explore', tone: 'act', text: `秘境今日还可探 ${String(h?.explore.remaining)} 次`, action: '去探索' });
   }
-  if (h?.tower.unlocked && h.tower.failsLeft > 0) {
+  if (h?.tower.unlocked) {
     items.push({ id: 'tower-climb', tone: 'act', text: `镇妖塔可挑战第 ${String(h.tower.maxFloor + 1)} 层`, action: '去闯塔' });
   }
   if (props.state.challenge.remaining > 0) {

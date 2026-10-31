@@ -141,7 +141,7 @@ describe('各系统接入', () => {
       assignment: 'energyGathering',
       talent: 'spiritGathering',
     });
-    expect(energy.get('spiritualEnergy')).toBe(12_000);
+    expect(energy.get('spiritualEnergy')).toBe(120_000);
     const herb = positionOutputPerHour(config, {
       ...base,
       realmId: 'nascentSoul',

@@ -441,7 +441,23 @@ export function updateDiscipleTalentStatement(discipleId: string, talent: string
   };
 }
 
-/** 0077 飞升：一次三劫结算后写回阶位与失败保底；服务层用当前快照做并发保护。 */
+/** 飞升状态必须仍与开局一致，防止重复成仙或重复发布系统公告。 */
+export function ascensionSnapshotGuardStatement(
+  guardId: string,
+  disciple: { id: string; sect_id: string; ascension_level: number; ascension_pity: number },
+): ParameterizedQuery {
+  return {
+    sql: `INSERT INTO mutation_guards (command_id, valid)
+          SELECT ?, CASE WHEN EXISTS (
+            SELECT 1 FROM disciples
+             WHERE id = ? AND sect_id = ? AND realm_id = 'tribulation' AND stage = 3
+               AND ascension_level = ? AND ascension_pity = ?
+          ) THEN 1 ELSE 0 END`,
+    params: [guardId, disciple.id, disciple.sect_id, disciple.ascension_level, disciple.ascension_pity],
+  };
+}
+
+/** 0077 飞升：一次三劫结算后写回成仙状态与失败保底。 */
 export function updateDiscipleAscensionStatement(input: {
   discipleId: string;
   sectId: string;

@@ -3294,9 +3294,10 @@ export interface TowerView {
     standardPower: number;
     equipmentQualityName: string | null;
   }[];
-  dailyFails: number;
+  /** null 表示每日失败次数不限。 */
+  dailyFails: number | null;
   failsUsed: number;
-  failsLeft: number;
+  failsLeft: number | null;
   sweptToday: boolean;
   /** 按当前最高层的扫荡奖励（最高层 0 时为空对象）。 */
   sweepReward: Record<string, number>;
@@ -3838,7 +3839,8 @@ export interface HubView {
     maxFloor: number;
     sweepable: boolean;
     /** 今天还能失败几次（打赢不扣）。 */
-    failsLeft: number;
+    /** null 表示挑战次数不限。 */
+    failsLeft: number | null;
   };
   /** 秘境：今天在已开放的秘境里还能探几次（各秘境每日次数相加）。 */
   explore: { remaining: number; total: number };

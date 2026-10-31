@@ -15,7 +15,7 @@ import type { TechniqueModifiers } from './techniques';
  *
  * 规则要点：
  * - 每个宗门独立爬塔，每次只能挑战「历史最高层 + 1」；固定 5 人出战。
- * - 打赢不扣次数，打输扣 1 次；每天 5 次失败机会（UTC+8 自然日）。打输没有其它惩罚。
+ * - 挑战次数不限，失败不受伤、不扣资源；每日失败数仅用于统计与日课。
  * - 每层强度按「该层的标准弟子」定：每 3 层对应一个境界小阶段（炼气一层 → 渡劫后期共 79 层），
  *   之后每层再 +2%；标准属性 / 装备 / 演武场随层数从「白板」平滑过渡到「一整套宝品 + 演武场 5 级」。
  * - 战斗当场算完：最多 10 回合，攻击 / 防御 / 身法 / 幸运 / 体魄各管一件事（见 simulateTowerBattle）。
@@ -27,8 +27,6 @@ import type { TechniqueModifiers } from './techniques';
 export const TOWER_PARTY_SIZE = 5;
 /** 解锁需要的宗门等级。 */
 export const TOWER_UNLOCK_SECT_LEVEL = 2;
-/** 每天的失败机会（打赢不扣）。 */
-export const TOWER_DAILY_FAILS = 5;
 /** 每场战斗的回合上限：到了还没打死妖物算失败。 */
 export const TOWER_MAX_ROUNDS = 10;
 /** 排行榜显示多少名。 */

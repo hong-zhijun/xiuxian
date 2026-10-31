@@ -152,7 +152,6 @@ const canChallenge = computed(
   () =>
     panel.value !== null &&
     panel.value.unlocked &&
-    panel.value.failsLeft > 0 &&
     !bagBlocked.value &&
     selected.value.length === partySize.value &&
     !submitting.value &&
@@ -163,7 +162,6 @@ const challengeButtonText = computed(() => {
   const current = panel.value;
   if (current === null) return '加载中…';
   if (!current.unlocked) return `宗门 ${String(current.unlockSectLevel)} 级解锁`;
-  if (current.failsLeft <= 0) return '今日失败次数已用完';
   if (bagBlocked.value) return '背包已满，先分解装备再来';
   return `挑战第 ${String(current.nextFloor)} 层（已选 ${String(selected.value.length)} / ${String(partySize.value)}）`;
 });
@@ -319,7 +317,7 @@ const battleSummary = computed(() => {
 const RULES_TEXT = `镇妖塔 · 玩法说明
 
 挑战：宗门 2 级解锁，每次派 5 名弟子挑战「历史最高层 + 1」；层数只增不减，不能跳层。
-次数：打赢不扣次数，打输扣 1 次；每天 5 次失败机会（0 点重置）。打输没有其它惩罚，不受伤、不扣资源。
+次数：挑战次数不限，失败后可继续挑战；打输不受伤、不扣资源。扫荡每天一次。
 出战：在外历练 / 疗伤中 / 重伤卧床 / 任执事的弟子不能上场。
 层数：每 3 层对应一个境界小阶段（第 1 层 = 炼气一层，第 79 层 = 渡劫后期），之后每层再强 2%；
       「标准战力」= 本层标准弟子的战力，5 名这个战力的弟子普通层基本能过。
@@ -393,16 +391,14 @@ onMounted(() => {
         宗门 {{ panel.unlockSectLevel }} 级解锁镇妖塔。下面可以先看看第 1 层的守关妖物。
       </p>
 
-      <!-- 战绩：最高层 / 名次 / 今日失败机会 -->
+      <!-- 战绩：最高层 / 名次 / 挑战次数 -->
       <p class="tower-record">
         <span class="tower-record-label">最高</span>
         <strong class="tower-record-value">第 {{ panel.maxFloor }} 层</strong>
         <span class="tower-record-label">名次</span>
         <strong class="tower-record-value">{{ panel.myRank === null ? '未上榜' : `第 ${panel.myRank} 名` }}</strong>
-        <span class="tower-record-label">今日失败机会</span>
-        <strong class="tower-record-value" :class="{ 'is-out': panel.failsLeft <= 0 }">
-          {{ panel.failsLeft }} / {{ panel.dailyFails }}
-        </strong>
+        <span class="tower-record-label">挑战次数</span>
+        <strong class="tower-record-value">不限</strong>
       </p>
 
       <!-- 守关妖物 -->

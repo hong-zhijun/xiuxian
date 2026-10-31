@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  TOWER_DAILY_FAILS,
   TOWER_MAX_ROUNDS,
   TOWER_TIER_CAP_FLOOR,
   isTowerBossFloor,
@@ -271,7 +270,6 @@ describe('镇妖塔 · 奖励与次数', () => {
   });
 
   it('当日失败次数：日期不是今天就是 0', () => {
-    expect(TOWER_DAILY_FAILS).toBe(5);
     expect(towerFailsToday(null, '2026-06-01')).toBe(0);
     expect(towerFailsToday({ fail_date_key: '2026-05-31', fail_count: 4 }, '2026-06-01')).toBe(0);
     expect(towerFailsToday({ fail_date_key: '2026-06-01', fail_count: 3 }, '2026-06-01')).toBe(3);

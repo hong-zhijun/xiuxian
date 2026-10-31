@@ -2700,9 +2700,10 @@ export interface TowerView {
     standardPower: number;
     equipmentQualityName: string | null;
   }[];
-  dailyFails: number;
+  /** null 表示每日失败次数不限。 */
+  dailyFails: number | null;
   failsUsed: number;
-  failsLeft: number;
+  failsLeft: number | null;
   sweptToday: boolean;
   sweepReward: Record<string, number>;
   rareFloor: number;
@@ -3588,7 +3589,7 @@ export interface HubView {
     hpPercent: number | null;
     attackable: boolean;
   };
-  tower: { unlocked: boolean; maxFloor: number; sweepable: boolean; failsLeft: number };
+  tower: { unlocked: boolean; maxFloor: number; sweepable: boolean; failsLeft: number | null };
   /** 秘境：今天在已开放的秘境里还能探几次（各秘境每日次数相加）。 */
   explore: { remaining: number; total: number };
   /** 0051 山河舆图：镇守名额与失陷情况（只读汇总）。 */

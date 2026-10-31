@@ -32,7 +32,7 @@ const UNIT = 1000;
 
 /** 资源基础产出（最小单位 / 小时，game-config resources.baseRatePerHour）。 */
 const BASE_STONE_RATE = 30_000;
-const BASE_ENERGY_RATE = 20_000;
+const BASE_ENERGY_RATE = 200_000;
 /** 灵矿：1～5 级每级 +20%，6～10 级每级 +40%（constants.ts missionHallSpiritStoneBonusBp）。 */
 function missionHallLevelGainBp(nextLevel: number): number {
   return nextLevel <= 5 ? 2000 : 4000;
@@ -43,7 +43,7 @@ const SPIRITUAL_ARRAY_GAIN_BP = 4000;
 /** 岗位每人每小时产出（最小单位，game-config positions）。 */
 const POST_OUTPUT: Readonly<Record<string, { post: string; postName: string; perHour: number }>> = {
   spiritStone: { post: 'stoneMining', postName: '采灵', perHour: 15_000 },
-  spiritualEnergy: { post: 'energyGathering', postName: '吐纳', perHour: 10_000 },
+  spiritualEnergy: { post: 'energyGathering', postName: '吐纳', perHour: 100_000 },
   herb: { post: 'herbGathering', postName: '药园', perHour: 20_000 },
   ore: { post: 'oreGathering', postName: '采矿', perHour: 15_000 },
 };

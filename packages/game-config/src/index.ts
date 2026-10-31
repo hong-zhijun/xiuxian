@@ -20,14 +20,14 @@ import type { GameConfigContent } from '@xiuxian/game-core';
  */
 
 /** 版本号：内容变化时必须同步更新版本与 payloadHash（见 03 第 12 节）。 */
-export const GAME_CONFIG_VERSION = 'v13.1.0';
+export const GAME_CONFIG_VERSION = 'v13.2.0';
 
 /**
  * 内容哈希（sha256:，覆盖规范化后的 JSON）。
  * 修改 content 后必须重新计算，否则 Worker 启动与 config:hash 校验都会失败。
  */
 export const GAME_CONFIG_PAYLOAD_HASH =
-  'sha256:e05acd88141af0a5a7654f7ebd2e6225436a93ef028570bf5b5affd92a5ca43e';
+  'sha256:a229c78dab058a69d63d7a287baa463951d6bd92039b4e9015f85586452a922a';
 
 export const GAME_CONFIG_CONTENT: GameConfigContent = {
   server: {
@@ -49,7 +49,8 @@ export const GAME_CONFIG_CONTENT: GameConfigContent = {
       name: '灵气',
       startAmount: '100000',
       capacity: '3000000',
-      baseRatePerHour: '20000',
+      // 灵气提速：宗门基础产出提升 10 倍，聚灵阵加成继续叠加。
+      baseRatePerHour: '200000',
       visibility: 'public',
     },
     {
@@ -183,10 +184,10 @@ export const GAME_CONFIG_CONTENT: GameConfigContent = {
       visibility: 'public',
     },
     {
-      // v8：吐纳岗位（每小时 10000 最小单位 = 10 展示单位灵气/人），人数上限见服务端 ENERGY_GATHERING_LIMIT。
+      // 灵气提速：吐纳基础每小时 100 灵气/人（原来 10），人数上限见服务端 ENERGY_GATHERING_LIMIT。
       id: 'energyGathering',
       name: '吐纳',
-      outputPerHourPerDisciple: { spiritualEnergy: '10000' },
+      outputPerHourPerDisciple: { spiritualEnergy: '100000' },
       visibility: 'public',
     },
   ],

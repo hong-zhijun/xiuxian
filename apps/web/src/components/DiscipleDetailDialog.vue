@@ -500,6 +500,10 @@ function requestAscend(): void {
   emit('ascend', props.disciple.id);
 }
 
+const ascensionVisible = computed(() =>
+  props.disciple.ascended || (props.disciple.realmId === 'tribulation' && props.disciple.stage === 3),
+);
+
 /* ---------- 0014 历练：状态、方向/时长选择与归队倒计时 ---------- */
 
 /** 服务端给的历练状态与名额：本组件不复制任何门槛、奖励或概率公式。 */
@@ -1251,7 +1255,7 @@ function refineGear(item: EquipmentItemView | null): void {
               <strong class="disciple-score-value">{{ disciple.combatPower }}</strong>
               <button class="upgrade-sim-button" type="button" @click="showUpgradeSimulator = true">提升模拟</button>
               <button
-                v-if="!disciple.ascended"
+                v-if="ascensionVisible && !disciple.ascended"
                 class="upgrade-sim-button"
                 type="button"
                 :disabled="busy || !disciple.canAscend"
@@ -1565,7 +1569,7 @@ function refineGear(item: EquipmentItemView | null): void {
           </p>
         </section>
 
-        <section class="disciple-detail-section" aria-labelledby="disciple-ascension-title">
+        <section v-if="ascensionVisible" class="disciple-detail-section" aria-labelledby="disciple-ascension-title">
           <h3 id="disciple-ascension-title" class="disciple-detail-title">飞升成仙</h3>
           <template v-if="disciple.ascended">
             <p class="disciple-immortal-tag">已成仙 · 战力 ×{{ disciple.ascensionPowerMultiplier }}</p>

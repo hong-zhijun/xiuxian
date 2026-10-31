@@ -77,7 +77,7 @@ describe('首页功能区状态', () => {
     });
     // 没有演武场：只有两个不需要演武场的低阶秘境开放，各 3 次
     expect((await getHub(env.DB, mid.userId, NOW)).explore).toEqual({ remaining: 6, total: 6 });
-    expect((await getHub(env.DB, mid.userId, NOW)).tower.failsLeft).toBe(5);
+    expect((await getHub(env.DB, mid.userId, NOW)).tower.failsLeft).toBeNull();
 
     const top = await makeSect(9);
     expect((await getHub(env.DB, top.userId, NOW)).world).toMatchObject({ cap: 3, freeSlots: 3 });

@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { createApp } from '../src/app';
 import { challengeTower, getSectState, getTower, sweepTower } from '../src/modules/game/service';
 import { BAG_CAPACITY } from '../src/modules/game/equipment';
-import { TOWER_DAILY_FAILS, towerClearReward, towerSweepReward } from '../src/modules/game/tower';
+import { towerClearReward, towerSweepReward } from '../src/modules/game/tower';
 
 import { dataOf, errorOf, TestClient } from './support/authClient';
 
@@ -151,29 +151,34 @@ describe('镇妖塔', () => {
     expect(second.tower.maxFloor).toBe(2);
   });
 
-  it('失败：只扣次数、不发奖、层数不变；用完 5 次当天不能再打，次日重置', async () => {
+  it('失败不发奖、层数不变；当天连续失败超过 5 次仍可继续，次日仅重置统计', async () => {
     const sect = await makeSect('lose', { strong: false });
     await setMaxFloor(sect.sectId, 60);
     const stoneBefore = await balanceOf(sect.sectId, 'spiritStone');
 
-    for (let index = 0; index < TOWER_DAILY_FAILS; index += 1) {
+    for (let index = 0; index < 7; index += 1) {
       const result = await challengeTower(env.DB, sect.userId, { discipleIds: sect.discipleIds }, NOW + index);
       expect(result.result.won).toBe(false);
       expect(result.result.floor).toBe(61);
       expect(result.result.reward).toEqual({});
       expect(result.tower.failsUsed).toBe(index + 1);
       expect(result.tower.maxFloor).toBe(60);
+      expect(result.tower.dailyFails).toBeNull();
+      expect(result.tower.failsLeft).toBeNull();
+      expect(result.result.message).toContain('次数不限');
     }
     expect(await balanceOf(sect.sectId, 'spiritStone')).toBe(stoneBefore);
-    await expect(
-      challengeTower(env.DB, sect.userId, { discipleIds: sect.discipleIds }, NOW + 10),
-    ).rejects.toMatchObject({ code: 'DAILY_LIMIT' });
+    // 已用完旧版失败机会的存档也能直接挑战，无需等到次日或清理进度。
+    await env.DB.prepare('UPDATE sect_towers SET fail_count = 100 WHERE sect_id = ?').bind(sect.sectId).run();
+    const continued = await challengeTower(env.DB, sect.userId, { discipleIds: sect.discipleIds }, NOW + 10);
+    expect(continued.tower.failsUsed).toBe(101);
+    expect(continued.tower.failsLeft).toBeNull();
 
     const tomorrow = NOW + DAY_MS;
     await freeze(sect.sectId, tomorrow);
     const panel = await getTower(env.DB, sect.userId, tomorrow);
     expect(panel.tower.failsUsed).toBe(0);
-    expect(panel.tower.failsLeft).toBe(TOWER_DAILY_FAILS);
+    expect(panel.tower.failsLeft).toBeNull();
     const again = await challengeTower(env.DB, sect.userId, { discipleIds: sect.discipleIds }, tomorrow);
     expect(again.tower.failsUsed).toBe(1);
   });

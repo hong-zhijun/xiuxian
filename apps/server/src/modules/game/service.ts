@@ -253,6 +253,7 @@ import {
   SectRepository,
   SparringRepository,
   alchemySnapshotGuardStatement,
+  ascensionSnapshotGuardStatement,
   alchemyDisciplesGuardStatement,
   ALCHEMY_DISCIPLES_PER_GUARD,
   challengeSnapshotGuardStatement,
@@ -642,7 +643,6 @@ import {
   towerMonsterOf,
   towerSweepReward,
   TOWER_AFFIXES,
-  TOWER_DAILY_FAILS,
   TOWER_LEADERBOARD_SIZE,
   TOWER_MAX_ROUNDS,
   TOWER_PARTY_SIZE,
@@ -3091,6 +3091,8 @@ export async function ascendDisciple(
 
   const toLevel = success ? 1 : 0;
   const pity = success ? 0 : Math.min(3, fromPity + 1);
+  const guardId = `${crypto.randomUUID()}:ascension`;
+  draft.addStatement(ascensionSnapshotGuardStatement(guardId, disciple));
   draft.addStatement(
     updateDiscipleAscensionStatement({
       discipleId: disciple.id,
@@ -3103,6 +3105,16 @@ export async function ascendDisciple(
   );
   disciple.ascension_level = toLevel;
   disciple.ascension_pity = pity;
+  if (success) {
+    draft.addStatement(insertChatMessageStatement({
+      id: `ascension:${disciple.id}`,
+      userId: 'system',
+      sectName: '系统',
+      content: `【飞升公告】${draft.sect.name}的弟子${disciple.name}成功渡过三劫，已成仙！战力 ${combatPowerBefore} → ${gearedCombatPower(disciple)}（×6）！`,
+      now,
+    }));
+  }
+  draft.addStatement(deleteDiscipleSnapshotGuardStatement(guardId));
   await draft.commitDisciple([{ id: disciple.id }]);
 
   return {
@@ -11400,9 +11412,9 @@ async function buildTowerView(input: {
     bagCount,
     bagCapacity: BAG_CAPACITY,
     upcoming,
-    dailyFails: TOWER_DAILY_FAILS,
+    dailyFails: null,
     failsUsed,
-    failsLeft: Math.max(0, TOWER_DAILY_FAILS - failsUsed),
+    failsLeft: null,
     sweptToday: row !== null && row.sweep_date_key === dateKeyUtc8(now),
     sweepReward: towerSweepReward(maxFloor),
     rareFloor: TOWER_RARE_FLOOR,
@@ -11435,8 +11447,8 @@ export async function getTower(
 /**
  * POST /game/tower/challenge：挑战「最高层 + 1」。
  *
- * 校验：解锁 → 今日失败次数 → 5 名不重复、属于本宗、能出战（不在外 / 不重伤 / 不是执事）且不在疗伤。
- * 胜：最高层 +1、发通关奖励（截断到容量）；败：今日失败次数 +1，没有其它惩罚。
+ * 校验：解锁 → 5 名不重复、属于本宗、能出战（不在外 / 不重伤 / 不是执事）且不在疗伤。
+ * 胜：最高层 +1、发通关奖励；败：记录今日失败次数，可继续挑战。
  * 进度写回与奖励同一次受保护 batch（sect_towers.version 守卫）。
  */
 export async function challengeTower(
@@ -11451,13 +11463,6 @@ export async function challengeTower(
   const row = await repo.findBySectId(draft.sect.id);
   const todayKey = dateKeyUtc8(now);
   const failsUsed = towerFailsToday(row, todayKey);
-  if (failsUsed >= TOWER_DAILY_FAILS) {
-    throw new AppError(
-      'DAILY_LIMIT',
-      `今日失败次数已用完（${String(failsUsed)}/${String(TOWER_DAILY_FAILS)}），明日再来`,
-      { failsUsed, dailyFails: TOWER_DAILY_FAILS },
-    );
-  }
 
   const discipleIds = [...new Set(input.discipleIds)];
   if (discipleIds.length !== TOWER_PARTY_SIZE) {
@@ -11557,15 +11562,14 @@ export async function challengeTower(
   }
 
   const after = await repo.findBySectId(draft.sect.id);
-  const failsLeft = Math.max(0, TOWER_DAILY_FAILS - (battle.won ? failsUsed : failsUsed + 1));
   let message: string;
   if (battle.won) {
     const gained = equipment === null ? '' : ` · ${equipment.name}（${equipment.qualityName}${equipment.slotName}）`;
     message = `第 ${String(floor)} 层 · ${monster.name}已被镇压（${String(battle.rounds.length)} 回合）。获得 ${towerRewardText(draft, credited)}${gained}`;
   } else if (battle.failReason === 'wiped') {
-    message = `第 ${String(floor)} 层 · 不敌${monster.name}，队伍力竭败退。今日还可失败 ${String(failsLeft)} 次`;
+    message = `第 ${String(floor)} 层 · 不敌${monster.name}，队伍力竭败退。可继续挑战，次数不限。`;
   } else {
-    message = `第 ${String(floor)} 层 · ${String(TOWER_MAX_ROUNDS)} 回合内未能拿下${monster.name}。今日还可失败 ${String(failsLeft)} 次`;
+    message = `第 ${String(floor)} 层 · ${String(TOWER_MAX_ROUNDS)} 回合内未能拿下${monster.name}。可继续挑战，次数不限。`;
   }
   return {
     state: draft.view(),
@@ -14750,7 +14754,7 @@ export async function getHub(db: D1Database, userId: string, now: number): Promi
       unlocked: towerUnlocked,
       maxFloor,
       sweepable: towerUnlocked && maxFloor > 0 && towerRow?.sweep_date_key !== todayKey,
-      failsLeft: Math.max(0, TOWER_DAILY_FAILS - towerFailsToday(towerRow, todayKey)),
+      failsLeft: null,
     },
     explore: { remaining: exploreRemaining, total: exploreTotal },
     world: {

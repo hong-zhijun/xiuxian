@@ -867,7 +867,7 @@ export function createGameRoutes(): Hono<AppEnv> {
     return respondOk(c, { state: result.state, tower: result.tower });
   });
 
-  // 0039 镇妖塔：挑战「最高层 + 1」（固定 5 人；赢了发通关奖励，输了扣 1 次失败机会；一次受保护 batch）。
+  // 0039 镇妖塔：挑战「最高层 + 1」（固定 5 人；赢了发通关奖励，失败可继续挑战；一次受保护 batch）。
   routes.post('/game/tower/challenge', async (c) => {
     const userId = requireUserId(c);
     const body = await parseStrictJson(towerChallengeRequestSchema, c);

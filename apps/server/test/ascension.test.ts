@@ -43,6 +43,7 @@ afterEach(() => vi.restoreAllMocks());
 describe('飞升天门：渡劫后期免费三劫成仙', () => {
   it('不看宗门等级、不扣资源，三劫成功后直接标记已成仙，战力提升六倍', async () => {
     const fixture = await makeFixture();
+    const observer = await makeFixture();
     await env.DB.prepare('UPDATE sects SET level = 1 WHERE id = ?').bind(fixture.sectId).run();
     await setBalance(fixture.sectId, 'spiritStone', 12_345_000);
     await setBalance(fixture.sectId, 'spiritualEnergy', 67_890_000);
@@ -62,6 +63,20 @@ describe('飞升天门：渡劫后期免费三劫成仙', () => {
     expect(await env.DB.prepare("SELECT balance FROM resource_balances WHERE sect_id = ? AND resource_id = 'spiritualEnergy'").bind(fixture.sectId).first<{ balance: number }>()).toMatchObject({ balance: energyBefore });
 
     await expect(ascendDisciple(env.DB, fixture.userId, fixture.discipleId, now)).rejects.toMatchObject({ code: 'INVALID_STATUS' });
+    const messages = await env.DB.prepare('SELECT user_id, sect_name, content FROM chat_messages WHERE id = ?')
+      .bind(`ascension:${fixture.discipleId}`).all<{ user_id: string; sect_name: string; content: string }>();
+    expect(messages.results).toEqual([{
+      user_id: 'system',
+      sect_name: '系统',
+      content: expect.stringContaining(`战力 ${result.outcome.combatPowerBefore} → ${result.outcome.combatPowerAfter}`),
+    }]);
+    expect(messages.results[0]!.content).toContain(result.outcome.discipleName);
+    expect(messages.results[0]!.content).toContain('已成仙');
+    // 其它宗门也能在全服聊天中看到系统公告。
+    const chat = await observer.api.get('/api/v1/game/chat');
+    expect(chat.status).toBe(200);
+    expect((dataOf(chat) as { messages: { id: string; isSystem: boolean }[] }).messages)
+      .toContainEqual(expect.objectContaining({ id: `ascension:${fixture.discipleId}`, isSystem: true }));
   });
 
   it('失败只增加保底层数，仍然不扣资源；非渡劫后期拒绝挑战', async () => {
@@ -71,9 +86,26 @@ describe('飞升天门：渡劫后期免费三劫成仙', () => {
     expect(failed.outcome.success).toBe(false);
     expect(failed.outcome.rounds).toHaveLength(3);
     expect(failed.outcome.pity).toBe(1);
+    expect(await env.DB.prepare('SELECT id FROM chat_messages WHERE id = ?').bind(`ascension:${fixture.discipleId}`).first()).toBeNull();
 
     const other = await makeFixture();
     await env.DB.prepare("UPDATE disciples SET realm_id = 'mahayana', stage = 3 WHERE id = ?").bind(other.discipleId).run();
     await expect(ascendDisciple(env.DB, other.userId, other.discipleId, Date.now())).rejects.toMatchObject({ code: 'INVALID_STATUS' });
+  });
+
+  it('同时点击成仙只提交一次结果与一次全服系统公告', async () => {
+    const fixture = await makeFixture();
+    const now = Date.now();
+    await env.DB.prepare('UPDATE sects SET last_settled_at = ? WHERE id = ?').bind(now + 3_600_000, fixture.sectId).run();
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+    const results = await Promise.allSettled([
+      ascendDisciple(env.DB, fixture.userId, fixture.discipleId, now),
+      ascendDisciple(env.DB, fixture.userId, fixture.discipleId, now),
+    ]);
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    const rejected = results.find((result) => result.status === 'rejected');
+    expect(rejected?.reason).toMatchObject({ code: 'INVALID_STATUS' });
+    expect((await env.DB.prepare('SELECT COUNT(*) AS total FROM chat_messages WHERE id = ?')
+      .bind(`ascension:${fixture.discipleId}`).first<{ total: number }>())?.total).toBe(1);
   });
 });
