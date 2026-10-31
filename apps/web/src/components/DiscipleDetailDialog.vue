@@ -1250,7 +1250,14 @@ function refineGear(item: EquipmentItemView | null): void {
               <span class="disciple-score-label">战力 <HelpTip label="战力说明" :text="POWER_HELP" /></span>
               <strong class="disciple-score-value">{{ disciple.combatPower }}</strong>
               <button class="upgrade-sim-button" type="button" @click="showUpgradeSimulator = true">提升模拟</button>
-              <button v-if="disciple.canAscend" class="upgrade-sim-button" type="button" @click="requestAscend">挑战飞升</button>
+              <button
+                v-if="!disciple.ascended"
+                class="upgrade-sim-button"
+                type="button"
+                :disabled="busy || !disciple.canAscend"
+                :title="disciple.ascensionBlockedReason ?? '免费挑战三劫，成功后成仙，战力提升为原来的 6 倍'"
+                @click="requestAscend"
+              >挑战飞升</button>
               <span v-else-if="disciple.ascended" class="disciple-immortal-tag">已成仙 · 战力 ×6</span>
             </div>
           </div>
@@ -1556,6 +1563,25 @@ function refineGear(item: EquipmentItemView | null): void {
                 : `静修 +${disciple.cultivationRatePerHour}/时`
             }}
           </p>
+        </section>
+
+        <section class="disciple-detail-section" aria-labelledby="disciple-ascension-title">
+          <h3 id="disciple-ascension-title" class="disciple-detail-title">飞升成仙</h3>
+          <template v-if="disciple.ascended">
+            <p class="disciple-immortal-tag">已成仙 · 战力 ×{{ disciple.ascensionPowerMultiplier }}</p>
+            <p class="disciple-detail-hint">三劫功成，弟子继续留在宗门，装备与战斗资格保留。</p>
+          </template>
+          <template v-else>
+            <p class="disciple-detail-hint">渡劫后期即可免费挑战雷劫、心魔劫、天门守卫。无宗门等级要求，不消耗资源；成功后直接成仙，战力提升为原来的 6 倍。</p>
+            <p v-if="disciple.ascensionPity > 0" class="disciple-detail-hint">失败加成已累计 {{ disciple.ascensionPity }} 层，后续挑战成功率已提高。</p>
+            <p v-if="disciple.ascensionBlockedReason" class="blocked-hint">{{ disciple.ascensionBlockedReason }}</p>
+            <button
+              class="action-button primary-action"
+              type="button"
+              :disabled="busy || !disciple.canAscend"
+              @click="requestAscend"
+            >{{ busy ? '请稍候…' : '挑战飞升' }}</button>
+          </template>
         </section>
 
         <section class="disciple-detail-section disciple-technique" aria-labelledby="disciple-technique-title">
