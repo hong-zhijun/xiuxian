@@ -1819,6 +1819,8 @@ export interface LeaderboardEntryView {
 
 /** 弟子榜单条目（跨宗门，公开字段只读）。 */
 export interface DiscipleLeaderboardEntryView {
+  /** 飞升成功后的公开仙人标识。 */
+  ascended: boolean;
   rank: number;
   discipleId: string;
   discipleName: string;
@@ -1881,6 +1883,7 @@ export interface DiscipleLeaderboardView {
 
 /** 天骄榜点开的弟子公开档案：只含公开字段（不含掌门备注、修为数值、差遣与历练）。 */
 export interface DiscipleProfileView {
+  ascended: boolean;
   discipleId: string;
   name: string;
   gender: string;
@@ -2005,6 +2008,7 @@ export interface PublicSectView {
 
 /** 公开档案里的弟子：名字/性别/境界/阶段/资质 + V4 的战斗属性与天赋。 */
 export interface PublicDiscipleView {
+  ascended: boolean;
   id: string;
   name: string;
   gender: string;

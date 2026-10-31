@@ -83,6 +83,29 @@ describe('弟子公开档案 · 灵兽与功法', () => {
     const owner = await makeSect();
     const profile = dataOf(await owner.api.get(`/api/v1/game/disciple-profile/${owner.discipleId}`)) as Record<string, any>;
     expect(profile.spiritBeast).toBeNull();
+    expect(profile.ascended).toBe(false);
+  });
+
+  it('仙人外观：自己的状态、跨宗档案、天骄榜与宗门公开名册都返回成仙标识', async () => {
+    const owner = await makeSect();
+    const viewer = await makeSect();
+    await env.DB.prepare("UPDATE disciples SET realm_id = 'tribulation', stage = 3, ascension_level = 1, note = '私有备注' WHERE id = ?")
+      .bind(owner.discipleId).run();
+    const mine = (await getSectState(env.DB, owner.userId, NOW))!.disciples.find((disciple) => disciple.id === owner.discipleId)!;
+    expect(mine.ascended).toBe(true);
+
+    const profile = dataOf(await viewer.api.get(`/api/v1/game/disciple-profile/${owner.discipleId}`)) as Record<string, any>;
+    expect(profile.ascended).toBe(true);
+    expect(profile.isMe).toBe(false);
+    expect(profile.combatPower).toBe(mine.combatPower);
+    expect(profile).not.toHaveProperty('note');
+
+    const board = dataOf(await viewer.api.get('/api/v1/game/disciple-leaderboard')) as Record<string, any>;
+    expect(board.byCombatPower).toContainEqual(expect.objectContaining({ discipleId: owner.discipleId, ascended: true }));
+    const sectResponse = await viewer.api.get(`/api/v1/game/sect/${owner.sectId}`);
+    expect(sectResponse.status).toBe(200);
+    const { sect } = dataOf(sectResponse) as Record<string, any>;
+    expect(sect.disciples).toContainEqual(expect.objectContaining({ id: owner.discipleId, ascended: true }));
   });
 
   it('功法：名称 / 本宗等级 / 熟练度；未修习时为 null + 无', async () => {

@@ -4,6 +4,7 @@ import { ref } from 'vue';
 import type { DiscipleLeaderboardEntryView, DiscipleLeaderboardView } from '../api/game';
 import { fetchDiscipleLeaderboard } from '../api/game';
 import DiscipleAvatar from './DiscipleAvatar.vue';
+import ImmortalTag from './ImmortalTag.vue';
 import DiscipleProfileDialog from './DiscipleProfileDialog.vue';
 import LoadingState from './LoadingState.vue';
 
@@ -110,12 +111,14 @@ function valueLabel(entry: DiscipleLeaderboardEntryView): string {
             :realm-id="entry.realmId"
             :frame-id="entry.frameId"
             :image-hash="entry.avatarHash"
+            :ascended="entry.ascended"
             variant="roster"
           />
           <span class="rank-copy">
             <span class="rank-title">
               <strong>{{ entry.discipleName }}</strong>
-              <span class="rank-level">{{ entry.stageName }}</span>
+              <ImmortalTag v-if="entry.ascended" />
+              <span v-else class="rank-level">{{ entry.stageName }}</span>
               <span v-if="entry.isMe" class="rank-me">本宗</span>
             </span>
             <span class="rank-meta">

@@ -5,6 +5,7 @@ import type { DiscipleView } from '../api/game';
 import { isInjured, selectionBlockReason, severeInjuryStatusLabel } from '../utils/discipleFilter';
 import { severeRiskPercent } from '../utils/worldBossRisk';
 import DiscipleAvatar from './DiscipleAvatar.vue';
+import ImmortalTag from './ImmortalTag.vue';
 
 /**
  * 统一的选人控件（登门挑战 / 守擂阵容 / 秘境出征 / 赌坊论道 共用）。
@@ -572,11 +573,13 @@ onUnmounted(() => {
               :realm-id="disciple.realmId"
               :frame-id="disciple.avatarFrameId"
               :image-hash="disciple.avatarHash"
+              :ascended="disciple.ascended"
             />
           </span>
           <span class="dp-name">{{ disciple.name }}</span>
           <span class="dp-meta">
-            <span>{{ disciple.stageName }}</span>
+            <ImmortalTag v-if="disciple.ascended" />
+            <span v-else>{{ disciple.stageName }}</span>
             <span>战力 {{ disciple.combatPower }}</span>
             <span v-if="disciple.spiritBeast" class="dp-technique" :title="disciple.spiritBeast.skillText">{{ disciple.spiritBeast.elementName }} · {{ disciple.spiritBeast.name }}</span>
             <span v-if="showTechnique && disciple.techniqueId !== null" class="dp-technique">
@@ -629,7 +632,7 @@ onUnmounted(() => {
     >
       <p class="dp-popover-name">{{ popoverDisciple.name }}</p>
       <p class="dp-popover-line">
-        境界：{{ popoverDisciple.realmName }} · {{ popoverDisciple.stageName }}
+        境界：{{ popoverDisciple.ascended ? '仙人' : `${popoverDisciple.realmName} · ${popoverDisciple.stageName}` }}
       </p>
       <p class="dp-popover-line">天赋：{{ popoverDisciple.talentName }}</p>
       <p class="dp-popover-line">战力：{{ popoverDisciple.combatPower }}</p>

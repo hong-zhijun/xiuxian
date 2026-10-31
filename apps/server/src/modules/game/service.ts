@@ -4539,6 +4539,7 @@ export async function listDiscipleLeaderboard(
     return {
       rank,
       discipleId: item.row.id,
+      ascended: Number(item.row.ascension_level) > 0,
       discipleName: item.row.name,
       gender: item.row.gender,
       realmId: item.row.realm_id,
@@ -4633,6 +4634,7 @@ export async function getDiscipleProfile(
     realmId: disciple.realm_id,
     frameId: disciple.avatar_frame_id,
     avatarHash: disciple.avatar_hash ?? null,
+    ascended: Number(disciple.ascension_level) > 0,
     sectId: disciple.sect_id,
     sectName: sect?.name ?? '',
     isMe: mySect?.id === disciple.sect_id,
@@ -4819,6 +4821,7 @@ export async function getPublicSect(
       stage: Number(disciple.stage),
       stageName: findStage(disciple.realm_id, Number(disciple.stage)).name,
       // 综合评分与天骄榜同一口径（六项基础属性；装备与灵兽只进战力，不计入评分）。
+      ascended: Number(disciple.ascension_level) > 0,
       attributeScore: attributeScore({
         aptitude: Number(disciple.aptitude),
         attack: Number(disciple.attack),

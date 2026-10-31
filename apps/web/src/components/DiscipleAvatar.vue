@@ -23,6 +23,8 @@ const props = defineProps<{
   frameId: string;
   /** 0038 自定义头像的内容哈希；null / 不传 = 没有。图片加载失败时回退框图。 */
   imageHash?: string | null;
+  /** 成仙后自动叠加金色仙纹边框，兼容自定义头像与原头像框。 */
+  ascended?: boolean;
   /** detail = 详情头部与预览用的大尺寸。 */
   variant?: 'roster' | 'detail';
 }>();
@@ -59,7 +61,7 @@ watch(
 <template>
   <div
     class="disciple-avatar"
-    :class="[`realm-${realmId}`, variant === 'detail' ? 'is-large' : '', photoSrc !== null ? 'has-photo' : '']"
+    :class="[`realm-${realmId}`, { 'is-large': variant === 'detail', 'has-photo': photoSrc !== null, 'is-immortal': ascended }]"
     :data-frame="frameId"
     aria-hidden="true"
   >
@@ -81,6 +83,29 @@ watch(
       @error="imageFailed = true"
     />
     <span v-if="photoSrc === null" class="disciple-avatar-char">{{ name.slice(0, 1) }}</span>
+    <svg v-if="ascended" class="immortal-frame" viewBox="0 0 100 100" fill="none" aria-hidden="true">
+      <circle cx="50" cy="50" r="44" stroke="#f7d389" stroke-width="2.2" />
+      <circle cx="50" cy="50" r="48" stroke="#f7d389" stroke-width="0.8" stroke-dasharray="24 8 2 8" />
+      <path d="M50 0 55 6 50 12 45 6Z M100 50 94 55 88 50 94 45Z M50 100 45 94 50 88 55 94Z M0 50 6 45 12 50 6 55Z" fill="#ffe8ae" stroke="#9e712d" stroke-width="0.8" />
+      <path d="M17 28c-7-2-8-9-3-12 3-2 6-1 7 2 5-4 12 0 10 5 M72 17c2-7 9-8 12-3 2 3 1 6-2 7 4 5 0 12-5 10 M83 72c7 2 8 9 3 12-3 2-6 1-7-2-5 4-12 0-10-5 M28 83c-2 7-9 8-12 3-2-3-1-6 2-7-4-5 0-12 5-10" stroke="#f7d389" stroke-width="1.4" stroke-linecap="round" />
+    </svg>
     <i>{{ gender === 'female' ? '坤' : '乾' }}</i>
   </div>
 </template>
+
+<style scoped>
+.disciple-avatar.is-immortal {
+  border-color: #f7d389;
+  color: #ffe8ae;
+  box-shadow: 0 0 12px rgba(247, 211, 137, 0.3), 0 0 22px rgba(158, 215, 215, 0.12);
+}
+.immortal-frame {
+  position: absolute;
+  z-index: 3;
+  inset: -10%;
+  width: 120%;
+  height: 120%;
+  overflow: visible;
+  pointer-events: none;
+}
+</style>

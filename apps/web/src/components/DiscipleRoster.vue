@@ -27,6 +27,7 @@ import {
   stageOptions,
 } from '../utils/discipleFilter';
 import DiscipleAvatar from './DiscipleAvatar.vue';
+import ImmortalTag from './ImmortalTag.vue';
 import { misplacedHint } from '../utils/discipleDispatch';
 
 /**
@@ -562,7 +563,7 @@ watch(
         :class="[
           `status-${row.displayStatus.key}`,
           row.journeyClass,
-          { 'is-selecting': selecting, 'is-selected': selecting && selectedSet.has(row.disciple.id) },
+          { 'is-selecting': selecting, 'is-selected': selecting && selectedSet.has(row.disciple.id), 'is-immortal': row.disciple.ascended },
         ]"
         :style="rowIndexStyle(index)"
         @click="onRowClick(row.disciple.id, $event)"
@@ -598,6 +599,7 @@ watch(
               :realm-id="row.disciple.realmId"
               :frame-id="row.disciple.avatarFrameId"
               :image-hash="row.disciple.avatarHash"
+              :ascended="row.disciple.ascended"
             />
           </button>
 
@@ -622,6 +624,7 @@ watch(
               :realm-id="row.disciple.realmId"
               :frame-id="row.disciple.avatarFrameId"
               :image-hash="row.disciple.avatarHash"
+              :ascended="row.disciple.ascended"
             />
           </div>
         </div>
@@ -634,7 +637,8 @@ watch(
 
         <!-- 境界单独一行：境界阶段与天赋两个标签居中并排。 -->
         <p class="disciple-row-realm">
-          <span class="realm-tag">{{ row.disciple.stageName }}</span>
+          <ImmortalTag v-if="row.disciple.ascended" />
+          <span v-else class="realm-tag">{{ row.disciple.stageName }}</span>
           <span
             class="disciple-row-talent"
             :class="{ 'is-misplaced': misplacedSet.has(row.disciple.id) }"

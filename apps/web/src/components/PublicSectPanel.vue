@@ -5,6 +5,7 @@ import type { PublicDiscipleView, PublicSectView, SectStateView } from '../api/g
 import { fetchPublicSect } from '../api/game';
 import { formatTime } from '../utils/format';
 import DiscipleAvatar from './DiscipleAvatar.vue';
+import ImmortalTag from './ImmortalTag.vue';
 import DiscipleProfileDialog from './DiscipleProfileDialog.vue';
 import LoadingState from './LoadingState.vue';
 import SectAvatar from './SectAvatar.vue';
@@ -201,6 +202,7 @@ function requestChallenge(): void {
                   :realm-id="disciple.realmId"
                   frame-id="classic"
                   :image-hash="disciple.avatarHash"
+                  :ascended="disciple.ascended"
                 />
               </span>
               <span class="public-disciple-copy">
@@ -209,7 +211,9 @@ function requestChallenge(): void {
                   <span v-if="index === 0" class="public-disciple-top">最强</span>
                 </span>
                 <span class="public-disciple-meta">
-                  {{ disciple.stageName }} · 综合 {{ disciple.attributeScore.toFixed(1) }}
+                  <ImmortalTag v-if="disciple.ascended" />
+                  <span v-else>{{ disciple.stageName }}</span>
+                  · 综合 {{ disciple.attributeScore.toFixed(1) }}
                 </span>
                 <span class="public-disciple-tags">
                   <span v-if="disciple.talentName !== '无'" class="stat-tag stat-talent">

@@ -797,6 +797,7 @@ export interface LeaderboardEntryView {
 
 /** 公开档案里的弟子：只有能公开的字段（没有修为 / 岗位 / 受伤）。 */
 export interface PublicDiscipleView {
+  ascended: boolean;
   id: string;
   name: string;
   gender: string;
@@ -948,6 +949,7 @@ export async function fetchLeaderboard(): Promise<LeaderboardEntryView[]> {
 
 /** 弟子榜单条目（与后端 view.ts 的 DiscipleLeaderboardEntryView 一一对应）。 */
 export interface DiscipleLeaderboardEntryView {
+  ascended: boolean;
   rank: number;
   discipleId: string;
   discipleName: string;
@@ -1004,6 +1006,7 @@ export async function fetchDiscipleLeaderboard(): Promise<DiscipleLeaderboardVie
 
 /** 天骄榜点开的弟子公开档案（任何登录玩家可看；不含掌门备注等私有字段）。 */
 export interface DiscipleProfileView {
+  ascended: boolean;
   discipleId: string;
   name: string;
   gender: string;

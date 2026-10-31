@@ -39,6 +39,7 @@ import type { CompressedAvatar } from '../utils/avatarImage';
 import AssignmentSelect from './AssignmentSelect.vue';
 import AvatarCropDialog from './AvatarCropDialog.vue';
 import DiscipleAvatar from './DiscipleAvatar.vue';
+import ImmortalTag from './ImmortalTag.vue';
 import DiscipleRadarChart from './DiscipleRadarChart.vue';
 import HelpTip from './HelpTip.vue';
 import { beastAttrList } from '../utils/spiritBeasts';
@@ -1195,13 +1196,15 @@ function refineGear(item: EquipmentItemView | null): void {
           :realm-id="disciple.realmId"
           :frame-id="disciple.avatarFrameId"
           :image-hash="disciple.avatarHash"
+          :ascended="disciple.ascended"
           variant="detail"
         />
       </div>
       <div class="disciple-detail-headline">
         <h2 class="disciple-detail-name" :title="disciple.name">{{ disciple.name }}</h2>
         <p class="disciple-detail-headline-meta">
-          <span class="realm-tag">{{ disciple.stageName }}</span>
+          <ImmortalTag v-if="disciple.ascended" />
+          <span v-else class="realm-tag">{{ disciple.stageName }}</span>
           <!-- 境界旁的「?」：与页面其它问号同一样式，点开境界一览（门槛 / 修炼倍率 / 天赋系数）。 -->
           <button
             class="help-tip-button"
@@ -1548,7 +1551,8 @@ function refineGear(item: EquipmentItemView | null): void {
             >
               <span :style="{ width: `${progress.percent}%` }" />
             </div>
-            <span class="realm-tag">{{ disciple.stageName }}</span>
+            <ImmortalTag v-if="disciple.ascended" />
+            <span v-else class="realm-tag">{{ disciple.stageName }}</span>
             <!-- 胜算 / 消耗 / 拦截原因都放进破境弹窗，点了再看。 -->
             <button
               class="action-button primary-action disciple-break-button"
@@ -1860,6 +1864,7 @@ function refineGear(item: EquipmentItemView | null): void {
                 :realm-id="disciple.realmId"
                 :frame-id="disciple.avatarFrameId"
                 :image-hash="disciple.avatarHash"
+                :ascended="disciple.ascended"
               />
             </span>
             <div class="disciple-photo-actions">
@@ -1934,6 +1939,7 @@ function refineGear(item: EquipmentItemView | null): void {
                   :gender="disciple.gender"
                   :realm-id="disciple.realmId"
                   :frame-id="option.id"
+                  :ascended="disciple.ascended"
                 />
               </span>
               <span class="disciple-frame-label">{{ option.label }}</span>

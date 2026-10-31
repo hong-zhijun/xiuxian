@@ -8039,6 +8039,13 @@ p.steward-bonus-note {
   --realm-glow: 0 0 18px rgba(255, 95, 90, 0.34);
 }
 
+/* 成仙后的名册卡片使用金色双边框；受伤、多选等状态的边线提示仍按原规则显示。 */
+.disciple-row.is-immortal {
+  --realm-rgb: 247, 211, 137;
+  --realm-edge: 0.85;
+  --realm-glow: 0 0 16px rgba(247, 211, 137, 0.22), inset 0 0 20px rgba(247, 211, 137, 0.05);
+}
+
 .disciple-row:where([data-realm]) {
   border-width: 2px;
   border-color: rgba(var(--realm-rgb), var(--realm-edge));
@@ -8046,6 +8053,11 @@ p.steward-bonus-note {
     linear-gradient(180deg, rgba(var(--realm-rgb), 0.08), transparent 42%),
     rgba(3, 14, 11, 0.28);
   box-shadow: var(--realm-glow, none);
+}
+
+.disciple-row:where(.is-immortal) {
+  border-width: 3px;
+  border-style: double;
 }
 
 /* 悬停只提亮上 / 右 / 下三边：左边线留给受伤警示。 */

@@ -5,6 +5,7 @@ import type { DiscipleProfileView } from '../api/game';
 import { fetchDiscipleProfile } from '../api/game';
 import { beastAttrList } from '../utils/spiritBeasts';
 import DiscipleAvatar from './DiscipleAvatar.vue';
+import ImmortalTag from './ImmortalTag.vue';
 import DiscipleRadarChart from './DiscipleRadarChart.vue';
 import LoadingState from './LoadingState.vue';
 import ModalShell from './ModalShell.vue';
@@ -86,6 +87,7 @@ const injuryText = computed(() => {
           :realm-id="profile.realmId"
           :frame-id="profile.frameId"
           :image-hash="profile.avatarHash"
+          :ascended="profile.ascended"
           variant="roster"
         />
         <div class="dpf-head-copy">
@@ -95,7 +97,8 @@ const injuryText = computed(() => {
           </h2>
           <p class="dpf-meta">
             <span>{{ profile.sectName }}</span>
-            <span>{{ profile.realmName }} · {{ profile.stageName }}</span>
+            <ImmortalTag v-if="profile.ascended" />
+            <span v-else>{{ profile.realmName }} · {{ profile.stageName }}</span>
             <span v-if="injuryText" class="dpf-injury">{{ injuryText }}</span>
           </p>
         </div>

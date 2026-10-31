@@ -19,6 +19,15 @@ export const MAX_ENTRIES = 5;
 
 export const CHANGELOG: readonly ChangelogEntry[] = [
   {
+    id: '2026-10-31-immortal-rank-frame',
+    time: '2026-10-31 12:32',
+    title: '仙人段位 · 成仙专属边框',
+    items: [
+      '飞升成功的弟子现在显示金色「仙人」段位标识，名册、详情、出战选人、天骄榜和公开档案同步展示。',
+      '仙人自动获得金色仙纹头像边框与名册双重金边，自定义头像也能显示；已成仙的弟子刷新后直接生效。',
+    ],
+  },
+  {
     id: '2026-10-31-energy-speed-tower-unlimited',
     time: '2026-10-31 11:40',
     title: '灵气产速十倍 · 镇妖塔畅战 · 成仙全服公告',
