@@ -19,6 +19,15 @@ export const MAX_ENTRIES = 5;
 
 export const CHANGELOG: readonly ChangelogEntry[] = [
   {
+    id: '2026-11-01-full-server-training-gift',
+    time: '2026-11-01 17:02',
+    title: '全民修炼补给 · 全服发放 2 万灵气与 2 万灵石',
+    items: [
+      '全服发放修炼补给：发放时已建立的每个宗门获得 20000 灵气与 20000 灵石，已直接到账、无需领取。',
+      '天机录新增「全民修炼补给」记录，并发布全服系统公告；每个宗门仅发放一次。',
+    ],
+  },
+  {
     id: '2026-11-01-beast-capture-training',
     time: '2026-11-01 16:39',
     title: '灵兽十连捕捉 · 品质等级扩展 · 灵兽苑扩容',

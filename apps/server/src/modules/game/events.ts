@@ -154,6 +154,7 @@ const SYSTEM_EVENT_NAMES: Readonly<Record<string, string>> = {
   scratchCardUpdateGift: '刮刮乐更新奖励',
   ascensionGift: '飞升贺礼',
   ascensionSpiritStoneGift: '飞升贺礼',
+  fullServerTrainingGift: '全民修炼补给',
   discipleCapacityGift: '扩容贺礼',
   rerollLaunchGift: '洗练贺礼',
   worldBossAutoLaunchGift: '自动讨伐上线贺礼',
