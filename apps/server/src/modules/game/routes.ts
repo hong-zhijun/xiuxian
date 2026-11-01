@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
-import { beastStartSchema, beastActionSchema, beastManageSchema, beastExchangeSchema, beastReleaseBatchSchema } from './schema';
-import { getSpiritBeasts, manageSpiritBeast, startBeastCapture, actBeastCapture, exchangeSpiritBeast, releaseSpiritBeasts } from './spiritBeastService';
+import { beastStartSchema, beastCaptureBatchSchema, beastActionSchema, beastManageSchema, beastExchangeSchema, beastReleaseBatchSchema } from './schema';
+import { getSpiritBeasts, manageSpiritBeast, startBeastCapture, captureBeastsBatch, actBeastCapture, exchangeSpiritBeast, releaseSpiritBeasts } from './spiritBeastService';
 
 import { AppError, authOf, type AppContext, type AppEnv } from '../../http/appError';
 import { respondOk } from '../../http/envelope';
@@ -222,6 +222,10 @@ export function createGameRoutes(): Hono<AppEnv> {
   routes.post('/game/beast-capture/start', async c => {
     const userId=requireUserId(c),body=await parseStrictJson(beastStartSchema,c);
     return respondOk(c,await startBeastCapture(getDb(c.env),userId,body,Date.now()));
+  });
+  routes.post('/game/beast-capture/batch', async c => {
+    const userId=requireUserId(c),body=await parseStrictJson(beastCaptureBatchSchema,c);
+    return respondOk(c,await captureBeastsBatch(getDb(c.env),userId,body,Date.now()));
   });
   routes.post('/game/beast-capture/action', async c => {
     const userId=requireUserId(c),body=await parseStrictJson(beastActionSchema,c);

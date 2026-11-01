@@ -3,15 +3,19 @@ import { MIN_UNITS_PER_DISPLAY_UNIT } from '@xiuxian/contracts';
 import { ELEMENT_NAMES } from './elements';
 
 export const BEAST_RULES = {
-  unlockLevel: 3, capacity: 60, maxLevel: 20, dailyLimit: 20,
+  unlockLevel: 3, capacity: 100, maxLevel: 60, dailyLimit: 50, batchSize: 10,
   maxRounds: 15, maxAttempts: 5, sessionMs: 30 * 60_000,
 } as const;
 export const BEAST_QUALITY = {
-  common: { name: '凡品', attrs: 1, skill: 1, weight: 70 },
-  spirit: { name: '灵品', attrs: 1.2, skill: 1.1, weight: 24 },
-  treasure: { name: '宝品', attrs: 1.4, skill: 1.2, weight: 5 },
-  immortal: { name: '仙品', attrs: 1.6, skill: 1.3, weight: 1 },
+  common: { name: '凡品', attrs: 1, skill: 1, weight: 70, maxLevel: 20 },
+  spirit: { name: '灵品', attrs: 1.2, skill: 1.1, weight: 24, maxLevel: 30 },
+  treasure: { name: '宝品', attrs: 1.4, skill: 1.2, weight: 5, maxLevel: 40 },
+  immortal: { name: '仙品', attrs: 1.6, skill: 1.3, weight: 1, maxLevel: 60 },
 } as const;
+export function beastMaxLevel(quality: BeastQuality): number { return BEAST_QUALITY[quality].maxLevel; }
+function trainedLevel(beast: Pick<BeastIdentity, 'quality' | 'level'>): number {
+  return Math.max(1, Math.min(beastMaxLevel(beast.quality), Math.floor(beast.level) || 1));
+}
 export const BEAST_TIER_NAMES: Record<BeastTier, string> = { spirit: '灵兽', rare: '珍兽', divine: '神兽' };
 export const EMPTY_BEAST_ATTRS: BeastAttrs = { attack: 0, defense: 0, speed: 0, luck: 0, physique: 0 };
 type Definition = Omit<BeastSpeciesView, 'elementName' | 'tierName' | 'image' | 'avatar'>;
@@ -51,7 +55,7 @@ export interface BeastMods {
 export function beastMods(beast: Pick<BeastIdentity,'speciesId'|'quality'|'level'>): BeastMods {
   const def = DEFINITIONS.find(b=>b.id===beast.speciesId);
   if (!def) throw new Error('Unknown spirit beast');
-  const s = BEAST_QUALITY[beast.quality].skill * (1 + .03 * (Math.max(1,Math.min(20,beast.level))-1));
+  const s = BEAST_QUALITY[beast.quality].skill * (1 + .03 * (trainedLevel(beast)-1));
   const m: BeastMods = { element: def.element, name: def.name, skillName: def.skillName, first:0,heal:0,firstGuard:0,low:0,hp:0,procChance:0,proc:0,guard:0,crit:0,firstCrit:false,extra:0,extraCap:0,poisonImmune:false,shield:0 };
   switch(def.id) {
     case 'claw_tiger': m.first=.2*s; break;
@@ -72,7 +76,7 @@ export function beastMods(beast: Pick<BeastIdentity,'speciesId'|'quality'|'level
 export function beastAttributes(beast: Pick<BeastIdentity,'speciesId'|'quality'|'level'>): BeastAttrs {
   const def = DEFINITIONS.find(b=>b.id===beast.speciesId);
   if (!def) return { ...EMPTY_BEAST_ATTRS };
-  const s = BEAST_QUALITY[beast.quality].attrs * (1+.06*(Math.max(1,Math.min(20,beast.level))-1));
+  const s = BEAST_QUALITY[beast.quality].attrs * (1+.06*(trainedLevel(beast)-1));
   return {attack:Math.floor(def.attrs.attack*s),defense:Math.floor(def.attrs.defense*s),speed:Math.floor(def.attrs.speed*s),luck:Math.floor(def.attrs.luck*s),physique:Math.floor(def.attrs.physique*s)};
 }
 export function beastSkillText(beast: Pick<BeastIdentity,'speciesId'|'quality'|'level'>): string {
@@ -93,7 +97,7 @@ export function readBeast(row: { beast_json?: string | null }): BeastIdentity | 
   try {
     const b = JSON.parse(row.beast_json) as BeastIdentity;
     return b && BEAST_SPECIES.some(d=>d.id===b.speciesId) && Object.hasOwn(BEAST_QUALITY,b.quality)
-      && Number.isInteger(b.level) && b.level>=1 && b.level<=BEAST_RULES.maxLevel ? b : null;
+      && Number.isInteger(b.level) && b.level>=1 && b.level<=beastMaxLevel(b.quality) ? b : null;
   } catch { return null; }
 }
 export function beastOf(row: { beast_json?: string | null }): BeastMods | undefined {
@@ -113,8 +117,8 @@ export function withBeastAttributes(base: BeastAttrs, row: { beast_json?: string
   const a=beastAttributes(b);
   return {attack:base.attack+a.attack,defense:base.defense+a.defense,speed:base.speed+a.speed,luck:base.luck+a.luck,physique:base.physique+a.physique};
 }
-export function beastUpgradeCost(beast: Pick<BeastIdentity,'speciesId'|'level'>) {
-  if(beast.level>=BEAST_RULES.maxLevel) return null;
+export function beastUpgradeCost(beast: Pick<BeastIdentity,'speciesId'|'quality'|'level'>) {
+  if(beast.level>=beastMaxLevel(beast.quality)) return null;
   const tier=BEAST_SPECIES.find(b=>b.id===beast.speciesId)?.tier ?? 'spirit';
   const factor={spirit:1,rare:2,divine:3}[tier];
   return {spiritStone:10_000*beast.level*factor,spiritualEnergy:8_000*beast.level*factor};
@@ -156,8 +160,8 @@ export function beastBreakthroughCost(beast: Pick<BeastIdentity, 'speciesId' | '
  * 表按**突破增量**给，不是绝对档位：品质是一笔一笔花精魄/灵石/灵气突破上来的，
  * 每一笔都要能对上「再花这些，再涨多少战力」。四个数依次是：
  *   抓到即得（凡品） / 突破到灵品 / 突破到宝品 / 突破到仙品。
- * 满配累计：灵兽 +7% / 珍兽 +12% / 神兽 +18%（一格灵兽 ≈ 一件仙品十二重装备的档位）。
- * 品阶只决定「抓到就赚多少」与每次突破的含金量，天花板仍按品阶拉开 7 / 12 / 18。
+ * 20 级仙品累计：灵兽 +7% / 珍兽 +12% / 神兽 +18%；20 级后继续乘等级系数成长。
+ * 三种档次的突破增量不同，品质突破后保留现有等级收益。
  */
 export const BEAST_POWER_BP: Readonly<Record<BeastTier, readonly [number, number, number, number]>> = {
   spirit: [100, 200, 200, 200],
@@ -165,10 +169,10 @@ export const BEAST_POWER_BP: Readonly<Record<BeastTier, readonly [number, number
   divine: [300, 400, 500, 600],
 };
 
-/** 等级系数：1 级吃一半，满 20 级吃满（突破要求满级，所以突破那一刻恒为 1）。 */
+/** 等级系数：1～20 级保留原值，20 级后继续按相同斜率成长，不因品质突破降低战力。 */
 export function beastLevelFactor(level: number): number {
   const clamped = Math.max(1, Math.min(BEAST_RULES.maxLevel, Math.floor(level) || 1));
-  return 0.5 + (0.5 * (clamped - 1)) / (BEAST_RULES.maxLevel - 1);
+  return 0.5 + (0.5 * (clamped - 1)) / 19;
 }
 
 /** 某只灵兽当前的战力加成（基点）：按已到达的品质累加增量，再乘等级系数。 */
@@ -179,7 +183,7 @@ export function beastPowerBonusBp(beast: Pick<BeastIdentity, 'speciesId' | 'qual
   const steps = BEAST_POWER_BP[tier];
   let total = 0;
   for (let step = 0; step <= index; step += 1) total += steps[step] ?? 0;
-  return Math.round(total * beastLevelFactor(beast.level));
+  return Math.round(total * beastLevelFactor(trainedLevel(beast)));
 }
 
 /** 弟子携带灵兽的战力加成（基点）；未携带或 beast_json 已不合法时为 0。 */

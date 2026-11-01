@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 export const beastStartSchema = z.strictObject({ areaId:z.string().min(1).max(64), discipleId:z.uuid(), commandId:z.uuid() });
+export const beastCaptureBatchSchema = beastStartSchema;
 export const beastActionSchema = z.strictObject({ sessionId:z.uuid(), version:z.number().int().min(0), commandId:z.uuid(), action:z.enum(['attack','restrain','capture','leave']) });
 const beastManageBase = { beastId:z.uuid(), version:z.number().int().min(0), commandId:z.uuid() };
 export const beastManageSchema = z.discriminatedUnion('action', [
@@ -9,7 +10,7 @@ export const beastManageSchema = z.discriminatedUnion('action', [
   ...(['unequip','upgrade','release','quality-breakthrough'] as const).map(action => z.strictObject({ ...beastManageBase, action:z.literal(action) })),
 ]);
 export const beastReleaseBatchSchema = z.strictObject({
-  beasts:z.array(z.strictObject({ beastId:z.uuid(), version:z.number().int().min(0) })).min(1).max(60),
+  beasts:z.array(z.strictObject({ beastId:z.uuid(), version:z.number().int().min(0) })).min(1).max(100),
   commandId:z.uuid(),
 });
 const beastTierSchema = z.enum(['spirit','rare','divine']);

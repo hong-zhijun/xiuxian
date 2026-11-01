@@ -30,6 +30,8 @@ export interface BeastSpeciesView {
   avatar: string | null;
 }
 export interface SpiritBeastView extends BeastIdentity {
+  /** 当前品质的等级上限。 */
+  maxLevel: number;
   species: BeastSpeciesView; qualityName: string; attrs: BeastAttrs; skillText: string;
   /**
    * 这只灵兽给弟子加的战力（基点，已按等级折算）：与装备加成一起进战力公式的同一个括号。
@@ -40,7 +42,7 @@ export interface SpiritBeastView extends BeastIdentity {
   upgradeCost: { spiritStone: number; spiritualEnergy: number } | null;
   releaseReward: { beastEssence: string };
   qualityBreakthrough: null | {
-    nextQuality: BeastQuality; nextQualityName: string; cost: BeastResourceCost;
+    nextQuality: BeastQuality; nextQualityName: string; nextMaxLevel: number; cost: BeastResourceCost;
     attrs: BeastAttrs; skillText: string; blockedReason: string | null;
   };
   upgradePreview: null | { level: number; attrs: BeastAttrs; skillText: string };
@@ -57,6 +59,7 @@ export interface BeastCaptureView {
   expiresAt: number; logs: string[]; caught: SpiritBeastView | null;
 }
 export interface SpiritBeastsPanel {
+  batchSize: number;
   unlocked: boolean; unlockLevel: number; capacity: number; maxLevel: number; dailyLimit: number; remaining: number;
   items: SpiritBeastView[]; species: BeastSpeciesView[]; areas: BeastAreaView[];
   collection: { speciesId: string; seen: number; caught: number; bestQuality: BeastQuality | null }[];
@@ -65,3 +68,13 @@ export interface SpiritBeastsPanel {
   rules: string[];
 }
 export type BeastCaptureAction = 'attack' | 'restrain' | 'capture' | 'leave';
+
+export interface BeastCaptureBatchOutcome {
+  commandId: string;
+  requested: number;
+  completed: number;
+  cost: string;
+  caught: BeastIdentity[];
+  encounters: { speciesId: string; status: 'caught' | 'escaped' | 'defeated' | 'killed'; rounds: number }[];
+  stopReason: 'complete' | 'defeated';
+}

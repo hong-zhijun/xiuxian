@@ -137,7 +137,7 @@ function canBreakthrough(beast: SpiritBeastView): boolean {
 function previewText(beast: SpiritBeastView, attrs: BeastAttrs): string {
   return beastAttrList(attrs).map(attr => attr.label + ' ' + String(beast.attrs[attr.key]) + ' → ' + String(attr.value)).join(' · ');
 }
-function levelPercent(beast: SpiritBeastView): number { return Math.min(100,beast.level/(panel.value?.maxLevel ?? 20)*100); }
+function levelPercent(beast: SpiritBeastView): number { return Math.min(100,beast.level/beast.maxLevel*100); }
 function open(beast: SpiritBeastView): void {
   if(blocked.value)return;
   detailId.value=beast.id;confirmRelease.value=false;equipTargets.value=beast.discipleId?[beast.discipleId]:[];
@@ -400,14 +400,14 @@ onMounted(refreshPanel);
               <span v-if="selected.locked" class="beast-chip">已锁定</span>
             </p>
             <div class="detail-level">
-              <span>Lv.{{ selected.level }}<small>/{{ panel.maxLevel }}</small></span>
+              <span>Lv.{{ selected.level }}<small>/{{ selected.maxLevel }}</small></span>
               <span class="detail-level-track"><span class="detail-level-fill" :style="{ width: `${levelPercent(selected)}%` }" /></span>
             </div>
             <ul class="detail-attrs">
               <li v-for="attr in beastAttrList(selected.attrs)" :key="attr.key">
                 <span>{{ attr.label }}</span><strong>+{{ attr.value }}</strong>
               </li>
-              <!-- 档位：与装备加成进战力公式的同一个括号，满 20 级吃满。 -->
+              <!-- 等级成长后的战力加成由服务端计算。 -->
               <li>
                 <span>战力</span><strong>+{{ (selected.powerBonusBp / 100).toFixed(1) }}%</strong>
               </li>
@@ -431,6 +431,7 @@ onMounted(refreshPanel);
           <div class="detail-upgrade">
             <div class="garden-costs" v-if="selected.qualityBreakthrough">
               <span>突破至{{ selected.qualityBreakthrough.nextQualityName }} · 必定成功</span>
+              <p class="detail-skill">等级上限 {{ selected.maxLevel }} → {{ selected.qualityBreakthrough.nextMaxLevel }}，保留当前等级</p>
               <p v-for="row in breakthroughRows(selected)" :key="row.id" :class="{ 'blocked-hint': row.lacking }">{{ row.name }}：拥有 {{ formatAmount(row.balance) }} / 需要 {{ formatAmount(row.cost) }}</p>
               <p class="detail-skill">{{ previewText(selected, selected.qualityBreakthrough.attrs) }}</p>
               <p class="detail-skill">技能：{{ selected.qualityBreakthrough.skillText }}</p>

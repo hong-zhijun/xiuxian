@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue';
-import type { BeastCaptureAction, BeastCaptureView, SpiritBeastsPanel } from '@xiuxian/contracts';
+import type { BeastCaptureAction, BeastCaptureView, SpiritBeastsPanel, BeastCaptureBatchOutcome } from '@xiuxian/contracts';
 
-import { actBeastCapture, fetchSpiritBeasts, startBeastCapture, type SectStateView } from '../api/game';
+import { actBeastCapture, captureBeastsBatch, fetchSpiritBeasts, startBeastCapture, type SectStateView } from '../api/game';
 import type { ToastTone } from '../types/ui';
 import { formatAmount } from '../utils/format';
 import { beastAttrList } from '../utils/spiritBeasts';
@@ -40,6 +40,10 @@ const held = ref<BeastCaptureView | null>(null);
 const encounter = computed(() => held.value ?? active.value);
 const fx = ref<{ kind: CaptureFxKind; id: number } | null>(null);
 const confirmLeave = ref(false);
+const batchOutcome = ref<BeastCaptureBatchOutcome | null>(null);
+/** 结果未确认时保留原始请求标识，重试不会重复扣费或发兽。 */
+const batchRequest = ref<{ areaId:string;discipleId:string;commandId:string } | null>(null);
+const qualityName = (quality:string):string => ({common:'凡品',spirit:'灵品',treasure:'宝品',immortal:'仙品'}[quality] ?? quality);
 /** 动画播放或请求进行中都不接受下一次操作。 */
 const busy = computed(() => pending.value || held.value !== null);
 const area = computed(() => panel.value?.areas.find((item) => item.id === areaId.value) ?? null);
@@ -82,6 +86,44 @@ const startBlock = computed<string | null>(() => {
   if (selectedDisciples.value.length === 0) return NEED_DISCIPLE;
   return null;
 });
+const batchBlock = computed(() => {
+  if(batchRequest.value) return null;
+  if(startBlock.value) return startBlock.value;
+  const p=panel.value,a=area.value;
+  if(!p||!a) return '正在读取';
+  if(p.remaining<p.batchSize) return `一键捕捉需要 ${p.batchSize} 次搜寻`;
+  if(p.availableSlots<p.batchSize) return `请先空出 ${p.batchSize} 个灵兽位置`;
+  if(spiritStone.value<a.cost*p.batchSize) return '十连搜寻所需灵石不足';
+  return null;
+});
+
+async function captureBatch():Promise<void> {
+  if(busy.value||batchBlock.value) return;
+  const discipleId=selectedDisciples.value[0];
+  if(!batchRequest.value) {
+    if(!discipleId) return;
+    batchRequest.value={areaId:areaId.value,discipleId,commandId:crypto.randomUUID()};
+  }
+  const request=batchRequest.value;
+  pending.value=true;
+  try {
+    const data=await captureBeastsBatch(request.areaId,request.discipleId,request.commandId);
+    panel.value=data.beasts;batchOutcome.value=data.batch;batchRequest.value=null;
+    emit('state-update',data.state);
+    emit('notify',data.batch.caught.length?'success':'warning','一键捕捉结束',`搜寻 ${data.batch.completed} 场，收服 ${data.batch.caught.length} 只，消耗 ${formatAmount(data.batch.cost)} 灵石。${data.batch.stopReason==='defeated'?'弟子战败，已停止后续搜寻。':''}`);
+  } catch(error) {
+    emit('notify','warning','一键捕捉结果未确认',error instanceof Error?error.message:'请重试原操作');
+  } finally {pending.value=false;}
+}
+
+async function abandonBatch():Promise<void> {
+  if(busy.value) return;
+  pending.value=true;
+  try {
+    const data=await fetchSpiritBeasts();panel.value=data.beasts;emit('state-update',data.state);batchRequest.value=null;
+  } catch(error) {emit('notify','warning','刷新失败',error instanceof Error?error.message:'请稍后重试');}
+  finally {pending.value=false;}
+}
 /** 出发栏提示：选人提示交给选人组件自己显示，这里只说费用或其他阻碍。 */
 const startHintBlocked = computed(() => startBlock.value !== null && startBlock.value !== NEED_DISCIPLE);
 const startHint = computed(() =>
@@ -152,7 +194,7 @@ const pickedBush = ref<number | null>(null);
 const searcher = computed(() => props.state.disciples.find((item) => item.id === selectedDisciples.value[0]) ?? null);
 
 function start(): void {
-  if (startBlock.value !== null) return;
+  if (startBlock.value !== null || busy.value || batchRequest.value) return;
   pickedBush.value = null;
   searching.value = true;
 }
@@ -324,6 +366,18 @@ onMounted(async () => {
         aria-labelledby="beast-tab-capture"
       >
         <p v-if="!panel.unlocked" class="beast-lock">宗门 {{ panel.unlockLevel }} 级开放捕捉，现在可以先翻看图鉴。</p>
+        <section v-if="batchRequest" class="beast-block" role="status">
+          <p class="blocked-hint">上次一键捕捉结果未确认，请重试原操作；重复请求不会重复扣费或发放灵兽。</p>
+          <button class="action-button primary-action" :disabled="busy" @click="captureBatch">重试原操作</button>
+          <button class="beast-quiet-button" :disabled="busy" @click="abandonBatch">刷新并放弃</button>
+        </section>
+        <section v-if="batchOutcome" class="beast-block" aria-live="polite">
+          <h4 class="beast-section-title">一键捕捉战果 <small>搜寻 {{ batchOutcome.completed }} 场 · 收服 {{ batchOutcome.caught.length }} 只</small></h4>
+          <p class="bush-hint">消耗 {{ formatAmount(batchOutcome.cost) }} 灵石；{{ batchOutcome.stopReason === 'defeated' ? '弟子战败，后续搜寻已停止。' : '十连搜寻已完成。' }}</p>
+          <ul class="beast-rules">
+            <li v-for="beast in batchOutcome.caught" :key="beast.id">{{ qualityName(beast.quality) }} · {{ panel.species.find(item => item.id === beast.speciesId)?.name ?? beast.speciesId }} · Lv.1</li>
+          </ul>
+        </section>
 
         <!-- 进行中的遭遇 -->
         <article
@@ -524,10 +578,16 @@ onMounted(async () => {
             <p class="start-hint" :class="{ 'is-blocked': startHintBlocked }">
               {{ startHint }}
             </p>
-            <button class="action-button primary-action" type="button" :disabled="pending || startBlock !== null" @click="start">
+            <button class="action-button primary-action" type="button" :disabled="pending || !!batchRequest || startBlock !== null" @click="start">
               进入山野搜寻
             </button>
+            <button class="action-button primary-action" type="button" :disabled="busy || batchBlock !== null" :title="batchBlock ?? undefined" @click="captureBatch">
+              {{ pending ? '捕捉中…' : `一键捕捉 ${panel.batchSize} 场` }}
+            </button>
           </div>
+          <p class="start-hint" :class="{ 'is-blocked': batchBlock !== null }">
+            {{ batchBlock ?? `十连消耗 ${formatAmount(String((area?.cost ?? 0) * panel.batchSize))} 灵石与 ${panel.batchSize} 次搜寻，需预留 ${panel.batchSize} 个空位；自动留手、收服，弟子战败则停止。` }}
+          </p>
         </template>
       </div>
 
@@ -809,6 +869,7 @@ onMounted(async () => {
 
 .start-bar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
