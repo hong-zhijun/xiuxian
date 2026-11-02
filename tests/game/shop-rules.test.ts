@@ -9,8 +9,12 @@ import {
   SHOP_UNSELLABLE_PILL_IDS,
   SHOP_PILL_SELL_RATIO,
   SHOP_SELL_PRICE,
+  SHOP_RESOURCE_SELL_PRICES,
+  SHOP_SELLABLE_RESOURCES,
+  SHOP_SHENMU_PER_XUANTIE,
   SHOP_TRADABLE_RESOURCES,
   UNITS_PER_DISPLAY,
+  asShopSellableResource,
   asShopTradableResource,
   shopBuyCost,
   shopPillPrice,
@@ -35,19 +39,30 @@ describe('坊市价格体系', () => {
     expect(shopBuyCost(6)).toBe(4002);
   });
 
-  it('卖出价：每 1 展示单位材料得 500 最小单位灵石（2 材料 = 1 灵石）', () => {
+  it('按材料计价：药材 / 矿石 0.5 灵石、神木 5 灵石、玄铁 10 灵石', () => {
     expect(SHOP_SELL_PRICE).toBe(500);
-    expect(shopSellRevenue(0)).toBe(0);
-    expect(shopSellRevenue(2)).toBe(1000);
-    expect(shopSellRevenue(4)).toBe(2000);
+    expect(SHOP_RESOURCE_SELL_PRICES).toEqual({ herb: 500, ore: 500, shenmu: 5_000, xuantie: 10_000 });
+    expect(shopSellRevenue(0, 'herb')).toBe(0);
+    expect(shopSellRevenue(2, 'herb')).toBe(1000);
+    expect(shopSellRevenue(4, 'ore')).toBe(2000);
+    expect(shopSellRevenue(3, 'shenmu')).toBe(15_000);
+    expect(shopSellRevenue(3, 'xuantie')).toBe(30_000);
+  });
+
+  it('神木与玄铁直接卖出和先兑换再卖出所得一致', () => {
+    for (const amount of [1, 3, 100, 1_000]) {
+      expect(shopSellRevenue(amount, 'xuantie')).toBe(shopSellRevenue(amount * SHOP_SHENMU_PER_XUANTIE, 'shenmu'));
+    }
   });
 
   it('买卖差价恒为正：任何数量的「买进再卖出」都必然亏灵石（不能套利）', () => {
-    for (const amount of [1, 2, 3, 5, 10, 100, SHOP_MAX_TRADE_AMOUNT]) {
-      expect(shopBuyCost(amount)).toBeGreaterThan(shopSellRevenue(amount));
+    for (const resourceId of SHOP_TRADABLE_RESOURCES) {
+      for (const amount of [1, 2, 3, 5, 10, 100, SHOP_MAX_TRADE_AMOUNT]) {
+        expect(shopBuyCost(amount)).toBeGreaterThan(shopSellRevenue(amount, resourceId));
+      }
     }
     // 差价比例就是 667 : 500。
-    expect(shopBuyCost(3) - shopSellRevenue(3)).toBe(3 * (SHOP_BUY_PRICE - SHOP_SELL_PRICE));
+    expect(shopBuyCost(3) - shopSellRevenue(3, 'herb')).toBe(3 * (SHOP_BUY_PRICE - SHOP_SELL_PRICE));
   });
 
   it('金额一律是最小单位整数：不会出现浮点零头', () => {
@@ -56,7 +71,9 @@ describe('坊市价格体系', () => {
     }
     for (const amount of [1, 3, 7, 999, SHOP_MAX_TRADE_AMOUNT]) {
       expect(Number.isInteger(shopBuyCost(amount))).toBe(true);
-      expect(Number.isInteger(shopSellRevenue(amount))).toBe(true);
+      for (const resourceId of SHOP_SELLABLE_RESOURCES) {
+        expect(Number.isInteger(shopSellRevenue(amount, resourceId))).toBe(true);
+      }
       expect(Number.isInteger(shopPillRevenue('healingPill', amount))).toBe(true);
     }
   });
@@ -72,6 +89,17 @@ describe('坊市价格体系', () => {
 describe('坊市可交易材料白名单', () => {
   it('只有药材与矿石可买卖（灵石与灵气不可交易）', () => {
     expect([...SHOP_TRADABLE_RESOURCES]).toEqual(['herb', 'ore']);
+  });
+
+  it('神木与玄铁只能卖出，不能买入；未知资源也不能卖出', () => {
+    expect([...SHOP_SELLABLE_RESOURCES]).toEqual(['herb', 'ore', 'shenmu', 'xuantie']);
+    for (const resourceId of ['shenmu', 'xuantie']) {
+      expect(asShopTradableResource(resourceId)).toBeNull();
+      expect(asShopSellableResource(resourceId)).toBe(resourceId);
+    }
+    for (const resourceId of ['spiritStone', 'spiritualEnergy', 'bossMerit', '', 'wood', 'toString']) {
+      expect(asShopSellableResource(resourceId)).toBeNull();
+    }
   });
 
   it('asShopTradableResource 只放行白名单，其余返回 null（由 service 拒绝）', () => {

@@ -28,9 +28,24 @@ export const SHOP_BUY_PRICE = 667;
 /** 卖出价（材料 → 灵石）：每 1000 最小单位材料（= 1 展示单位）得 500 最小单位灵石（2 材料 = 1 灵石）。 */
 export const SHOP_SELL_PRICE = 500;
 
-/** 可买卖的材料白名单：只有药材与矿石（灵石与灵气不可交易）。 */
+/** 可买入的材料白名单：只有药材与矿石；神木与玄铁仅可卖出。 */
 export const SHOP_TRADABLE_RESOURCES = ['herb', 'ore'] as const;
 export type ShopTradableResource = (typeof SHOP_TRADABLE_RESOURCES)[number];
+
+/** 可卖出的材料白名单（灵石与灵气不可交易）。 */
+export const SHOP_SELLABLE_RESOURCES = [...SHOP_TRADABLE_RESOURCES, 'shenmu', 'xuantie'] as const;
+export type ShopSellableResource = (typeof SHOP_SELLABLE_RESOURCES)[number];
+
+/**
+ * 每 1 展示单位材料的回收价（最小单位灵石）。神木 5 灵石、玄铁 10 灵石，
+ * 与 2 神木 = 1 玄铁的双向兑换等值，且不高于拍卖行的材料最低起拍价（10 灵石 / 个）。
+ */
+export const SHOP_RESOURCE_SELL_PRICES: Readonly<Record<ShopSellableResource, number>> = {
+  herb: SHOP_SELL_PRICE,
+  ore: SHOP_SELL_PRICE,
+  shenmu: 5 * UNITS_PER_DISPLAY,
+  xuantie: 10 * UNITS_PER_DISPLAY,
+};
 
 /**
  * 丹药回收价的分子 / 分母：70% = 7 / 10。
@@ -62,8 +77,8 @@ export const SHOP_PILL_PRICES: Record<string, number> = {
 };
 
 /**
- * 坊市不回收的丹药：洗髓丹 / 悟道丹 / 培元丹 —— 配方都要神木（只能功勋兑换、不可交易，
- * 没有折算口径），回收的话功勋就能变相换成灵石。价格表里没有它们，service 按未知丹药拒绝。
+ * 坊市不回收的丹药：洗髓丹 / 悟道丹 / 培元丹。神木可直接卖出，
+ * 这些丹药仍沿用原有的不可回收规则；价格表里没有它们，service 拒绝出售。
  */
 export const SHOP_UNSELLABLE_PILL_IDS: readonly string[] = ['talentPill', 'insightPill', 'aptitudePill'];
 
@@ -81,6 +96,11 @@ export function asShopTradableResource(resourceId: string): ShopTradableResource
   return SHOP_TRADABLE_RESOURCES.find((id) => id === resourceId) ?? null;
 }
 
+/** 卖出材料白名单判定；买入仍使用 asShopTradableResource。 */
+export function asShopSellableResource(resourceId: string): ShopSellableResource | null {
+  return SHOP_SELLABLE_RESOURCES.find((id) => id === resourceId) ?? null;
+}
+
 /** 展示单位 → 最小单位。 */
 export function toMinUnits(displayAmount: number): number {
   return displayAmount * UNITS_PER_DISPLAY;
@@ -92,8 +112,8 @@ export function shopBuyCost(displayAmount: number): number {
 }
 
 /** 卖出材料获得的灵石（最小单位）。 */
-export function shopSellRevenue(displayAmount: number): number {
-  return displayAmount * SHOP_SELL_PRICE;
+export function shopSellRevenue(displayAmount: number, resourceId: ShopSellableResource): number {
+  return displayAmount * SHOP_RESOURCE_SELL_PRICES[resourceId];
 }
 
 /** 单颗丹药的回收价（最小单位）；未知 id 返回 null（不在这里抛错，由 service 拒绝）。 */
