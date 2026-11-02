@@ -89,6 +89,7 @@ import {
 import {
   SHOP_SHENMU_ID,
   UNITS_PER_DISPLAY,
+  asShopSellableResource,
   asShopTradableResource,
   shopBuyCost,
   shopExchangePlan,
@@ -11119,8 +11120,11 @@ export async function shopSell(
   now: number,
 ): Promise<{ state: SectStateView; result: ShopSellResultView }> {
   const draft = await draftFor(db, userId, now);
-  const traded = requireTradableResource(resourceId);
-  const revenue = shopSellRevenue(amount);
+  const traded = asShopSellableResource(resourceId);
+  if (traded === null) {
+    throw new AppError('VALIDATION_ERROR', '该资源不能在坊市出售', { resourceId });
+  }
+  const revenue = shopSellRevenue(amount, traded);
 
   // requireResource 同时完成检查与扣减（不足抛 INSUFFICIENT_RESOURCE，带缺少数量）。
   draft.requireResource(traded, toMinUnits(amount));

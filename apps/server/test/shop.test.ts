@@ -13,8 +13,9 @@ import {
   SHOP_PILL_PRICES,
   SHOP_MAX_EXCHANGE_AMOUNT,
   SHOP_SELL_PRICE,
+  SHOP_RESOURCE_SELL_PRICES,
+  SHOP_SELLABLE_RESOURCES,
   SHOP_SHENMU_PER_XUANTIE,
-  SHOP_TRADABLE_RESOURCES,
   UNITS_PER_DISPLAY,
   shopBuyCost,
   shopExchangeShenmuCost,
@@ -248,7 +249,7 @@ describe('坊市：卖出材料', () => {
     const sold = await sell(sect, { resourceId: 'herb', amount: 4 });
     expect(sold.status).toBe(200);
     const payload = dataOf(sold) as Record<string, any>;
-    const revenue = shopSellRevenue(4);
+    const revenue = shopSellRevenue(4, 'herb');
     expect(revenue).toBe(4 * SHOP_SELL_PRICE);
     expect(payload.result).toMatchObject({
       action: 'sell',
@@ -278,6 +279,55 @@ describe('坊市：卖出材料', () => {
     await expectShopUnchanged(sect, before);
     expect(await balanceOf(sect.sectId, 'herb')).toBe(UNITS_PER_DISPLAY - 1);
     expect(await balanceOf(sect.sectId, 'spiritStone')).toBe(1_000);
+  });
+});
+
+describe('坊市：卖出神木与玄铁', () => {
+  it.each([
+    ['shenmu', '神木', 5_000],
+    ['xuantie', '玄铁', 10_000],
+  ] as const)('%s 按独立价格卖出，扣除整件库存并保留零头', async (resourceId, resourceName, price) => {
+    const sect = await makeSect(`shp-rare-${resourceId}`);
+    await freezeSettlement(sect.sectId);
+    await setBalance(sect.sectId, resourceId, 3_500);
+    await setBalance(sect.sectId, 'spiritStone', 1_000);
+
+    const sold = await sell(sect, { resourceId, amount: 3 });
+    expect(sold.status).toBe(200);
+    const payload = dataOf(sold) as Record<string, any>;
+    expect(payload.result).toMatchObject({ action: 'sell', resourceId, resourceName, amount: 3, revenue: 3 * price });
+    expect(payload.result.message).toContain(`获得 ${String(3 * price / UNITS_PER_DISPLAY)} 灵石`);
+    expect(await balanceOf(sect.sectId, resourceId)).toBe(500);
+    expect(await balanceOf(sect.sectId, 'spiritStone')).toBe(1_000 + 3 * price);
+    expect(payload.state.resources.find((item: any) => item.id === resourceId)?.balance).toBe('500');
+    expect(payload.state.shop.resourceSellPrices[resourceId]).toBe(price);
+
+    const before = await shopSnapshot(sect);
+    const short = await sell(sect, { resourceId, amount: 1 });
+    expect(short.status).toBe(409);
+    expect(errorOf(short).code).toBe('INSUFFICIENT_RESOURCE');
+    await expectShopUnchanged(sect, before);
+  });
+
+  it('神木与玄铁不可买入，非法出售数量不动余额', async () => {
+    const sect = await makeSect('shp-rare-invalid');
+    await freezeSettlement(sect.sectId);
+    await setBalance(sect.sectId, 'spiritStone', 100_000);
+    await setBalance(sect.sectId, 'shenmu', 5_000);
+    await setBalance(sect.sectId, 'xuantie', 5_000);
+    const before = await shopSnapshot(sect);
+
+    for (const resourceId of ['shenmu', 'xuantie']) {
+      const bought = await buy(sect, { resourceId, amount: 1 });
+      expect(bought.status).toBe(400);
+      expect(errorOf(bought).code).toBe('VALIDATION_ERROR');
+      for (const amount of [0, -1, 1.5, SHOP_MAX_TRADE_AMOUNT + 1]) {
+        const sold = await sell(sect, { resourceId, amount });
+        expect(sold.status).toBe(400);
+        expect(errorOf(sold).code).toBe('VALIDATION_ERROR');
+      }
+    }
+    await expectShopUnchanged(sect, before);
   });
 });
 
@@ -558,8 +608,10 @@ describe('坊市面板：1 级宗门即可交易', () => {
 
     const state = await sect.state();
     const shop = state.shop as Record<string, unknown>;
-    // 结构就是三个键：没有 unlocked / blockedReason —— 坊市不设解锁条件。
-    expect(Object.keys(shop).sort()).toEqual(['buyPrice', 'pills', 'sellPrice', 'shenmuPerXuantie']);
+    // 没有 unlocked / blockedReason —— 坊市不设解锁条件。
+    expect(Object.keys(shop).sort()).toEqual(['buyPrice', 'maxTradeAmount', 'pills', 'resourceSellPrices', 'sellPrice', 'shenmuPerXuantie']);
+    expect(shop.resourceSellPrices).toEqual(SHOP_RESOURCE_SELL_PRICES);
+    expect(shop.maxTradeAmount).toBe(SHOP_MAX_TRADE_AMOUNT);
     expect(shop.buyPrice).toBe(SHOP_BUY_PRICE);
     expect(shop.sellPrice).toBe(SHOP_SELL_PRICE);
     expect(shop.shenmuPerXuantie).toBe(SHOP_SHENMU_PER_XUANTIE);
@@ -581,7 +633,7 @@ describe('坊市面板：1 级宗门即可交易', () => {
 
     // 买入 / 卖出页的数据：可交易材料的名称与余额来自 state.resources。
     const resources = state.resources as Record<string, any>[];
-    for (const resourceId of SHOP_TRADABLE_RESOURCES) {
+    for (const resourceId of SHOP_SELLABLE_RESOURCES) {
       const view = resources.find((item) => item.id === resourceId);
       expect(view, `面板里必须有 ${resourceId}`).toBeTruthy();
       expect(typeof view!.name).toBe('string');

@@ -25,6 +25,7 @@ import type {
   SectStateView,
   ShopExchangeDirection,
   ShopResourceId,
+  ShopSellResourceId,
   WheelSpinResult,
   HubView,
   DailyTasksView,
@@ -1109,7 +1110,7 @@ async function onShopBuy(resourceId: ShopResourceId, amount: number): Promise<vo
 }
 
 /** 卖出材料（POST /game/shop-sell）：库存由服务端校验，成功后留在卖出页。 */
-async function onShopSell(resourceId: ShopResourceId, amount: number): Promise<void> {
+async function onShopSell(resourceId: ShopSellResourceId, amount: number): Promise<void> {
   if (props.busy || shopSubmitting.value) return;
   shopSubmitting.value = true;
   try {

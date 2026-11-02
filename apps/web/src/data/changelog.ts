@@ -19,6 +19,15 @@ export const MAX_ENTRIES = 5;
 
 export const CHANGELOG: readonly ChangelogEntry[] = [
   {
+    id: '2026-11-02-shop-rare-materials',
+    time: '2026-11-02 09:30',
+    title: '坊市 · 神木与玄铁可卖出',
+    items: [
+      '坊市「卖出」页新增神木与玄铁：每个神木可换 5 灵石，每个玄铁可换 10 灵石；可输入数量或使用「全部」，单笔最多 10000 个。',
+      '选择材料即可查看单价与本次所得灵石。神木与玄铁仅可卖出，原有双向兑换仍按 2 神木 = 1 玄铁。',
+    ],
+  },
+  {
     id: '2026-11-01-full-server-training-gift',
     time: '2026-11-01 17:02',
     title: '全民修炼补给 · 全服发放 2 万灵气与 2 万灵石',

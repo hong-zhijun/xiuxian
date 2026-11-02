@@ -71,7 +71,7 @@ export const GAME_CONFIG_CONTENT: GameConfigContent = {
     },
     {
       // 装备二期：玄铁（世界 Boss / 高级秘境 / 分解获得，炼高品质装备与升级炼器坊消耗）。
-      // 没有产速；不可在坊市买卖、不可下注（坊市与赌坊都有资源白名单）。
+      // 没有产速；坊市可卖出及兑换，不可买入或下注。
       id: 'xuantie',
       name: '玄铁',
       startAmount: '0',
@@ -90,8 +90,8 @@ export const GAME_CONFIG_CONTENT: GameConfigContent = {
       visibility: 'public',
     },
     {
-      // 神木：炼丹专用的稀有材料（洗髓丹 / 悟道丹 / 培元丹），目前只能用功勋兑换。
-      // 没有产速；不可在坊市买卖、不可下注（坊市与赌坊都有资源白名单）。
+      // 神木：炼丹稀有材料（洗髓丹 / 悟道丹 / 培元丹），可通过功勋、讨伐、拍卖等获得。
+      // 没有产速；坊市可卖出及兑换，不可买入或下注。
       id: 'shenmu',
       name: '神木',
       startAmount: '0',

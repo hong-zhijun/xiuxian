@@ -330,8 +330,12 @@ export interface SectStateView {
   shop: {
     /** 买 1 展示单位材料要花的灵石（最小单位，= 667）。 */
     buyPrice: number;
-    /** 卖 1 展示单位材料能得的灵石（最小单位，= 500）。 */
+    /** 药材 / 矿石卖 1 展示单位所得灵石（最小单位，= 500）。 */
     sellPrice: number;
+    /** 每种可卖材料的单价（最小单位灵石 / 展示单位）。 */
+    resourceSellPrices: Record<ShopSellResourceId, number>;
+    /** 单次材料买卖数量上限（展示单位）。 */
+    maxTradeAmount: number;
     /** 兑换 1 个玄铁要花几个神木（展示单位）。 */
     shenmuPerXuantie: number;
     /** 可回收的丹药：有回收价的丹方都会下发（库存为 0 的也在列表里，前端自行标灰）；owned 是库存颗数。 */
@@ -2006,8 +2010,11 @@ export function fetchScratchCard(requestId?: string): Promise<{ state: SectState
 
 /* ---------- 坊市（材料买卖与丹药回收） ---------- */
 
-/** 可交易材料（与后端 shop.ts 的 SHOP_TRADABLE_RESOURCES 同口径）：灵石与灵气都不可买卖。 */
+/** 可买入材料（与后端 shop.ts 的 SHOP_TRADABLE_RESOURCES 同口径）。 */
 export type ShopResourceId = 'herb' | 'ore';
+
+/** 可卖出材料：神木与玄铁仅可卖出，灵石与灵气不可买卖。 */
+export type ShopSellResourceId = ShopResourceId | 'shenmu' | 'xuantie';
 
 /** 买入回执（与后端 shop.ts 的 ShopBuyResult 一一对应）。 */
 export interface ShopBuyResult {
@@ -2062,7 +2069,7 @@ export async function shopBuy(
 
 /** 坊市卖出材料（POST /game/shop-sell）：amount 是**展示单位整数**（≥ 1），库存由服务端校验。 */
 export async function shopSell(
-  resourceId: ShopResourceId,
+  resourceId: ShopSellResourceId,
   amount: number,
 ): Promise<{ state: SectStateView; result: ShopSellResult }> {
   return apiRequest<{ state: SectStateView; result: ShopSellResult }>('/api/v1/game/shop-sell', {

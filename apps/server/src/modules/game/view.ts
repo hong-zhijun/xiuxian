@@ -54,7 +54,7 @@ import {
   wheelSpinCost,
   type DebateDayState,
 } from './gambling';
-import { SHOP_BUY_PRICE, SHOP_PILL_PRICES, SHOP_SELL_PRICE, SHOP_SHENMU_PER_XUANTIE } from './shop';
+import { SHOP_BUY_PRICE, SHOP_MAX_TRADE_AMOUNT, SHOP_PILL_PRICES, SHOP_RESOURCE_SELL_PRICES, SHOP_SELL_PRICE, SHOP_SHENMU_PER_XUANTIE, type ShopSellableResource } from './shop';
 import type { DailyTaskId } from './dailyTasks';
 import {
   STONE_MATERIAL_PER_STONE,
@@ -1093,8 +1093,12 @@ export interface ShopPillView {
 export interface ShopView {
   /** 买 1 展示单位材料花多少灵石（最小单位）。 */
   buyPrice: number;
-  /** 卖 1 展示单位材料得多少灵石（最小单位）。 */
+  /** 药材 / 矿石卖 1 展示单位得多少灵石（最小单位，兼容旧客户端）。 */
   sellPrice: number;
+  /** 各种可卖材料的单价（最小单位灵石 / 展示单位）。 */
+  resourceSellPrices: Readonly<Record<ShopSellableResource, number>>;
+  /** 单次材料买卖数量上限（展示单位）。 */
+  maxTradeAmount: number;
   /** 1 个玄铁折几个神木（展示单位）：神木 ⇄ 玄铁两个方向同一比价。 */
   shenmuPerXuantie: number;
   pills: ShopPillView[];
@@ -2650,6 +2654,8 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
   const shopView: ShopView = {
     buyPrice: SHOP_BUY_PRICE,
     sellPrice: SHOP_SELL_PRICE,
+    resourceSellPrices: { ...SHOP_RESOURCE_SELL_PRICES },
+    maxTradeAmount: SHOP_MAX_TRADE_AMOUNT,
     shenmuPerXuantie: SHOP_SHENMU_PER_XUANTIE,
     pills: PILL_RECIPES.flatMap((recipe) => {
       const sellPrice = SHOP_PILL_PRICES[recipe.id];

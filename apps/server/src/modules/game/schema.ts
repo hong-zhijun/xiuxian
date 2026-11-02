@@ -27,7 +27,7 @@ import { BETTABLE_ATTRIBUTES, RACE_BEAST_COUNT, RACE_BET_MAX, RACE_BET_MIN } fro
 import { BAG_CAPACITY } from './equipment';
 import { DAILY_TASK_IDS } from './dailyTasks';
 import { MARKET_MAX_SHARES_PER_TRADE, MARKET_ORDER_KINDS, MARKET_ORDER_MAX_TRIGGER } from './market';
-import { SHOP_EXCHANGE_DIRECTIONS, SHOP_MAX_EXCHANGE_AMOUNT, SHOP_MAX_PILL_QUANTITY, SHOP_MAX_TRADE_AMOUNT, SHOP_TRADABLE_RESOURCES } from './shop';
+import { SHOP_EXCHANGE_DIRECTIONS, SHOP_MAX_EXCHANGE_AMOUNT, SHOP_MAX_PILL_QUANTITY, SHOP_MAX_TRADE_AMOUNT, SHOP_SELLABLE_RESOURCES, SHOP_TRADABLE_RESOURCES } from './shop';
 import { STONE_PAY_RESOURCES, STONE_TIER_IDS } from './stoneGamble';
 
 /**
@@ -403,9 +403,9 @@ export const shopBuyRequestSchema = z.strictObject({
   amount: z.number().int().min(1).max(SHOP_MAX_TRADE_AMOUNT),
 });
 
-/** 坊市卖出材料：请求体与买入完全同形，但语义相反（材料 → 灵石）。 */
+/** 坊市卖出材料：药材、矿石、神木与玄铁 → 灵石；神木与玄铁不能买入。 */
 export const shopSellRequestSchema = z.strictObject({
-  resourceId: z.enum(SHOP_TRADABLE_RESOURCES),
+  resourceId: z.enum(SHOP_SELLABLE_RESOURCES),
   amount: z.number().int().min(1).max(SHOP_MAX_TRADE_AMOUNT),
 });
 

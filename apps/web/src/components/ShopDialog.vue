@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue';
 
-import type { SectStateView, ShopExchangeDirection, ShopResourceId } from '../api/game';
+import type { SectStateView, ShopExchangeDirection, ShopResourceId, ShopSellResourceId } from '../api/game';
 import { toDisplayUnits } from '../utils/format';
 
 /**
@@ -21,7 +21,7 @@ const emit = defineEmits<{
   /** 买入材料：amount 是展示单位整数（≥ 1），换算由服务端负责。 */
   buy: [resourceId: ShopResourceId, amount: number];
   /** 卖出材料：amount 是展示单位整数（≥ 1）。 */
-  sell: [resourceId: ShopResourceId, amount: number];
+  sell: [resourceId: ShopSellResourceId, amount: number];
   /** 卖出丹药：quantity 是颗数（≥ 1）。 */
   sellPill: [pillId: string, quantity: number];
   /** 神木 ⇄ 玄铁：amount 两个方向都是玄铁数量（展示单位整数，≥ 1）。 */
@@ -43,8 +43,9 @@ function formatStone(minUnits: number): string {
   return Number.isInteger(value) ? String(value) : String(Number(value.toFixed(3)));
 }
 
-/** 可交易材料（与后端 shop.ts 的 SHOP_TRADABLE_RESOURCES 同口径）；名字与库存都取自服务端资源表。 */
-const RESOURCE_OPTIONS: readonly ShopResourceId[] = ['herb', 'ore'];
+/** 买入仅支持药材 / 矿石；卖出材料与单价取自服务端。 */
+const BUY_RESOURCE_OPTIONS: readonly ShopResourceId[] = ['herb', 'ore'];
+const sellResourceOptions = computed(() => Object.keys(props.state.shop.resourceSellPrices) as ShopSellResourceId[]);
 
 /* ---------- 标签页：真正的 tablist / tab / tabpanel（与弟子详情同一套约定） ---------- */
 
@@ -127,7 +128,7 @@ const spiritStone = computed(() => resourceBalance('spiritStone'));
 
 const buyResourceId = ref<ShopResourceId>('herb');
 const buyAmountInput = ref('');
-const sellResourceId = ref<ShopResourceId>('herb');
+const sellResourceId = ref<ShopSellResourceId>('herb');
 const sellAmountInput = ref('');
 const pillAmountInput = ref('');
 const exchangeAmountInput = ref('');
@@ -152,7 +153,7 @@ const buyMax = computed(() => {
   const price = shop.value.buyPrice;
   const affordable = price > 0 ? Math.floor(spiritStone.value / price) : 0;
   const room = Math.floor(resourceRoom(buyResourceId.value) / UNITS_PER_DISPLAY);
-  return Math.max(0, Math.min(affordable, room));
+  return Math.max(0, Math.min(shop.value.maxTradeAmount, affordable, room));
 });
 
 /** 本次花费（最小单位灵石，整数乘法，不出现浮点误差）。 */
@@ -161,6 +162,7 @@ const buyCost = computed(() => buyAmount.value * shop.value.buyPrice);
 /** 买入的阻止原因（null = 可以提交）；按钮 disabled 与提示文案共用这一份判断。 */
 const buyBlockedReason = computed<string | null>(() => {
   if (buyAmount.value <= 0) return '请填写不小于 1 的整数数量（展示单位）。';
+  if (buyAmount.value > shop.value.maxTradeAmount) return `单次最多买入 ${String(shop.value.maxTradeAmount)}。`;
   if (buyCost.value > spiritStone.value) {
     return `灵石不足：本次需 ${formatStone(buyCost.value)}，现有 ${formatStone(spiritStone.value)}。`;
   }
@@ -184,14 +186,16 @@ function submitBuy(): void {
 
 /* ---------- 卖出材料 ---------- */
 
-/** 能卖多少：全部库存（展示单位整数）。 */
-const sellMax = computed(() => Math.floor(resourceBalance(sellResourceId.value) / UNITS_PER_DISPLAY));
+/** 能卖多少：整件库存与服务端单次上限取小。 */
+const sellMax = computed(() => Math.min(shop.value.maxTradeAmount, Math.floor(resourceBalance(sellResourceId.value) / UNITS_PER_DISPLAY)));
 
-/** 本次获得（最小单位灵石，整数乘法）。 */
-const sellRevenue = computed(() => sellAmount.value * shop.value.sellPrice);
+/** 当前材料单价及本次所得均使用服务端价格（最小单位灵石）。 */
+const sellPrice = computed(() => shop.value.resourceSellPrices[sellResourceId.value]);
+const sellRevenue = computed(() => sellAmount.value * sellPrice.value);
 
 const sellBlockedReason = computed<string | null>(() => {
   if (sellAmount.value <= 0) return '请填写不小于 1 的整数数量（展示单位）。';
+  if (sellAmount.value > shop.value.maxTradeAmount) return `单次最多卖出 ${String(shop.value.maxTradeAmount)}。`;
   if (sellAmount.value > sellMax.value) {
     return `${resourceName(sellResourceId.value)}库存不足：现有 ${formatStone(resourceBalance(sellResourceId.value))}。`;
   }
@@ -359,7 +363,7 @@ function submitExchange(): void {
         <p class="eyebrow">选择材料</p>
         <div class="shop-choices" role="radiogroup" aria-label="买入材料">
           <button
-            v-for="resourceId in RESOURCE_OPTIONS"
+            v-for="resourceId in BUY_RESOURCE_OPTIONS"
             :key="resourceId"
             class="shop-choice"
             :class="{ 'is-selected': buyResourceId === resourceId }"
@@ -448,7 +452,7 @@ function submitExchange(): void {
         <p class="eyebrow">选择材料</p>
         <div class="shop-choices" role="radiogroup" aria-label="卖出材料">
           <button
-            v-for="resourceId in RESOURCE_OPTIONS"
+            v-for="resourceId in sellResourceOptions"
             :key="resourceId"
             class="shop-choice"
             :class="{ 'is-selected': sellResourceId === resourceId }"
@@ -460,6 +464,7 @@ function submitExchange(): void {
           >
             <strong>{{ resourceName(resourceId) }}</strong>
             <small>现有 {{ formatStone(resourceBalance(resourceId)) }}</small>
+            <small>每个 {{ formatStone(shop.resourceSellPrices[resourceId]) }} 灵石</small>
           </button>
         </div>
 
@@ -730,9 +735,8 @@ function submitExchange(): void {
           买入：每 1 展示单位材料（1000 最小单位）花 {{ shop.buyPrice }} 灵石最小单位，约
           {{ formatStone(shop.buyPrice) }} 灵石。
         </li>
-        <li>
-          卖出：每 1 展示单位材料得 {{ shop.sellPrice }} 灵石最小单位，约
-          {{ formatStone(shop.sellPrice) }} 灵石。
+        <li v-for="resourceId in sellResourceOptions" :key="resourceId">
+          卖出：每 1 {{ resourceName(resourceId) }} 得 {{ formatStone(shop.resourceSellPrices[resourceId]) }} 灵石。
         </li>
         <li>丹药只收不卖：按丹方回收价折算，单颗价格见上方清单。</li>
         <li>兑换：{{ shop.shenmuPerXuantie }} 神木换 1 玄铁，1 玄铁也能换回 {{ shop.shenmuPerXuantie }} 神木，两个方向同一比价。</li>
