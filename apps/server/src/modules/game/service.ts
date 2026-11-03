@@ -596,7 +596,7 @@ import type {
   ArenaTeamMatchView,
   ArenaView,
 } from './view';
-import { settleEconomy, resourceRates, type SettleResult } from './settle';
+import { boostedResourceRates, settleEconomy, resourceRates, type SettleResult } from './settle';
 import {
   TECHNIQUES,
   TECHNIQUE_MAX_LEVEL,
@@ -839,7 +839,13 @@ import {
  * 没有幂等键、没有版本号、没有事务守卫（任务卡明确要求）。
  */
 
+import { emptyProgressionState, loadProgressionState, progressionSnapshotGuard, type SectProgressionState } from './progressionState';
+import { emptyRebirthState, loadRebirthState, rebirthSnapshotGuard, type SectRebirthState } from './rebirthState';
+import { bondBonusFor, cultivationWithMentor } from './relationsState';
+
 export interface SectSnapshot {
+  progression?: SectProgressionState;
+  rebirth?: SectRebirthState;
   sect: SectRow;
   disciples: DiscipleRow[];
   /** 0066 功法：本宗的收录 / 参悟 / 残卷行（level = 0 未收录）。 */
@@ -1043,6 +1049,8 @@ async function loadSnapshot(
     stewards,
     worldSites,
     techniques,
+    progression,
+    rebirth,
   ] = await Promise.all([
     new DiscipleRepository(db).findBySectId(sect.id),
     new BuildingRepository(db).findBySectId(sect.id),
@@ -1061,6 +1069,8 @@ async function loadSnapshot(
     new WorldSiteRepository(db).findByHolder(sect.id),
     // 0066 功法：本宗的收录 / 参悟 / 残卷行。
     new TechniqueRepository(db).findBySectId(sect.id),
+    loadProgressionState(db, sect.id),
+    loadRebirthState(db, sect.id),
   ]);
   // 0019 赌坊：论道当日次数（0019 是新表新列，没有需要按日志窗口兼容核对的旧记录）。
   const debateDay = debateDayStateOf(sect, now);
@@ -1079,6 +1089,8 @@ async function loadSnapshot(
     stewards,
     worldSites,
     techniques,
+    progression,
+    rebirth,
   };
 }
 
@@ -1097,6 +1109,8 @@ class SectDraft {
   /** 当前宗门等级决定的建筑上限。 */
   readonly buildingCapacity: number;
   readonly sect: SectRow;
+  progression: SectProgressionState;
+  rebirth: SectRebirthState;
   disciples: DiscipleRow[];
   readonly buildings: BuildingRow[];
   balances: ResourceBalanceRow[];
@@ -1149,10 +1163,12 @@ class SectDraft {
   ) {
     this.config = gameConfig();
     this.now = now;
+    this.progression = { ...(base.progression ?? emptyProgressionState()) };
+    this.rebirth = { ...(base.rebirth ?? emptyRebirthState()) };
 
     const levelDef = findSectLevel(Number(base.sect.level));
-    this.discipleCapacity = levelDef.discipleCapacity;
-    this.buildingCapacity = levelDef.buildingCapacity;
+    this.discipleCapacity = Math.max(levelDef.discipleCapacity, this.rebirth.disciple_capacity_floor);
+    this.buildingCapacity = Math.max(levelDef.buildingCapacity, this.rebirth.building_capacity_floor);
 
     // 0014：未领取的历练记录（在外中 + 待领取）；最近历史另查一次，供摘要用。
     this.journeys = base.journeys.map((row) => ({ ...row }));
@@ -1180,6 +1196,7 @@ class SectDraft {
     }
     this.settleResult = settleEconomy({
       config: this.config,
+      productionBonusBp: this.progression.production_bonus_bp + this.rebirth.bonus_production_bp,
       lastSettledAt,
       now,
       resources: base.balances.map((row) => ({
@@ -1196,6 +1213,7 @@ class SectDraft {
         cultivationRemainder: Number(row.cultivation_remainder),
         assignment: row.assignment,
         talent: row.talent,
+        cultivationBonusBp: row.cultivation_bonus_bp ?? 0,
       })),
       buildingLevels: Object.fromEntries(base.buildings.map((row) => [row.def_id, row.level])),
       absences,
@@ -1457,6 +1475,8 @@ class SectDraft {
     return buildSectStateView({
       config: this.config,
       sect: this.sect,
+      progression: this.progression,
+      rebirth: this.rebirth,
       disciples: this.disciples,
       buildings: this.buildings,
       balances: this.balances,
@@ -1479,8 +1499,18 @@ class SectDraft {
     });
   }
 
+  private progressionGuards(): ParameterizedQuery[] {
+    const id = `${crypto.randomUUID()}:progression`;
+    return [
+      progressionSnapshotGuard(id, this.sect.id, this.base.progression ?? emptyProgressionState()),
+      deleteDiscipleSnapshotGuardStatement(id),
+      rebirthSnapshotGuard(`${id}:rebirth`, this.sect.id, this.base.rebirth ?? emptyRebirthState()),
+      deleteDiscipleSnapshotGuardStatement(`${id}:rebirth`),
+    ];
+  }
+
   private beastGuards(): ParameterizedQuery[] {
-    const queries: ParameterizedQuery[] = [];
+    const queries: ParameterizedQuery[] = this.progressionGuards();
     for(let start=0; start<this.base.disciples.length; start+=20) {
       const rows=this.base.disciples.slice(start,start+20), id=crypto.randomUUID();
       const checks=rows.map(()=> 'EXISTS(SELECT 1 FROM disciples WHERE id=? AND beast_json IS ? AND capture_until IS ?)');
@@ -1539,6 +1569,7 @@ class SectDraft {
     try {
       // 这里不加 beastGuards：settlementSnapshotGuardStatements 已逐个弟子核对 beast_json / capture_until。
       await this.db.batch(prepareStatements(this.db, [
+        ...this.progressionGuards(),
         ...guard.guards,
         ...this.statements,
         ...guard.cleanup,
@@ -2145,12 +2176,12 @@ class SectDraft {
   }
 }
 
-export async function draftFor(db: D1Database, userId: string, now: number): Promise<SectDraft> {
+export async function draftFor(db: D1Database, userId: string, now: number, random: () => number = Math.random): Promise<SectDraft> {
   const snapshot = await loadSnapshot(db, userId, now);
   if (snapshot === null) {
     throw new AppError('NOT_FOUND', '尚未创建宗门');
   }
-  return new SectDraft(db, snapshot, now);
+  return new SectDraft(db, snapshot, now, random);
 }
 
 /** GET /game/sync 最多每隔多久把离线结算写回一次（见 getSectState）。 */
@@ -2488,15 +2519,16 @@ export async function previewRecruit(
   if (sect === null) {
     throw new AppError('NOT_FOUND', '尚未创建宗门');
   }
-  const [disciples, balances] = await Promise.all([
+  const [disciples, balances, rebirth] = await Promise.all([
     new DiscipleRepository(db).findBySectId(sect.id),
     new ResourceBalanceRepository(db).findBySectId(sect.id),
+    loadRebirthState(db, sect.id),
   ]);
 
   const dateKey = dateKeyUtc8(now);
   // 与 SectDraft 的 recruitUsedToday 同一归一逻辑：日期 key 不匹配时视为 0（跨天重置）。
   const recruitUsedToday = sect.recruit_date_key === dateKey ? Number(sect.recruit_count) : 0;
-  const discipleCapacity = findSectLevel(Number(sect.level)).discipleCapacity;
+  const discipleCapacity = Math.max(findSectLevel(Number(sect.level)).discipleCapacity, rebirth.disciple_capacity_floor);
   const quota = recruitRefreshQuota(sect);
 
   const blockedReason = recruitBlockedReason({
@@ -2656,7 +2688,39 @@ export async function recruitDisciple(
   draft.sect.recruit_date_key = dateKeyUtc8(now);
   draft.sect.recruit_count = draft.recruitUsedToday + 1;
 
-  await draft.commit({ checkRecruitState: true, staleRecruitBatchOnConflict: true });
+  // 招募时随机牵一条羁绊：两端都还没有羁绊才生成，已有则跳过（每人最多一条）。
+  const bonded = new Set(draft.disciples.filter((row) => row.bond_partner_id).map((row) => row.id));
+  const partners = draft.disciples.filter((row) => row.id !== disciple.id && !bonded.has(row.id));
+  const bondGuard: { id: string; statement: ParameterizedQuery } | null = partners.length === 0
+    ? null
+    : (() => {
+        const partner = partners[Math.floor(Math.random() * partners.length)]!;
+        const pair = disciple.id < partner.id
+          ? { first: disciple.id, second: partner.id }
+          : { first: partner.id, second: disciple.id };
+        const kind = (['fellow', 'partner', 'rival'] as const)[Math.floor(Math.random() * 3)]!;
+        const guardId = `${crypto.randomUUID()}:bond`;
+        draft.addStatement({
+          sql: `INSERT INTO disciple_relations(id,sect_id,kind,status,mentor_id,disciple_id,bond_kind,target_realm_index,teaching_value,version,mentor_bonus,created_at,updated_at)
+                VALUES(?,?,'bond','active',?,?,?,NULL,0,1,'{}',?,?)`,
+          params: [crypto.randomUUID(), draft.sect.id, pair.first, pair.second, kind, now, now],
+        });
+        return {
+          id: guardId,
+          statement: {
+            sql: `INSERT INTO mutation_guards(command_id,valid) SELECT ?,CASE WHEN NOT EXISTS(
+                    SELECT 1 FROM disciple_relations WHERE sect_id=? AND kind='bond' AND status='active'
+                    AND (mentor_id IN (?,?) OR disciple_id IN (?,?))) THEN 1 ELSE 0 END`,
+            params: [guardId, draft.sect.id, pair.first, pair.second, pair.first, pair.second],
+          },
+        };
+      })();
+
+  await draft.commit({
+    checkRecruitState: true,
+    staleRecruitBatchOnConflict: true,
+    ...(bondGuard === null ? {} : { extraGuards: [bondGuard] }),
+  });
   return {
     state: draft.view(),
     outcome: {
@@ -2998,7 +3062,7 @@ function breakthroughBlocker(draft: SectDraft, disciple: DiscipleRow): DiscipleB
 function breakthroughChanceOf(draft: SectDraft): number {
   const arrayLevel =
     draft.buildings.find((building) => building.def_id === SPIRITUAL_ARRAY_BUILDING_ID)?.level ?? 0;
-  return breakthroughChanceBp(draft.config, arrayLevel);
+  return breakthroughChanceBp(draft.config, arrayLevel, draft.rebirth.bonus_breakthrough_bp);
 }
 
 /** 突破：结算 → 门槛/冷却/灵气检查 → 扣灵气 → 抽一次随机。 */
@@ -3108,7 +3172,7 @@ export async function ascendDisciple(
   disciple.ascension_pity = pity;
   if (success) {
     draft.addStatement(insertChatMessageStatement({
-      id: `ascension:${disciple.id}`,
+      id: draft.rebirth.cycle > 0 ? `ascension:${disciple.id}:${String(draft.rebirth.cycle)}` : `ascension:${disciple.id}`,
       userId: 'system',
       sectName: '系统',
       content: `【飞升公告】${draft.sect.name}的弟子${disciple.name}成功渡过三劫，已成仙！战力 ${combatPowerBefore} → ${gearedCombatPower(disciple)}（×6）！`,
@@ -3565,7 +3629,16 @@ export async function renameSect(
   // 顺序要紧：查重在扣费之前——名字被占用时连余额都不动。
   await requireSectNameAvailable(db, normalized, draft.sect.id);
 
-  draft.requireResource('spiritStone', SECT_RENAME_COST);
+  if (draft.progression.rename_tokens > 0) {
+    draft.addStatement({
+      sql: 'UPDATE sect_progression SET rename_tokens = rename_tokens - 1, version = version + 1, updated_at = ? WHERE sect_id = ?',
+      params: [now, draft.sect.id],
+    });
+    draft.progression.rename_tokens -= 1;
+    draft.progression.version += 1;
+  } else {
+    draft.requireResource('spiritStone', SECT_RENAME_COST);
+  }
   draft.addStatement(updateSectNameStatement(draft.sect.id, normalized));
   draft.sect.name = normalized;
 
@@ -3957,6 +4030,7 @@ export async function exploreSectRealm(
     talent: string;
     gearPowerBonusBp: number;
     ascensionLevel: number;
+    permanentPowerBp: number;
     name: string;
   }[] = [];
   for (const id of discipleIds) {
@@ -3976,8 +4050,9 @@ export async function exploreSectRealm(
       speed: attrs.speed,
       talent: disciple.talent,
       // 战力加成 = 装备 + 灵兽（同一个括号）。
-      gearPowerBonusBp: powerBonusBpOfDisciple(disciple),
+      gearPowerBonusBp: powerBonusBpOfDisciple(disciple) + bondBonusFor(disciple, discipleIds),
       ascensionLevel: Number(disciple.ascension_level),
+      permanentPowerBp: Number(disciple.permanent_power_bp ?? 0),
       name: disciple.name,
     });
   }
@@ -4108,6 +4183,7 @@ async function autoRealmSpeedrunParty(
           disciple.talent,
           powerBonusBpOfDisciple(disciple),
           Number(disciple.ascension_level),
+          Number(disciple.permanent_power_bp ?? 0),
         ),
       }];
     })
@@ -4363,6 +4439,7 @@ export function gearedCombatPower(disciple: DiscipleRow): number {
     disciple.talent,
     powerBonusBpOfDisciple(disciple),
     Number(disciple.ascension_level),
+    Number(disciple.permanent_power_bp ?? 0),
   );
 }
 
@@ -4433,6 +4510,10 @@ export async function listLeaderboard(
     sectRepository.findByUserId(userId),
   ]);
   const mySectId = mySect?.id ?? null;
+  const appearances = await db.prepare('SELECT sect_id, equipped_frame, equipped_title FROM sect_progression').all<{
+    sect_id: string; equipped_frame: string | null; equipped_title: string | null;
+  }>();
+  const appearanceBySect = new Map(appearances.results.map((row) => [row.sect_id, row]));
 
   const rows: { sect: SectRow; disciples: DiscipleRow[]; power: number }[] = [];
   for (const sect of sects) {
@@ -4458,6 +4539,8 @@ export async function listLeaderboard(
     reputation: Number(sect.reputation) || 0,
     // 0073：江湖榜左侧的宗门头像（没有自定义头像时前端显示宗门名首字）。
     avatarHash: sect.avatar_hash ?? null,
+    frameId: appearanceBySect.get(sect.id)?.equipped_frame ?? null,
+    titleId: appearanceBySect.get(sect.id)?.equipped_title ?? null,
     // 排序键之一，榜行直接显示，玩家才知道名次差在哪。
     sectPower: power,
     discipleCount: disciples.length,
@@ -4717,13 +4800,14 @@ export async function getPublicSect(
     throw new AppError('NOT_FOUND', '宗门不存在');
   }
 
-  const [disciples, buildings, viewerSect, tower, techniqueRows] = await Promise.all([
+  const [disciples, buildings, viewerSect, tower, techniqueRows, progression] = await Promise.all([
     new DiscipleRepository(db).findBySectId(sectId),
     new BuildingRepository(db).findBySectId(sectId),
     new SectRepository(db).findByUserId(viewerUserId),
     // 镇妖塔层数与已收录功法数都是公开进度（榜单里本来就公开），档案页一起摆出来。
     new TowerRepository(db).findBySectId(sectId),
     new TechniqueRepository(db).findBySectId(sectId),
+    loadProgressionState(db, sectId),
   ]);
   const config = gameConfig();
 
@@ -4798,6 +4882,8 @@ export async function getPublicSect(
     reputation: Number(sect.reputation) || 0,
     // 0073：宗门头像是公开外观（换图时服务端已保证旧图不再被引用才会删）。
     avatarHash: sect.avatar_hash ?? null,
+    frameId: progression.equipped_frame,
+    titleId: progression.equipped_title,
     // 0051 / 0066：公开进度。镇妖塔没有记录时按 0 层；功法只数参悟到 1 级及以上的（与 learnedTechniques 同口径）。
     towerFloor: tower === null ? 0 : Number(tower.max_floor) || 0,
     techniqueCount: techniqueRows.filter((row) => Number(row.level) >= 1).length,
@@ -5328,6 +5414,7 @@ export async function challengeSect(
         disciple.realm_id, stage, attrs.attack, attrs.defense, attrs.speed, disciple.talent,
         powerBonusBpOfDisciple(disciple),
         Number(disciple.ascension_level),
+        Number(disciple.permanent_power_bp ?? 0),
       ),
       realmName: findStage(disciple.realm_id, stage).name,
       stage,
@@ -5377,6 +5464,7 @@ export async function challengeSect(
         disciple.realm_id, stage, attrs.attack, attrs.defense, attrs.speed, disciple.talent,
         powerBonusBpOfDisciple(disciple),
         Number(disciple.ascension_level),
+        Number(disciple.permanent_power_bp ?? 0),
       ),
       realmName: findStage(disciple.realm_id, stage).name,
       stage,
@@ -5671,6 +5759,10 @@ export async function craftPill(
   }
 
   draft.addPill(recipe.id, quantity);
+  draft.addStatement(insertEventLogStatement({
+    id: crypto.randomUUID(), sectId: draft.sect.id, eventId: 'progressionCraftPill',
+    description: `炼制${recipe.name} ×${String(quantity)}`, effects: '{}', now,
+  }));
 
   await draft.commitAlchemy(recipe.id);
   return {
@@ -5748,7 +5840,7 @@ export async function usePill(
     }
     const remaining = stage.requiredCultivation - Number(disciple.cultivation);
     // 天赋重构 · 丹心：每颗增益按这名弟子的天赋与境界算。
-    const gainPerPill = cultivationPillGainOf(disciple.talent, disciple.realm_id, cultivationBase);
+    const gainPerPill = cultivationWithMentor(cultivationPillGainOf(disciple.talent, disciple.realm_id, cultivationBase), disciple.cultivation_bonus_bp ?? 0);
     const used = Math.min(
       count,
       cultivationPillsToFull(Number(disciple.cultivation), stage.requiredCultivation, gainPerPill),
@@ -6263,6 +6355,10 @@ export async function forgeEquipment(
       now,
     }),
   );
+  draft.addStatement(insertEventLogStatement({
+    id: crypto.randomUUID(), sectId: draft.sect.id, eventId: 'progressionForgeEquipment',
+    description: `炼成${generated.name}`, effects: '{}', now,
+  }));
   await draft.commit();
   if (generated.quality === 'immortal') {
     await broadcastWorldBoss(db, `【炼器】${draft.sect.name}炼成 ${generated.name}！`, now);
@@ -7123,6 +7219,7 @@ function journeyRewardInputOf(disciple: DiscipleRow): {
   speed: number;
   luck: number;
   physique: number;
+  permanentPowerBp: number;
 } {
   return {
     realmId: disciple.realm_id,
@@ -7134,6 +7231,7 @@ function journeyRewardInputOf(disciple: DiscipleRow): {
     speed: Number(disciple.speed),
     luck: Number(disciple.luck),
     physique: Number(disciple.physique),
+    permanentPowerBp: Number(disciple.permanent_power_bp ?? 0),
   };
 }
 
@@ -8130,6 +8228,8 @@ export async function chooseRealmExplore(
         talent: disciple.talent,
         // 演武场队伍战力：装备 + 灵兽（同一个括号）。
         gearPowerBonusBp: powerBonusBpOfDisciple(disciple),
+        ascensionLevel: Number(disciple.ascension_level),
+        permanentPowerBp: Number(disciple.permanent_power_bp ?? 0),
       };
     }),
   );
@@ -9428,6 +9528,7 @@ async function broadcastWorldBoss(db: D1Database, content: string, now: number):
  */
 function resourceRatesOfSect(input: {
   config: GameConfigContent;
+  productionBonusBp?: number;
   disciples: readonly DiscipleRow[];
   buildings: readonly BuildingRow[];
   journeys: readonly DiscipleJourneyRow[];
@@ -9449,6 +9550,7 @@ function resourceRatesOfSect(input: {
         talent: disciple.talent,
       })),
     Object.fromEntries(input.buildings.map((building) => [building.def_id, building.level])),
+    input.productionBonusBp ?? 0,
   );
 }
 
@@ -9741,8 +9843,14 @@ export async function setWorldBossAuto(
   now: number,
 ): Promise<{ state: SectStateView; boss: WorldBossView }> {
   const draft = await draftFor(db, userId, now);
+  draft.addStatement({
+    sql: `INSERT INTO world_boss_auto_settings
+      (sect_id,enabled,lock_until,next_run_at,last_run_at,last_result,pause_reason,updated_at)
+      VALUES(?,?,0,?,NULL,NULL,NULL,?) ON CONFLICT(sect_id) DO UPDATE SET
+      enabled=excluded.enabled,lock_until=0,next_run_at=excluded.next_run_at,pause_reason=NULL,updated_at=excluded.updated_at`,
+    params: [draft.sect.id,enabled ? 1 : 0,enabled ? now : 0,now],
+  });
   await draft.commit();
-  await new WorldBossAutoRepository(db).setEnabled(draft.sect.id, enabled, now);
   return getWorldBoss(db, userId, now);
 }
 
@@ -10154,6 +10262,7 @@ export async function attackWorldBoss(
         member.talent,
         powerBonusBpOfDisciple(member),
         Number(member.ascension_level),
+        Number(member.permanent_power_bp ?? 0),
       ),
       affix,
       {
@@ -10508,13 +10617,15 @@ async function rewardWorldBoss(
     // 只读参与宗门的弟子 / 建筑 / 在外记录 / 余额（参与宗门最多几个，不做全表扫）。
     const ratesById = new Map<string, Map<string, number>>();
     for (const [sectId] of participants) {
-      const [disciples, buildings, journeys, balances] = await Promise.all([
+      const [disciples, buildings, journeys, balances, progression, rebirth] = await Promise.all([
         new DiscipleRepository(db).findBySectId(sectId),
         new BuildingRepository(db).findBySectId(sectId),
         new DiscipleJourneyRepository(db).findOpenBySectId(sectId),
         new ResourceBalanceRepository(db).findBySectId(sectId),
+        loadProgressionState(db, sectId),
+        loadRebirthState(db, sectId),
       ]);
-      ratesById.set(sectId, resourceRatesOfSect({ config, disciples, buildings, journeys, now }));
+      ratesById.set(sectId, resourceRatesOfSect({ config, disciples, buildings, journeys, now, productionBonusBp: progression.production_bonus_bp + rebirth.bonus_production_bp }));
       balancesBySect.set(sectId, new Map(balances.map((row) => [row.resource_id, Number(row.balance)])));
     }
 
@@ -12855,16 +12966,23 @@ async function garrisonedDiscipleIdsOf(db: D1Database, sectId: string): Promise<
 }
 
 /** 整点结算（纯计算，不写库）：占领中的灵地，结算到最近的整点。无主 / 数据异常返回 null。 */
-function settleSiteOf(site: WorldSiteRow, now: number): WorldSettlement | null {
+function settleSiteOf(site: WorldSiteRow, now: number, productionBonusBp = 0): WorldSettlement | null {
   const def = findWorldSite(site.id);
   if (def === undefined || site.holder_sect_id === null || site.settled_at === null) return null;
-  return settleWorldSite({
-    outputs: def.outputs,
+  const settled = settleWorldSite({
+    outputs: Object.fromEntries(boostedResourceRates(new Map(Object.entries(def.outputs)), productionBonusBp)),
     rare: def.rare,
     settledAt: Number(site.settled_at),
     rareHours: Number(site.rare_hours),
     now,
   });
+  // Rare material awards are discrete six-hour drops; apply the same bonus per drop.
+  if (def.rare && settled.rareCount > 0 && productionBonusBp > 0) {
+    const rawDrop = WORLD_RARE_PER_DROP * 1000;
+    const drop = Math.floor(rawDrop * (10_000 + productionBonusBp) / 10_000);
+    settled.credits[def.rare.resourceId] = (settled.credits[def.rare.resourceId] ?? 0) + (drop - rawDrop) * settled.rareCount;
+  }
+  return settled;
 }
 
 /** 把产出记给占领者：每种资源一条「不超过仓库容量」的相对加法（同一批里同资源已经合并过）。 */
@@ -12969,8 +13087,13 @@ export async function processWorldSites(db: D1Database, now: number, lazy = fals
       const statements: ParameterizedQuery[] = [];
       const guardIds: string[] = [];
       const total: Record<string, number> = {};
+      const [progression, rebirth] = await Promise.all([loadProgressionState(db, sectId), loadRebirthState(db, sectId)]);
+      const progressionGuardId = `${crypto.randomUUID()}:world-growth`;
+      const rebirthGuardId = `${progressionGuardId}:rebirth`;
+      statements.push(progressionSnapshotGuard(progressionGuardId, sectId, progression), rebirthSnapshotGuard(rebirthGuardId, sectId, rebirth));
+      guardIds.push(progressionGuardId, rebirthGuardId);
       for (const site of sites) {
-        const settled = settleSiteOf(site, now);
+        const settled = settleSiteOf(site, now, progression.production_bonus_bp + rebirth.bonus_production_bp);
         if (settled === null || settled.hours === 0) continue;
         const guard = worldSiteGuard(site);
         guardIds.push(guard.id);
@@ -12990,7 +13113,7 @@ export async function processWorldSites(db: D1Database, now: number, lazy = fals
         );
         addCredits(total, settled.credits);
       }
-      if (guardIds.length === 0) continue;
+      if (guardIds.length === 2) continue;
       await runGuardedBatch(db, [
         ...statements,
         ...worldCreditStatements(holder.id, total, now),
@@ -13360,7 +13483,13 @@ export async function attackWorldSite(
   if (battle.won) {
     // 易主前：原主已满的整点结算给原主（与易主同批）；不满一小时的部分作废。
     if (defenderSect !== null) {
-      const settled = settleSiteOf(site, now);
+      const [defenderProgression, defenderRebirth] = await Promise.all([loadProgressionState(db, defenderSect.id), loadRebirthState(db, defenderSect.id)]);
+      const growthGuardId = `${crypto.randomUUID()}:world-defender-growth`;
+      draft.addStatement(progressionSnapshotGuard(growthGuardId, defenderSect.id, defenderProgression));
+      draft.addStatement(deleteDiscipleSnapshotGuardStatement(growthGuardId));
+      draft.addStatement(rebirthSnapshotGuard(`${growthGuardId}:rebirth`, defenderSect.id, defenderRebirth));
+      draft.addStatement(deleteDiscipleSnapshotGuardStatement(`${growthGuardId}:rebirth`));
+      const settled = settleSiteOf(site, now, defenderProgression.production_bonus_bp + defenderRebirth.bonus_production_bp);
       if (settled !== null && settled.hours > 0) {
         for (const statement of worldCreditStatements(defenderSect.id, settled.credits, now)) {
           draft.addStatement(statement);
@@ -13463,7 +13592,7 @@ export async function withdrawWorldSite(
   const draft = await draftFor(db, userId, now);
   const { site, def } = await requireWorldSiteRow(db, input.siteId);
   if (site.holder_sect_id !== draft.sect.id) throw new AppError('INVALID_STATUS', '你没有占领这处灵地');
-  const settled = settleSiteOf(site, now);
+  const settled = settleSiteOf(site, now, draft.progression.production_bonus_bp + draft.rebirth.bonus_production_bp);
   if (settled !== null && settled.hours > 0) {
     for (const statement of worldCreditStatements(draft.sect.id, settled.credits, now)) {
       draft.addStatement(statement);
@@ -15927,8 +16056,8 @@ export async function setArenaLineup(
   discipleIds: readonly string[],
   now: number,
 ): Promise<ArenaView> {
-  const sect = await new SectRepository(db).findByUserId(userId);
-  if (sect === null) throw new AppError('NOT_FOUND', '尚未创建宗门');
+  const draft = await draftFor(db, userId, now);
+  const sect = draft.sect;
   if (Number(sect.level) < ARENA_UNLOCK_SECT_LEVEL) {
     throw new AppError('INVALID_STATUS', `宗门 ${String(ARENA_UNLOCK_SECT_LEVEL)} 级解锁宗门大比`);
   }
@@ -15951,7 +16080,14 @@ export async function setArenaLineup(
       throw new AppError('INVALID_STATUS', `${member.name}：${reason}，无法呈报出战`);
     }
   }
-  await repo.saveLineup({ sectId: sect.id, kind, lineup: discipleIds, auto: false, dateKey, now });
+  const dayGuardId = `${crypto.randomUUID()}:arena-enroll`;
+  draft.addStatement(upsertArenaEntryStatement({ sectId: sect.id, kind, lineup: discipleIds, auto: false, dateKey, now }));
+  await draft.commit({ extraGuards: [{ id: dayGuardId, statement: {
+    sql: `INSERT INTO mutation_guards(command_id,valid) SELECT ?,CASE WHEN
+      NOT EXISTS(SELECT 1 FROM arena_individual_scores WHERE date_key=?)
+      AND NOT EXISTS(SELECT 1 FROM arena_team_scores WHERE date_key=?) THEN 1 ELSE 0 END`,
+    params: [dayGuardId,dateKey,dateKey],
+  } }] });
   return getArena(db, userId, now);
 }
 

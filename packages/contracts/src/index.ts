@@ -9,5 +9,9 @@ export * from './errors';
 export * from './primitives';
 export * from './spiritBeasts';
 export * from './scratchCards';
+export * from './progression';
+export * from './rebirth';
+export * from './alliance';
+export * from './relations';
 
 export const PACKAGE_NAME = '@xiuxian/contracts' as const;

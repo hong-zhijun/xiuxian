@@ -105,12 +105,15 @@ function requestChallenge(): void {
     <template v-else-if="sect">
       <!-- ---------- 名帖：头像 / 宗门名 / 品阶与立宗时间 / 挑战 ---------- -->
       <header class="public-hero">
-        <SectAvatar class="public-hero-avatar" :name="sect.name" :image-hash="sect.avatarHash" />
+        <SectAvatar class="public-hero-avatar" :name="sect.name" :image-hash="sect.avatarHash" :frame-id="sect.frameId" />
         <div class="public-hero-copy">
           <h2 id="public-sect-title" class="public-hero-name">{{ sect.name }}</h2>
           <p class="public-hero-tags">
             <span class="stat-tag stat-talent">LV.{{ sect.level }} · {{ sect.levelName }}</span>
+            <span v-if="sect.titleId === 'rising-star'" class="stat-tag stat-talent">后起之秀</span>
+            <span v-if="sect.titleId === 'title-worldwalker'" class="stat-tag stat-talent">开界行者</span>
             <span class="stat-tag">立于 {{ formatTime(sect.createdAt) }}</span>
+            <span class="stat-tag" :title="sect.sectId">宗门 ID：{{ sect.sectId }}</span>
           </p>
         </div>
         <!-- 挑战按钮 + 今日剩余次数（次数是服务端相对当前玩家算好的）。 -->

@@ -31,6 +31,7 @@ import type {
   DailyTasksView,
 } from '../api/game';
 import type { ToastTone } from '../types/ui';
+import type { ProgressionDestination } from '@xiuxian/contracts';
 import type { AvatarFrameId } from '../utils/avatarFrames';
 import { avatarImageUrl, type CompressedAvatar } from '../utils/avatarImage';
 import { ApiError } from '../api/client';
@@ -59,6 +60,10 @@ import { CHANGELOG } from '../data/changelog';
 import AccountDialog from './AccountDialog.vue';
 import ChangelogDialog from './ChangelogDialog.vue';
 import DailyTasksCard from './DailyTasksCard.vue';
+import ProgressionDialog from './ProgressionDialog.vue';
+import RebirthDialog from './RebirthDialog.vue';
+import AllianceDialog from './AllianceDialog.vue';
+import RelationsDialog from './RelationsDialog.vue';
 import AlchemyPanel from './AlchemyPanel.vue';
 import ChallengeDialog from './ChallengeDialog.vue';
 import ChallengeHistoryPanel from './ChallengeHistoryPanel.vue';
@@ -229,11 +234,19 @@ const openPanel = ref<
   | 'market'
   | 'steward'
   | 'daily'
+  | 'progression'
+  | 'rebirth'
+  | 'relations'
+  | 'alliance'
   | 'advisor'
   | null
 >(null);
 /** 灵兽苑请求进行中：外层弹窗显示加载遮罩。 */
 const beastGardenBusy = ref(false);
+/** 成长领奖/兑换请求期间阻止关闭，避免回执丢失。 */
+const progressionSubmitting = ref(false);
+const rebirthSubmitting = ref(false);
+const allianceSubmitting = ref(false);
 
 /**
  * 赌坊里当前在玩哪个玩法，用于弹窗的加载层文案，
@@ -286,14 +299,35 @@ const renameInvalid = computed(
 /** trim 后与当前宗门名不同才允许提交（同名请求服务端会早退，不扣费也不写库）。 */
 const renameDirty = computed(() => renameDraft.value.trim() !== props.state.sect.name);
 /** 灵石够不够：只决定按钮可用性，余额校验与扣费都由服务端裁决。 */
+const renameTokens = computed(() => props.state.sect.progression?.renameTokens ?? 0);
 const renameAffordable = computed(
-  () => (liveResources.value['spiritStone'] ?? 0) >= Number(props.state.rename.sectCost),
+  () => renameTokens.value > 0 || (liveResources.value['spiritStone'] ?? 0) >= Number(props.state.rename.sectCost),
 );
-const renameCostLabel = computed(() => formatAmount(props.state.rename.sectCost));
+const renameCostLabel = computed(() =>
+  renameTokens.value > 0 ? `优先消耗 1 枚改名令（无令时 ${formatAmount(props.state.rename.sectCost)} 灵石）` : formatAmount(props.state.rename.sectCost),
+);
 const renameHint = computed(() => {
   if (renameInvalid.value) return `宗门名需 ${renameRangeLabel.value}`;
-  if (!renameAffordable.value) return '灵石不足';
+  if (!renameAffordable.value) return '灵石不足且没有改名令';
+  if (renameTokens.value > 0) return '本次改名将优先消耗 1 枚改名令；改名令不足时才消耗灵石';
   return '宗门名不可与别家重名；重挂门匾后，江湖榜与战报都会显示新名字';
+});
+
+const sectFrameClass = computed(() => {
+  const frameId = props.state.sect.progression?.frameId ?? null;
+  if (frameId === 'frame-jade') return 'sect-logo-frame-jade';
+  if (frameId === 'frame-cloud') return 'sect-logo-frame-cloud';
+  if (frameId === 'frame-dragon') return 'sect-logo-frame-dragon';
+  if (frameId === 'frame-astral') return 'sect-logo-frame-astral';
+  if (frameId === 'frame-alliance') return 'sect-logo-frame-alliance';
+  if (frameId?.startsWith('achievement:')) return 'sect-logo-frame-achievement';
+  return '';
+});
+const sectTitleLabel = computed(() => {
+  const titleId = props.state.sect.progression?.titleId ?? null;
+  if (titleId === 'rising-star') return '后起之秀';
+  if (titleId === 'title-worldwalker') return '开界行者';
+  return titleId ?? '';
 });
 
 function openRenameDialog(): void {
@@ -1953,7 +1987,7 @@ function signedPct(value: number): string {
 type HubCardId =
   | 'daily' | 'alchemy' | 'forge' | 'refine' | 'steward' | 'defense'
   | 'boss' | 'arena' | 'tower' | 'explore' | 'world'
-  | 'shop' | 'gambling' | 'auction' | 'market' | 'merit' | 'techniques' | 'beasts';
+  | 'shop' | 'gambling' | 'auction' | 'market' | 'merit' | 'techniques' | 'beasts' | 'alliance';
 
 interface HubCard {
   id: HubCardId;
@@ -2026,6 +2060,7 @@ const hubGroups = computed<{ label: string; cards: HubCard[] }[]>(() => {
         { id: 'forge', name: '炼器', glyph: '器', status: equipment.value ? `背包 ${String(equipment.value.bagCount)} / ${String(equipment.value.bagCapacity)}` : '打造装备' },
         { id: 'refine', name: '祭炼', glyph: '祭', status: refineCardStatus.value },
         { id: 'defense', name: '守擂阵容', glyph: '擂', status: props.state.sect.defenseLineup ? '已布阵' : '尚未布阵' },
+        { id: 'alliance', name: '仙盟', glyph: '盟', status: '盟友协作 · 每周首领' },
       ],
     },
     {
@@ -2146,6 +2181,7 @@ function openHubCard(id: HubCardId): void {
     merit: 'merit',
     techniques: 'techniques',
     beasts: 'beast-garden',
+    alliance: 'alliance',
   };
   openPanel.value = panels[id];
 }
@@ -2240,6 +2276,30 @@ function onAdvisorAction(action: AdvisorAction): void {
     if (action.kind === 'panel') openHubCard(action.panel);
     else if (action.kind === 'disciple') openDetail(action.discipleId);
     else scrollToSection(action.target);
+  });
+}
+
+/** 成长主线复用首页现有功能：先收起弹窗，再打开或滚动到对应入口。 */
+function onProgressionNavigate(destination: ProgressionDestination): void {
+  openPanel.value = null;
+  void nextTick(() => {
+    if (destination === 'sect') {
+      scrollToSection(props.state.sectUpgrade === null ? 'building-title' : 'sect-upgrade-title');
+    } else if (destination === 'disciples') {
+      scrollToSection('disciple-title');
+    } else if (destination === 'equipment') {
+      openEquipment();
+    } else if (destination === 'alchemy') {
+      openPanel.value = 'alchemy';
+    } else if (destination === 'realms') {
+      openPanel.value = 'explore';
+    } else if (destination === 'challenge') {
+      openPanel.value = 'leaderboard';
+    } else if (destination === 'boss') {
+      openPanel.value = 'world-boss';
+    } else {
+      openPanel.value = destination;
+    }
   });
 }
 
@@ -2378,13 +2438,15 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
     <TodoFloat :items="todoItems" @select="onTodo" @docked="(docked: boolean) => (todoDocked = docked)" />
     <header class="game-topbar">
       <div class="sect-identity">
-        <img
-          class="sect-logo"
-          :class="{ 'is-custom': state.sect.avatarHash !== null }"
-          :src="sectLogoUrl"
-          alt=""
-          aria-hidden="true"
-        />
+        <span class="sect-logo-wrap" :class="sectFrameClass">
+          <img
+            class="sect-logo"
+            :class="{ 'is-custom': state.sect.avatarHash !== null }"
+            :src="sectLogoUrl"
+            alt=""
+            aria-hidden="true"
+          />
+        </span>
         <div class="sect-identity-text">
           <div class="sect-name-row">
             <h1>{{ state.sect.name }}</h1>
@@ -2437,7 +2499,7 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
               @change="onSectAvatarFileChange"
             />
           </div>
-          <p class="eyebrow sect-world">太初界 · 掌门府</p>
+          <p class="eyebrow sect-world"><span v-if="sectTitleLabel" class="sect-growth-title">{{ sectTitleLabel }}</span>太初界 · 掌门府</p>
         </div>
       </div>
 
@@ -2459,6 +2521,10 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
       </dl>
 
       <div class="header-actions">
+        <button class="icon-action progression-launch" type="button" aria-label="宗门成长：签到、成就、主线与声望兑换" @click="openPanel = 'progression'">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h14v16H5V4Zm4 4h6m-6 4h6m-6 4h4M3 4v16m18-16v16" /></svg>
+          <span>成长</span>
+        </button>
         <button
           class="icon-action advisor-launch"
           type="button"
@@ -3092,6 +3158,50 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
       回执里的 state 交给 App 统一赋值（见 handOffShopState），交易成功留在当前标签页。
     -->
     <!-- 0048 宗门日课：操作栏「日课」卡片打开；每次打开卡片都重读进度，领取 / 开箱后回传摘要给操作栏与待办。 -->
+    <ModalShell v-if="openPanel === 'progression'" label="宗门成长" :loading="progressionSubmitting" loading-text="正在更新成长纪要" @close="openPanel = null">
+      <div class="rebirth-launch-row">
+        <div><strong>道途不止 · 开辟新界</strong><span>{{ state.sect.level >= 15 ? '查看转生资格、资源保留与道韵积累' : '宗门 15 级且有成仙弟子后可转生 · 先查看预览' }}</span></div>
+        <button class="rebirth-launch" type="button" :disabled="busy || progressionSubmitting" @click="openPanel = 'rebirth'">开辟新界 <span aria-hidden="true">→</span></button>
+      </div>
+      <div class="rebirth-launch-row">
+        <div><strong>宗门传承 · 师徒与羁绊</strong><span>收徒提升修炼速度，同门羁绊同时出战加战力</span></div>
+        <button class="rebirth-launch" type="button" :disabled="busy || progressionSubmitting" @click="openPanel = 'relations'">查看传承 <span aria-hidden="true">→</span></button>
+      </div>
+      <ProgressionDialog
+        :state="state"
+        :busy="busy"
+        @state-update="handOffShopState"
+        @notify="onDailyTasksNotify"
+        @navigate="onProgressionNavigate"
+        @busy-change="progressionSubmitting = $event"
+      />
+    </ModalShell>
+    <ModalShell v-if="openPanel === 'rebirth'" label="开辟新界" :loading="rebirthSubmitting" loading-text="正在开辟新界或兑换道韵" @close="openPanel = 'progression'">
+      <RebirthDialog
+        :state="state"
+        :busy="busy"
+        @state-update="handOffShopState"
+        @notify="onDailyTasksNotify"
+        @busy-change="rebirthSubmitting = $event"
+      />
+    </ModalShell>
+    <ModalShell v-if="openPanel === 'relations'" label="师徒与羁绊" @close="openPanel = 'progression'">
+      <RelationsDialog
+        :state="state"
+        :busy="busy"
+        @state-update="handOffShopState"
+        @notify="onDailyTasksNotify"
+      />
+    </ModalShell>
+    <ModalShell v-if="openPanel === 'alliance'" label="仙盟" :loading="allianceSubmitting" loading-text="正在处理仙盟事务" @close="openPanel = null">
+      <AllianceDialog
+        :state="state"
+        :busy="busy"
+        @state-update="handOffShopState"
+        @notify="onDailyTasksNotify"
+        @busy-change="allianceSubmitting = $event"
+      />
+    </ModalShell>
     <ModalShell v-if="openPanel === 'daily'" narrow label="宗门日课" @close="openPanel = null">
       <DailyTasksCard
         :busy="busy"
@@ -3456,7 +3566,7 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
           :class="{ 'is-error': renameInvalid || !renameAffordable }"
           role="status"
         >
-          {{ renameLength }}/{{ state.rename.sectNameMaxChars }} 字 · 一次 {{ renameCostLabel }} 灵石 ·
+          {{ renameLength }}/{{ state.rename.sectNameMaxChars }} 字 · {{ renameTokens > 0 ? renameCostLabel : `一次 ${renameCostLabel} 灵石` }} ·
           {{ renameHint }}
         </p>
 
@@ -3506,3 +3616,23 @@ function onDetailRenameDisciple(discipleId: string, name: string): void {
     />
   </main>
 </template>
+
+<style scoped>
+.sect-logo-wrap { position: relative; display: block; flex: 0 0 auto; border-radius: 50%; }
+.sect-logo-wrap::after { position: absolute; inset: -3px; border: 2px solid transparent; border-radius: 50%; pointer-events: none; content: ''; }
+.sect-logo-frame-jade::after { border-color: #72c6ad; box-shadow: 0 0 0 2px rgba(114,198,173,.18), inset 0 0 12px rgba(114,198,173,.2); }
+.sect-logo-frame-cloud::after { border-color: #cfdfec; border-style: double; border-width: 4px; box-shadow: 0 0 10px rgba(171,204,225,.25); }
+.sect-logo-frame-dragon::after, .sect-logo-frame-achievement::after { border-color: #e4bc65; border-width: 3px; box-shadow: 0 0 0 2px rgba(175,126,48,.22), 0 0 13px rgba(228,188,101,.23); }
+.sect-growth-title { display: inline-block; margin-right: 7px; color: var(--gold-bright); }
+.progression-launch { color: var(--gold-bright); }
+.sect-logo-frame-astral::after { border-color: #b0b5ef; border-style: double; border-width: 4px; box-shadow: 0 0 0 2px rgba(120,116,190,.22), 0 0 16px rgba(167,172,235,.3); }
+.sect-logo-frame-alliance::after { border-color: #9bd2c3; border-style: double; border-width: 4px; box-shadow: 0 0 0 2px rgba(202,169,106,.2), 0 0 13px rgba(119,184,154,.32); }
+.rebirth-launch-row { position: relative; z-index: 1; display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 0 20px; padding: 11px 40px 11px 12px; border: 1px solid rgba(167,172,235,.3); border-radius: 9px; background: #17272a; }
+.rebirth-launch-row > div { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
+.rebirth-launch-row strong { color: #d2d1eb; font-size: 12px; font-weight: 500; }
+.rebirth-launch-row > div > span { color: var(--muted); font-size: 11px; }
+.rebirth-launch { appearance: none; flex: 0 0 auto; padding: 7px 10px; border: 1px solid #777aab; border-radius: 6px; color: #d4d1f0; background: #27313e; font: inherit; font-size: 12px; cursor: pointer; }
+.rebirth-launch:disabled { opacity: .5; cursor: not-allowed; }
+.rebirth-launch:not(:disabled):hover { border-color: #b0b5ef; background: #343e52; }
+@media (max-width: 600px) { .rebirth-launch-row { align-items: flex-start; flex-direction: column; gap: 8px; } .rebirth-launch { align-self: flex-start; } }
+</style>

@@ -28,6 +28,11 @@ export const REQUIRED_TABLES = [
   'pill_inventories',
   'realm_explorations',
   'dao_debate_log',
+  'sect_progression',
+  'sect_checkin',
+  'sect_achievements',
+  'sect_quests',
+  'sect_rebirth',
 ] as const;
 
 export interface DbReadiness {

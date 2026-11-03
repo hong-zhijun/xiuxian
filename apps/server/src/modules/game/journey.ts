@@ -714,6 +714,8 @@ export function journeyBaseRewardForDisciple(
     speed: number;
     luck: number;
     physique: number;
+    permanentPowerBp?: number;
+    cultivationBonusBp?: number;
   },
   direction: JourneyDirection,
   durationSeconds: number,
@@ -733,6 +735,9 @@ export function journeyBaseRewardForDisciple(
       disciple.defense,
       disciple.speed,
       disciple.talent,
+      0,
+      0,
+      disciple.permanentPowerBp ?? 0,
     ),
     luck: disciple.luck,
     physique: disciple.physique,
