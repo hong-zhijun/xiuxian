@@ -256,6 +256,7 @@ export interface SectStateView {
     defenseLineup: string[] | null;
     /** 0073 宗门头像哈希（null = 没有，顶栏用静态 Logo）。 */
     avatarHash: string | null;
+    progression?: { frameId: string | null; titleId: string | null; productionBonusBp: number; renameTokens: number };
   };
   serverNow: string;
   resources: ResourceView[];
@@ -786,6 +787,8 @@ export interface LeaderboardEntryView {
   reputation: number;
   /** 0073 宗门头像哈希（null = 没有，榜单显示宗门名首字）。 */
   avatarHash: string | null;
+  frameId?: string | null;
+  titleId?: string | null;
   /** 门人战力：战力最高的 5 名弟子的含装备战力合计（综合榜第三排序键，也显示在榜行）。 */
   sectPower: number;
   discipleCount: number;
@@ -840,6 +843,8 @@ export interface PublicSectView {
   reputation: number;
   /** 0073 宗门头像哈希（null = 没有；公开外观，按内容哈希取图）。 */
   avatarHash: string | null;
+  frameId?: string | null;
+  titleId?: string | null;
   /** 镇妖塔历史最高层（0 = 一层都还没过）。 */
   towerFloor: number;
   /** 已收录的功法数量（参悟到 1 级及以上才算）。 */

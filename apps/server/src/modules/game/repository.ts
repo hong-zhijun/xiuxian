@@ -51,6 +51,11 @@ export interface SectRow {
 }
 
 export interface DiscipleRow {
+  /** 宗门永久战力倍率，读取时按所属宗门关联，不写入弟子实体。 */
+  permanent_power_bp?: number;
+  cultivation_bonus_bp?: number;
+  bond_partner_id?: string | null;
+  bond_power_bp?: number;
   beast_json?: string | null;
   capture_until?: number | null;
   id: string;
@@ -300,7 +305,11 @@ export class DiscipleRepository extends ParamRepository {
                    realm_id, stage, cultivation, cultivation_remainder,
                    assignment, injured_until, severe_injured_until, body_tempering_count, note, avatar_frame_id, avatar_hash, dao_insight, dao_insight_used,
                    talent_reroll_count, talent_candidate, steward_handover_until, aptitude_pill_count,
-                   technique_id, technique_prof_base, technique_since, ascension_level, ascension_pity, created_at
+                   technique_id, technique_prof_base, technique_since, ascension_level, ascension_pity, created_at,
+                    COALESCE((SELECT bonus_power_bp FROM sect_rebirth WHERE sect_id=disciples.sect_id),0) AS permanent_power_bp,
+                    CASE WHEN EXISTS(SELECT 1 FROM disciple_relations r WHERE r.sect_id=disciples.sect_id AND r.disciple_id=disciples.id AND r.kind='mentorship' AND r.status='active') THEN 1500 ELSE 0 END AS cultivation_bonus_bp,
+                    (SELECT CASE WHEN r.mentor_id=disciples.id THEN r.disciple_id ELSE r.mentor_id END FROM disciple_relations r WHERE r.sect_id=disciples.sect_id AND r.kind='bond' AND r.status='active' AND (r.mentor_id=disciples.id OR r.disciple_id=disciples.id) LIMIT 1) AS bond_partner_id,
+                    COALESCE((SELECT CASE r.bond_kind WHEN 'fellow' THEN 500 WHEN 'partner' THEN 800 ELSE 1000 END FROM disciple_relations r WHERE r.sect_id=disciples.sect_id AND r.kind='bond' AND r.status='active' AND (r.mentor_id=disciples.id OR r.disciple_id=disciples.id) LIMIT 1),0) AS bond_power_bp
             FROM disciples WHERE sect_id = ? ORDER BY created_at ASC, id ASC`,
       params: [sectId],
     });
@@ -313,7 +322,11 @@ export class DiscipleRepository extends ParamRepository {
                    realm_id, stage, cultivation, cultivation_remainder,
                    assignment, injured_until, severe_injured_until, body_tempering_count, note, avatar_frame_id, avatar_hash, dao_insight, dao_insight_used,
                    talent_reroll_count, talent_candidate, steward_handover_until, aptitude_pill_count,
-                   technique_id, technique_prof_base, technique_since, ascension_level, ascension_pity, created_at
+                   technique_id, technique_prof_base, technique_since, ascension_level, ascension_pity, created_at,
+                    COALESCE((SELECT bonus_power_bp FROM sect_rebirth WHERE sect_id=disciples.sect_id),0) AS permanent_power_bp,
+                    CASE WHEN EXISTS(SELECT 1 FROM disciple_relations r WHERE r.sect_id=disciples.sect_id AND r.disciple_id=disciples.id AND r.kind='mentorship' AND r.status='active') THEN 1500 ELSE 0 END AS cultivation_bonus_bp,
+                    (SELECT CASE WHEN r.mentor_id=disciples.id THEN r.disciple_id ELSE r.mentor_id END FROM disciple_relations r WHERE r.sect_id=disciples.sect_id AND r.kind='bond' AND r.status='active' AND (r.mentor_id=disciples.id OR r.disciple_id=disciples.id) LIMIT 1) AS bond_partner_id,
+                    COALESCE((SELECT CASE r.bond_kind WHEN 'fellow' THEN 500 WHEN 'partner' THEN 800 ELSE 1000 END FROM disciple_relations r WHERE r.sect_id=disciples.sect_id AND r.kind='bond' AND r.status='active' AND (r.mentor_id=disciples.id OR r.disciple_id=disciples.id) LIMIT 1),0) AS bond_power_bp
             FROM disciples WHERE id = ?`,
       params: [discipleId],
     });
@@ -2544,7 +2557,7 @@ export interface ChatMessageRow {
 export class ChatMessageRepository extends ParamRepository {
   async findRecent(limit: number): Promise<ChatMessageRow[]> {
     return this.all<ChatMessageRow>({
-      sql: 'SELECT id, user_id, sect_name, content, created_at FROM chat_messages ORDER BY created_at DESC, id DESC LIMIT ?',
+      sql: `SELECT id, user_id, sect_name, content, created_at FROM chat_messages WHERE channel = 'world' AND scope_id = '' ORDER BY created_at DESC, id DESC LIMIT ?`,
       params: [limit],
     });
   }
@@ -2554,8 +2567,9 @@ export class ChatMessageRepository extends ParamRepository {
       // 外层用 created_at >= 锚点 走 idx_chat_messages_created_at 做范围扫描；
       // 原来整条 WHERE 是 OR，SQLite 用不上索引，每次轮询都全表扫描。
       sql: `SELECT id, user_id, sect_name, content, created_at FROM chat_messages
-            WHERE created_at >= (SELECT created_at FROM chat_messages WHERE id = ?)
-              AND (created_at > (SELECT created_at FROM chat_messages WHERE id = ?) OR id > ?)
+            WHERE channel = 'world' AND scope_id = ''
+              AND created_at >= (SELECT created_at FROM chat_messages WHERE id = ? AND channel = 'world' AND scope_id = '')
+              AND (created_at > (SELECT created_at FROM chat_messages WHERE id = ? AND channel = 'world' AND scope_id = '') OR id > ?)
             ORDER BY created_at ASC, id ASC LIMIT ?`,
       params: [afterId, afterId, afterId, limit],
     });
@@ -2563,7 +2577,7 @@ export class ChatMessageRepository extends ParamRepository {
 
   async findLatestByUserId(userId: string): Promise<ChatMessageRow | null> {
     return this.one<ChatMessageRow>({
-      sql: 'SELECT id, user_id, sect_name, content, created_at FROM chat_messages WHERE user_id = ? ORDER BY created_at DESC, id DESC LIMIT 1',
+      sql: `SELECT id, user_id, sect_name, content, created_at FROM chat_messages WHERE user_id = ? AND channel = 'world' AND scope_id = '' ORDER BY created_at DESC, id DESC LIMIT 1`,
       params: [userId],
     });
   }
@@ -5018,7 +5032,11 @@ export class ArenaRepository extends ParamRepository {
                    realm_id, stage, cultivation, cultivation_remainder,
                    assignment, injured_until, severe_injured_until, body_tempering_count, note, avatar_frame_id, avatar_hash, dao_insight, dao_insight_used,
                    talent_reroll_count, talent_candidate, steward_handover_until, aptitude_pill_count,
-                   technique_id, technique_prof_base, technique_since, ascension_level, ascension_pity, created_at
+                   technique_id, technique_prof_base, technique_since, ascension_level, ascension_pity, created_at,
+                    COALESCE((SELECT bonus_power_bp FROM sect_rebirth WHERE sect_id=disciples.sect_id),0) AS permanent_power_bp,
+                    CASE WHEN EXISTS(SELECT 1 FROM disciple_relations r WHERE r.sect_id=disciples.sect_id AND r.disciple_id=disciples.id AND r.kind='mentorship' AND r.status='active') THEN 1500 ELSE 0 END AS cultivation_bonus_bp,
+                    (SELECT CASE WHEN r.mentor_id=disciples.id THEN r.disciple_id ELSE r.mentor_id END FROM disciple_relations r WHERE r.sect_id=disciples.sect_id AND r.kind='bond' AND r.status='active' AND (r.mentor_id=disciples.id OR r.disciple_id=disciples.id) LIMIT 1) AS bond_partner_id,
+                    COALESCE((SELECT CASE r.bond_kind WHEN 'fellow' THEN 500 WHEN 'partner' THEN 800 ELSE 1000 END FROM disciple_relations r WHERE r.sect_id=disciples.sect_id AND r.kind='bond' AND r.status='active' AND (r.mentor_id=disciples.id OR r.disciple_id=disciples.id) LIMIT 1),0) AS bond_power_bp
             FROM disciples
             WHERE sect_id IN (SELECT id FROM sects WHERE level >= ?)
             ORDER BY created_at ASC, id ASC`,

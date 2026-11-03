@@ -82,11 +82,13 @@ function openSect(entry: LeaderboardEntryView): void {
           @click="openSect(entry)"
         >
           <span class="rank-no">{{ index + 1 }}</span>
-          <SectAvatar class="lb-avatar" :name="entry.name" :image-hash="entry.avatarHash" />
+          <SectAvatar class="lb-avatar" :name="entry.name" :image-hash="entry.avatarHash" :frame-id="entry.frameId" />
           <span class="rank-copy">
             <span class="rank-title">
               <strong>{{ entry.name }}</strong>
               <span class="rank-level">{{ entry.levelName }}</span>
+              <span v-if="entry.titleId === 'rising-star'" class="rank-level">后起之秀</span>
+              <span v-if="entry.titleId === 'title-worldwalker'" class="rank-level">开界行者</span>
               <span v-if="entry.isMe" class="rank-me">本宗</span>
             </span>
             <span class="rank-meta">

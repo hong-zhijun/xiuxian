@@ -181,7 +181,8 @@ import {
   parseJourneyRewardResources,
   JOURNEY_BONUS_ATTRIBUTE_NAMES,
 } from './journey';
-import { cultivationRatePerHour, resourceRates, type DiscipleState, type SettleResult } from './settle';
+import { boostedResourceRates, cultivationRatePerHour, resourceRates, type DiscipleState, type SettleResult } from './settle';
+import { cultivationWithMentor } from './relationsState';
 import type { MarketOrderKind } from './market';
 import type { WorldBossPhase } from './worldBoss';
 import { towerCritProfile, type TowerTechniqueSummary } from './tower';
@@ -1660,6 +1661,7 @@ export interface SectStateView {
     defenseLineup: string[] | null;
     /** 0073 宗门头像哈希（null = 没有，顶栏用静态 Logo）。图片走 GET /game/avatars/:hash。 */
     avatarHash: string | null;
+    progression?: { frameId: string | null; titleId: string | null; productionBonusBp: number; renameTokens: number };
     veinLevel: number;
     discipleCapacity: number;
     buildingCapacity: number;
@@ -1805,6 +1807,8 @@ export interface LeaderboardEntryView {
   reputation: number;
   /** 0073 宗门头像哈希（null = 没有，榜单显示宗门名首字）。公开外观。 */
   avatarHash: string | null;
+  frameId?: string | null;
+  titleId?: string | null;
   /**
    * 门人战力：战力最高的 5 名弟子的含装备战力合计。
    * 既是综合榜的第三排序键（等级 → 声望 → 门人战力 → 建宗时间），也直接显示在榜行上。
@@ -1997,6 +2001,8 @@ export interface PublicSectView {
   reputation: number;
   /** 0073 宗门头像哈希（null = 没有；公开外观，别人也看得到）。 */
   avatarHash: string | null;
+  frameId?: string | null;
+  titleId?: string | null;
   /** 镇妖塔历史最高层（0 = 一层都还没过）。 */
   towerFloor: number;
   /** 已收录的功法数量（参悟到 1 级及以上才算；只有残卷不算）。 */
@@ -2150,6 +2156,8 @@ export interface ChallengeHistoryView {
 
 export interface SectStateInput {
   config: GameConfigContent;
+  progression?: import('./progressionState').SectProgressionState;
+  rebirth?: import('./rebirthState').SectRebirthState;
   sect: SectRow;
   disciples: readonly DiscipleRow[];
   buildings: readonly BuildingRow[];
@@ -2223,7 +2231,7 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
   const isUnavailable = (disciple: (typeof disciples)[number]): boolean =>
     awayIds.has(disciple.id) || isSeverelyInjured(disciple.severe_injured_until, now);
   const rateDisciples = disciples.filter((disciple) => !isUnavailable(disciple));
-  const resourceRatesNow = resourceRates(config, rateDisciples.map(toDiscipleState), buildingLevels);
+  const resourceRatesNow = resourceRates(config, rateDisciples.map(toDiscipleState), buildingLevels, (input.progression?.production_bonus_bp ?? 0) + (input.rebirth?.bonus_production_bp ?? 0));
   const ratesByDisciple = new Map(
     disciples.map((disciple) => [
       disciple.id,
@@ -2250,6 +2258,7 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
     }
   }
 
+  const boostedWorldRates = boostedResourceRates(worldRates, (input.progression?.production_bonus_bp ?? 0) + (input.rebirth?.bonus_production_bp ?? 0));
   const resources: ResourceView[] = config.resources.map((definition) => {
     const row = balances.find((item) => item.resource_id === definition.id);
     const settled = settleResult.resources.find((item) => item.resourceId === definition.id);
@@ -2260,7 +2269,7 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
       // 仓库不设上限：容量恒为 RESOURCE_CAPACITY，前端不再显示库容。
       capacity: String(RESOURCE_CAPACITY),
       ratePerHour: String(resourceRatesNow.get(definition.id) ?? 0),
-      worldRatePerHour: String(worldRates.get(definition.id) ?? 0),
+      worldRatePerHour: String(boostedWorldRates.get(definition.id) ?? 0),
       capped: settled?.capped ?? false,
       discarded: String(settled?.discarded ?? 0),
     };
@@ -2288,7 +2297,7 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
     const realm = findRealm(disciple.realm_id);
     const stage = findStage(disciple.realm_id, disciple.stage);
     const cost = breakthroughEnergyCost(disciple.realm_id, disciple.stage);
-    const chanceBp = breakthroughChanceBp(config, arrayLevel);
+    const chanceBp = breakthroughChanceBp(config, arrayLevel, input.rebirth?.bonus_breakthrough_bp ?? 0);
     const injured = disciple.injured_until !== null && disciple.injured_until > now;
     const garrisonSiteName = garrisonSiteNames.get(disciple.id) ?? null;
     // 0014：历练状态（在外 / 待领取 / 名额与资格原因）全部在服务端算好，前端不复制公式。
@@ -2347,8 +2356,8 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
     } else if (handoverUntil !== null && handoverUntil > now) {
       combatBlockedReason = '执事交接中';
     }
-    const pillGain = cultivationPillGainOf(disciple.talent, disciple.realm_id);
-    const greatPillGain = cultivationPillGainOf(disciple.talent, disciple.realm_id, GREAT_CULTIVATION_PILL_GAIN);
+    const pillGain = cultivationWithMentor(cultivationPillGainOf(disciple.talent, disciple.realm_id), disciple.cultivation_bonus_bp ?? 0);
+    const greatPillGain = cultivationWithMentor(cultivationPillGainOf(disciple.talent, disciple.realm_id, GREAT_CULTIVATION_PILL_GAIN), disciple.cultivation_bonus_bp ?? 0);
 
     // 0028 装备：战斗属性 = 基础属性 + 装备加成（加成后可以超过 100；基础属性本身仍最高 100）。
     const gear = gearBonusOfDisciple(disciple);
@@ -2455,6 +2464,7 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
         // 战力加成 = 装备 + 灵兽（同一个括号，与 service.ts 的 powerBonusBpOfDisciple 同一口径）。
         gearPowerBonusBpOfDisciple(disciple) + beastPowerBonusBpOf(disciple),
         Number(disciple.ascension_level),
+        Number(disciple.permanent_power_bp ?? 0),
       ),
       ascended,
       ascensionPity: Number(disciple.ascension_pity) || 0,
@@ -2579,8 +2589,8 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
     };
   });
 
-  const discipleCapacity = levelDef.discipleCapacity;
-  const buildingCapacity = levelDef.buildingCapacity;
+  const discipleCapacity = Math.max(levelDef.discipleCapacity, input.rebirth?.disciple_capacity_floor ?? 0);
+  const buildingCapacity = Math.max(levelDef.buildingCapacity, input.rebirth?.building_capacity_floor ?? 0);
   const recruitRemaining = Math.max(0, discipleCapacity - disciples.length);
   const recruitCost = { ...config.recruitment.cost };
   const recruitLacking = Object.entries(recruitCost).find(
@@ -2739,6 +2749,12 @@ export function buildSectStateView(input: SectStateInput): SectStateView {
       reputation: Number(sect.reputation) || 0,
       defenseLineup: parseDefenseLineup(sect.defense_lineup),
       avatarHash: sect.avatar_hash ?? null,
+      progression: {
+        frameId: input.progression?.equipped_frame ?? null,
+        titleId: input.progression?.equipped_title ?? null,
+        productionBonusBp: (input.progression?.production_bonus_bp ?? 0) + (input.rebirth?.bonus_production_bp ?? 0),
+        renameTokens: input.progression?.rename_tokens ?? 0,
+      },
       veinLevel: sect.vein_level,
       discipleCapacity,
       buildingCapacity,
@@ -2980,9 +2996,9 @@ export function upgradeCost(
 }
 
 /** 突破成功率（基点）：基础 + 聚灵阵等级加成（只算到 5 级），再按配置 clamp。 */
-export function breakthroughChanceBp(config: GameConfigContent, arrayLevel: number): number {
+export function breakthroughChanceBp(config: GameConfigContent, arrayLevel: number, permanentBonusBp = 0): number {
   const base =
-    config.breakthrough.baseChanceBp +
+    config.breakthrough.baseChanceBp + Math.max(0, permanentBonusBp) +
     Math.max(0, Math.min(arrayLevel, BREAKTHROUGH_ARRAY_BONUS_MAX_LEVEL) - 1) * BREAKTHROUGH_ARRAY_BONUS_BP_PER_LEVEL;
   return Math.min(config.breakthrough.maxChanceBp, Math.max(config.breakthrough.minChanceBp, base));
 }
@@ -3099,6 +3115,7 @@ function toDiscipleState(row: DiscipleRow): DiscipleState {
     cultivationRemainder: Number(row.cultivation_remainder),
     assignment: row.assignment,
     talent: row.talent,
+    cultivationBonusBp: row.cultivation_bonus_bp ?? 0,
   };
 }
 

@@ -13,6 +13,7 @@ import {
 } from './constants';
 import { triggerEvents, type TriggeredEvent } from './events';
 import { talentBonusBp } from './talents';
+import { cultivationWithMentor } from './relationsState';
 
 /**
  * 天赋重构：产出类天赋各自加成哪些岗位（灵植 → 药园、矿脉 → 采矿、聚灵 → 采灵 / 吐纳）。
@@ -55,6 +56,7 @@ export interface DiscipleState {
   assignment: string;
   /** V4 天赋 id（见 constants.ts 的 TALENTS）；缺省由调用方保证。 */
   talent: string;
+  cultivationBonusBp?: number;
 }
 
 /**
@@ -71,6 +73,8 @@ export interface AbsenceWindow {
 
 export interface SettleInput {
   config: GameConfigContent;
+  /** 永久宗门产出加成（基点）；获得时先结算旧时段，仅影响之后的岗位与建筑产出。 */
+  productionBonusBp?: number;
   lastSettledAt: number;
   now: number;
   resources: readonly ResourceState[];
@@ -130,10 +134,10 @@ export function settleEconomy(input: SettleInput, random: () => number = Math.ra
   const outputs = disciples.map((disciple) => ({
     id: disciple.id,
     activeMs: Math.max(0, durationMs - (absentMsByDisciple.get(disciple.id) ?? 0)),
-    output: positionOutputPerHour(config, disciple),
+    output: boostedResourceRates(positionOutputPerHour(config, disciple), input.productionBonusBp),
   }));
-  const baseRates = resourceBaseRates(config, input.buildingLevels);
-  const rateByResource = resourceRates(config, disciples, input.buildingLevels);
+  const baseRates = boostedResourceRates(resourceBaseRates(config, input.buildingLevels), input.productionBonusBp);
+  const rateByResource = resourceRates(config, disciples, input.buildingLevels, input.productionBonusBp);
 
   const settledResources = resources.map((resource) => {
     const ratePerHour = rateByResource.get(resource.resourceId) ?? 0;
@@ -217,15 +221,23 @@ export function applyEventEffects(resources: SettledResource[], events: readonly
   }
 }
 
+/** 对每份产出按相同口径取整，展示速率和结算分子共用，避免加成只显示不入账。 */
+export function boostedResourceRates(rates: Map<string, number>, bonusBp = 0): Map<string, number> {
+  const bonus = Number.isFinite(bonusBp) ? Math.max(0, Math.floor(bonusBp)) : 0;
+  if (bonus === 0) return rates;
+  return new Map([...rates].map(([id, rate]) => [id, Math.floor(rate * (BP + bonus) / BP)]));
+}
+
 /** 每种资源的产量 = 基础产量 + 所有岗位弟子的产出（配置驱动，不硬编码）。 */
 export function resourceRates(
   config: GameConfigContent,
   disciples: readonly DiscipleState[],
   buildingLevels?: Record<string, number>,
+  productionBonusBp = 0,
 ): Map<string, number> {
-  const rates = resourceBaseRates(config, buildingLevels);
+  const rates = boostedResourceRates(resourceBaseRates(config, buildingLevels), productionBonusBp);
   for (const disciple of disciples) {
-    for (const [resourceId, amount] of positionOutputPerHour(config, disciple)) {
+    for (const [resourceId, amount] of boostedResourceRates(positionOutputPerHour(config, disciple), productionBonusBp)) {
       rates.set(resourceId, (rates.get(resourceId) ?? 0) + amount);
     }
   }
@@ -329,7 +341,7 @@ export function cultivationRatePerHour(
   const talentBp = talentBonusBp(disciple.talent, disciple.realmId, 'cultivation');
   const withTalent = talentBp > 0 ? Math.floor((result * (10_000 + talentBp)) / 10_000) : result;
   // 境界扩充：最后乘修炼倍率（化神起 ×2～×16，炼气～元婴 ×1；见 REALM_CULTIVATION_MULTIPLIER）。
-  return withTalent * realmCultivationMultiplier(disciple.realmId);
+  return cultivationWithMentor(withTalent * realmCultivationMultiplier(disciple.realmId), disciple.cultivationBonusBp ?? 0);
 }
 
 /**

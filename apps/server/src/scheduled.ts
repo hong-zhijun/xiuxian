@@ -8,6 +8,7 @@ import {
   settleCurrentRound,
 } from './modules/game/service';
 import { pruneBeastRecords } from './modules/game/spiritBeastService';
+import { processAllianceBosses } from './modules/game/allianceService';
 
 /**
  * 每分钟一次的定时任务（Workers Cron 与 Node 版的计时器共用这一份）。
@@ -49,6 +50,11 @@ export async function runScheduledTasks(db: D1Database, now: number): Promise<vo
     await processArenaTournament(db, now);
   } catch (error) {
     console.warn(`process_arena_tournament_failed error=${String(error)}`);
+  }
+  try {
+    await processAllianceBosses(db, now);
+  } catch (error) {
+    console.warn(`process_alliance_bosses_failed error=${String(error)}`);
   }
   try {
     await pruneBeastRecords(db, now);

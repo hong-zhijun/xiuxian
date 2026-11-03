@@ -192,6 +192,14 @@ import type { SectStateView } from './view';
 import type { Multiplier, WheelTier } from './gambling';
 import { scratchCardBuySchema, scratchCardQuerySchema } from './scratchCards';
 import { buyScratchCard, getScratchCard } from './scratchCardService';
+import { progressionActionSchema } from './progression';
+import { actProgression, getProgression } from './progressionService';
+import { rebirthActionSchema } from './rebirth';
+import { actRebirth, getRebirth } from './rebirthService';
+import { allianceActionSchema, allianceChatQuerySchema, allianceChatSchema } from './alliance';
+import { actAlliance, getAlliance, getAllianceChat, sendAllianceChat } from './allianceService';
+import { relationActionSchema } from './relations';
+import { actRelations, getRelations } from './relationsService';
 
 /**
  * 游戏接口（一次性可玩版本，任务卡第二节）。
@@ -205,6 +213,55 @@ import { buyScratchCard, getScratchCard } from './scratchCardService';
  */
 export function createGameRoutes(): Hono<AppEnv> {
   const routes = new Hono<AppEnv>();
+
+  routes.get('/game/alliance', async (c) => {
+    const userId = requireUserId(c);
+    return respondOk(c, await getAlliance(getDb(c.env), userId, Date.now()));
+  });
+  routes.get('/game/relations', async (c) => {
+    const userId = requireUserId(c);
+    return respondOk(c, await getRelations(getDb(c.env), userId, Date.now()));
+  });
+  routes.post('/game/relations/action', async (c) => {
+    const userId = requireUserId(c);
+    const body = await parseStrictJson(relationActionSchema, c);
+    return respondOk(c, await actRelations(getDb(c.env), userId, body, Date.now()));
+  });
+  routes.post('/game/alliance/action', async (c) => {
+    const userId = requireUserId(c);
+    const body = await parseStrictJson(allianceActionSchema, c);
+    return respondOk(c, await actAlliance(getDb(c.env), userId, body, Date.now()));
+  });
+  routes.get('/game/alliance/chat', async (c) => {
+    const userId = requireUserId(c);
+    const query = parseStrictQuery(allianceChatQuerySchema, c);
+    return respondOk(c, await getAllianceChat(getDb(c.env), userId, query.allianceId));
+  });
+  routes.post('/game/alliance/chat', async (c) => {
+    const userId = requireUserId(c);
+    const body = await parseStrictJson(allianceChatSchema, c);
+    return respondOk(c, await sendAllianceChat(getDb(c.env), userId, body, Date.now()));
+  });
+
+  routes.get('/game/rebirth', async (c) => {
+    const userId = requireUserId(c);
+    return respondOk(c, await getRebirth(getDb(c.env), userId, Date.now()));
+  });
+  routes.post('/game/rebirth/action', async (c) => {
+    const userId = requireUserId(c);
+    const body = await parseStrictJson(rebirthActionSchema, c);
+    return respondOk(c, await actRebirth(getDb(c.env), userId, body, Date.now()));
+  });
+
+  routes.get('/game/progression', async (c) => {
+    const userId = requireUserId(c);
+    return respondOk(c, await getProgression(getDb(c.env), userId, Date.now()));
+  });
+  routes.post('/game/progression/action', async (c) => {
+    const userId = requireUserId(c);
+    const body = await parseStrictJson(progressionActionSchema, c);
+    return respondOk(c, await actProgression(getDb(c.env), userId, body, Date.now()));
+  });
 
   routes.get('/game/spirit-beasts', async c => respondOk(c,await getSpiritBeasts(getDb(c.env),requireUserId(c),Date.now())));
   routes.post('/game/spirit-beasts/exchange', async c => {
